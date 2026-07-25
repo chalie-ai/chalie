@@ -571,6 +571,7 @@ class MessageProcessor:
         role = self.config.role
         try:
             if role == "user" and self.channel == Channel.USER:
+                self._voice_presynthesis()
                 self._proactive_suggestion()
             elif role == "user_summary":
                 UserSynthesis.persist_user_summary(response_text)
@@ -580,6 +581,19 @@ class MessageProcessor:
                 self._disclose_to_human(response_text)
         except Exception as exc:  # noqa: BLE001 — post-turn work must never fail the turn
             logger.warning("[post_turn] %s handler failed (isolated): %s", role, exc)
+
+    def _voice_presynthesis(self) -> None:
+        """Kick background speech pre-synthesis for this turn's settled row on a
+        fire-and-forget daemon thread — the pipeline owns every gate and terminal
+        state, and running it inline would delay the turn-complete frame the
+        frontend waits on (``finish(COMPLETED)`` stamps after post-turn work)."""
+        settle_id = Transcript.settle0(self.channel, self.turn_id)
+        if settle_id is None:
+            return
+        from services.voice_transcript_service import get_service  # noqa: PLC0415
+        Thread(
+            target=get_service().synthesize_settled, args=(settle_id,), daemon=True,
+        ).start()
 
     def _proactive_suggestion(self) -> None:
         """After a ``user`` turn that made enough real tool calls, hand the act

@@ -371,8 +371,10 @@ def _warmup_models() -> None:
     """Warm up voice and embedding models in background daemon threads."""
     import threading as _t
     try:
-        from api.voice import _ensure_models as _voice_warm
-        _t.Thread(target=_voice_warm, name="voice-warmup", daemon=True).start()
+        from api.voice import _ensure_moonshine as _stt_warm
+        from services.voice_transcript_service import get_service
+        _t.Thread(target=get_service().ensure_loaded, name="voice-tts-warmup", daemon=True).start()
+        _t.Thread(target=_stt_warm, name="voice-stt-warmup", daemon=True).start()
     except Exception as e:
         logger.warning(f"[Startup] Voice warm-up skipped: {e}")
     try:

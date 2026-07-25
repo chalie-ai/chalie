@@ -35,6 +35,22 @@ class Transcript(Model):
     def get_table(cls) -> str:
         return "transcript"
 
+    channel: str
+    role: str
+    content: str
+    tool_call_id: str | None
+    tool_name: str | None
+    internal: int
+    deliberation_score: float | None
+    created_at: str
+    xml_migrated: int
+    location_lat: float | None
+    location_lon: float | None
+    location_name: str | None
+    turn_id: int | None
+    settled: int
+    thinking_level: str | None
+
     # settle0 — the FIRST assistant row of a turn with settled=1: the boundary
     # between a turn's main exchange and its fork continuation. The write path
     # stamps assistant rows settled=1; a settling tool-call demotes to 0

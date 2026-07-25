@@ -24,8 +24,12 @@ import re
 import threading
 from typing import TYPE_CHECKING, cast
 
+from models.transcript import Transcript
+from models.voice_signal import VoiceSignal
+from models.voice_transcript import VoiceTranscript
 from services.file_mapper_service import FileMapperService
 from services.markup import extract_plaintext, markdown_to_html
+from services.websocket import Websocket
 
 if TYPE_CHECKING:
     from typing import Protocol
@@ -43,6 +47,9 @@ _KOKORO_VOICES = FileMapperService.get_voice_models_path("kokoro", "voices-v1.0.
 TTS_VOICE = "af_heart"
 TTS_LANG = "en-us"
 
+_MAX_SYNTHESIS_ATTEMPTS = 3
+_SILENCE_PEAK_THRESHOLD = 0.001
+
 # ── Lazy model state (Kokoro-only; STT owns its own model slot) ──────────────
 
 _kokoro: object = None
@@ -50,6 +57,9 @@ _tts_lock = threading.Lock()
 _load_lock = threading.Lock()
 _models_loaded = False
 _models_loading = False
+
+_synthesize_in_flight: set[int] = set()
+_synthesize_in_flight_lock = threading.Lock()
 
 
 def _missing_kokoro_model_files() -> list[str]:
@@ -273,17 +283,17 @@ class VoiceTranscriptService:
             import numpy as np
 
             all_samples: list[object] = []
-            sr: int | None = None
+            rate: int | None = None
             with _tts_lock:
                 for i, chunk in enumerate(chunks):
                     chunk_samples, chunk_sr = cast(
                         "_KokoroModel", _kokoro,
                     ).create(chunk, voice=TTS_VOICE, speed=1.0, lang=TTS_LANG)
-                    if sr is None:
-                        sr = chunk_sr
+                    if rate is None:
+                        rate = chunk_sr
                     all_samples.append(chunk_samples)
                     if i < len(chunks) - 1:
-                        pad_len = int(_TTS_SILENCE_PAD_SECONDS * sr)
+                        pad_len = int(_TTS_SILENCE_PAD_SECONDS * rate)
                         all_samples.append(
                             np.zeros(
                                 pad_len,
@@ -296,11 +306,98 @@ class VoiceTranscriptService:
             samples = np.concatenate(
                 cast("list[np.ndarray[tuple[int], np.dtype[np.float32]]]", all_samples)
             )
-            if sr is None:
+            if rate is None:
                 raise RuntimeError("Kokoro returned no sample rate")
+            sr = rate
 
-        wav_bytes = _audio_to_wav_bytes(samples, cast(int, sr))
-        return samples, cast(int, sr), wav_bytes
+        wav_bytes = _audio_to_wav_bytes(samples, sr)
+        return samples, sr, wav_bytes
+
+    def synthesize_settled(self, transcript_id: int) -> None:
+        """Synthesize speech for one settled transcript row, exactly once to a
+        terminal state. Retries up to 3 times on silent or failed synthesis,
+        persists the WAV path on success or NULL on failure, and broadcasts
+        the pipeline state transition."""
+        import numpy as np
+
+        with _synthesize_in_flight_lock:
+            if transcript_id in _synthesize_in_flight:
+                return
+            if VoiceTranscript.filter("transcript_id", transcript_id).exists():
+                return
+            _synthesize_in_flight.add(transcript_id)
+        try:
+            row = Transcript.get(transcript_id)
+            if row is None:
+                return
+            text = _clean_for_tts(row.content)
+            Websocket.broadcast(VoiceSignal.pending(transcript_id))
+            if not text:
+                VoiceTranscript(
+                    transcript_id=transcript_id, file_path=None,
+                ).record()
+                Websocket.broadcast(VoiceSignal.failed(transcript_id))
+                logger.error(
+                    "[VoiceTranscript] synthesize_settled(%d): empty text — marking failed",
+                    transcript_id,
+                )
+                return
+            for attempt in range(1, _MAX_SYNTHESIS_ATTEMPTS + 1):
+                try:
+                    samples, _sr, wav_bytes = self.synthesize(text)
+                    samples_arr = cast(
+                        "np.ndarray[tuple[int], np.dtype[np.float32]]", samples,
+                    )
+                    if (
+                        len(samples_arr) > 0
+                        and float(np.max(np.abs(samples_arr))) > _SILENCE_PEAK_THRESHOLD
+                    ):
+                        file_name = f"{transcript_id}.wav"
+                        path = FileMapperService.get_voice_path(file_name)
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        path.write_bytes(wav_bytes)
+                        VoiceTranscript(
+                            transcript_id=transcript_id, file_path=file_name,
+                        ).record()
+                        Websocket.broadcast(VoiceSignal.ready(transcript_id))
+                        return
+                    logger.error(
+                        "[VoiceTranscript] synthesize_settled(%d): attempt %d/%d produced silent audio",
+                        transcript_id, attempt, _MAX_SYNTHESIS_ATTEMPTS,
+                    )
+                except Exception:
+                    logger.exception(
+                        "[VoiceTranscript] synthesize_settled(%d): attempt %d/%d raised",
+                        transcript_id, attempt, _MAX_SYNTHESIS_ATTEMPTS,
+                    )
+            VoiceTranscript(
+                transcript_id=transcript_id, file_path=None,
+            ).record()
+            Websocket.broadcast(VoiceSignal.failed(transcript_id))
+            logger.error(
+                "[VoiceTranscript] synthesize_settled(%d): all attempts exhausted — marking failed",
+                transcript_id,
+            )
+        finally:
+            with _synthesize_in_flight_lock:
+                _synthesize_in_flight.discard(transcript_id)
+
+    def delete_for_transcripts(self, transcript_ids: list[int]) -> None:
+        """Delete the stored WAV files and ``voice_transcript`` rows for the
+        given transcript ids — the single owner of voice cleanup. Explicit
+        because the GC sweep runs with ``PRAGMA foreign_keys`` OFF (CASCADE
+        never fires there) and a row delete alone would orphan the file."""
+        for row in VoiceTranscript.for_transcripts(transcript_ids):
+            if row.file_path is not None:
+                path = FileMapperService.get_voice_path(row.file_path)
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError as exc:
+                    logger.error(
+                        "[VoiceTranscript] delete_for_transcripts: unlink %s failed: %s",
+                        path, exc,
+                    )
+        VoiceTranscript.delete_by_transcripts(transcript_ids)
 
     # ── loading-state introspection (used by the HTTP layer to decide 503) ──
 
