@@ -52,12 +52,6 @@ class CapabilitiesSetup(Action):
         ),
     }
 
-    def slug(self) -> str:
-        return "capabilities"
-
-    def verb(self) -> str:
-        return "setup"
-
     def post(self, id: int | str, data: Request | None) -> ResponseReturnValue:
         """Connect a capability with credentials; fires an initial sync on a daemon thread.
 

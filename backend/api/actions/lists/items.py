@@ -44,12 +44,6 @@ class ListItems(Action):
         "post": DocumentedResponse(ListItemResponse),
     }
 
-    def slug(self) -> str:
-        return "lists"
-
-    def verb(self) -> str:
-        return "items"
-
     def get(self, id: int | str) -> ResponseReturnValue:
         items = ListService().get_items(cast(str, id))
         if items is None:

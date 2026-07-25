@@ -51,7 +51,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> "Generator[FlaskClient, None, Non
     # test's in-memory handle.
     _db_gateway.Database().bind()
     try:
-        app = mount_namespace(PoliciesEndpoint().namespace())
+        app = mount_namespace(PoliciesEndpoint("policies").namespace())
         yield app.test_client()
     finally:
         _db_gateway._local.conns = {}
@@ -128,7 +128,7 @@ def mcp_client(monkeypatch: pytest.MonkeyPatch) -> "Generator[FlaskClient, None,
     # test's in-memory handle.
     _db_gateway.Database().bind()
     try:
-        app = mount_namespace(PoliciesEndpoint().namespace())
+        app = mount_namespace(PoliciesEndpoint("policies").namespace())
         yield app.test_client()
     finally:
         _db_gateway._local.conns = {}

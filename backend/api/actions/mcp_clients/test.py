@@ -30,12 +30,6 @@ class McpTest(Action):
         "post": DocumentedResponse(McpTestResult, extras=((404, "Server not found"),)),
     }
 
-    def slug(self) -> str:
-        return "mcp-clients"
-
-    def verb(self) -> str:
-        return "test"
-
     def post(self, id: int | str, data: Request | None) -> ResponseReturnValue:
         svc = McpClientService()
         server_id = cast(str, id)

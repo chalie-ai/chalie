@@ -30,12 +30,6 @@ class SnapshotExportAction(Action):
     request_dto = SnapshotExportRequest
     response_dto = {"post": DocumentedResponse()}
 
-    def slug(self) -> str:
-        return "snapshot"
-
-    def verb(self) -> str:
-        return "export"
-
     def post(self, id: int | str, data: Request | None) -> ResponseReturnValue:
         """Export a complete instance clone as a downloadable ZIP.
 

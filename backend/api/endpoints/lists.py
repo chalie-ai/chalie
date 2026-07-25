@@ -37,9 +37,6 @@ class Lists(Endpoint):
         ),
     }
 
-    def slug(self) -> str:
-        return "lists"
-
     def get_all(self, page: int = 1, limit: int = 20) -> ResponseReturnValue:
         items = [self._to_response(row) for row in ListService().get_all_lists()]
         total = len(items)

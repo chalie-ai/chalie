@@ -27,12 +27,6 @@ class SkillAssociations(Action):
 
     response_dto = {"get": DocumentedResponse(SkillAssociationResponse, listing=True)}
 
-    def slug(self) -> str:
-        return "skills"
-
-    def verb(self) -> str:
-        return "associations"
-
     def get(self, id: int | str) -> ResponseReturnValue:
         if not self.is_create(id):
             raise NotFoundError("Not found")

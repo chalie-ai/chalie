@@ -71,9 +71,6 @@ class Skills(Endpoint):
         "delete": DocumentedResponse(extras=((503, "Skills database unavailable"),)),
     }
 
-    def slug(self) -> str:
-        return "skills"
-
     def get_all(self, page: int = 1, limit: int = 20) -> ResponseReturnValue:
         if not FileMapperService.get_skills_db_path().exists():
             return SkillResponse.listing([], page, limit, 0)

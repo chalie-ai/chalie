@@ -1,10 +1,9 @@
 """
-REST API package — Flask-RESTx app factory with Namespace auto-discovery,
+REST API package — Flask-RESTx app factory wiring the ``routes`` table,
 WebSocket, and static file serving (replaces nginx).
 """
 
 import importlib
-import inspect
 import logging
 import mimetypes
 import pkgutil
@@ -48,17 +47,16 @@ mimetypes.add_type('text/html', '.html')
 
 
 def _register_namespaces(app: Flask, api: Api) -> None:
-    """Auto-discover and register every Namespace defined in this package.
+    """Register the route table, plus every legacy Namespace in this package.
 
     Walks ``backend/api/*.py``, imports each module, and registers any top-level
     ``Namespace`` instance on the given ``Api`` object. Modules without a
     Namespace (e.g. ``auth``, ``websocket``) are skipped silently.
 
-    Also walks the ``api.endpoints`` and ``api.actions`` subpackages (the
-    migration markers of the API rewrite) and registers every concrete
-    ``Endpoint``/``Action`` subclass defined there via its generated Namespace.
+    Everything on the ``Endpoint``/``Action`` contract is registered from
+    :data:`api.routes.ROUTES` instead — that table is the only place a path is
+    decided, so a route is never conjured by the mere existence of a file.
     """
-    from .endpoint import Endpoint
     package = importlib.import_module(__name__)
     seen: set[int] = set()
     for module_info in pkgutil.iter_modules(package.__path__):
@@ -77,25 +75,10 @@ def _register_namespaces(app: Flask, api: Api) -> None:
                 seen.add(id(attr))
                 logger.info("[REST API] Registered blueprint %s.%s", module_info.name, attr_name)
 
-    for subpackage_name in ("endpoints", "actions"):
-        subpackage = importlib.import_module(f"{__name__}.{subpackage_name}")
-        for submodule_info in pkgutil.walk_packages(subpackage.__path__, prefix=f"{subpackage.__name__}."):
-            try:
-                submodule = importlib.import_module(submodule_info.name)
-            except Exception:
-                # Name the offending module before the boot crash — one broken
-                # endpoint file must be findable without a stack-trace dig.
-                logger.error("[REST API] Failed to import endpoint module %s", submodule_info.name)
-                raise
-            for attr in vars(submodule).values():
-                if (
-                    isinstance(attr, type)
-                    and issubclass(attr, Endpoint)
-                    and attr.__module__ == submodule.__name__
-                    and not inspect.isabstract(attr)
-                ):
-                    api.add_namespace(attr().namespace())
-                    logger.info("[REST API] Registered endpoint %s.%s", submodule_info.name, attr.__name__)
+    from .routes import ROUTES
+    for controller in ROUTES:
+        api.add_namespace(controller.namespace())
+        logger.info("[REST API] Registered /api/%s → %s", controller.slug, type(controller).__name__)
 
     # api.init_app() is deferred to create_app(): RESTx registers its own root
     # '/' route during init, which would shadow the SPA's '/' handler. Init must

@@ -67,8 +67,9 @@ Domain-specific terminology used throughout the Chalie system.
 | `chip` | FE rendering of a tool-call under an assistant message. | `{tool_name, summary}` |
 | `card` | Rich-media payload rendered as a structured card. | `WeatherCard`, `SchedulerCard` |
 | `segment` | FE parse of assistant content into text / rich blocks. | `text`, `rich` |
-| `Endpoint` | ABC every migrated REST CRUD group subclasses (`api/endpoints/`); the base generates the routes, auth, and envelopes from `slug()` alone. | `GET /api/{slug}/all`, `POST /api/{slug}/-1` (create) |
+| `Endpoint` | ABC every migrated REST CRUD group subclasses (`api/endpoints/`); the base generates the routes, auth, and envelopes from the slug it is constructed with. | `GET /api/{slug}/all`, `POST /api/{slug}/-1` (create) |
 | `Action` | `Endpoint` subclass for verb-shaped operations (`api/actions/<slug>/<verb>.py`); `all` is a reserved verb. | `POST /api/lists/items/<id>` |
+| route map | `backend/api/routes.py` — the single table mounting every controller at its slug (and verb); controllers declare no path of their own. | `Skills("skills")`, `SkillCopy("skills", "copy")` |
 | `envelope` | The uniform response shape built only by the `Response` DTO base. | `{success, result}`, error: `{success: false, result: [], error}` |
 | `find_tools` | Discovery ability that surfaces tools the model can use. | `find_tools(query=['weather','valletta'])` |
 | `internal_dev` | Env-var flag gating in-development features. | `CHALIE_INTERNAL_DEV='1'` |

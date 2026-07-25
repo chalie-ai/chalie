@@ -36,12 +36,6 @@ class ProviderTest(Action):
     request_dto: ClassVar[type[Request] | None] = ProviderTestRequest
     response_dto = {"post": DocumentedResponse(ProviderTestResult)}
 
-    def slug(self) -> str:
-        return "providers"
-
-    def verb(self) -> str:
-        return "test"
-
     def post(self, id: int | str, data: Request | None) -> ResponseReturnValue:
         if not self.is_create(id):
             raise NotFoundError("Not found")

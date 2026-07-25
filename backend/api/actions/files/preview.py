@@ -29,12 +29,6 @@ class FilesPreview(Action):
     id_converter: ClassVar[str] = "path"
     response_dto = {"get": DocumentedResponse(not_found=True)}
 
-    def slug(self) -> str:
-        return "files"
-
-    def verb(self) -> str:
-        return "preview"
-
     def get(self, id: int | str) -> ResponseReturnValue:
         if self.is_create(id):
             raise NotFoundError("Not found")

@@ -101,9 +101,6 @@ class CapabilitiesEndpoint(Endpoint):
         "get": DocumentedResponse(CapabilityDetailResponse),
     }
 
-    def slug(self) -> str:
-        return "capabilities"
-
     def get_all(self, page: int = 1, limit: int = 20) -> ResponseReturnValue:
         """List every registered capability with manifest metadata and connection state."""
         caps = _load_caps()

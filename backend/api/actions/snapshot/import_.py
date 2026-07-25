@@ -45,12 +45,6 @@ class SnapshotImportAction(Action):
     _post_may_create: ClassVar[bool] = False
     response_dto = {"post": DocumentedResponse(SnapshotImportResult)}
 
-    def slug(self) -> str:
-        return "snapshot"
-
-    def verb(self) -> str:
-        return "import"
-
     def post(self, id: int | str, data: Request | None) -> ResponseReturnValue:
         """Stage an uploaded snapshot and request a restart to apply it.
 

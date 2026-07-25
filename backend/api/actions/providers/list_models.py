@@ -38,12 +38,6 @@ class ProviderListModels(Action):
     request_dto: ClassVar[type[Request] | None] = ListModelsRequest
     response_dto = {"post": DocumentedResponse(ListModelsResult)}
 
-    def slug(self) -> str:
-        return "providers"
-
-    def verb(self) -> str:
-        return "list-models"
-
     def post(self, id: int | str, data: Request | None) -> ResponseReturnValue:
         if not self.is_create(id):
             raise NotFoundError("Not found")

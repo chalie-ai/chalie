@@ -40,12 +40,6 @@ class PersonalityAction(Action):
         ),
     }
 
-    def slug(self) -> str:
-        return "settings"
-
-    def verb(self) -> str:
-        return "personality"
-
     def get(self, id: int | str) -> ResponseReturnValue:
         """Read the current personality tuple and its derived voice."""
         tup = personality_service.get_tuple()

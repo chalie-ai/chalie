@@ -26,12 +26,6 @@ class BlockedAction(Action):
         "delete": DocumentedResponse(not_found=False),
     }
 
-    def slug(self) -> str:
-        return "policies"
-
-    def verb(self) -> str:
-        return "blocked"
-
     def _service(self) -> PolicyManager:
         return PolicyManager()
 

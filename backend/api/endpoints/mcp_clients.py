@@ -48,9 +48,6 @@ class McpClients(Endpoint):
         "post": DocumentedResponse(McpServer, extras=((404, "Server not found"),)),
     }
 
-    def slug(self) -> str:
-        return "mcp-clients"
-
     def _service(self) -> McpClientService:
         return McpClientService()
 

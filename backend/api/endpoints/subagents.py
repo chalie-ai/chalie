@@ -46,9 +46,6 @@ class SubagentsEndpoint(Endpoint):
         "delete": DocumentedResponse(SubagentStopResult, not_found=False),  # ack-style: always 200
     }
 
-    def slug(self) -> str:
-        return "subagents"
-
     def get_all(self, page: int = 1, limit: int = 20) -> ResponseReturnValue:
         """Active async delegates — hydrates the Processes panel on
         load/reconnect, since WS push events are missed while the client is

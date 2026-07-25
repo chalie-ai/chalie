@@ -45,9 +45,6 @@ class McpSettingsEndpoint(Endpoint):
         "post": DocumentedResponse(extras=((404, "No per-resource id"),)),
     }
 
-    def slug(self) -> str:
-        return "mcp-server"
-
     def get_all(self, page: int = 1, limit: int = 20) -> ResponseReturnValue:
         """Read the singleton settings record."""
         dto = self._settings_dto()

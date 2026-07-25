@@ -57,12 +57,6 @@ class MemorySearch(Action):
     # search, so this handler can never 404.
     response_dto = {"get": DocumentedResponse(MemoryHitResponse, listing=True, not_found=False)}
 
-    def slug(self) -> str:
-        return "memory"
-
-    def verb(self) -> str:
-        return "search"
-
     def get(self, id: int | str) -> ResponseReturnValue:
         """Search episodic memory + the data graph and return ranked, merged hits.
 

@@ -1,7 +1,9 @@
 """Action — abstract base for verb-shaped endpoints, aligned with the CRUD contract.
 
 Subclass :class:`Action` to migrate a non-CRUD operation into
-``api/actions/{slug}/{verb}.py``. Routes generated per subclass:
+``api/actions/{slug}/{verb}.py``. The slug and verb are supplied by
+``api/routes.py`` — an Action never names its own path. Routes generated per
+mounted controller:
 
 - ``/api/{slug}/{verb}``       → dispatched with the create sentinel id ``-1``
 - ``/api/{slug}/{verb}/<id>``  → dispatched with the captured id
@@ -14,7 +16,6 @@ defaults. ``all`` is a reserved verb — it collides with the CRUD listing route
 from __future__ import annotations
 
 import re
-from abc import abstractmethod
 from typing import ClassVar
 
 from flask.typing import ResponseReturnValue
@@ -40,25 +41,27 @@ class Action(Endpoint):
     when the id itself contains slashes (e.g. a file path relative to a
     root) — a ``string`` converter stops at the first ``/``."""
 
-    @abstractmethod
-    def verb(self) -> str:
-        """URL segment of the operation (``/api/{slug}/{verb}/...``)."""
+    def __init__(self, slug: str, verb: str) -> None:
+        """Bind this controller to the ``{slug}/{verb}`` pair the route map mounts it under.
 
-    def namespace(self) -> Namespace:
-        """Build the fully-wired Namespace for this action's verb routes only."""
-        verb = self.verb()
+        Both names are validated here so an illegal verb fails when
+        ``api/routes.py`` is imported — at boot, not on the first request.
+        """
+        super().__init__(slug)
         if verb == "all":
-            raise ValueError(
-                f'Action verb "all" is reserved — it collides with /api/{self.slug()}/all'
-            )
+            raise ValueError(f'Action verb "all" is reserved — it collides with /api/{slug}/all')
         if not _VERB_PATTERN.fullmatch(verb):
             raise ValueError(
                 f'Action verb "{verb}" must be kebab-case ([a-z0-9-], no leading/trailing dash)'
             )
+        self.verb = verb
+
+    def namespace(self) -> Namespace:
+        """Build the fully-wired Namespace for this action's verb routes only."""
         ns = Namespace(
-            self.slug(),
-            path=f"/api/{self.slug()}",
-            description=f"{self.slug()} {verb} action",
+            self.slug,
+            path=f"/api/{self.slug}",
+            description=f"{self.slug} {self.verb} action",
         )
         action = self
 
@@ -108,8 +111,8 @@ class Action(Endpoint):
         # separators + kebab-only verbs make these disjoint from the CRUD
         # names ({slug}_all / {slug}_item) and from every other verb — a verb
         # named "item" or "x-item" can never forge another route's name.
-        ns.route(f"/{verb}", endpoint=f"{self.slug()}__{verb}")(VerbResource)
-        ns.route(f"/{verb}/<{self.id_converter}:id>", endpoint=f"{self.slug()}__{verb}__item")(VerbItemResource)
+        ns.route(f"/{self.verb}", endpoint=f"{self.slug}__{self.verb}")(VerbResource)
+        ns.route(f"/{self.verb}/<{self.id_converter}:id>", endpoint=f"{self.slug}__{self.verb}__item")(VerbItemResource)
         verb_map: dict[str, str | None] = {"get": "get", "post": "post", "put": None, "delete": "delete"}
         self._document(ns, [(VerbResource, verb_map), (VerbItemResource, verb_map)])
         return ns

@@ -38,12 +38,6 @@ class RegenerateTokenAction(Action):
         "post": DocumentedResponse(RegenerateTokenResult),
     }
 
-    def slug(self) -> str:
-        return "mcp-server"
-
-    def verb(self) -> str:
-        return "regenerate-token"
-
     def post(self, id: int | str, data: Request | None) -> ResponseReturnValue:
         """Mint a fresh MCP server bearer token, revoking the prior one if present."""
         auth_svc = WrapperAuthService()

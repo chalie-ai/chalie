@@ -52,9 +52,6 @@ class WrappersEndpoint(Endpoint):
         ),
     }
 
-    def slug(self) -> str:
-        return "wrappers"
-
     def _service(self) -> WrapperAuthService:
         return WrapperAuthService()
 

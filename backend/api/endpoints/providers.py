@@ -55,9 +55,6 @@ class Providers(Endpoint):
         ),  # idempotent: 204 even when already gone
     }
 
-    def slug(self) -> str:
-        return "providers"
-
     def _service(self) -> ProviderDbService:
         return ProviderDbService()
 

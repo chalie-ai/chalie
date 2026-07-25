@@ -30,12 +30,6 @@ class CapabilitiesDisconnect(Action):
         "post": DocumentedResponse(extras=((404, "Capability not found"),)),
     }
 
-    def slug(self) -> str:
-        return "capabilities"
-
-    def verb(self) -> str:
-        return "disconnect"
-
     def post(self, id: int | str, data: Request | None) -> ResponseReturnValue:
         """Disconnect a capability.
 
