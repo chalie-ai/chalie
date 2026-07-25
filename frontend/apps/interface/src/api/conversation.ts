@@ -1,8 +1,7 @@
 import { api } from '@chalie/shared';
 
-/** A single attachment served from /api/documents/preview/<id> (URL is backend-provided). */
+/** A single attachment served from /api/files/preview/<path> (URL is backend-provided). */
 export interface ConversationAttachment {
-  doc_id: string;
   filename: string;
   mime_type: string;
   is_image: boolean;

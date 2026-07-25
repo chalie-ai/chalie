@@ -13,7 +13,6 @@ const LABELS: Record<string, string> = {
   cognition: 'Cognition',
   scheduler: 'Scheduler',
   lists: 'Lists',
-  documents: 'Documents',
   capabilities: 'Capabilities',
   policies: 'Policies',
   skills: 'Skills',

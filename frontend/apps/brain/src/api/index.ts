@@ -9,7 +9,6 @@ export { providers } from './providers';
 export { cognition } from './cognition';
 export { scheduler } from './scheduler';
 export { lists } from './lists';
-export { documents } from './documents';
 export { capabilities } from './capabilities';
 export { policies } from './policies';
 export { skills } from './skills';

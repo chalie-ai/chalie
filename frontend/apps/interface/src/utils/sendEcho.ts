@@ -74,15 +74,14 @@ function _ensureRegistered(): void {
 /**
  * The echoed view of a not-yet-uploaded attachment. `filename`/`mime_type` are
  * read straight off the File, which is everything UserBubble renders — the chip
- * label and its image-vs-document icon. `doc_id`/`url` stay empty because the
- * document does not exist server-side until the multipart POST lands and the
- * backend ingests it; UserBubble's `open()` no-ops on an empty `url`, so an
- * in-flight chip is inert rather than a link to nothing. The real attachments,
- * carrying both, arrive with the REST refetch that replaces this echo.
+ * label and its image-vs-document icon. `url` stays empty because the document
+ * does not exist server-side until the multipart POST lands and the backend
+ * ingests it; UserBubble's `open()` no-ops on an empty `url`, so an in-flight
+ * chip is inert rather than a link to nothing. The real attachments, carrying
+ * the URL, arrive with the REST refetch that replaces this echo.
  */
 function echoAttachments(files: File[]): ConversationAttachment[] {
   return files.map((file) => ({
-    doc_id: '',
     filename: file.name,
     mime_type: file.type,
     is_image: file.type.startsWith('image/'),

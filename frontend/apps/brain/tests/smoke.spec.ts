@@ -12,7 +12,6 @@ const NAV_IDS = [
   'cognition',
   'scheduler',
   'lists',
-  'documents',
   'capabilities',
   'policies',
   'skills',
