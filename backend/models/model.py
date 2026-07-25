@@ -189,14 +189,3 @@ class Model(Serializable, HasTable):
         connection = self._bound_connection()
         connection.execute(f"DELETE FROM {self.get_table()} WHERE id = ?", (self.id,))
         self.id = None
-
-    @classmethod
-    def truncate(cls) -> int:
-        """Delete every row of this model's table on the bound connection.
-
-        The whole-table counterpart to :meth:`delete` (one row): no predicate,
-        no WHERE. Never commits — the bound connection autocommits and
-        ``Database.transaction()`` groups a multi-table atomic wipe (I6). Returns
-        the number of rows removed (``cursor.rowcount``)."""
-        cursor = cls._bound_connection().execute(f"DELETE FROM {cls.get_table()}")
-        return cursor.rowcount

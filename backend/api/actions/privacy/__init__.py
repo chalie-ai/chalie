@@ -1,1 +1,0 @@
-"""Privacy vertical actions."""

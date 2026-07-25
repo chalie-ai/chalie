@@ -415,43 +415,6 @@ class MemoryStore:
     def pipeline(self, _transaction: bool = True) -> 'PipelineProxy':
         return PipelineProxy(self)
 
-    def export_matching(self, patterns: List[str]) -> Dict[str, Dict[str, object]]:
-        """
-        Instead of keys() × type() × get() per key (O(n×m×5) lock acquisitions),
-        iterates each keyspace once and applies all patterns simultaneously —
-        O(n) total, where n = number of live keys across all keyspaces.
-        """
-        import re as _re
-        regexes = [_re.compile(p.replace("*", ".*").replace("?", ".")) for p in patterns]
-
-        def _matches(k: str) -> bool:
-            return any(rx.fullmatch(k) for rx in regexes)
-
-        result: Dict[str, Dict[str, object]] = {}
-        now = time.time()
-
-        with self._str_lock:
-            for k, (v, expiry) in cast("Dict[str, Tuple[object, Optional[float]]]", self._strings).items():
-                if (expiry is None or now <= expiry) and _matches(k):
-                    result[k] = {"type": "string", "value": v}
-
-        with self._list_lock:
-            for k, (v, expiry) in cast("Dict[str, Tuple[object, Optional[float]]]", self._lists).items():
-                if (expiry is None or now <= expiry) and _matches(k):
-                    result[k] = {"type": "list", "value": list(cast("List[str]", v))}
-
-        with self._zset_lock:
-            for k, (v, expiry) in cast("Dict[str, Tuple[object, Optional[float]]]", self._sorted_sets).items():
-                if (expiry is None or now <= expiry) and _matches(k):
-                    result[k] = {"type": "zset", "value": [m for m, _ in cast("List[Tuple[float, str]]", v)]}
-
-        with self._set_lock:
-            for k, (v, expiry) in cast("Dict[str, Tuple[object, Optional[float]]]", self._sets).items():
-                if (expiry is None or now <= expiry) and _matches(k):
-                    result[k] = {"type": "set", "value": list(cast("Set[str]", v))}
-
-        return result
-
     # ── Type method (compatibility) ────────────────────────────
 
     def type(self, key: str) -> str:

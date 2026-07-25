@@ -2,9 +2,9 @@
 
 A ``voice_transcript`` row cascades away with its transcript, but the WAV it
 names is invisible to SQLite — nothing in the database can reach it once the
-row is gone. Both delete paths therefore have to unlink the file *while* the
-row still exists, and this test proves they do by driving the real sweep and
-the real privacy endpoint against real files on disk. No mocks.
+row is gone. The retention sweep therefore has to unlink the file *while* the
+row still exists, and this test proves it does by driving the real sweep
+against real files on disk. No mocks.
 
 ``FileMapperService._VOICE_DIR`` is redirected into pytest's ``tmp_path``, so
 these deletions can only ever touch throwaway files — never the real
@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from flask.testing import FlaskClient
 
 from models.voice_transcript import VoiceTranscript
 from services.file_mapper_service import FileMapperService
@@ -120,27 +119,3 @@ class TestRetentionSweep:
         GarbageCollectorService().run()
 
         assert VoiceTranscript.filter("transcript_id", transcript_id).first() is None
-
-
-class TestPrivacyWipe:
-    def test_delete_all_removes_every_stored_voice_file_and_row(
-        self,
-        authed_client: tuple[FlaskClient, sqlite3.Connection, object],
-        voice_dir: Path,
-    ) -> None:
-        """"Delete all my data" means the audio too — stored speech is a
-        verbatim recording of the conversation."""
-        client, db, _store = authed_client
-        _spoken_turn(db, voice_dir, turn_id=5, age_days=1)
-        _spoken_turn(db, voice_dir, turn_id=6, age_days=1)
-        assert len(list(voice_dir.iterdir())) == 2
-
-        response = client.delete(
-            "/api/privacy/delete-all", headers={"X-Confirm-Delete": "yes"},
-        )
-
-        assert response.status_code == 200
-        assert list(voice_dir.iterdir()) == [], "no recording may survive the wipe"
-        assert db.execute("SELECT COUNT(*) FROM voice_transcript").fetchone()[0] == 0
-        # The directory itself stays — the next synthesis writes straight into it.
-        assert voice_dir.is_dir()
