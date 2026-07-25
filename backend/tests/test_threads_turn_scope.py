@@ -1,5 +1,5 @@
 """Regression guard for ``Transcript.turn_scope_ids`` — the turn-scope resolver
-the thread-block render path (``api.threads._rows_to_messages``) uses to widen a
+the thread-block render path (``TurnSerializerService``'s row projection) uses to widen a
 set of transcript ids into every id of the turn(s) they belong to.
 
 The multi-turn branch was previously hand-rolled in the API layer with a

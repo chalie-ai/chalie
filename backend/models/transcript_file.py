@@ -10,7 +10,7 @@ base ``Model.save()``/``delete()`` (id-centric: INSERT excludes ``id`` + reads
 ``__dict__ ∩ __columns__``), and this model carries its own conflict-safe
 :meth:`link` insert. Holds no mp, calls no service (Rule-3 depth).
 
-The read side (``api.threads._fetch_attachments_for_transcripts``) reads this
+The read side (``TurnSerializerService``'s attachment hydration) reads this
 table directly — no join — and resolves the absolute path by joining the
 relative ``path`` onto the documents root.
 """

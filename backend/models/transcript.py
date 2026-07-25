@@ -196,7 +196,7 @@ class Transcript(Model):
     def count_turns(cls, channel: str, *, exclude_roles: tuple[str, ...] = (),
                     query: str = "") -> int:
         """Distinct turn count for a channel (NULL-safe ``_TURN_KEY``) — the
-        feed's ``has_more`` source. A non-empty ``query`` counts only threads
+        feed's pagination total. A non-empty ``query`` counts only threads
         matching the search filter."""
         role_filter = "".join(" AND role != ?" for _ in exclude_roles)
         having, having_params = cls._thread_query_filter(query)
@@ -210,15 +210,16 @@ class Transcript(Model):
     @classmethod
     def recent_threads(cls, channel: str, *, exclude_roles: tuple[str, ...] = (),
                        limit: int = 20, offset: int = 0, query: str = "",
-                       ) -> tuple[list[dict[str, object]], bool, int]:
+                       ) -> list[dict[str, object]]:
         """Thread-level metadata for the collapsed feed: one summary per thread
         (turn_id), ordered by last activity (``MAX(id)``). Each dict carries
         ``turn_id``, ``last_activity_at``, ``last_row_id``, ``row_count``,
         ``preview`` (first row's content, truncated) and ``working`` (no settled
         assistant row yet). Legacy NULL-turn_id rows each form their own
         singleton thread via ``_TURN_KEY``. A non-empty ``query`` restricts the
-        page to threads with a matching user-role row. Returns
-        ``(threads, has_more, threads_returned)``."""
+        page to threads with a matching user-role row. Page-position facts
+        (total, has-more) come from :meth:`count_turns` — the one authority —
+        so this returns the page and nothing else."""
         role_filter = "".join(" AND role != ?" for _ in exclude_roles)
         having, having_params = cls._thread_query_filter(query)
         conn = cls._bound_connection()
@@ -231,7 +232,7 @@ class Transcript(Model):
             ).fetchall()
         ]
         if not page_keys:
-            return [], False, 0
+            return []
 
         placeholders = cls._placeholders(len(page_keys))
         meta_rows = conn.execute(
@@ -275,17 +276,13 @@ class Transcript(Model):
             for key in page_keys
         ]
         threads.sort(key=lambda t: cast("int", t.get("last_row_id") or 0), reverse=True)
-        threads_returned = len(threads)
-        has_more = cls.count_turns(
-            channel, exclude_roles=exclude_roles, query=query,
-        ) > offset + threads_returned
-        return threads, has_more, threads_returned
+        return threads
 
     @classmethod
     def by_turn(cls, channel: str, turn_id: int) -> list[dict[str, object]]:
         """Every row of one thread (``channel``/``turn_id``), oldest-first, as
         plain column dicts — the expand-on-click / turn-serialisation payload
-        the REST reads (``api.threads.serialize_turn``) and the
+        the REST reads (``TurnSerializerService.serialize``) and the
         ``delegate:thread_gist`` prompt project. The WHOLE turn, no settle0
         floor: the caller tags rows past settle0 itself. Dict-shaped (like
         ``recent_threads``) because every consumer treats rows as

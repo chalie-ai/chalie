@@ -1,7 +1,7 @@
 """Turn serialization service — projects transcript rows into the conversation
 message shape used by the thread feed, thread-expand, and thread-batch endpoints.
 
-Extracted from ``api.threads`` so the routes become thin controllers over an
+Owns turn serialisation outright, so the routes stay thin controllers over an
 Endpoint/Action contract and the business logic lives in a service class that
 non-HTTP callers can reuse without spinning up Flask.
 

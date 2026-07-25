@@ -308,7 +308,7 @@ describe('requestStop — DELETE only fires for a confirmed in-flight turn', () 
     turnDom.setTurnWorking(11, ConfigType.USER, true);
     await session.requestStop(11, ConfigType.USER, null, '');
     expect(fetch).toHaveBeenCalledWith(
-      '/api/thread/11?type=user',
+      '/api/threads/11?type=user',
       expect.objectContaining({ method: 'DELETE' }),
     );
   });

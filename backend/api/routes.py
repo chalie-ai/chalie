@@ -46,6 +46,8 @@ from .actions.skills.copy import SkillCopy
 from .actions.skills.toggle import SkillToggle
 from .actions.snapshot.export import SnapshotExportAction
 from .actions.snapshot.import_ import SnapshotImportAction
+from .actions.threads.batch import ThreadsBatch
+from .actions.threads.thinking_level import ThreadsThinkingLevel
 from .actions.voice.health import VoiceHealthAction
 from .actions.voice.transcribe import VoiceTranscribeAction
 from .actions.voice.transcript import VoiceTranscriptAction
@@ -59,6 +61,7 @@ from .endpoints.providers import Providers
 from .endpoints.scheduler import Scheduler
 from .endpoints.skills import Skills
 from .endpoints.subagents import SubagentsEndpoint
+from .endpoints.threads import ThreadsEndpoint
 from .endpoints.wrappers import WrappersEndpoint
 
 ROUTES: tuple[Endpoint, ...] = (
@@ -109,6 +112,10 @@ ROUTES: tuple[Endpoint, ...] = (
     SnapshotImportAction("snapshot", "import"),
 
     SubagentsEndpoint("subagents"),
+
+    ThreadsEndpoint("threads"),
+    ThreadsBatch("threads", "batch"),
+    ThreadsThinkingLevel("threads", "thinking-level"),
 
     VoiceHealthAction("voice", "health"),
     VoiceTranscribeAction("voice", "transcribe"),

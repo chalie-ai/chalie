@@ -56,7 +56,7 @@ def test_finish_does_not_clobber_a_cancel_that_lands_first(db: sqlite3.Connectio
     assert opened is not None and opened.ended_at is None  # sanity: real open, still live
 
     # A DIFFERENT inert mp for the same (channel, turn_id) — exactly how the
-    # real DELETE handler builds its instance (api.threads.ThreadItemResource.delete).
+    # real DELETE handler builds its instance (ThreadsEndpoint.delete).
     canceller = MessageProcessor(UserConfig(), turn_id)
     cancelled = canceller.turn_execution_service.cancel()
     assert cancelled is not None

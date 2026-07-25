@@ -3,7 +3,7 @@
 Drives the REAL ``MessageProcessor._seed_turn_zero`` (the same production
 method the ACT loop fires once before iteration 0) against a real test DB and
 real files, then follows the attachment through the real read paths a client
-actually uses: the ``transcript_files`` link row, ``api.threads``'s attachment
+actually uses: the ``transcript_files`` link row, the turn serializer's attachment
 projection, ``FileIndexService`` search, and the real ``/api/files/preview``
 HTTP endpoint via ``authed_client``. ZERO mocks — the ``_DOCUMENTS_DIR`` /
 ``get_file_index_db_path`` patches are the same conftest-blessed path
@@ -73,7 +73,7 @@ def _redirect_docs_and_index(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
 
 
 def _stage_attachment(name: str, content: bytes) -> str:
-    """Stage exactly the way ``api.threads._stage_chat_uploads`` does: a real
+    """Stage exactly the way ``ThreadsEndpoint._stage_uploads`` does: a real
     tmp path under ``TMP_PATH_PREFIX`` with an 8-hex collision prefix on the
     basename, real bytes written to it."""
     tmp_path = new_tmp_path(f"{uuid.uuid4().hex[:8]}_{name}")
@@ -108,7 +108,7 @@ def test_text_attachment_lands_in_uploads_indexed_linked_and_previewable(
 ) -> None:
     """The full chain a chat client depends on for one text attachment: saved
     file -> transcript_files link -> file-index search hit -> the pill
-    api.threads projects -> the pill's own preview URL serving the real bytes."""
+    the turn serializer projects -> the pill's own preview URL serving the real bytes."""
     client, db_conn, _store = authed_client
     docs_dir = _redirect_docs_and_index(tmp_path, monkeypatch)
 
@@ -130,7 +130,7 @@ def test_text_attachment_lands_in_uploads_indexed_linked_and_previewable(
     # FileIndexService finds it by its actual content, not just its filename.
     assert str(saved) in FileIndexService().search("Valletta")
 
-    # api.threads projects it into the attachment pill the FE renders.
+    # the turn serializer projects it into the attachment pill the FE renders.
     by_id = _fetch_attachments_for_transcripts(db_conn, [uid])
     assert by_id[uid] == [{
         "filename": "brief.txt",
@@ -138,7 +138,7 @@ def test_text_attachment_lands_in_uploads_indexed_linked_and_previewable(
         "is_image": False,
         "url": "/api/files/preview/uploads/brief.txt",
     }]
-    # The dict must satisfy the Attachment DTO — GET /api/thread validates it.
+    # The dict must satisfy the Attachment DTO — GET /api/threads/<id> validates it.
     Attachment.model_validate(by_id[uid][0])
 
     # The pill's own URL serves the real bytes through the real HTTP endpoint.

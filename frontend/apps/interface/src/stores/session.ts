@@ -418,13 +418,13 @@ export const useSessionStore = defineStore('session', {
       }
     },
 
-    /** DELETE /api/thread/<turn_id>?type=<type> — best-effort interrupt, never throws. */
+    /** DELETE /api/threads/<turn_id>?type=<type> — best-effort interrupt, never throws. */
     async _postInterrupt(turnId: number | null = null, type: string = ConfigType.USER): Promise<void> {
       if (turnId == null) return;
       try {
         const host = getHost();
         const base = host ? host.replace(/\/$/, '') : '';
-        await fetch(base + '/api/thread/' + turnId + '?type=' + encodeURIComponent(type), {
+        await fetch(base + '/api/threads/' + turnId + '?type=' + encodeURIComponent(type), {
           method: 'DELETE',
           credentials: 'same-origin',
         });

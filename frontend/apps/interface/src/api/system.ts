@@ -19,6 +19,11 @@ export interface ReadyStatus {
 // a 401 there means the session expired → redirect to /login/.
 const NO_REDIRECT = { redirectOnAuthError: false } as const;
 
+interface ThinkingLevelEnvelope {
+  success: true;
+  result: { level: string };
+}
+
 export const system = {
   /** GET /auth/status — readiness probe used by the auth gate in main.ts. */
   authStatus(): Promise<AuthStatus> {
@@ -42,8 +47,8 @@ export const system = {
     return api.post('/health', payload, NO_REDIRECT);
   },
 
-  /** GET /thread/<turnId>/thinking-level?type= — the sender's last-chosen thinking level for this thread. */
+  /** GET /api/threads/thinking-level/<turnId>?type= — the sender's last-chosen thinking level for this thread. */
   thinkingLevel(type: string, turnId: number): Promise<{ level: string }> {
-    return api.get(`/api/thread/${turnId}/thinking-level?type=${type}`);
+    return api.get<ThinkingLevelEnvelope>(`/api/threads/thinking-level/${turnId}?type=${type}`).then((body) => body.result);
   },
 };

@@ -50,7 +50,7 @@ def _png_with_text(text: str) -> bytes:
 
 
 def _write_attachment(label: str) -> str:
-    """Stage exactly the way ``api.threads._stage_chat_uploads`` does: paths
+    """Stage exactly the way ``ThreadsEndpoint._stage_uploads`` does: paths
     must be under ``TMP_PATH_PREFIX`` (so the sandbox guard passes) with an
     8-hex collision prefix on the basename."""
     path = new_tmp_path(f"{uuid.uuid4().hex[:8]}_seed_parallel_{label}.png")

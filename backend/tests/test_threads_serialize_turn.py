@@ -6,7 +6,7 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Regression guard for ``api.threads.serialize_turn``'s ``working`` field on
+"""Regression guard for ``TurnSerializerService.serialize``'s ``working`` field on
 the ``schedule`` channel (``external_turn_id=True`` — the schedule's own
 integer id IS the turn_id, and every tick reuses it).
 
@@ -22,7 +22,7 @@ turn_id) is not None``.
 
 Drives the real ``TurnExecutionService``/``TranscriptService`` through a real
 inert ``MessageProcessor`` under ``ScheduledConfig`` (construction is
-side-effect-free, mirrors ``DELETE /api/thread/<turn_id>``'s own cancel path
+side-effect-free, mirrors ``DELETE /api/threads/<turn_id>``'s own cancel path
 in ``api/threads.py``) against the real, fully-migrated SQLite database — the
 same collaborators production uses to open/finish a turn's execution row and
 append its transcript rows. No mocks, no hand-rolled DDL.
@@ -423,7 +423,7 @@ def test_serialize_turn_stamps_the_config_type_it_was_called_with(db: sqlite3.Co
 def test_thread_feed_stamps_every_summary_with_the_requested_type(
     authed_client: tuple[FlaskClient, sqlite3.Connection, object],
 ) -> None:
-    """``GET /api/threads?type=scheduled`` must resolve to the ``schedule``
+    """``GET /api/threads/all?type=scheduled`` must resolve to the ``schedule``
     channel and stamp EVERY summary it returns ``type == "scheduled"`` — the
     identity a client needs to correctly refetch any thread it discovers via
     this feed. A sibling thread on the ``user`` channel must not leak into
@@ -443,9 +443,9 @@ def test_thread_feed_stamps_every_summary_with_the_requested_type(
     user_mp.current_transcript_id = uid
     user_mp.transcript_service.append_assistant("Nothing scheduled.")
 
-    resp = client.get(f"/api/threads?type={_SCHEDULED_TYPE}")
+    resp = client.get(f"/api/threads/all?type={_SCHEDULED_TYPE}")
     assert resp.status_code == 200
-    threads = resp.get_json()["threads"]
+    threads = resp.get_json()["result"]
 
     assert threads  # sanity: the seeded scheduled thread is actually returned
     assert all(t["type"] == _SCHEDULED_TYPE for t in threads)
@@ -470,14 +470,14 @@ def test_scheduled_turn_fetched_with_wrong_type_renders_empty_but_right_type_ren
     mp.transcript_service.append_assistant("Standup reminder: 9am daily sync.")
     assert mp.turn_execution_service.finish(TurnExecution.COMPLETED) is not None
 
-    wrong_type_resp = client.get(f"/api/thread/{turn_id}")  # default type=user
+    wrong_type_resp = client.get(f"/api/threads/{turn_id}")  # default type=user
     assert wrong_type_resp.status_code == 200
-    wrong_body = wrong_type_resp.get_json()
+    wrong_body = wrong_type_resp.get_json()["result"]
     assert wrong_body["messages"] == []
 
-    right_type_resp = client.get(f"/api/thread/{turn_id}?type={_SCHEDULED_TYPE}")
+    right_type_resp = client.get(f"/api/threads/{turn_id}?type={_SCHEDULED_TYPE}")
     assert right_type_resp.status_code == 200
-    right_body = right_type_resp.get_json()
+    right_body = right_type_resp.get_json()["result"]
     assert right_body["type"] == _SCHEDULED_TYPE
     contents = [m["content"] for m in right_body["messages"]]
     assert "Standup reminder: 9am daily sync." in contents

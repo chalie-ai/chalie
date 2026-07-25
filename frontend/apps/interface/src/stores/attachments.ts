@@ -1,7 +1,7 @@
 /**
  * Attachments store — holds raw File objects (images AND documents) and renders
  * a preview chip for each. Nothing is sent to the server here; raw files ride
- * the multipart POST /api/thread at send time (backend ingests via `document.upload`
+ * the multipart POST /api/threads/<turn_id> at send time (backend ingests via `document.upload`
  * by PATH, never bytes — see session.sendMessage). Image previews come from
  * webPlatformAdapter.readFileAsDataURL (no URL.createObjectURL); docs have no
  * thumbnail (dataUrl null) and render as a 📄 chip.
