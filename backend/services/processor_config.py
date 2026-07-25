@@ -122,8 +122,9 @@ class ProcessorConfig(ABC):
 
     memory_seed: bool
     """True → fire the memory recall tool (action='recall') once on turn 0.
-    Attachments are NOT a flag: presence of metadata['attachments'] auto-fires
-    document.upload per file on turn 0."""
+    Attachments are NOT a flag: presence of metadata['attachments'] auto-ingests
+    each file on turn 0 (saved via FileParserService, linked in
+    ``transcript_files``, dispatched ``vision`` for images, ``read`` otherwise)."""
 
     # ── Split-channel routing (cross-turn history read channel) ───────────────
 

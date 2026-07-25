@@ -2,7 +2,7 @@
 
 Pulls a URL's body to a unique temp path (for later reading or processing) and
 returns the path, byte count, and content type so the model can hand it to
-``document.upload`` or a file tool.
+``read`` or another file tool.
 
 Security:
   - SSRF guard: a SINGLE gate in ``services.web_fetch`` blocks requests to
