@@ -202,6 +202,7 @@ class FileIndexService:
     - :meth:`index_file`: delete-then-insert a row for *path*.
     - :meth:`upsert_content`: delete-then-insert a row for *path* with given content.
     - :meth:`remove_file`: delete the row for *path*.
+    - :meth:`clear`: delete every row (privacy delete-all).
     - :meth:`move_file`: delete src row, insert dst row.
     - :meth:`search`: return matching file paths.
     - :meth:`should_index`: return True if *path* should be indexed.
@@ -308,6 +309,17 @@ class FileIndexService:
             logger.debug("[FileIndexService] Removed %s from index", path)
         except Exception as exc:
             logger.error("[FileIndexService] Failed to remove %s: %s", path, exc)
+
+    def clear(self) -> None:
+        """Delete every row from the index (privacy delete-all).
+
+        Raises on failure — unlike the watcher-thread methods above, this runs
+        on a request thread whose caller reports the outcome. The reconcile
+        scan repopulates the index from disk afterwards.
+        """
+        with Database.transaction(self.db_path) as conn:
+            conn.execute("DELETE FROM file_index_fts")
+        logger.info("[FileIndexService] Index cleared")
 
     def move_file(self, src: str, dst: str) -> None:
         """Move a file in the index.

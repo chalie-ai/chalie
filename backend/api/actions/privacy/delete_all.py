@@ -9,6 +9,7 @@ the wipe plus any per-table truncation warnings.
 from __future__ import annotations
 
 import logging
+import shutil
 from typing import ClassVar
 
 from flask.typing import ResponseReturnValue
@@ -18,7 +19,6 @@ from api.endpoint import DocumentedResponse
 from api.response.privacy import DeleteAllResult
 from exceptions import EndpointError
 from models.data_graph import DataGraphRow
-from models.document_meta import DocumentMetaData
 from models.episode import Episode
 from models.llm_call_log import LlmCallLog
 from models.list import List
@@ -28,8 +28,9 @@ from models.model import Model
 from models.scheduled_item import ScheduledItem
 from models.tool_call import ToolCall
 from models.transcript import Transcript
-from models.watched_folder import WatchedFolder
 from services.database import Database
+from services.file_index_service import FileIndexService
+from services.file_mapper_service import FileMapperService
 from services.memory_client import MemoryClientService
 from services.time_utils import utc_now
 
@@ -45,8 +46,6 @@ _DELETE_ALL_MODELS: tuple[type[Model], ...] = (
     DataGraphRow,      # data_graph
     List,              # lists
     ScheduledItem,
-    DocumentMetaData,  # documents
-    WatchedFolder,
     MemoryRecallLog,
     LlmCallLog,
 )
@@ -57,6 +56,10 @@ _DELETE_ALL_MODELS: tuple[type[Model], ...] = (
 _DELETE_ALL_MODELLESS_TABLES = (
     "data_graph_edges",   # FK -> data_graph(id) ON DELETE CASCADE
     "concept_lut_misses",
+    # Legacy document tables — modelless since the document subsystem was
+    # deleted; entries die with the tables when the schema drops them.
+    "documents",
+    "watched_folders",
 )
 
 # MemoryStore key patterns that belong to the user and must be cleared.
@@ -102,7 +105,6 @@ class PrivacyDeleteAllAction(Action):
                 except Exception as e:
                     logger.warning(f"[REST API] Failed to truncate {model.get_table()}: {e}")
                     truncate_failures.append(model.get_table())
-
         # Clear user-owned MemoryStore keys
         try:
             store = MemoryClientService.create_connection()
@@ -112,6 +114,24 @@ class PrivacyDeleteAllAction(Action):
                     store.delete(*matched)
         except Exception as e:
             logger.warning(f"[REST API] Failed to clear memory store: {e}")
+
+        # Recursively delete the contents of the documents directory (directory itself stays)
+        try:
+            docs_path = FileMapperService.get_documents_path()
+            if docs_path.exists():
+                for item in docs_path.iterdir():
+                    if item.is_dir():
+                        shutil.rmtree(item)
+                    else:
+                        item.unlink()
+        except Exception as e:
+            logger.warning(f"[REST API] Failed to clear documents directory: {e}")
+
+        # Clear the extracted-content index; the reconcile scan repopulates it.
+        try:
+            FileIndexService().clear()
+        except Exception as e:
+            logger.warning(f"[REST API] Failed to clear file index: {e}")
 
         return DeleteAllResult(
             deleted=True,

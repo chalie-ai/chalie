@@ -265,19 +265,11 @@ def _register_workers(manager: "_WorkerManager", host: str, port: int) -> None:
     schedule (``ScheduledItemsDispatcherJob`` folds in the schedule poller; the
     nine idle-gated cognition jobs fold in the subconscious tick).
     """
-    from workers.document_worker import document_purge_worker
-
-    manager.register_service("document-purge-service", document_purge_worker)
-
-    from workers.folder_watcher_worker import folder_watcher_worker
-    manager.register_service("folder-watcher-service", folder_watcher_worker)
-
     from workers.tmp_cleanup_worker import tmp_cleanup_worker
     manager.register_service("tmp-cleanup-service", tmp_cleanup_worker)
 
     from cron.runner import cron_runner
     manager.register_service("cron-runner", cron_runner)
-
     _bootstrap_capability_sync()
     _try_register(manager, "search-expander-service",
                   "services.search_expander_service", "search_expander_worker")

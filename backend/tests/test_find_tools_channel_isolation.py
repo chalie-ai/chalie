@@ -192,7 +192,6 @@ _EXPECTED_NON_DISCOVERABLE = frozenset({
     "find_skills",             # framework — always_available only
     "memory",                  # framework — always_available only
     "chat_history_compactor",  # internal — dispatched programmatically
-    "document",                # internal — turn-zero attachment transition
     "skill_manager",           # system variant — SkillSuggestionConfig only
     "email",                   # personal info — pim delegate only
     "calendar",                # personal info — pim delegate only

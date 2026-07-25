@@ -12,7 +12,6 @@ import sqlite3
 
 import pytest
 
-from models.document_meta import DocumentMetaData
 from models.list import List
 from models.scheduled_item import ScheduledItem
 from services.embedding_utils import pack_embedding
@@ -101,23 +100,3 @@ def test_scheduled_item_write_embedding_replaces_vector(db: sqlite3.Connection) 
     assert len(rows) == 1
     assert rows[0][0] == _blob(dim, 1)
 
-
-def test_document_set_embedding_replaces_vector(db: sqlite3.Connection) -> None:
-    """Documents already used delete-then-insert; converging on the shared
-    idiom must preserve that replace behaviour."""
-    db.execute(
-        "INSERT INTO documents (id, original_name, mime_type, file_path) "
-        "VALUES ('d1', 'notes.txt', 'text/plain', '/data/notes.txt')"
-    )
-    db.commit()
-
-    dim = _vec_dim(db, 'documents_vec')
-    DocumentMetaData.set_embedding('d1', _blob(dim, 0))
-    DocumentMetaData.set_embedding('d1', _blob(dim, 1))
-
-    rows = db.execute(
-        "SELECT v.embedding FROM documents_vec v "
-        "JOIN documents d ON d.rowid = v.rowid WHERE d.id = 'd1'",
-    ).fetchall()
-    assert len(rows) == 1
-    assert rows[0][0] == _blob(dim, 1)

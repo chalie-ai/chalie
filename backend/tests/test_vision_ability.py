@@ -13,9 +13,8 @@ description or an exception — never an empty string or a half-success it would
 have to interpret. VisionAbility.run() converts the raise into status='error'
 with the cause visible.
 
-``image`` is an absolute filepath on disk (not a document id) — VisionAbility
-resolves it directly with no DocumentService involved; a path with no file at
-it is ``code=not-found``.
+``image`` is an absolute filepath on disk, resolved directly; a path with no
+file at it is ``code=not-found``.
 """
 
 import logging
@@ -124,52 +123,39 @@ def test_image_description_raises_when_provider_fails_and_ocr_reads_nothing(
         ImageDescription(str(img), "what is this").get_value()
 
 
-def test_vision_run_provider_error_returns_visible_error(db: sqlite3.Connection) -> None:
+def test_vision_run_provider_error_returns_visible_error(
+    db: sqlite3.Connection, tmp_path: Path
+) -> None:
     """The styled-error surface: VisionAbility.run wraps ImageDescription's raise in
     its one allowed except and returns status='error' with the cause visible
     — never a false success / empty string."""
     from abilities.vision import VisionAbility
     from contracts.params.vision_params_bag import VisionParamsBag
-    from services.document_service import DocumentService
-    from services.file_mapper_service import FileMapperService
 
     force_vision_provider(db)
 
-    # A real document row + a real on-disk image file the ability resolves.
-    import hashlib
-
-    png = blank_png_bytes()
-    doc_svc = DocumentService()
-    doc_id = doc_svc.create_document(
-        original_name="pic.png",
-        mime_type="image/png",
-        file_size=len(png),
-        file_path="vis001/pic.png",
-        file_hash=hashlib.sha256(png).hexdigest(),
-    )
-    # Materialise the file at the resolved documents path.
-    abs_path = FileMapperService.get_documents_path("vis001", "pic.png")
-    abs_path.parent.mkdir(parents=True, exist_ok=True)
-    abs_path.write_bytes(png)
+    # A real on-disk image file the ability resolves.
+    img = tmp_path / "pic.png"
+    img.write_bytes(blank_png_bytes())
 
     ability = VisionAbility(mp=_make_user_mp())
     result = ability.run(
-        built(VisionParamsBag.from_params({"image": doc_id, "instructions": "what is this"}))
+        built(VisionParamsBag.from_params({"image": str(img), "instructions": "what is this"}))
     )
 
     assert result.status == "error"
     assert result.body  # non-empty: the failure is visible, not swallowed
 
 
-def test_vision_run_unknown_doc_id_is_error(db: sqlite3.Connection) -> None:
+def test_vision_run_unknown_filepath_is_error(db: sqlite3.Connection) -> None:
     from abilities.vision import VisionAbility
     from contracts.params.vision_params_bag import VisionParamsBag
 
     ability = VisionAbility(mp=_make_user_mp())
-    result = ability.run(built(VisionParamsBag.from_params({"image": "deadbeef", "instructions": "x"})))
+    result = ability.run(built(VisionParamsBag.from_params({"image": "deadbeef.png", "instructions": "x"})))
 
     assert result.status == "error"
-    assert "deadbeef" in result.body
+    assert "deadbeef.png" in result.body
 
 
 # ===========================================================================

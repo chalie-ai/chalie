@@ -4,8 +4,8 @@ anchoring transcript row and an uploaded file.
 Active-record row-model (Rule 5 / §4.1). The table's primary key is the
 composite ``(transcript_id, path)`` — there is **no** ``id`` column — so the
 base ``Model.save()``/``delete()`` (id-centric: INSERT excludes ``id`` + reads
-``lastrowid``; UPDATE/DELETE ``WHERE id = ?``) do not apply here. Mirrors
-``TranscriptDoc``: ``__columns__`` omits ``id`` (so the base's phantom
+``lastrowid``; UPDATE/DELETE ``WHERE id = ?``) do not apply here.
+``__columns__`` omits ``id`` (so the base's phantom
 ``self.id`` never leaks into ``to_dict``/``to_json`` — ``_fields`` keeps only
 ``__dict__ ∩ __columns__``), and this model carries its own conflict-safe
 :meth:`link` insert. Holds no mp, calls no service (Rule-3 depth).
