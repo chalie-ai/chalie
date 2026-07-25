@@ -33,16 +33,17 @@ export const voice = {
   },
 
   /**
-   * POST /voice/synthesize — body { text }, returns raw Response (audio/wav).
-   * HTTP 503 + reason:'loading' means the TTS model is warming up; the player
-   * runs the Retry-After loop.
+   * GET /voice/transcript/<id> — the speech already synthesized for one
+   * settled reply. Returns the raw Response so the player can decode the body
+   * itself: 200 carries the audio/wav, 202 means synthesis is running (this
+   * request started it, for history that predates pre-synthesis), 409 means it
+   * failed for good, 404 means the row can never speak.
    */
-  speak(text: string): Promise<Response> {
-    return fetch(`${getHost().replace(/\/$/, '')}/api/voice/synthesize`, {
-      method: 'POST',
+  transcript(transcriptId: number, signal?: AbortSignal): Promise<Response> {
+    return fetch(`${getHost().replace(/\/$/, '')}/api/voice/transcript/${transcriptId}`, {
+      method: 'GET',
       credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text }),
+      signal,
     });
   },
 };

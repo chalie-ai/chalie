@@ -49,6 +49,20 @@ export interface ConversationMessage {
    * has any of them is a thread, so the feed shows its opener.
    */
   thread_message?: boolean;
+  /**
+   * True on the ONE assistant row that closes a turn_execution — the final
+   * reply. Only that row is spoken, so it is the only one that carries a
+   * speaker button.
+   */
+  settled?: boolean;
+  /**
+   * Pre-synthesis outcome for a settled row, as of this fetch: 'ready' (audio
+   * stored), 'failed' (gave up after its attempts), or absent/null for a row
+   * with no attempt on record — history from before pre-synthesis, whose first
+   * press starts the pipeline. Live changes arrive as `voice_transcript` WS
+   * frames instead (see stores/voiceTranscripts.ts).
+   */
+  voice_state?: 'pending' | 'ready' | 'failed' | null;
 }
 
 /** Collapsed thread metadata returned by /api/threads. */

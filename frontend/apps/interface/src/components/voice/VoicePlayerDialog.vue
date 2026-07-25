@@ -77,9 +77,6 @@ import { webPlatformAdapter } from '@chalie/shared';
 import { on } from '../../composables/useEventBus';
 import { voice } from '../../api/voice';
 
-const _LOADING_MAX_RETRIES = 6;
-const _LOADING_DEFAULT_DELAY_MS = 3000;
-
 const dialogEl = ref<HTMLDialogElement | null>(null);
 const playBtnEl = ref<HTMLButtonElement | null>(null);
 const progressEl = ref<HTMLInputElement | null>(null);
@@ -115,8 +112,8 @@ let _boundKeydown: ((e: KeyboardEvent) => void) | null = null;
 let _unsubSpeak: (() => void) | null = null;
 
 onMounted(() => {
-  _unsubSpeak = on('chalie:speak-message', ({ text }) => {
-    if (text) void _open(text);
+  _unsubSpeak = on('chalie:speak-message', ({ transcriptId }) => {
+    void _open(transcriptId);
   });
 });
 
@@ -126,7 +123,7 @@ onBeforeUnmount(() => {
   _unbindKeyboard();
 });
 
-async function _open(text: string): Promise<void> {
+async function _open(transcriptId: number): Promise<void> {
   _openGeneration += 1;
   const gen = _openGeneration;
 
@@ -149,8 +146,9 @@ async function _open(text: string): Promise<void> {
   _bindKeyboard();
 
   try {
-    const resp = await _fetchWithLoadingRetry(text, gen);
+    const resp = await voice.transcript(transcriptId, _fetchAbort.signal);
     if (gen !== _openGeneration || !resp) return;
+    if (!resp.ok) throw new Error('Speech is not available for this message');
 
     const arrayBuf = await resp.arrayBuffer();
     if (gen !== _openGeneration) return;
@@ -167,81 +165,9 @@ async function _open(text: string): Promise<void> {
     if ((err as { name?: string }).name === 'AbortError') return;
     if (gen !== _openGeneration) return;
     uiState.value = 'idle';
-    errorMsg.value = err instanceof Error ? err.message : 'Failed to synthesize';
-    console.error('[VoicePlayer] synthesize error:', err);
+    errorMsg.value = err instanceof Error ? err.message : 'Could not play this message';
+    console.error('[VoicePlayer] transcript error:', err);
   }
-}
-
-type _RetryErrorBody = { error?: string; reason?: string; hint?: string };
-
-/** Parse a failed /voice/synthesize response body (defaults to {} on non-JSON). */
-async function _parseRetryError(resp: Response): Promise<_RetryErrorBody> {
-  return (await resp
-    .clone()
-    .json()
-    .catch(() => ({}))) as _RetryErrorBody;
-}
-
-/** ms to wait before the next cold-start retry, honoring Retry-After when valid. */
-function _retryDelayMs(resp: Response): number {
-  const retryAfter = Number.parseFloat(resp.headers.get('Retry-After') ?? '');
-  return Number.isFinite(retryAfter) && retryAfter > 0
-    ? retryAfter * 1000
-    : _LOADING_DEFAULT_DELAY_MS;
-}
-
-/** Build the terminal error for a non-retryable (or exhausted) synthesize failure. */
-function _retryFailureError(err: _RetryErrorBody, resp: Response): Error {
-  if (err.reason === 'deps_missing') {
-    return new Error(err.hint ?? err.error ?? 'Voice dependencies not installed');
-  }
-  if (err.reason === 'models_missing') {
-    return new Error(err.hint ?? err.error ?? 'Voice models not installed');
-  }
-  return new Error(err.error ?? `HTTP ${resp.status}`);
-}
-
-/**
- * POST text to /voice/synthesize with cold-start retry. Returns the successful
- * Response, null if the session was aborted/superseded mid-wait, or throws on
- * any non-loading error.
- */
-async function _fetchWithLoadingRetry(text: string, gen: number): Promise<Response | null> {
-  for (let attempt = 0; attempt <= _LOADING_MAX_RETRIES; attempt += 1) {
-    const resp = await voice.speak(text);
-    if (gen !== _openGeneration) return null;
-    if (resp.ok) return resp;
-
-    const err = await _parseRetryError(resp);
-    if (err.reason === 'loading' && attempt < _LOADING_MAX_RETRIES) {
-      await _sleepAbortable(_retryDelayMs(resp));
-      if (gen !== _openGeneration) return null;
-      continue;
-    }
-    throw _retryFailureError(err, resp);
-  }
-  throw new Error('Voice models still loading — please retry shortly');
-}
-
-/** Resolve after `ms`, or reject with AbortError if the active AbortController fires. */
-function _sleepAbortable(ms: number): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    const signal = _fetchAbort?.signal ?? null;
-    const t = setTimeout(() => {
-      signal?.removeEventListener('abort', onAbort);
-      resolve();
-    }, ms);
-    const onAbort = () => {
-      clearTimeout(t);
-      const e = new DOMException('aborted', 'AbortError');
-      reject(e);
-    };
-    if (signal?.aborted) {
-      onAbort();
-      return;
-    }
-    signal?.addEventListener('abort', onAbort, { once: true });
-  });
 }
 
 /** Promise wrapper around AudioContext.decodeAudioData (callback form for iOS compat). */

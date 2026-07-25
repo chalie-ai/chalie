@@ -3,6 +3,8 @@ import { computed, ref } from 'vue';
 import type { ConversationMessage } from '../../api/conversation';
 import { messagePlaintext } from '../../utils/speech';
 import { emit as busEmit } from '../../composables/useEventBus';
+import { useVoiceTranscriptsStore } from '../../stores/voiceTranscripts';
+import { voice } from '../../api/voice';
 import { Copy, Reply, Volume2 } from '@lucide/vue';
 
 const props = withDefaults(defineProps<{
@@ -18,25 +20,58 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{ reply: []; openThread: [] }>();
 
-const speakText = computed(() => messagePlaintext(props.message));
-
 const rootRef = ref<HTMLElement | null>(null);
 const expanded = ref(false);
 
-// Speak plays the WHOLE turn (every assistant row, not just this exchange) —
-// read straight off the rendered DOM (the `data-speech` attribute every
-// Chalie bubble under this turn carries), matching the DOM-contract (no
-// shared client store).
-function onSpeak(): void {
-  const turnHost = rootRef.value?.closest<HTMLElement>('[data-turn-id]');
-  if (!turnHost) return;
-  const text = Array.from(
-    turnHost.querySelectorAll<HTMLElement>('.speech-form--chalie[data-speech]'),
-  )
-    .map((el) => el.dataset.speech ?? '')
-    .filter(Boolean)
-    .join(' ');
-  if (text) busEmit('chalie:speak-message', { text });
+const voiceStore = useVoiceTranscriptsStore();
+
+// Only the row that CLOSES a turn is spoken, so only it gets a button — the
+// mid-turn "let me check…" rows have no audio and never will.
+const transcriptId = computed(() => Number(props.message.id));
+const canSpeak = computed(() => !!props.message.settled && Number.isFinite(transcriptId.value));
+
+// Live state wins over the snapshot this message was fetched with; null means
+// nothing has been attempted, which is normal for history that predates
+// pre-synthesis and reads as a plain, pressable button.
+const voiceState = computed(() =>
+  voiceStore.stateFor(transcriptId.value, props.message.voice_state ?? null),
+);
+
+// Pending fades slowly in and out — synthesis is seconds, not milliseconds,
+// and a press that appears to do nothing reads as broken. Failed is terminal:
+// the pipeline exhausted its attempts, so the button stays red and dead rather
+// than inviting a press that can only fail again.
+const speakDisabled = computed(() => voiceState.value === 'pending' || voiceState.value === 'failed');
+const speakLabel = computed(() => {
+  if (voiceState.value === 'pending') return 'Preparing speech…';
+  if (voiceState.value === 'failed') return 'Speech could not be generated for this message';
+  return 'Read this message aloud';
+});
+
+// A row with stored audio opens the player straight away. One with no attempt
+// on record has to start the pipeline first — the GET does that and answers
+// 202, and the pipeline's own WS frames drive the button from there.
+async function onSpeak(): Promise<void> {
+  if (speakDisabled.value) return;
+  if (voiceState.value === 'ready') {
+    busEmit('chalie:speak-message', { transcriptId: transcriptId.value });
+    return;
+  }
+  voiceStore.record(transcriptId.value, 'pending');
+  try {
+    const resp = await voice.transcript(transcriptId.value);
+    if (resp.ok) {
+      voiceStore.record(transcriptId.value, 'ready');
+      busEmit('chalie:speak-message', { transcriptId: transcriptId.value });
+      return;
+    }
+    // 202 leaves it pending — the pipeline is running and will push its own
+    // terminal frame. Anything else is terminal here and now.
+    if (resp.status !== 202) voiceStore.record(transcriptId.value, 'failed');
+  } catch (err) {
+    console.error('[BubbleFooter] speech request failed:', err);
+    voiceStore.record(transcriptId.value, 'failed');
+  }
 }
 
 // Copy message text to clipboard — guard for absence, no throw.
@@ -80,9 +115,15 @@ function onCopy(): void {
 
       <span class="speech-form__acts">
         <button
-          v-if="speakText"
+          v-if="canSpeak"
           class="speech-form__act-btn speech-form__act-btn--speak"
-          aria-label="Read this message aloud"
+          :class="{
+            'speech-form__act-btn--pending': voiceState === 'pending',
+            'speech-form__act-btn--failed': voiceState === 'failed',
+          }"
+          :aria-label="speakLabel"
+          :title="speakLabel"
+          :disabled="speakDisabled"
           type="button"
           @click="onSpeak"
         >

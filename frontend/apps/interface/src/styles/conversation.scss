@@ -298,6 +298,32 @@
   color: var(--accent-primary);
 }
 
+// Speech is synthesized in the background, so the speaker button reports a
+// pipeline it did not start. Pending breathes rather than spins — synthesis
+// takes seconds and a still button reads as a dead one; failed is terminal, so
+// it goes red and stops responding instead of inviting a press that can only
+// fail again. Both drop the hover accent by refusing pointer events.
+.speech-form__act-btn--pending,
+.speech-form__act-btn--failed {
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.speech-form__act-btn--pending {
+  animation: speak-breathe 1.8s ease-in-out infinite;
+}
+
+.speech-form__act-btn--failed {
+  color: var(--error);
+  opacity: 0.65;
+}
+
+@keyframes speak-breathe {
+  0%,
+  100% { opacity: 0.8; }
+  50% { opacity: 0.25; }
+}
+
 // --------------------------------------------------------------------------
 // 9. Trace pill + expandable trace body
 // --------------------------------------------------------------------------

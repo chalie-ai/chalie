@@ -1,24 +1,15 @@
 <script setup lang="ts">
-import { computed } from 'vue';
 import type { ConversationMessage } from '../../api/conversation';
-import { messagePlaintext } from '../../utils/speech';
 import { renderMarkup } from '../../composables/useMarkup';
 import SegmentRenderer from './SegmentRenderer.vue';
 
-const props = defineProps<{ message: ConversationMessage }>();
-
-// Feeds `data-speech` only — BubbleFooter's onSpeak reads this attribute off
-// every `.speech-form--chalie` row under the turn host to assemble the
-// whole-turn speak text, so it must stay populated even though the footer
-// itself no longer lives here.
-const speakText = computed(() => messagePlaintext(props.message));
+defineProps<{ message: ConversationMessage }>();
 </script>
 
 <template>
   <div
     class="speech-form speech-form--chalie"
     :data-transcript-row-id="message.id"
-    :data-speech="speakText"
   >
     <SegmentRenderer
       v-if="message.segments && message.segments.length"

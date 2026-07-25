@@ -27,6 +27,7 @@ import { findTurnType, setTurnDone, setTurnWorking, upsertTurnToSurfaces } from 
 import { useTasksStore } from '../stores/tasks';
 import { usePermissionsStore } from '../stores/permissions';
 import { useContextUsageStore } from '../stores/contextUsage';
+import { useVoiceTranscriptsStore } from '../stores/voiceTranscripts';
 
 /** The session-owned side effects a turn_execution frame still needs — see
  *  module docblock for why this is dependency-injected rather than a static
@@ -178,9 +179,9 @@ function _dispatchToolCall(data: WsPushEvent): boolean {
  * Mid-turn progress signals — stateless and turn-addressed, discriminated on
  * `status`. `updated` re-fetches the turn ONCE and fans it out to every
  * registered surface of its type; `provider_retry` is a transient toast (the
- * turn stays in flight, no error bubble); `context_usage` writes the token
- * reading straight to its store — no refetch, no DOM effect. Returns true when
- * handled.
+ * turn stays in flight, no error bubble); `context_usage` and
+ * `voice_transcript` write straight to their stores — no refetch, no DOM
+ * effect. Returns true when handled.
  *
  * The types of `updated` and `context_usage` are resolved (never coerced to
  * `user`) since turn_id alone doesn't identify a turn across channels — see
@@ -230,6 +231,19 @@ function _dispatchTurnSignal(data: WsPushEvent): boolean {
       const usage = data as { tokens_input?: number; context_window?: number };
       if (usage.tokens_input == null || usage.context_window == null) return true;
       useContextUsageStore().record(type, turnId, usage.tokens_input, usage.context_window);
+      return true;
+    }
+    case 'voice_transcript': {
+      // Addressed by transcript row, not by turn — the pre-synthesis pipeline
+      // speaks one settled reply, and the button that paints this state is
+      // already rendered on that row. No refetch, no type to resolve.
+      const signal = data as { transcript_id?: number; state?: string };
+      if (signal.transcript_id == null) return true;
+      if (signal.state !== 'pending' && signal.state !== 'ready' && signal.state !== 'failed') {
+        console.warn('[driftDispatcher] voice_transcript frame has unknown state', signal.state, '— dropped');
+        return true;
+      }
+      useVoiceTranscriptsStore().record(signal.transcript_id, signal.state);
       return true;
     }
     default:

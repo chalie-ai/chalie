@@ -76,6 +76,11 @@ vi.mock('../stores/permissions', () => ({
   usePermissionsStore: () => ({ enqueue: enqueueMock }),
 }));
 
+const { recordVoiceMock } = vi.hoisted(() => ({ recordVoiceMock: vi.fn() }));
+vi.mock('../stores/voiceTranscripts', () => ({
+  useVoiceTranscriptsStore: () => ({ record: recordVoiceMock }),
+}));
+
 const { dispatchDrift, registerSessionHooks } = await import('./driftDispatcher');
 
 // Fake stand-in for the SessionHooks a real `session.init()` would register —
@@ -217,6 +222,31 @@ describe('dispatchDrift — turn_signal frame', () => {
   it('status=provider_retry falls back to the default retry copy when no message is present', () => {
     dispatchDrift(frame({ status: 'provider_retry', type: 'user' }));
     expect(showToastMock).toHaveBeenCalledWith('The AI provider had a problem — retrying…');
+  });
+
+  // Pre-synthesis pushes these as it moves a settled reply pending → ready/failed.
+  // The frame is addressed by transcript row, so it carries no turn_id and no
+  // type — and it must NOT be treated as a turn signal that needs either.
+  it('status=voice_transcript records the state against its transcript row, with no refetch and no DOM effect', () => {
+    dispatchDrift(frame({ status: 'voice_transcript', transcript_id: 412, state: 'ready' }));
+    expect(recordVoiceMock).toHaveBeenCalledWith(412, 'ready');
+    expect(threadMock).not.toHaveBeenCalled();
+    expect(upsertTurnToSurfacesMock).not.toHaveBeenCalled();
+  });
+
+  it('a voice_transcript frame with no transcript_id is claimed and dropped — there is no row to paint', () => {
+    dispatchDrift(frame({ status: 'voice_transcript', state: 'ready' }));
+    expect(recordVoiceMock).not.toHaveBeenCalled();
+  });
+
+  // The store's state union is the contract; anything outside it would paint an
+  // unstyled button forever, so it is dropped loudly rather than stored.
+  it('a voice_transcript frame carrying an unknown state warns and stores nothing', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => { /* silence */ });
+    dispatchDrift(frame({ status: 'voice_transcript', transcript_id: 412, state: 'synthesizing' }));
+    expect(recordVoiceMock).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
   });
 });
 
