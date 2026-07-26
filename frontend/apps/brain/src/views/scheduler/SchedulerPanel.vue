@@ -168,8 +168,8 @@ async function cancelSchedule(s: ScheduleItem): Promise<void> {
         <label for="schedStart">Start Time</label>
         <input id="schedStart" v-model="formStart" type="datetime-local" />
       </div>
-      <div class="form-group">
-        <label>Recurrence (crontab)</label>
+      <div class="form-group" role="group" aria-labelledby="schedRecurrenceLabel">
+        <span id="schedRecurrenceLabel" class="form-group-label">Recurrence (crontab)</span>
         <div class="cron-grid">
           <div class="cron-field">
             <label for="cronMinute">Minute</label>
@@ -199,8 +199,8 @@ async function cancelSchedule(s: ScheduleItem): Promise<void> {
         </p>
       </div>
       <div class="form-group">
-        <label>Enabled</label>
-        <ToggleSwitch v-model="formEnabled" />
+        <label for="schedEnabled">Enabled</label>
+        <ToggleSwitch id="schedEnabled" v-model="formEnabled" />
         <p class="form-hint">Disable to pause firing without deleting the schedule.</p>
       </div>
       <div class="form-actions">

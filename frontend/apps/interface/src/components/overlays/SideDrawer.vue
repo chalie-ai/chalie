@@ -88,7 +88,7 @@ onBeforeUnmount(() => {
   ></div>
 
   <!-- Slide-out panel -->
-  <aside ref="drawerRef" class="side-drawer hidden" role="complementary" :aria-label="title">
+  <aside ref="drawerRef" class="side-drawer hidden" :aria-label="title">
     <div class="side-drawer__header">
       <h2 class="side-drawer__title">{{ title }}</h2>
       <button

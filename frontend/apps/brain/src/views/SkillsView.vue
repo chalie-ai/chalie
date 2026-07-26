@@ -245,8 +245,9 @@ async function submitCreate(): Promise<void> {
           </div>
           <form class="skill-edit-form" @submit.prevent="saveEdit(skill)">
             <div class="form-group">
-              <label>Use for</label>
+              <label :for="'skill-usefor-' + skill.id">Use for</label>
               <input
+                :id="'skill-usefor-' + skill.id"
                 v-model="editUseFor"
                 type="text"
                 class="skill-field-use_for"
@@ -254,8 +255,9 @@ async function submitCreate(): Promise<void> {
               />
             </div>
             <div class="form-group">
-              <label>Tags</label>
+              <label :for="'skill-tags-' + skill.id">Tags</label>
               <input
+                :id="'skill-tags-' + skill.id"
                 v-model="editTags"
                 type="text"
                 class="skill-field-tags"
@@ -263,8 +265,9 @@ async function submitCreate(): Promise<void> {
               />
             </div>
             <div class="form-group">
-              <label>Instructions</label>
+              <label :for="'skill-instructions-' + skill.id">Instructions</label>
               <textarea
+                :id="'skill-instructions-' + skill.id"
                 v-model="editContent"
                 class="skill-field-content"
                 rows="8"
@@ -300,7 +303,7 @@ async function submitCreate(): Promise<void> {
                 class="switch-label skill-toggle-wrap"
                 :title="skill.enabled ? 'Disable' : 'Enable'"
               >
-                <label class="switch">
+                <label class="switch" :aria-label="skill.enabled ? 'Disable' : 'Enable'">
                   <input
                     type="checkbox"
                     class="skill-toggle"
@@ -365,7 +368,7 @@ async function submitCreate(): Promise<void> {
               class="switch-label skill-toggle-wrap"
               :title="skill.enabled ? 'Disable' : 'Enable'"
             >
-              <label class="switch">
+              <label class="switch" :aria-label="skill.enabled ? 'Disable' : 'Enable'">
                 <input
                   type="checkbox"
                   class="skill-toggle"

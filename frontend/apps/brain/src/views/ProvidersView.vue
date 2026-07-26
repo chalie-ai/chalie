@@ -478,7 +478,7 @@ async function saveProvider(): Promise<void> {
           :key="p.id"
           :class="['provider-card', { selected: p.id === selectedId }]"
         >
-          <label class="provider-radio">
+          <label class="provider-radio" :aria-label="p.name">
             <input
               type="radio"
               name="sel_prov"
@@ -539,13 +539,14 @@ async function saveProvider(): Promise<void> {
       <div class="form-group">
         <select
           v-if="visionCapable.length > 0"
+          aria-label="Vision"
           :value="visionSelectValue"
           @change="setVision(($event.target as HTMLSelectElement).value)"
         >
           <option v-if="mainSupportsVision" value="">Use main provider</option>
           <option v-for="p in visionCapable" :key="p.id" :value="p.id">{{ p.name }}</option>
         </select>
-        <select v-else disabled>
+        <select v-else aria-label="Vision" disabled>
           <option value="">Disabled — no vision-capable providers</option>
         </select>
       </div>
@@ -557,6 +558,7 @@ async function saveProvider(): Promise<void> {
       </p>
       <div class="form-group">
         <select
+          aria-label="Delegate"
           :value="delegateSelectValue"
           @change="setDelegate(($event.target as HTMLSelectElement).value)"
         >

@@ -28,7 +28,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKey));
       >
         ×
       </button>
-      <img class="img-modal__img" :src="src" :alt="alt || 'attached image'" />
+      <img class="img-modal__img" :src="src" :alt="alt || 'attached'" />
     </div>
   </Teleport>
 </template>

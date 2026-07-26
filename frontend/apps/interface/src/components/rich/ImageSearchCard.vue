@@ -255,7 +255,7 @@ onBeforeUnmount(() => {
             <img
               v-if="!failed.has(idx)"
               :src="img.thumbSrc"
-              :alt="img.title || 'Image'"
+              :alt="img.title || payload.query"
               class="image-card__img"
               loading="lazy"
               draggable="false"

@@ -17,6 +17,21 @@
   stroke-width: 1.75;
 }
 
+// Visually hidden but present for assistive tech (e.g. table headers that would
+// otherwise duplicate a visible caption). Standard "sr-only" clip technique —
+// position:absolute removes it from layout so it never affects sizing.
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 html,
 body {
   margin: 0;
@@ -141,13 +156,25 @@ body::before {
   gap: 8px;
   width: 100%;
   padding: 6px 12px;
+  margin: 0;
   background: var(--bg-input);
   border: 1px solid var(--border);
   border-radius: 20px;
   color: var(--text-secondary);
+  font: inherit;
   font-size: 13px;
+  text-align: inherit;
+  appearance: none;
+  -webkit-appearance: none;
   cursor: pointer;
   transition: border-color 150ms var(--ease-out), box-shadow 150ms;
+
+  // Native <button> is now the element — kill Firefox's inner focus box and
+  // any UA button chrome so the div-era look is byte-for-byte unchanged.
+  &::-moz-focus-inner {
+    border: 0;
+    padding: 0;
+  }
 
   &:hover {
     border-color: rgba(138, 92, 255, 0.3);
@@ -1196,6 +1223,18 @@ input[type='checkbox'] {
 .form-group { margin-bottom: 14px; }
 
 .form-group label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+// Same visual treatment as `.form-group label`, for group captions that don't
+// describe a single control (e.g. a fieldset-like group of buttons/inputs) —
+// a bare <label> there isn't associated with any one control, so this text is
+// a plain element instead, paired with role="group"/aria-labelledby.
+.form-group-label {
   display: block;
   font-size: 12px;
   font-weight: 600;

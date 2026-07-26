@@ -187,6 +187,7 @@ async function deleteList(list: List): Promise<void> {
             type="text"
             class="list-add-input"
             placeholder="Add item…"
+            aria-label="Add item…"
             maxlength="300"
             @keydown.enter="onAddKey($event, list)"
           />

@@ -135,6 +135,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onGlobalKeydown));
         ref="inputRef"
         v-model="query"
         class="cp-input"
+        aria-label="Search the brain"
         placeholder="Search the brain… (try 'memory', 'policy')"
         @keydown="onKeydown"
       />

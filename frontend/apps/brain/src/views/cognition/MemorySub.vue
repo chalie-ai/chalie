@@ -70,6 +70,7 @@ function loadMore(): void {
         type="text"
         class="search-input"
         placeholder="Search…"
+        aria-label="Search…"
         @keydown.enter="submitSearch"
       />
     </div>

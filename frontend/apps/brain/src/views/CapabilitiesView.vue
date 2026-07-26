@@ -114,7 +114,7 @@ async function disconnect(c: Capability): Promise<void> {
         <template v-for="f in formFields" :key="f.name">
           <div v-if="f.type === 'checkbox'" class="form-group">
             <label class="switch-label">
-              <label class="switch">
+              <label class="switch" :aria-label="f.label">
                 <input v-model="boolValues[f.name]" type="checkbox" />
                 <span class="switch-track"></span>
               </label>
@@ -122,8 +122,13 @@ async function disconnect(c: Capability): Promise<void> {
             </label>
           </div>
 
-          <div v-else-if="f.type === 'select'" class="form-group">
-            <label>{{ f.label }}</label>
+          <div
+            v-else-if="f.type === 'select'"
+            class="form-group"
+            role="group"
+            :aria-labelledby="'cap-group-' + f.name"
+          >
+            <span :id="'cap-group-' + f.name" class="form-group-label">{{ f.label }}</span>
             <div class="tab-select">
               <button
                 v-for="o in f.options"
@@ -139,8 +144,9 @@ async function disconnect(c: Capability): Promise<void> {
           </div>
 
           <div v-else-if="f.type === 'textarea'" class="form-group">
-            <label>{{ f.label }}</label>
+            <label :for="'cap-field-' + f.name">{{ f.label }}</label>
             <textarea
+              :id="'cap-field-' + f.name"
               v-model="textValues[f.name]"
               rows="4"
               :placeholder="f.placeholder ?? ''"
@@ -148,8 +154,9 @@ async function disconnect(c: Capability): Promise<void> {
           </div>
 
           <div v-else v-show="isVisible(f)" class="form-group">
-            <label>{{ f.label }}</label>
+            <label :for="'cap-field-' + f.name">{{ f.label }}</label>
             <input
+              :id="'cap-field-' + f.name"
               v-model="textValues[f.name]"
               :type="f.type === 'password' ? 'password' : 'text'"
               :placeholder="f.placeholder ?? ''"
