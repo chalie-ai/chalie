@@ -17,21 +17,6 @@
   stroke-width: 1.75;
 }
 
-// Visually hidden but present for assistive tech (e.g. table headers that would
-// otherwise duplicate a visible caption). Standard "sr-only" clip technique —
-// position:absolute removes it from layout so it never affects sizing.
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
 html,
 body {
   margin: 0;
