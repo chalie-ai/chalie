@@ -31,23 +31,21 @@ Errors are returned as structured :class:`ToolResult` values (``code`` +
 from __future__ import annotations
 
 from abc import ABC
-from typing import TYPE_CHECKING, ClassVar, cast
+from collections.abc import Callable
+from typing import ClassVar, cast
 
 from abilities._ability import Ability
 from abilities._result import ToolResult
 from contracts.params.capability_params_bag import CapabilityParamsBag
 from contracts.params.param_bag import ParamBag
 
-if TYPE_CHECKING:
-    from collections.abc import Callable
-
 
 class CapabilityAbility(Ability[CapabilityParamsBag], ABC):
     """Base for an ability that delegates to a connected capability handler.
 
-    Listing ``ABC`` directly in the bases makes ``Ability.__init_subclass__``
-    skip the metadata probe for this base itself; concrete subclasses (which do
-    NOT list ABC) are probed as usual.
+    Listing ``ABC`` directly in the bases marks this base as an abstract mix-in,
+    never a tool in its own right; only the concrete subclasses (which do NOT
+    list ABC) reach the registry.
     """
 
     #: Capability key for ``load_capabilities().get(...)``. Subclass MUST set.
@@ -108,7 +106,7 @@ class CapabilityAbility(Ability[CapabilityParamsBag], ABC):
                 action=action,
             )
 
-        result = cast("Callable[..., dict[str, object]]", handler)(handler_params, self.telemetry)
+        result = cast(Callable[..., dict[str, object]], handler)(handler_params, self.telemetry)
         # A handler signals failure with a truthy ``error`` key. Wrapping that in
         # ``ok`` would tag a genuine failure ``status=success`` — the model never
         # sees an error envelope, and the dispatcher's repeat-error steer (which

@@ -97,9 +97,8 @@ class _MCPAbility(Ability):
     tool schema (lazily fetched + cached via McpClientService); the search-facing
     getters return empty because a synthetic proxy is never indexed.
 
-    _SYNTHETIC=True exempts it from __init_subclass__ metadata validation (no
-    EXAMPLES/SEARCH_TOOLTIP shape check) and from the registry's boot-time
-    instantiation (_all_concrete_subclasses skips it — it takes a tool_name).
+    _SYNTHETIC=True exempts it from the registry's boot-time instantiation
+    (_all_concrete_subclasses skips it — its __init__ takes a tool_name).
     """
 
     _SYNTHETIC: ClassVar[bool] = True

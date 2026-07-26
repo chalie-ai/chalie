@@ -21,6 +21,7 @@ from __future__ import annotations
 import copy
 import typing
 from abc import ABC, abstractmethod
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, cast
 
 from typing_extensions import TypeVar
@@ -29,8 +30,6 @@ from abilities._result import ToolResult
 from contracts.params.param_bag import ParamBag
 
 if TYPE_CHECKING:
-    from datetime import datetime
-
     from controllers.message_processor import MessageProcessor
 
 # The act_summary framework field, injected into EVERY tool descriptor by
@@ -117,62 +116,6 @@ class Ability(ABC, Generic[B]):
         # when no client context is stored yet (fresh boot, no heartbeat).
         self.telemetry: "dict[str, object] | None" = None
 
-    def __init_subclass__(cls, **kwargs: object) -> None:
-        super().__init_subclass__(**kwargs)
-        # get_input_schema is the single tool-descriptor assembler — sealed. A
-        # subclass that redefines it would silently fork the contract, so it is
-        # rejected at import. Subclasses enrich via get_parameters() /
-        # get_summary() instead.
-        if "get_input_schema" in cls.__dict__:
-            raise TypeError(
-                f"{cls.__name__} must not override Ability.get_input_schema — "
-                f"enrich get_parameters()/get_summary() instead"
-            )
-        # _inject_framework_fields is the single injection site — sealed against
-        # arbitrary subclasses (redefining it would fork the act_summary/async
-        # contract). The lone sanctioned override is DelegateAbility, which adds
-        # the delegate-only ``async`` property on top of super()'s act_summary.
-        if "_inject_framework_fields" in cls.__dict__ and cls.__name__ != "DelegateAbility":
-            raise TypeError(
-                f"{cls.__name__} must not override Ability._inject_framework_fields — "
-                f"enrich get_parameters()/get_summary() instead"
-            )
-
-        # Synthetic proxies (e.g. _MCPAbility) source their metadata from a remote
-        # schema and are constructed with arguments — skip metadata validation.
-        if getattr(cls, "_SYNTHETIC", False):
-            return
-        # Abstract base mix-ins (e.g. SearchableAbility, which lists ABC directly
-        # in its bases) are not concrete abilities — skip their metadata probe.
-        # We deliberately do NOT consult __abstractmethods__ here: ABCMeta sets it
-        # AFTER __init_subclass__ returns, so it is always unset at this point. A
-        # concrete-looking subclass that still omits a getter is caught downstream
-        # instead — get_examples / get_search_tooltip by the probe below (the
-        # inherited abstract getter returns None and fails the shape check), and
-        # get_name / get_summary / get_parameters / run at registry instantiation
-        # (ABC blocks it).
-        if ABC in cls.__bases__:
-            return
-
-        # Concrete ability: validate its metadata shape AT IMPORT, through the
-        # getters, on a throwaway mp=None instance (deterministic at build time).
-        # This keeps the "won't import with bad metadata" guarantee for EVERY
-        # ability — including the never-indexed ones (thinking, the compactors)
-        # that the search-index builder skips.
-        probe = cls()
-        examples = probe.get_examples()
-        if not isinstance(examples, list) or not all(isinstance(e, str) for e in examples):
-            raise TypeError(f"{cls.__name__}.get_examples() must return list[str]")
-        if not (6 <= len(examples) <= 8):
-            raise TypeError(
-                f"{cls.__name__}.get_examples() must return 6–8 entries, got {len(examples)}"
-            )
-        if cls.__module__.startswith("abilities.") and not probe.get_search_tooltip():
-            raise TypeError(f"{cls.__name__}.get_search_tooltip() must be non-empty")
-        follow_up = probe.get_follow_up(ToolResult.ok(""))
-        if not isinstance(follow_up, str):
-            raise TypeError(f"{cls.__name__}.get_follow_up() must return str")
-
     # ── Metadata getters — every concrete ability implements all five ──────────
 
     @abstractmethod
@@ -210,9 +153,8 @@ class Ability(ABC, Generic[B]):
         interpolate live values straight from the result the model already sees
         (the downloaded ``path``, the activated tool ``name``, the anchor
         ``date_time``) — present-in-context data lifts compliance over a generic
-        nudge. An override that needs data the result lacks MUST degrade to ``""``;
-        it is probed at import on an empty ``ToolResult`` and so must never assume a
-        shape. No ``self.mp`` — the nudge is request-agnostic.
+        nudge. An override that needs data the result lacks MUST degrade to ``""``
+        rather than assume a shape. No ``self.mp`` — the nudge is request-agnostic.
         """
         return ""
 
@@ -245,8 +187,8 @@ class Ability(ABC, Generic[B]):
     def get_input_schema(self) -> dict[str, object]:
         """This is the ONE place a tool schema is built and the ONE place
         ``act_summary`` is declared (``async`` is added on top by
-        ``DelegateAbility`` for delegate tools only). ``final`` — sealed at import
-        by ``__init_subclass__``."""
+        ``DelegateAbility`` for delegate tools only). ``final`` — do not override;
+        enrich ``get_parameters()`` / ``get_summary()`` instead."""
         return {
             "name": self.get_name(),
             "description": self.get_summary(),
@@ -283,7 +225,7 @@ class Ability(ABC, Generic[B]):
         return None
 
     @classmethod
-    def enrich_rich_payload(cls, payload: dict[str, object], created_at: "datetime | str | None") -> dict[str, object]:
+    def enrich_rich_payload(cls, payload: dict[str, object], created_at: datetime | str | None) -> dict[str, object]:
         """Resolve a rich-media payload's runtime state at parse time.
 
         The default implementation returns the payload unchanged. Override on

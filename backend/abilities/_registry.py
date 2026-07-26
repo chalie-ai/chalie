@@ -17,8 +17,8 @@ _registry: dict[str, Ability] | None = None
 
 
 def _load() -> dict[str, Ability]:
-    """Concrete Ability subclasses self-register via __init_subclass__; we collect
-    them after the walk by inspecting all subclasses of Ability.
+    """Importing every ability module makes its class object exist; we collect the
+    concrete ones afterwards by walking ``Ability.__subclasses__()``.
     """
     abilities_dir = FileMapperService.get_abilities_path()
     for path in sorted(abilities_dir.glob("*.py")):

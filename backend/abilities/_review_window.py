@@ -27,9 +27,9 @@ Everything else — the structured success/empty/error envelopes, the ``count`` 
 ``anchor`` / ``buffer`` meta, the ``ACTION_REQUIRED`` pre-gate declaration — is
 shared and lives here exactly once. ``code="error"`` appears nowhere.
 
-Listing ``ABC`` in the bases makes ``Ability.__init_subclass__`` skip this base in
-the metadata probe (precedent: ``abilities/_delegate.py``); concrete subclasses are
-probed normally.
+Listing ``ABC`` in the bases marks this as an abstract mix-in, never a tool in its
+own right (precedent: ``abilities/_delegate.py``); only concrete subclasses reach
+the registry.
 """
 
 from __future__ import annotations

@@ -65,7 +65,7 @@ class DelegateAbility(Ability[B], ABC):
     """Base class for delegate tools — the ONE sanctioned override of
     ``_inject_framework_fields``, adding the delegate-only ``async`` property on
     top of the base ``act_summary``. Abstract (lists ``ABC`` directly, like the
-    other base mix-ins) so ``Ability.__init_subclass__`` skips its metadata probe;
+    other base mix-ins) so it is never registered as a tool in its own right;
     concrete delegates fill in the getters. Per-tool ``run()`` bodies are left to
     the subclass — each builds a different ``*Config`` and query params — so the
     base is generic over the subclass's bag (``DelegateAbility[ItsBag]``)."""

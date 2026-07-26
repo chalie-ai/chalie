@@ -16,10 +16,8 @@ contract cannot: that the live value off ``tr`` actually reaches the rendered
 nudge. Regressing any override to ignore ``tr`` (revert to static text) turns the
 matching case RED — verified by reverting ``web_download`` to static text.
 
-Everything else about the hook is enforced by the import-time probe CONTRACT in
-``Ability.__init_subclass__`` (it calls ``get_follow_up(ToolResult.ok(""))`` on
-every ability at registry import, so a non-``str`` return or a body-shape crash
-fails the import, not a test) — there is no separate conformance sweep to drift.
+Everything else about the hook is carried by its signature — ``-> str``, checked
+statically — so there is no separate conformance sweep to drift.
 The drop/keep/reword verdicts are plain text with no dynamic behaviour to break,
 so they carry no test. Real hot path, zero mocks: a real ``ToolResult`` through
 the real registered ability.

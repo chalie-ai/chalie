@@ -43,7 +43,7 @@ def test_email_calendar_contacts_are_registered() -> None:
         assert ability.get_name() == name
         assert isinstance(ability.get_summary(), str) and ability.get_summary()
         assert isinstance(ability.get_parameters(), dict)
-        # EXAMPLES count is enforced by __init_subclass__ (6–8).
+        # 6–8 keeps the find_tools embedding/FTS index balanced across abilities.
         assert 6 <= len(ability.get_examples()) <= 8, (
             f"{name}.get_examples() has {len(ability.get_examples())} entries, expected 6–8"
         )
