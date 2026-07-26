@@ -828,7 +828,7 @@ class SchemaConvergenceService:
     def _run_seed_data(self, schema_sql: str, live_conn: sqlite3.Connection) -> None:
         stripped = re.sub(_RE_SQL_COMMENTS, "",schema_sql)
         for match in re.finditer(
-            r"(INSERT\s+OR\s+IGNORE\s+INTO\s+\w+[^;]+;)", stripped, re.IGNORECASE | re.DOTALL
+            r"(INSERT\s+OR\s+IGNORE\s+INTO\s+\w[^;]++;)", stripped, re.IGNORECASE | re.DOTALL
         ):
             stmt = match.group(1).strip()
             try:

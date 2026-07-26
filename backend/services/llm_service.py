@@ -16,7 +16,7 @@ from typing import cast
 
 logger = logging.getLogger(__name__)
 
-_THINK_BLOCK_RE = re.compile(r"<think>.*?(?:</think>\s*|\Z)", re.DOTALL | re.IGNORECASE)
+_THINK_BLOCK_RE = re.compile(r"<think>(?:(?!</think>).)*(?:</think>\s*)?", re.DOTALL | re.IGNORECASE)
 
 _APP_URL = "https://chalie.ai"
 _APP_TITLE = "Chalie"
