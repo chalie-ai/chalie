@@ -3,7 +3,7 @@ relative-floor telemetry. All exercised through the real production
 path via DispatchService.dispatch("memory") with zero mocks.
 
 Pinned behaviors:
-1. Explicit recall carries a fallback guardrail naming document/schedule tools but fires no fan-out.
+1. Explicit recall carries a fallback guardrail routing misses to find_tools but fires no fan-out.
 2. Turn-0 auto-seed (_auto=True) is silent — no guardrail hint, no fan-out.
 3. Recall-log uses floor_cut_count / final_rrf_count fields under the correct caller.
 """
@@ -17,7 +17,7 @@ from controllers.message_processor import MessageProcessor
 
 pytestmark = pytest.mark.unit
 
-_HINT_LEAD = "If you cannot find the information in memory"
+_HINT_LEAD = "If memory holds nothing relevant"
 
 
 def _build_user_mp(text: str) -> MessageProcessor:
@@ -76,10 +76,12 @@ def test_explicit_recall_carries_guardrail_and_fires_no_fanout(db: sqlite3.Conne
         "memory", {"action": "recall", "query": "what is my home wifi password"}
     )
 
-    # The guardrail is present and names the exact fallback tools + action.
+    # The guardrail is present and routes misses to tool discovery — it must
+    # never name tools that are not in the registry (the document subsystem
+    # is deleted; its stale mention sent the model to a dead tool).
     assert _HINT_LEAD in out
-    assert "`document` (action: search)" in out
-    assert "`schedule` (action: search)" in out
+    assert "`find_tools`" in out
+    assert "document" not in out.lower()
 
     # Fan-out is gone: the removed code dispatched document.search + schedule.search,
     # each of which would have recorded a tool_calls row under this transcript.

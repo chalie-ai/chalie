@@ -30,7 +30,7 @@ scope.
 Two recall callers stay distinct only in their side-effects:
 ``caller='seed'`` is the silent turn-0 auto-seed (no fallback hint, no
 fan-out). ``caller='llm_recall'`` is the explicit recall — appends the
-fallback hint naming ``document`` and ``schedule`` tools.
+fallback hint routing misses to ``find_tools``.
 """
 
 from __future__ import annotations
@@ -62,14 +62,18 @@ LOG_PREFIX = "[MEMORY]"
 # top_patterns), never semantically, so they are not a recall lane.
 _DG_RECALL_KINDS = ["user_specific", "system", "misc", "place", "discovery"]
 
-# Guardrail appended to every explicit (model-invoked) recall so the model
-# falls back to the document/schedule stores ON ITS OWN JUDGEMENT rather than
-# memory.recall silently dispatching those searches behind its back. The
-# turn-0 auto-seed recall (_auto=True) stays silent — no hint, no fan-out.
-# Tool names are exact: `document` and `schedule`, each with action="search".
+# Guardrail appended to every explicit (model-invoked) recall. An empty recall
+# means the fact is not stored — the model's next move is tool discovery, not
+# another reworded recall. `find_tools` is the one surface that lists every
+# available tool, so the hint routes there instead of naming stores that may
+# not exist (the old `document`/`schedule` wording outlived the document
+# subsystem's deletion and sent the model to a dead tool). The turn-0
+# auto-seed recall (_auto=True) stays silent — no hint, no fan-out.
 _RECALL_FALLBACK_HINT = (
-    "If you cannot find the information in memory, try using the "
-    "`document` (action: search) or `schedule` (action: search) tools."
+    "If memory holds nothing relevant, the fact is not stored — do not re-query "
+    "memory with reworded queries. For live or time-sensitive data (weather, "
+    "news, prices, current events), call `find_tools` and use the tool it "
+    "surfaces this turn."
 )
 
 # Stable, machine-readable code surfaced when EVERY retrieval backend a recall
