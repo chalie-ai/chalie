@@ -9,7 +9,7 @@ version: 1
 2. Ask what the single most important outcome of this email is; use `memory` to recall the user's communication style preferences.
 3. Use `memory` to recall any context on the recipient, prior correspondence, or the user's communication style preferences.
 4. Use `contacts` to retrieve any stored information about the recipient that is relevant (role, company, prior interactions).
-5. Use `document` to draft the email: subject line, opening that establishes context in one sentence, body with a clear ask or information, and a specific CTA or next step — no more than 3 short paragraphs.
-6. Use `document` to produce a second shorter version (3–5 sentences) for cases where brevity is needed.
+5. Use `file_write` to draft the email: subject line, opening that establishes context in one sentence, body with a clear ask or information, and a specific CTA or next step — no more than 3 short paragraphs.
+6. Use `file_write` to produce a second shorter version (3–5 sentences) for cases where brevity is needed.
 7. Suggest a follow-up timing: when to resend if no reply, and what to say — then optionally use `schedule` to set a reminder.
 8. Ask the user to confirm before sending, then use `email` to send the approved draft.

@@ -10,5 +10,5 @@ version: 1
 3. Use the `subagent(type=web_surfer)` tool to research each option in depth — official documentation quality, GitHub activity, Stack Overflow presence, and known limitations. Fire one subagent per technology with `wait=false`.
 4. Use the `subagent(type=summariser)` tool to compress each technology's research into a comparable profile: maturity, adoption, strengths, risks.
 5. Build a decision matrix scoring each option against the user's stated criteria on a 1-5 scale with justification per cell.
-6. Use the `document` tool to save the evaluation as a persistent document titled with the category and date.
+6. Use the `file_write` tool to save the evaluation as a persistent document titled with the category and date.
 7. Present the recommendation with a clear winner, runner-up, and trade-off analysis. Flag any criteria where the winner is weak and the runner-up is strong.

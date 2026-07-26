@@ -5,11 +5,11 @@ tags: meeting transcript, communication patterns, speaking ratio, filler words, 
 version: 1
 ---
 
-1. Use `read` to load the meeting transcript file, identifying the user's speaker label and noting participant count in `document`.
-2. Use `document` to record speaking dynamics: word count and percentage per speaker, turn count, average turn length, and any monologues exceeding 200 words.
-3. Scan the user's speech via `document` for hedging language, conflict avoidance patterns, and permission-seeking phrases — extract specific quotes with surrounding context.
-4. Use `document` to tally filler words (um, uh, like, you know, basically) per 100 words and classify the user's questions by type: closed, leading, open genuine, clarifying, and building.
-5. If the user was the facilitator, use `document` to evaluate agenda adherence, decision clarity, and whether action items were assigned with explicit owners and deadlines.
-6. Use `document` to produce a report with: top 3 findings with evidence, detailed analysis per module, 3 genuine strengths, and 3 ranked growth opportunities each with a concrete "try this next time" action.
-7. Save the report using `document` and store key metrics in `memory` as a baseline for future comparison.
+1. Use `read` to load the meeting transcript file, identifying the user's speaker label and noting participant count via `file_write`.
+2. Use `file_write` to record speaking dynamics: word count and percentage per speaker, turn count, average turn length, and any monologues exceeding 200 words.
+3. Scan the user's speech for hedging language, conflict avoidance patterns, and permission-seeking phrases — extract specific quotes with surrounding context.
+4. Use `file_write` to tally filler words (um, uh, like, you know, basically) per 100 words and classify the user's questions by type: closed, leading, open genuine, clarifying, and building.
+5. If the user was the facilitator, use `file_write` to evaluate agenda adherence, decision clarity, and whether action items were assigned with explicit owners and deadlines.
+6. Use `file_write` to produce a report with: top 3 findings with evidence, detailed analysis per module, 3 genuine strengths, and 3 ranked growth opportunities each with a concrete "try this next time" action.
+7. Save the report using `file_write` and store key metrics in `memory` as a baseline for future comparison.
 8. Use `memory` to surface prior session baselines alongside this report so the user can see trend data.

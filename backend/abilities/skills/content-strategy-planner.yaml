@@ -9,7 +9,7 @@ version: 1
 2. Use `memory` to surface any stored customer research, then ask what questions customers ask before buying, what objections come up, and what language they use to describe their problems.
 3. Use the `search` tool to research what competitors are publishing and identify content gaps in the market.
 4. Use the `search` tool to validate keyword demand for the top candidate topics.
-5. Use `document` to define 3–5 content pillars with rationale for each, including how each pillar connects to the product.
-6. For each pillar in `document`, generate a subtopic cluster of 5–8 specific article or video ideas, tagging each as searchable (SEO-driven) or shareable (distribution-driven).
-7. Use `document` to build a prioritized topic list with: topic title, pillar, content type, target keyword, buyer stage, and why this topic (customer research backing).
+5. Use `file_write` to define 3–5 content pillars with rationale for each, including how each pillar connects to the product.
+6. For each pillar, generate a subtopic cluster of 5–8 specific article or video ideas, tagging each as searchable (SEO-driven) or shareable (distribution-driven).
+7. Use `file_write` to build a prioritized topic list with: topic title, pillar, content type, target keyword, buyer stage, and why this topic (customer research backing).
 8. Save the strategy to `memory` so it can inform future content and copywriting sessions.

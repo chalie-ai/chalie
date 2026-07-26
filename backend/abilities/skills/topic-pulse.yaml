@@ -11,5 +11,5 @@ version: 1
 4. Use the `search` tool to find recent web coverage and discussion for the topic within the time window.
 5. Use the `news` tool to find recent news articles about the topic within the time window.
 6. Use the `search` tool again with a more specific query targeting pain points or complaints about the topic.
-7. Use `document` to synthesize findings into a briefing with: TL;DR (2–3 sentences), key signals from search/news, notable pain points or enthusiasm, and cross-source patterns.
+7. Use `file_write` to synthesize findings into a briefing with: TL;DR (2–3 sentences), key signals from search/news, notable pain points or enthusiasm, and cross-source patterns.
 8. Store the summary in `memory` if the user wants to track this topic over time.

@@ -10,6 +10,6 @@ version: 1
 3. Ask the user to paste or describe their transactions for the period to be analysed — use `read` if they provide a file URL or path.
 4. Use `code_agent` to parse the transactions, categorise them (groceries, dining, transport, utilities, entertainment, etc.), and total each category.
 5. Use `code_agent` to compare actual spending per category against the budget targets — calculate variance (amount and percentage) and flag categories more than 10% over budget.
-6. Use `document` to produce a budget summary: income, total spend, net balance, and a table of actuals vs. budget per category with variance column — highlight overspent categories.
+6. Use `file_write` to produce a budget summary: income, total spend, net balance, and a table of actuals vs. budget per category with variance column — highlight overspent categories.
 7. Use `code_agent` to rank categories by overspend magnitude, then identify the top 1–3 drivers and suggest one specific, actionable change for each.
-8. Use `document` to save the updated budget report, use `memory` to store the new running totals, and use `schedule` to set a reminder for the next budget review.
+8. Use `file_write` to save the updated budget report, use `memory` to store the new running totals, and use `schedule` to set a reminder for the next budget review.

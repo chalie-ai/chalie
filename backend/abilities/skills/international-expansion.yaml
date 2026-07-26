@@ -9,7 +9,7 @@ version: 1
 2. Use `search` to gather data on each candidate market: addressable market size, competitive intensity, regulatory requirements, and local buying behavior.
 3. Use `news` to surface recent market developments, competitor entries, and regulatory changes in the target regions.
 4. Use `code_agent` to score each candidate market across six factors: market size, competitive intensity, regulatory complexity, cultural distance, existing traction, and operational complexity.
-5. Use `document` to recommend the entry mode for the top-scoring market — export, partnership, local team, or entity — with a rationale based on revenue opportunity versus investment required.
-6. Use `document` to produce a localization checklist covering product, go-to-market, and operations dimensions for the recommended market.
-7. Use `document` to save the market scoring matrix, recommended entry mode, and localization checklist.
+5. Use `file_write` to recommend the entry mode for the top-scoring market — export, partnership, local team, or entity — with a rationale based on revenue opportunity versus investment required.
+6. Use `file_write` to produce a localization checklist covering product, go-to-market, and operations dimensions for the recommended market.
+7. Use `file_write` to save the market scoring matrix, recommended entry mode, and localization checklist.
 8. Use `memory` to store the expansion decision and rationale for future reference.

@@ -11,5 +11,5 @@ version: 1
 4. Use `code_agent` to calculate the requested metrics: financial ratios (profitability, liquidity, leverage, efficiency, valuation), DCF with WACC and terminal value, or budget variances with favorable/unfavorable classification.
 5. Use `search` to benchmark calculated ratios against industry standards and flag any metric significantly outside the normal range.
 6. Use `code_agent` to generate scenario analysis where appropriate — base, bull, and bear cases for forecasts or sensitivity tables for DCF.
-7. Use `document` to produce an executive summary with: key findings, material variances explained with root causes, and the top 3 recommended actions.
-8. Use `document` to save the full analysis report with supporting data and assumptions documented.
+7. Use `file_write` to produce an executive summary with: key findings, material variances explained with root causes, and the top 3 recommended actions.
+8. Use `file_write` to save the full analysis report with supporting data and assumptions documented.

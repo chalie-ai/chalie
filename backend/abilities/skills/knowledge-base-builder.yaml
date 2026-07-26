@@ -10,6 +10,6 @@ version: 1
 3. For each source URL, use `read` to extract the full content; use `browser` for JS-heavy or login-required pages.
 4. Use `search` to discover additional sources on the topic if the user provided keywords rather than explicit URLs.
 5. For large sets (5+ sources), use `subagent` to process sources in parallel — each subagent extracts and distils one source into a structured note.
-6. Use `document` to structure each entry: title, source URL, date retrieved, 3–5 key takeaways, and any notable quotes or data points.
-7. Use `document` to organise the entries into the agreed structure and build an index document linking all entries.
-8. Use `document` to save each entry and the index, then use `memory` to store a summary of what the knowledge base covers for quick future reference.
+6. Use `file_write` to structure each entry: title, source URL, date retrieved, 3–5 key takeaways, and any notable quotes or data points.
+7. Use `file_write` to organise the entries into the agreed structure and build an index document linking all entries.
+8. Use `file_write` to save each entry and the index, then use `memory` to store a summary of what the knowledge base covers for quick future reference.

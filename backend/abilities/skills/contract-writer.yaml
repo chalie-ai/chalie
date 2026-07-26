@@ -6,10 +6,10 @@ version: 1
 ---
 
 1. Use `memory` to recall any standard terms, rate cards, or client preferences stored from prior sessions before gathering requirements.
-2. Ask what document type is needed, the jurisdiction, engagement type (fixed-price, hourly, or retainer), party details, contract value, dates, and any special requirements — then record in `document`.
+2. Ask what document type is needed, the jurisdiction, engagement type (fixed-price, hourly, or retainer), party details, contract value, dates, and any special requirements — then record via `file_write`.
 3. Use `search` to verify jurisdiction-specific legal standards or required clause structures (e.g. GDPR DPA for EU, BGB considerations for Germany) if any are uncertain.
-4. Use `document` to draft the complete contract in structured markdown with all required clauses: services, payment terms, IP ownership, confidentiality, warranties, liability cap, termination conditions, and dispute resolution.
-5. In `document`, flag any missing information as REQUIRED with a placeholder, and annotate jurisdiction-specific notes inline.
+4. Use `file_write` to draft the complete contract in structured markdown with all required clauses: services, payment terms, IP ownership, confidentiality, warranties, liability cap, termination conditions, and dispute resolution.
+5. Use `file_write` to flag any missing information as REQUIRED with a placeholder, and annotate jurisdiction-specific notes inline.
 6. Use `search` to cross-check any clause wording against current jurisdiction guidance if the engagement is high-value or cross-border.
-7. Present the draft from `document` for review and refine based on the user's feedback.
-8. Save the finalised contract using `document` and remind the user to review with an attorney for high-value engagements.
+7. Present the draft for review and refine based on the user's feedback.
+8. Save the finalised contract using `file_write` and remind the user to review with an attorney for high-value engagements.

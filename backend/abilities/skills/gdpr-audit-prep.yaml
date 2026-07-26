@@ -7,9 +7,9 @@ version: 1
 
 1. Use `memory` to recall any prior GDPR assessments, known gaps, or compliance decisions already documented.
 2. Ask for the audit scope: which processing activities, systems, or business units are in scope; use `memory` to surface any prior scope decisions.
-3. Use `document` to record whether the Article 30 Record of Processing Activities (RoPA) exists with a recent update date, covers all required elements, and documents joint controller arrangements.
-4. Use `document` to record the lawful basis under Article 6 for each key processing activity and flag any that rely on consent without a documented withdrawal mechanism.
+3. Use `file_write` to record whether the Article 30 Record of Processing Activities (RoPA) exists with a recent update date, covers all required elements, and documents joint controller arrangements.
+4. Use `file_write` to record the lawful basis under Article 6 for each key processing activity and flag any that rely on consent without a documented withdrawal mechanism.
 5. Use `read` or `search` to check whether high-risk processing activities have a completed DPIA per Article 35, including the four required elements: systematic description, necessity assessment, risk to rights, and mitigation measures.
-6. Use `document` to record DSAR response workflow findings: whether the organization can respond within one month, has an identity verification process, and covers the right to erasure including backups and processors.
+6. Use `file_write` to record DSAR response workflow findings: whether the organization can respond within one month, has an identity verification process, and covers the right to erasure including backups and processors.
 7. Use `search` to check transfer compliance: confirm that non-EU data transfers rely on adequacy decisions, SCCs, or documented derogations with completed Transfer Impact Assessments.
-8. Use `document` to save an audit readiness report listing confirmed controls, open gaps, and prioritized remediation actions.
+8. Use `file_write` to save an audit readiness report listing confirmed controls, open gaps, and prioritized remediation actions.

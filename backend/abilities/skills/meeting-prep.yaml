@@ -10,6 +10,6 @@ version: 1
 3. Use `contacts` to retrieve information on the key attendees — role, organisation, and any prior interaction notes.
 4. Use `memory` to recall any context on the attendees, their organisation, or the topic from previous conversations.
 5. Use `search` and `news` to find recent news, announcements, or developments relevant to the attendees' company or the meeting topic.
-6. Use `document` to draft a structured agenda: opening (2 min), context / background (5 min), main discussion items with owner and time allocation, decisions needed, and next steps.
-7. Use `document` to suggest 3–5 questions the user should be prepared to answer, and 3–5 questions worth asking the other party.
+6. Use `file_write` to draft a structured agenda: opening (2 min), context / background (5 min), main discussion items with owner and time allocation, decisions needed, and next steps.
+7. Use `file_write` to suggest 3–5 questions the user should be prepared to answer, and 3–5 questions worth asking the other party.
 8. Use `schedule` to create a reminder 30 minutes before the meeting, and optionally a follow-up reminder to send notes the day after.

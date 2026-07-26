@@ -11,5 +11,5 @@ version: 1
 4. Use `code_agent` to load, clean, and validate the data — report any missing values, outliers, or type errors before proceeding.
 5. Use `code_agent` to run the requested analysis: compute statistics, group comparisons, correlations, or growth rates with appropriate precision.
 6. Use `code_agent` to generate a chart or summary table that makes the key finding visually clear — prefer a simple bar, line, or scatter as appropriate.
-7. Use `document` to record the plain-language interpretation: the main finding, what drives it, and any caveats (sample size, data quality, assumptions).
-8. Use `document` to save the analysis results and code so the user can reproduce or extend it later.
+7. Use `file_write` to record the plain-language interpretation: the main finding, what drives it, and any caveats (sample size, data quality, assumptions).
+8. Use `file_write` to save the analysis results and code so the user can reproduce or extend it later.

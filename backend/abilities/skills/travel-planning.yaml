@@ -11,5 +11,5 @@ version: 1
 4. Use `place` to look up top attractions, neighbourhoods, and logistics (airport, transport options, visa requirements) for the destination.
 5. Use `search` to find curated recommendations for accommodation, restaurants, and activities matching the user's style and budget.
 6. Use `news` to check for any travel advisories, local events, or disruptions at the destination during the travel window.
-7. Use `document` to build a day-by-day itinerary: morning / afternoon / evening slots with specific places, estimated travel times between locations, and alternatives for bad weather days.
-8. Use `calendar` to add the trip dates and key activities, use `schedule` to set a packing reminder 3 days before departure, and use `document` to save the full itinerary.
+7. Use `file_write` to build a day-by-day itinerary: morning / afternoon / evening slots with specific places, estimated travel times between locations, and alternatives for bad weather days.
+8. Use `calendar` to add the trip dates and key activities, use `schedule` to set a packing reminder 3 days before departure, and use `file_write` to save the full itinerary.

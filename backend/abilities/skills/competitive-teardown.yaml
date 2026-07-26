@@ -6,10 +6,10 @@ version: 1
 ---
 
 1. Use `memory` to recall any prior competitive research already stored for this space.
-2. Confirm with the user the 2 to 4 competitors to analyze and which is the primary focus — then open `document` to capture the research as it builds.
+2. Confirm with the user the 2 to 4 competitors to analyze and which is the primary focus — then use `file_write` to capture the research as it builds.
 3. Use `read` to extract pricing tiers, feature lists, primary messaging, case study logos, and trust signals from each competitor's website.
 4. Use `search` to find app store reviews and customer feedback, categorizing them as praise, feature requests, bugs, or UX complaints.
 5. Use `search` to analyze job posting signals for each competitor: engineering volume, tech stack mentions, sales-to-CS ratio, and any data or compliance roles indicating upcoming moves.
 6. Use `news` to surface recent funding rounds, partnership announcements, and product launches for each competitor.
-7. Use `document` to produce structured output: a scored feature comparison matrix across key dimensions, a SWOT per competitor, a pricing model breakdown, and a positioning map.
-8. Generate an action plan with quick wins (exploit competitor weaknesses immediately), medium-term gaps to close, and strategic positioning recommendations — then use `document` to save everything.
+7. Use `file_write` to produce structured output: a scored feature comparison matrix across key dimensions, a SWOT per competitor, a pricing model breakdown, and a positioning map.
+8. Generate an action plan with quick wins (exploit competitor weaknesses immediately), medium-term gaps to close, and strategic positioning recommendations — then use `file_write` to save everything.

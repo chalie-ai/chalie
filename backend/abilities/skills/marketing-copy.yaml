@@ -6,10 +6,10 @@ version: 1
 ---
 
 1. Use `memory` to recall any existing brand voice, prior copy, or ICP notes on file before gathering requirements.
-2. Ask what the copy is for (landing page hero, ad copy, product description, email subject lines, or taglines), who the target audience is, their primary pain point, and the single most important outcome the product delivers — then record in `document`.
+2. Ask what the copy is for (landing page hero, ad copy, product description, email subject lines, or taglines), who the target audience is, their primary pain point, and the single most important outcome the product delivers — then record via `file_write`.
 3. Use `search` to study 3–5 competitors' landing pages or ads for the same category — note the hooks, benefit statements, and CTAs they lead with.
-4. Use `document` to identify the primary message hierarchy: headline claim → key benefit → social proof hook → CTA — based on the pain point and product outcome.
-5. Use `document` to draft 3 headline variations using different persuasion frames: outcome ("Get X in Y time"), problem-relief ("Stop doing Z"), or authority ("The only tool that X").
-6. Write the full copy asset(s) in `document` — body copy, subheadings, bullet benefits, and CTA button text — with one complete version and one shorter punchy alternative.
-7. Annotate each variant in `document` with the copywriting principle it applies (e.g. Cialdini social proof, Jobs-to-be-done framing, PAS structure).
-8. Use `document` to save the final annotated copy so it can be iterated on across sessions.
+4. Use `file_write` to identify the primary message hierarchy: headline claim → key benefit → social proof hook → CTA — based on the pain point and product outcome.
+5. Use `file_write` to draft 3 headline variations using different persuasion frames: outcome ("Get X in Y time"), problem-relief ("Stop doing Z"), or authority ("The only tool that X").
+6. Write the full copy asset(s) via `file_write` — body copy, subheadings, bullet benefits, and CTA button text — with one complete version and one shorter punchy alternative.
+7. Annotate each variant via `file_write` with the copywriting principle it applies (e.g. Cialdini social proof, Jobs-to-be-done framing, PAS structure).
+8. Use `file_write` to save the final annotated copy so it can be iterated on across sessions.
