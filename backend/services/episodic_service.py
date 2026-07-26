@@ -138,7 +138,7 @@ class EpisodicService:
                 logging.info(f"Stored episode {episode_id} for channel '{episode_data['channel']}'")
 
         except Exception as e:
-            logging.error(f"Failed to store episode: {e}")
+            logging.exception(f"Failed to store episode: {e}")
             raise
 
         # Fire consolidation off-thread AFTER the transaction commits so the
@@ -305,7 +305,7 @@ class EpisodicService:
             return ranked
 
         except Exception as exc:
-            logger.error(f"[RETRIEVAL] retrieve failed: {exc}")
+            logger.exception(f"[RETRIEVAL] retrieve failed: {exc}")
             if return_telemetry:
                 return [], telemetry
             return []

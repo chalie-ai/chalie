@@ -180,7 +180,7 @@ class CaldavHandler:
             principal = client.principal()
             calendars = principal.calendars()
         except Exception as exc:
-            logger.error("[caldav_handler] ingest: failed to list calendars: %s", exc)
+            logger.exception("[caldav_handler] ingest: failed to list calendars: %s", exc)
             return []
 
         all_events: list[dict[str, object]] = []
@@ -198,7 +198,7 @@ class CaldavHandler:
                             "[caldav_handler] parse failed in '%s': %s", cal_name, exc
                         )
             except Exception as exc:
-                logger.error(
+                logger.exception(
                     "[caldav_handler] fetch failed for '%s': %s", cal_name, exc
                 )
 
@@ -377,7 +377,7 @@ class CaldavHandler:
                 "calendar_name": cal_label,
             }
         except Exception as exc:
-            logger.error("[caldav_handler] create_event failed: %s", exc)
+            logger.exception("[caldav_handler] create_event failed: %s", exc)
             return {"error": str(exc)}
 
     @staticmethod
@@ -459,7 +459,7 @@ class CaldavHandler:
             logger.info("[caldav_handler] Updated event uid=%s", uid)
             return {"uid": uid, "updated": True}
         except Exception as exc:
-            logger.error("[caldav_handler] update_event failed: %s", exc)
+            logger.exception("[caldav_handler] update_event failed: %s", exc)
             return {"error": str(exc)}
 
     def delete_event(self, client: "_CalDAVClient", params: dict[str, object]) -> dict[str, object]:
@@ -483,7 +483,7 @@ class CaldavHandler:
                     continue
             return {"error": f"Event not found (UID: {uid})"}
         except Exception as exc:
-            logger.error("[caldav_handler] delete_event failed: %s", exc)
+            logger.exception("[caldav_handler] delete_event failed: %s", exc)
             return {"error": str(exc)}
 
     # ------------------------------------------------------------------
@@ -508,7 +508,7 @@ class CaldavHandler:
                 "window": {"start": start.isoformat(), "end": end.isoformat()},
             }
         except Exception as exc:
-            logger.error("[caldav_handler] list_events failed: %s", exc)
+            logger.exception("[caldav_handler] list_events failed: %s", exc)
             return {"error": str(exc)}
 
     def get_event(self, client: "_CalDAVClient", params: dict[str, object]) -> dict[str, object]:
@@ -536,7 +536,7 @@ class CaldavHandler:
                 return {"error": self._ambiguous_title_error(title, matches)}
             return {"event": self._serialize_event(matches[0])}
         except Exception as exc:
-            logger.error("[caldav_handler] get_event failed: %s", exc)
+            logger.exception("[caldav_handler] get_event failed: %s", exc)
             return {"error": str(exc)}
 
     # ------------------------------------------------------------------
@@ -619,7 +619,7 @@ class CaldavHandler:
                             "[caldav_handler] parse failed in '%s': %s", cal_name, exc
                         )
             except Exception as exc:
-                logger.error("[caldav_handler] fetch failed for '%s': %s", cal_name, exc)
+                logger.exception("[caldav_handler] fetch failed for '%s': %s", cal_name, exc)
         return out
 
     def _find_parsed_by_uid(

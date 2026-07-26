@@ -381,7 +381,7 @@ class MailCapability(AbstractCapability):
                         except Exception:
                             pass
             except Exception as exc:
-                logger.error("[mail] ingest() IMAP: %s", exc)
+                logger.exception("[mail] ingest() IMAP: %s", exc)
 
         if self._caldav_ok and provider.caldav_url:
             try:
@@ -393,7 +393,7 @@ class MailCapability(AbstractCapability):
                     events = self._caldav_handler.ingest(cast("_CalDAVClient", client))
                     items.extend(events)
             except Exception as exc:
-                logger.error("[mail] ingest() CalDAV: %s", exc)
+                logger.exception("[mail] ingest() CalDAV: %s", exc)
 
         if self._carddav_ok and provider.carddav_url:
             try:
@@ -405,7 +405,7 @@ class MailCapability(AbstractCapability):
                     contacts = self._carddav_handler.sync_contacts(cast("_CaldavClientProto", client))
                     items.extend(contacts)
             except Exception as exc:
-                logger.error("[mail] ingest() CardDAV: %s", exc)
+                logger.exception("[mail] ingest() CardDAV: %s", exc)
 
         return items
 
@@ -434,7 +434,7 @@ class MailCapability(AbstractCapability):
             if client is not None:
                 self._carddav_handler.monitor(client)
         except Exception as exc:
-            logger.error("[mail] _do_monitor() CardDAV: %s", exc)
+            logger.exception("[mail] _do_monitor() CardDAV: %s", exc)
 
     def _do_monitor(self) -> None:
         if not self.is_connected():

@@ -164,7 +164,7 @@ class SearchAbility(Ability[SearchParamsBag]):
             rows = conn.execute("SELECT * FROM providers WHERE enabled = 1").fetchall()
             cls._providers = {row["name"]: dict(row) for row in rows}
         except Exception as e:
-            logger.error("[SEARCH] Failed to load providers: %s", e)
+            logger.exception("[SEARCH] Failed to load providers: %s", e)
             return {}
 
         return cls._providers

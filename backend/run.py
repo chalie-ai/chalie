@@ -106,9 +106,7 @@ def _start_model_preload() -> None:
             cast("EmbeddingService", svc).generate_embedding("warmup")
             logger.info("[System] Embedding model ready (inference warm)")
         except Exception as e:
-            import traceback
-            logger.error(f"[System] Embedding model preload failed: {e}")
-            logger.error(f"[System] Preload traceback:\n{traceback.format_exc()}")
+            logger.exception(f"[System] Embedding model preload failed: {e}")
 
         svc = None
         try:
@@ -121,7 +119,7 @@ def _start_model_preload() -> None:
                 try:
                     svc._get_head(_task)
                 except RuntimeError as _reg_err:
-                    logger.error(
+                    logger.exception(
                         f"[System] CLASSIFIER REGISTRATION FAILED — task={_task} "
                         f"reason={_reg_err}"
                     )

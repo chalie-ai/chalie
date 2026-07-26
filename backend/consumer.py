@@ -78,7 +78,7 @@ class WorkerManager:
             try:
                 self.spawn_service(worker_id, worker_func)
             except Exception as e:
-                logging.error(f"[Manager] Failed to spawn service '{worker_id}': {e}")
+                logging.exception(f"[Manager] Failed to spawn service '{worker_id}': {e}")
 
     def check_health(self) -> None:
         """Check service thread health and restart dead threads."""
@@ -89,7 +89,7 @@ class WorkerManager:
                     logging.warning(f"[Manager] Service {worker_id} is dead. Restarting...")
                     self.spawn_service(worker_id, worker_func)
             except Exception as e:
-                logging.error(f"[Manager] Health check failed for service {worker_id}: {e}")
+                logging.exception(f"[Manager] Health check failed for service {worker_id}: {e}")
 
 
     def shutdown_all(self) -> None:

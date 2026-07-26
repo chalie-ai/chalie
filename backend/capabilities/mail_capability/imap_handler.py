@@ -137,7 +137,7 @@ class ImapHandler:
             c.login(email, password)
             return c
         except Exception as exc:
-            logger.error("[imap_handler] open_client: %s", exc)
+            logger.exception("[imap_handler] open_client: %s", exc)
             return None
 
     # ------------------------------------------------------------------
@@ -161,7 +161,7 @@ class ImapHandler:
             new_watermark = max_uid if max_uid > wm else (wm or None)
             return results, new_watermark
         except Exception as exc:
-            logger.error("[imap_handler] ingest: %s", exc)
+            logger.exception("[imap_handler] ingest: %s", exc)
             return [], wm or None
 
     # ------------------------------------------------------------------
@@ -234,7 +234,7 @@ class ImapHandler:
                 })
             return {"emails": results, "count": len(results)}
         except Exception as exc:
-            logger.error("[imap_handler] search: %s", exc)
+            logger.exception("[imap_handler] search: %s", exc)
             return {"error": str(exc)}
 
     # ------------------------------------------------------------------
@@ -266,7 +266,7 @@ class ImapHandler:
                 "body": extract_body(raw_bytes),
             }
         except Exception as exc:
-            logger.error("[imap_handler] read_email: %s", exc)
+            logger.exception("[imap_handler] read_email: %s", exc)
             return {"error": str(exc)}
 
     # ------------------------------------------------------------------
@@ -295,7 +295,7 @@ class ImapHandler:
             client.append(drafts, msg.as_bytes(), flags=[b"\\Draft", b"\\Seen"])
             return {"success": True, "to": to, "subject": subject, "folder": drafts}
         except Exception as exc:
-            logger.error("[imap_handler] draft_email: %s", exc)
+            logger.exception("[imap_handler] draft_email: %s", exc)
             return {"error": str(exc)}
 
     # ------------------------------------------------------------------
@@ -345,7 +345,7 @@ class ImapHandler:
                     server.send_message(msg)
             return {"success": True, "to": to, "subject": subject}
         except Exception as exc:
-            logger.error("[imap_handler] send_email: %s", exc)
+            logger.exception("[imap_handler] send_email: %s", exc)
             return {"error": str(exc)}
 
     # ------------------------------------------------------------------
@@ -391,5 +391,5 @@ class ImapHandler:
                     client.expunge([uid])
                 return {"success": True, "uid": uid, "operation": "move_to_spam"}
         except Exception as exc:
-            logger.error("[imap_handler] manage_email: %s", exc)
+            logger.exception("[imap_handler] manage_email: %s", exc)
             return {"error": str(exc)}
