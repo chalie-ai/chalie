@@ -505,7 +505,13 @@ def _ok_list(service: "_ListService", list_id: str) -> ToolResult:
 
 
 def _normalize_string_items(items: list[object]) -> list[str]:
-    return [i.strip() for i in items if isinstance(i, str) and i.strip()]
+    """Item text from either shape the contract permits: a bare string, or the
+    ``{"content": ...}`` object that ``check`` already requires and the REST item
+    endpoint already speaks. ``items`` is declared untyped in the schema, so
+    taking strings alone rejected schema-valid calls as 'must contain at least
+    one non-empty string'."""
+    texts = (i.get("content") if isinstance(i, dict) else i for i in items)
+    return [t.strip() for t in texts if isinstance(t, str) and t.strip()]
 
 
 def _split_check_items(raw_items: list[object]) -> tuple[list[str], list[str]]:
