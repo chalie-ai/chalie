@@ -24,6 +24,7 @@ is read-only reached from here, unmodified.
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import TYPE_CHECKING, cast
 
@@ -31,7 +32,11 @@ from configs.enums.provider_type import ProviderType
 from exceptions import ContextLimit, ProviderError
 from models.turn_signal import TurnSignal
 from services.llm_clients.factory import build_client
-from services.provider_api import MAX_CONTEXT_WINDOW
+from services.provider_api import (
+    DEFAULT_CONTEXT_WINDOW,
+    DEFAULT_CONTEXT_WINDOWS,
+    MAX_CONTEXT_WINDOW,
+)
 
 if TYPE_CHECKING:
     from controllers.message_processor import MessageProcessor
@@ -46,17 +51,74 @@ _LLM_SENTINEL_PATTERNS = (
     re.compile(r'<\|[^|<>]*\|'),
 )
 
+logger = logging.getLogger(__name__)
+
+
+def _persist_window(config: dict[str, object], window: int) -> None:
+    """Write a freshly probed window onto the provider row.
+
+    Without this, a row that predates window-seeding would make every single
+    send re-probe the host: ``send()`` builds a fresh client per call, so the
+    client's own per-instance cache dies with it. Persisting converges the row
+    on first use, which is why no migration backfill is needed.
+
+    The cache bust is not optional — provider rows are served from
+    ``ProviderCacheService``, and invalidation lives at the API layer
+    (``api/endpoints/providers.py``), not in ``ProviderDbService``. Skipping it
+    would leave the stale ``context_window: None`` in the cached dict and the
+    probe would repeat on every send anyway.
+
+    Best-effort by design: a failure here costs one repeated probe, never the turn.
+    """
+    provider_id = config.get("id")
+    if not isinstance(provider_id, int):
+        return
+    try:
+        from services.provider_db_service import ProviderDbService  # noqa: PLC0415
+        from services.provider_probe import invalidate_provider_cache  # noqa: PLC0415
+        ProviderDbService().update_provider(provider_id, {"context_window": window})
+        invalidate_provider_cache()
+        config["context_window"] = window
+        logger.info(
+            "Stored context window %d for provider id=%s (%s)",
+            window, provider_id, config.get("model") or "",
+        )
+    except Exception as exc:
+        logger.warning(
+            "Could not persist context window for provider id=%s: %s", provider_id, exc,
+        )
+
 
 def _window_of(client: "ProviderClient", config: dict[str, object]) -> int:
     """The one context-window computation, hard-capped at MAX_CONTEXT_WINDOW.
 
     Prefers the window stored on the provider row. Only when that is unset does
-    it fall back to the client's own answer — which for Gemini and Ollama is a
-    real query against the model, but for an OpenAI-compatible provider is a
-    flat constant that cannot know the model behind an arbitrary host.
+    it fall back to the client's own live answer. When the client also cannot
+    tell (no host, transient probe failure, model not advertised), it drops to
+    the platform's documented operating default and logs a WARNING naming
+    provider+model. Never returns None.
+
+    The last step deliberately does NOT use MAX_CONTEXT_WINDOW: that is the most
+    permissive value there is, so a failed probe against a small model would
+    size compaction against 200k and let every turn run until the provider hard-
+    rejects it. An unknown window must degrade conservatively, not optimistically.
     """
+    provider = cast(str, config.get("platform") or "")
     stored = config.get("context_window")
-    limit = stored if isinstance(stored, int) and stored > 0 else client.get_context_limit()
+    limit: int | None
+    if isinstance(stored, int) and stored > 0:
+        limit = stored
+    else:
+        limit = client.get_context_limit()
+        if limit is not None:
+            _persist_window(config, min(limit, MAX_CONTEXT_WINDOW))
+    if limit is None:
+        limit = DEFAULT_CONTEXT_WINDOWS.get(provider, DEFAULT_CONTEXT_WINDOW)
+        logger.warning(
+            "No context window available for provider=%s model=%s; using the "
+            "platform default of %d tokens",
+            provider, cast(str, config.get("model") or ""), limit,
+        )
     return min(limit, MAX_CONTEXT_WINDOW)
 
 

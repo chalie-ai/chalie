@@ -16,10 +16,10 @@ Native size-rejection signal — VERIFIED (google-genai 1.65.0):
   causes (wrong parameter type, unsupported region, etc.), so a bare
   ``exc.code == 400`` check would over-trigger.  The most reliable
   discriminator is ``exc.code == 400 AND exc.status == 'INVALID_ARGUMENT'
-  AND any(s in (exc.message or '').lower() for s in _TOKEN_LIMIT_STRINGS)``.
+  AND is_token_limit_message(exc.message)`` (services.provider_api).
 
   Residual gap: Gemini may produce a token-limit 400 with a message phrasing
-  not in _TOKEN_LIMIT_STRINGS.  If the string-match misses, the exception
+  not in TOKEN_LIMIT_STRINGS.  If the string-match misses, the exception
   falls through to the bare ``raise`` and propagates to the MessageProcessor,
   which resends — the turn dies without compaction only after retries exhaust.
   This is an improvement over the old GeminiService which had NO token-limit
@@ -106,25 +106,10 @@ from services.llm_clients.thinking_map import GEMINI_NONE_FALLBACK_BUDGET, GEMIN
 from services.provider_api import (
     ProviderApiRequest,
     ProviderApiResponse,
+    is_token_limit_message,
 )
 
 logger = logging.getLogger(__name__)
-
-# Message substrings used as a fallback discriminator for Gemini token-limit
-# errors.  All token-limit rejections arrive as HTTP 400 / INVALID_ARGUMENT,
-# but that same code covers many unrelated causes.  These strings narrow it
-# to size-related errors; mismatches fall through and are logged at WARNING
-# so the set can be extended if needed.
-_TOKEN_LIMIT_STRINGS = frozenset({
-    'token limit',
-    'context length',
-    'too long',
-    'maximum context',
-    'input too large',
-    'request payload size',
-    'exceeds the limit',
-})
-
 
 def _gemini_tool_response(msg: dict[str, object]) -> dict[str, object]:
     return {
@@ -289,15 +274,14 @@ class GeminiClient(ProviderClient):
         # code==400 check would over-trigger (covers wrong params, regions, etc.).
         # If the string-match misses, log a WARNING so the set can be extended.
         if exc_code == 400 and exc_status == 'INVALID_ARGUMENT':
-            exc_msg = (getattr(exc, 'message', None) or '').lower()
-            if any(s in exc_msg for s in _TOKEN_LIMIT_STRINGS):
+            if is_token_limit_message(getattr(exc, 'message', None)):
                 raise ContextLimit(
                     f"Gemini rejected payload (token limit): {exc}",
                     provider='gemini',
                 ) from exc
             logger.warning(
                 "[GeminiClient] 400 INVALID_ARGUMENT not matched as token-limit "
-                "(msg=%r); propagating. Add matching string to _TOKEN_LIMIT_STRINGS "
+                "(msg=%r); propagating. Add matching string to TOKEN_LIMIT_STRINGS "
                 "if this is a size rejection.",
                 getattr(exc, 'message', str(exc))[:200],
             )
@@ -417,8 +401,12 @@ class GeminiClient(ProviderClient):
             response_code=200,
         )
 
-    def get_context_limit(self) -> int:
-        """Query Gemini API for model's input token limit, cached."""
+    def get_context_limit(self) -> int | None:
+        """Query Gemini API for model's input token limit, cached.
+
+        Returns None when the SDK call fails — Gemini exposes the limit for
+        most models, but a transient failure should not be masked by a guess.
+        """
         if hasattr(self, '_cached_context_limit'):
             return self._cached_context_limit
         try:
@@ -426,11 +414,11 @@ class GeminiClient(ProviderClient):
             from services.llm_service import _resolve_api_key  # noqa: PLC0415
             client = genai.Client(api_key=_resolve_api_key(self._config))
             model_info = client.models.get(model=self.model)
-            self._cached_context_limit: int = cast(int, model_info.input_token_limit)
+            self._cached_context_limit: int | None = cast(int, model_info.input_token_limit)
             return self._cached_context_limit
         except Exception as exc:
             logger.debug("[GeminiClient] Failed to get context limit: %s", exc)
-            self._cached_context_limit = 1_000_000
+            self._cached_context_limit = None
             return self._cached_context_limit
 
     def estimate_request_tokens(self, dto: ProviderApiRequest) -> int:

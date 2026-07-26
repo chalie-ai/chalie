@@ -97,6 +97,30 @@ def _install_stub_codex(tmp_path: Path) -> str:
     return str(binary)
 
 
+# A stub that impersonates a *failing* codex. `mode='exit'` writes the message to
+# stderr and exits non-zero; `mode='event'` exits 0 but emits a JSONL error event
+# with no agent message. Those are the only two shapes a codex failure takes, and
+# neither carries anything but prose to say whether it was a size rejection.
+_STUB_CODEX_FAILS = """#!/usr/bin/env python3
+import sys, json
+sys.stdin.read()
+mode, message = {mode!r}, {message!r}
+if mode == "exit":
+    sys.stderr.write(message)
+    sys.exit(1)
+print(json.dumps({{"type": "error", "message": message}}))
+sys.exit(0)
+"""
+
+
+def _install_failing_codex(tmp_path: Path, name: str, *, mode: str, message: str) -> str:
+    """Write a stub codex that fails in the given shape; return its path."""
+    binary = tmp_path / f"codex-fail-{name}"
+    binary.write_text(_STUB_CODEX_FAILS.format(mode=mode, message=message))
+    binary.chmod(binary.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    return str(binary)
+
+
 def _install_codex_home(tmp_path: Path, *, logged_in: bool = True) -> Path:
     """Create a fake ~/.codex with a models cache and (optionally) auth.json."""
     home = tmp_path / "codex-home"
@@ -187,8 +211,8 @@ class TestCodexCliProvider:
         monkeypatch.setenv('CODEX_HOME', str(home))
 
         assert CodexCliClient({'platform': 'codex_cli', 'model': 'gpt-5.5'}).get_context_limit() == 272000
-        # Unknown slug → documented default.
-        assert CodexCliClient({'platform': 'codex_cli', 'model': 'nope'}).get_context_limit() == 272000
+        # Unknown slug → None (contract: "I don't know" instead of fabricating).
+        assert CodexCliClient({'platform': 'codex_cli', 'model': 'nope'}).get_context_limit() is None
 
     # ------------------------------------------------------------------
     # send() — the full subprocess path via a real stub binary.
@@ -240,6 +264,69 @@ class TestCodexCliProvider:
         ])
         assert resp.text.startswith("STUB")   # survived; images/tool_calls dropped
         assert resp.tool_calls is None
+
+    # ------------------------------------------------------------------
+    # Size rejections. codex has no size-specific exit code or event type, so
+    # a "too long" failure is only distinguishable by its prose. Getting this
+    # wrong is not cosmetic: a size fault raised as a generic error is retried
+    # unchanged until attempts run out, when compacting would have saved the turn.
+    # ------------------------------------------------------------------
+
+    def _send_failing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                      name: str, *, mode: str, message: str) -> None:
+        from services.llm_clients.codex_cli import CodexCliClient
+        from services.provider_api import ProviderApiRequest
+
+        monkeypatch.setenv('CODEX_BIN', _install_failing_codex(tmp_path, name, mode=mode, message=message))
+        monkeypatch.setenv('CODEX_HOME', str(_install_codex_home(tmp_path)))
+        client = CodexCliClient({'platform': 'codex_cli', 'model': 'gpt-5.5'})
+        client.send(ProviderApiRequest(
+            system="You are helpful.", messages=[{"role": "user", "content": "hi"}],
+            type=ProviderType.CHAT, thinking_mode=ThinkingLevel.LOW,
+            cache_prefix=False, max_tokens=64,
+        ))
+
+    def test_non_zero_exit_reporting_size_raises_context_limit(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from exceptions import ContextLimit
+
+        with pytest.raises(ContextLimit) as caught:
+            self._send_failing(
+                tmp_path, monkeypatch, "size-exit", mode="exit",
+                message="Error: prompt is too long: 300000 tokens exceeds the limit",
+            )
+        assert caught.value.provider == 'codex_cli'
+        assert caught.value.model == 'gpt-5.5'
+
+    def test_non_zero_exit_from_another_cause_stays_a_generic_error(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from exceptions import ContextLimit, ProviderResponseError
+
+        with pytest.raises(ProviderResponseError) as caught:
+            self._send_failing(
+                tmp_path, monkeypatch, "other-exit", mode="exit",
+                message="Error: not logged in — run `codex login`",
+            )
+        # Compacting would not help here; misreading it as a size fault would
+        # silently shrink the user's history for nothing.
+        assert not isinstance(caught.value, ContextLimit)
+
+    def test_error_event_reporting_size_raises_context_limit(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from exceptions import ContextLimit
+
+        with pytest.raises(ContextLimit):
+            self._send_failing(
+                tmp_path, monkeypatch, "size-event", mode="event",
+                message="context length exceeded for this model",
+            )
+
+    def test_error_event_from_another_cause_stays_a_generic_error(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from exceptions import ContextLimit, ProviderResponseError
+
+        with pytest.raises(ProviderResponseError) as caught:
+            self._send_failing(
+                tmp_path, monkeypatch, "other-event", mode="event",
+                message="model not found",
+            )
+        assert not isinstance(caught.value, ContextLimit)
 
     def test_estimate_request_tokens_includes_overhead(self) -> None:
         from services.llm_clients.codex_cli import CodexCliClient

@@ -9,6 +9,50 @@ from configs.enums.thinking_level import ThinkingLevel
 # Hard ceiling on any provider's reported context window.
 MAX_CONTEXT_WINDOW = 200_000
 
+# Operating default per platform, used ONLY when nothing truthful is known: the
+# provider row carries no window AND the client's live probe returned None.
+# Deliberately separate from ``ProviderClient.get_context_limit()``, which
+# reports measurements only — a guess must never be persisted onto a provider
+# row, but a send still needs some number to size compaction against. Values are
+# each platform's documented baseline. The unknown-platform floor is deliberately
+# small: compacting too eagerly is recoverable, overshooting the real window is
+# a dead turn.
+DEFAULT_CONTEXT_WINDOW = 8_192
+DEFAULT_CONTEXT_WINDOWS: dict[str, int] = {
+    'anthropic': 200_000,   # Claude 3+ documented window
+    'gemini': 1_000_000,    # Gemini 1.5+ documented window
+    'openai': 128_000,      # GPT-4 class documented window
+    'openai_compatible': 128_000,
+    'codex_cli': 272_000,   # GPT-5 class default reported by the codex CLI
+    'ollama': DEFAULT_CONTEXT_WINDOW,
+}
+
+# Provider prose that means "your request was too big". Some providers have no
+# machine-readable size-fault code — Gemini reports 400/INVALID_ARGUMENT, which
+# also covers wrong params and regions; codex reports a non-zero exit; a
+# non-OpenAI host behind the OpenAI-compatible API rarely sends OpenAI's
+# 'context_length_exceeded'. Those can only be told apart by their message, so
+# the vocabulary lives here once instead of drifting per client. A miss must
+# fall through to the generic error and log — never be swallowed.
+TOKEN_LIMIT_STRINGS = frozenset({
+    'token limit',
+    'context length',
+    'too long',
+    'maximum context',
+    'input too large',
+    'request payload size',
+    'exceeds the limit',
+})
+
+
+def is_token_limit_message(text: str | None) -> bool:
+    """True when a provider's error prose reports a size rejection.
+
+    Owns the casefold so no caller can match case-sensitively by accident.
+    """
+    return any(s in (text or '').lower() for s in TOKEN_LIMIT_STRINGS)
+
+
 # Deadline (seconds) for a single provider API call, enforced by every thin
 # client at its own HTTP boundary (the only place a call can actually be
 # interrupted — a Python thread cannot be killed). On expiry the client raises

@@ -68,7 +68,10 @@ class ContextLimit(ProviderError):
       (``ProviderService.send``).
     - Mid-inference, when the provider itself rejects the payload for length —
       every client's native size signal (Anthropic/Ollama HTTP 413, OpenAI
-      ``context_length_exceeded``, Gemini's token-limit message).
+      ``context_length_exceeded``). Providers with no size-specific signal —
+      Gemini's catch-all 400, codex's non-zero exit, any openai_compatible host
+      not using OpenAI's code — are matched on their message prose instead, via
+      ``services.provider_api.is_token_limit_message``.
 
     Carries the :class:`MessageProcessor` whose turn hit the wall. Clients raise
     it without one — a client has no turn — and ``ProviderService.send``

@@ -8,7 +8,12 @@ and no ``host`` required — codex_cli is the ONLY platform with zero
 credentials. Removing ``OPENAI_API_KEY`` / ``OPENAI_BASE_URL`` from the
 child env forces codex onto its local auth flow.
 
-Native size-rejection signal: non-zero exit code from the subprocess.
+Native size-rejection signal: none. codex reports a size rejection as an
+ordinary failure — a non-zero exit or a JSONL error event — with nothing in the
+exit code or event type to tell it apart from any other failure, so both paths
+fall back to matching the message prose (``is_token_limit_message``) to raise
+``ContextLimit`` instead of ``ProviderResponseError``. A miss is not silent: it
+propagates as a normal provider error and the MessageProcessor retries.
 Confirmed against codex-cli 0.143.0 (JSONL stdout, ``-o`` output file).
 
 Depends on: services.provider_api (contract), services.llm_service (estimate_tokens).
@@ -29,6 +34,7 @@ from typing import ClassVar, Optional, cast
 from contracts.provider_client import ProviderClient
 from services.llm_clients.thinking_map import CODEX_REASONING_EFFORTS
 from exceptions import (
+    ContextLimit,
     ProviderResponseError,
     ProviderTimeoutError,
 )
@@ -36,6 +42,7 @@ from services.provider_api import (
     PROVIDER_CALL_TIMEOUT_S,
     ProviderApiRequest,
     ProviderApiResponse,
+    is_token_limit_message,
 )
 
 logger = logging.getLogger(__name__)
@@ -73,26 +80,29 @@ def list_codex_models() -> list[dict[str, str | None]]:
         return []
 
 
-def codex_model_context_window(slug: str | None) -> int:
+def codex_model_context_window(slug: str | None) -> int | None:
     """Return the context window (tokens) for a codex model slug.
 
-    Falls back to 272_000 (GPT-5 class default) on any lookup failure.
+    Returns None when the local cache has no entry for the slug, instead of
+    guessing. The caller is responsible for falling back to a documented
+    default.
     """
     if not slug:
-        return 272_000
+        return None
     try:
         cache_path = _codex_home() / "models_cache.json"
         if not cache_path.is_file():
-            return 272_000
+            return None
         data = json.loads(cache_path.read_text())
         if not isinstance(data, dict):
-            return 272_000
+            return None
         for m in data.get("models", []):
             if isinstance(m, dict) and m.get("slug") == slug:
-                return int(m.get("context_window", 272_000))
-        return 272_000
+                ctx = m.get("context_window")
+                return int(ctx) if isinstance(ctx, int) else None
+        return None
     except (OSError, json.JSONDecodeError, KeyError, TypeError):
-        return 272_000
+        return None
 
 
 # ── Prompt flattening ────────────────────────────────────────────────────────
@@ -280,9 +290,17 @@ class CodexCliClient(ProviderClient):
 
         latency_ms = int((time.time() - start) * 1000)
 
-        # (g) Non-zero return code.
+        # (g) Non-zero return code. codex has no size-fault exit code of its own,
+        # so a rejection for length is only distinguishable by its prose — match
+        # it here or the turn dies on retries instead of compacting.
         if proc is not None and proc.returncode != 0:
             err_text = (stderr or "").strip() or (stdout or "").strip() or f"codex exited {proc.returncode}"
+            if is_token_limit_message(err_text):
+                raise ContextLimit(
+                    f"codex rejected payload (token limit): {err_text}",
+                    provider='codex_cli',
+                    model=self.model or "codex",
+                )
             raise ProviderResponseError(
                 err_text,
                 response_code=0,
@@ -304,6 +322,12 @@ class CodexCliClient(ProviderClient):
 
         # (i) Surface an upstream error only when no assistant text was produced.
         if errors and not agent_text:
+            if is_token_limit_message(errors[0]):
+                raise ContextLimit(
+                    f"codex rejected payload (token limit): {errors[0]}",
+                    provider='codex_cli',
+                    model=self.model or "codex",
+                )
             raise ProviderResponseError(
                 errors[0],
                 response_code=0,
@@ -340,8 +364,9 @@ class CodexCliClient(ProviderClient):
             response_code=200,
         )
 
-    def get_context_limit(self) -> int:
-        """Return the model's context window from codex's local cache."""
+    def get_context_limit(self) -> int | None:
+        """Return the model's context window from codex's local cache, or None
+        when the cache has no entry for this slug."""
         return codex_model_context_window(self.model)
 
     def estimate_request_tokens(self, dto: ProviderApiRequest) -> int:

@@ -250,11 +250,15 @@ class OllamaClient(ProviderClient):
             self._handle_http_error(exc)
             raise  # pragma: no cover — _handle_http_error always raises
 
-    def get_context_limit(self) -> int:
-        """Query Ollama for model's context window size, cached per-instance."""
+    def get_context_limit(self) -> int | None:
+        """Query Ollama for model's context window size, cached per-instance.
+
+        Returns None when the query fails or the key is absent — Ollama models
+        vary too much for a safe conservative default.
+        """
         if hasattr(self, '_cached_context_limit'):
             return self._cached_context_limit
-        raw_limit: Optional[int] = None
+        raw_limit: int | None = None
         try:
             resp = requests.post(
                 f"{self.host}/api/show",
@@ -270,9 +274,8 @@ class OllamaClient(ProviderClient):
                         break
         except Exception as exc:
             logger.debug("[OllamaClient] Failed to get context limit: %s", exc)
-        if raw_limit is None:
-            raw_limit = 8192  # Conservative default
-        self._cached_context_limit: int = raw_limit
+
+        self._cached_context_limit: int | None = raw_limit
         return self._cached_context_limit
 
     def estimate_request_tokens(self, dto: ProviderApiRequest) -> int:

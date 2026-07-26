@@ -9,6 +9,10 @@ Native size-rejection signal:
   Confirmed from existing code: openai_mod.BadRequestError is caught in
   _call_completions; the 'context_length_exceeded' code is the canonical OpenAI
   signal (https://platform.openai.com/docs/guides/error-codes).
+  That code is OpenAI's own convention, and the openai_compatible hosts sharing
+  this client are under no obligation to use it, so the message prose is matched
+  as well (``is_token_limit_message``) — otherwise a size rejection from a
+  self-hosted server would surface as a generic 400 and never compact.
 
 Depends on: services.provider_api (contract), services.llm_service (estimate_tokens,
 _app_user_agent, _resolve_api_key, _strip_think_blocks — utilities).
@@ -57,6 +61,7 @@ from services.llm_clients.thinking_map import (
 from services.provider_api import (
     ProviderApiRequest,
     ProviderApiResponse,
+    is_token_limit_message,
 )
 
 logger = logging.getLogger(__name__)
@@ -182,13 +187,21 @@ class OpenAIClient(ProviderClient):
         except openai_mod.APITimeoutError as exc:
             raise ProviderTimeoutError(str(exc), provider='openai') from exc
         except (openai_mod.BadRequestError, openai_mod.APIError) as exc:
-            # Confirmed: OpenAI sends HTTP 400 with error.code == 'context_length_exceeded'
+            # Confirmed: OpenAI sends HTTP 400 with error.code == 'context_length_exceeded'.
+            # That code is OpenAI's own — the openai_compatible hosts sharing this
+            # client (llama.cpp, vLLM, third-party gateways) rarely send it, so the
+            # message prose is checked too or their size rejections never compact.
             err_body = getattr(exc, 'body', None) or {}
             err_code = (err_body.get('error') or {}).get('code', '') if isinstance(err_body, dict) else ''
-            if err_code == 'context_length_exceeded' or 'context_length_exceeded' in str(exc).lower():
+            if (
+                err_code == 'context_length_exceeded'
+                or 'context_length_exceeded' in str(exc).lower()
+                or is_token_limit_message(str(exc))
+            ):
                 raise ContextLimit(
-                    f"OpenAI rejected payload (context_length_exceeded): {exc}",
-                    provider='openai',
+                    f"Provider rejected payload (context length): {exc}",
+                    provider=cast(str, self._config.get('platform') or 'openai'),
+                    model=self.model,
                 ) from exc
             if _is_thinking_rejection(exc, create_kwargs):
                 # Ladder: only when we sent reasoning_effort='none' do we try
@@ -283,9 +296,72 @@ class OpenAIClient(ProviderClient):
             response_code=200,
         )
 
-    def get_context_limit(self) -> int:
-        """Default 128k for GPT-4 class models."""
-        return 128_000
+    def get_context_limit(self) -> int | None:
+        """Query the host for the model's real context window, cached per-instance.
+
+        Tries the llama.cpp /models endpoint first (meta.n_ctx of the matching
+        entry), then /props (default_generation_settings.n_ctx). Returns None
+        when there is no host or every read fails, and logs a warning.
+        """
+        if hasattr(self, '_cached_context_limit'):
+            return self._cached_context_limit
+
+        import requests  # noqa: PLC0415
+
+        raw_limit: int | None = None
+        host = cast("str | None", self._config.get('host'))
+        # Read the key directly, never through _resolve_api_key: that raises when
+        # the key is absent (vault locked, key-less local host), and a window
+        # probe must degrade to the default rather than take the caller down.
+        api_key = self._config.get('api_key')
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+
+        if host:
+            base = host.rstrip('/')
+            # 1. /models — find the entry whose id matches self.model, read meta.n_ctx.
+            try:
+                resp = requests.get(f"{base}/models", headers=headers, timeout=5)
+                if resp.ok:
+                    for entry in resp.json().get('data', []):
+                        if entry.get('id') == self.model:
+                            meta = entry.get('meta') or {}
+                            n_ctx = meta.get('n_ctx')
+                            if isinstance(n_ctx, int) and n_ctx > 0:
+                                raw_limit = n_ctx
+                                break
+            except Exception as exc:  # pragma: no cover — network error path
+                logger.debug("[OpenAIClient] /models query failed: %s", exc)
+
+            # 2. /props — default_generation_settings.n_ctx. Verified against a
+            # live llama.cpp server: /props sits at the server root, NOT under
+            # the OpenAI-compatible /v1 prefix (`/v1/props` returns 404 where
+            # `/props` returns 200), so the prefix comes off first.
+            if raw_limit is None:
+                try:
+                    root = base.removesuffix('/v1')
+                    resp = requests.get(f"{root}/props", headers=headers, timeout=5)
+                    if resp.ok:
+                        dgs = (resp.json().get('default_generation_settings') or {})
+                        n_ctx = dgs.get('n_ctx')
+                        if isinstance(n_ctx, int) and n_ctx > 0:
+                            raw_limit = n_ctx
+                except Exception as exc:  # pragma: no cover — network error path
+                    logger.debug("[OpenAIClient] /props query failed: %s", exc)
+
+        if raw_limit is None:
+            if host:
+                logger.warning(
+                    "[OpenAIClient] Could not determine context window for model=%s via /models or /props",
+                    self.model,
+                )
+            else:
+                logger.warning(
+                    "[OpenAIClient] No host configured for platform=openai; cannot determine context window for model=%s",
+                    self.model,
+                )
+
+        self._cached_context_limit: int | None = raw_limit
+        return self._cached_context_limit
 
     def estimate_request_tokens(self, dto: ProviderApiRequest) -> int:
         """Estimate tokens using tiktoken if available, else heuristic."""

@@ -91,7 +91,7 @@ class ProviderDbService:
 
     def create_provider(self, data: Dict[str, object]) -> Optional[Dict[str, object]]:
         default_model = data.get("model")
-        if not default_model:
+        if not isinstance(default_model, str) or not default_model:
             raise ValueError("'model' is required")
 
         platform = data.get("platform", "")
@@ -134,10 +134,18 @@ class ProviderDbService:
             }
             vision = 1 if probe_provider(probe_config) else 0
 
-        # Validate and clamp context_window on create
+        # Validate and clamp context_window on create. An explicit value in the
+        # payload is the operator's word and always wins; otherwise ask the
+        # provider itself, so the row carries a measured window from birth
+        # rather than leaving every send to guess.
         context_window = data.get("context_window")
         if context_window is not None:
             context_window = self._validate_context_window(context_window)
+        else:
+            context_window = self._probe_context_window(
+                str(platform), default_model,
+                cast(Optional[str], data.get("host")), api_key_val,
+            )
 
         with Database.transaction():
             provider = ProviderModel(
@@ -206,6 +214,17 @@ class ProviderDbService:
                 }
                 updates["supports_vision"] = 1 if probe_provider(probe_config) else 0
 
+            # The window belongs to the model behind the host, so the same
+            # field change that invalidates the vision verdict invalidates it
+            # too. An explicit value in this payload still wins.
+            if "context_window" not in data:
+                probed = self._probe_context_window(
+                    cast(str, eff_platform), cast(str, eff_model),
+                    cast(Optional[str], eff_host), cast(Optional[str], eff_api_key),
+                )
+                if probed is not None:
+                    updates["context_window"] = probed
+
         # Handle api_key separately for encryption
         if "api_key" in data:
             if data["api_key"] is None:
@@ -221,6 +240,41 @@ class ProviderDbService:
             ProviderModel.touch(provider_id)
 
         return self.get_provider_by_id(provider_id)
+
+    @staticmethod
+    def _probe_context_window(
+        platform: str, model: str, host: Optional[str], api_key: Optional[str],
+    ) -> Optional[int]:
+        """Ask the provider for the model's real context window, clamped.
+
+        Returns None when the window cannot be determined — the caller must
+        leave the column alone rather than write a guess. ``get_context_limit``
+        reports measurements only, so None here means "nobody knows", and a send
+        will fall back to the platform default without poisoning the row.
+
+        Never raises: a provider must remain creatable while its host is down.
+        """
+        try:
+            from services.llm_clients.factory import build_client  # noqa: PLC0415
+            client = build_client({
+                'platform': platform, 'model': model,
+                'host': host, 'api_key': api_key,
+            })
+            window = client.get_context_limit()
+        except Exception as exc:
+            logger.warning(
+                "[Provider] Context-window probe failed for platform=%s model=%s: %s",
+                platform, model, exc,
+            )
+            return None
+        if not isinstance(window, int) or window < 1:
+            logger.warning(
+                "[Provider] No context window reported for platform=%s model=%s — "
+                "leaving it unset; sends will use the platform default",
+                platform, model,
+            )
+            return None
+        return min(window, MAX_CONTEXT_WINDOW)
 
     @staticmethod
     def _validate_context_window(value: object) -> int:
