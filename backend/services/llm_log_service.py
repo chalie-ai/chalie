@@ -55,6 +55,8 @@ class LlmLogService:
                 tokens_cache_create=response.tokens_cache_create or 0,
                 tokens_thinking=response.tokens_thinking or 0,
                 latency_ms=response.latency_ms or 0,
+                prefill_ms=response.prefill_ms,
+                decode_ms=response.decode_ms,
             ).save()
         except Exception as e:
             logger.debug(f"[LLM_LOG] Failed to log call: {e}")
