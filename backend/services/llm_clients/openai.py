@@ -306,6 +306,25 @@ class OpenAIClient(ProviderClient):
         _completion_details = getattr(response.usage, 'completion_tokens_details', None)
         _reasoning = getattr(_completion_details, 'reasoning_tokens', None) if _completion_details else None
 
+        # Defensive reads for provider-reported telemetry that the SDK does not
+        # expose through typed attributes.
+        #
+        # Real OpenAI: usage.prompt_tokens_details.cached_tokens (int | None).
+        # llama.cpp OpenAI-compatible server: timings.cache_n (int | None).
+        _prompt_details = getattr(response.usage, 'prompt_tokens_details', None)
+        tokens_cache_read = getattr(_prompt_details, 'cached_tokens', None) if _prompt_details else None
+        timings = getattr(response, 'timings', None)
+        if isinstance(timings, dict):
+            if tokens_cache_read is None:
+                _cache_n = timings.get('cache_n')
+                if isinstance(_cache_n, int):
+                    tokens_cache_read = _cache_n
+            prefill_ms = timings.get('prompt_ms')
+            decode_ms = timings.get('predicted_ms')
+        else:
+            prefill_ms = None
+            decode_ms = None
+
         log_fn = logger.info if (text and text.strip()) or tool_calls else logger.warning
         log_fn(
             "[OpenAIClient] model=%s tokens=%d+%d latency=%dms finish=%s%s",
@@ -324,7 +343,10 @@ class OpenAIClient(ProviderClient):
             tokens_input=cast(_COMPLETION_USAGE, response.usage).prompt_tokens,
             tokens_output=cast(_COMPLETION_USAGE, response.usage).completion_tokens,
             tokens_thinking=_reasoning,
+            tokens_cache_read=tokens_cache_read,
             latency_ms=latency_ms,
+            prefill_ms=prefill_ms,
+            decode_ms=decode_ms,
             tool_calls=tool_calls,
             stop_reason=finish_reason,
             response_code=200,

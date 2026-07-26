@@ -121,5 +121,7 @@ class ProviderApiResponse:
     tool_calls: Optional[list[dict[str, object]]] = None
     stop_reason: Optional[str] = None
     latency_ms: Optional[int] = None
+    prefill_ms: Optional[float] = None
+    decode_ms: Optional[float] = None
     thinking_block: Optional[str] = None
     response_code: Optional[int] = None

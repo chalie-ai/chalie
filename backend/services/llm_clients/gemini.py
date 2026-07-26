@@ -381,6 +381,9 @@ class GeminiClient(ProviderClient):
         tokens_input = getattr(usage, 'prompt_token_count', None) if usage else None
         tokens_output = getattr(usage, 'candidates_token_count', None) if usage else None
         tokens_thinking = getattr(usage, 'thoughts_token_count', None) if usage else None
+        # Gemini reports cached_content_token_count on usage_metadata when
+        # a prompt cache hit occurred; absent otherwise.
+        tokens_cache_read = getattr(usage, 'cached_content_token_count', None) if usage else None
 
         logger.info(
             "[GeminiClient] model=%s tokens=%s+%s latency=%dms%s",
@@ -395,6 +398,7 @@ class GeminiClient(ProviderClient):
             tokens_input=tokens_input,
             tokens_output=tokens_output,
             tokens_thinking=tokens_thinking,
+            tokens_cache_read=tokens_cache_read,
             latency_ms=latency_ms,
             tool_calls=tool_calls,
             stop_reason=finish_reason,

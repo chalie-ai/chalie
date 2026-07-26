@@ -121,12 +121,21 @@ def _parse_chat_response(data: dict[str, object], default_model: str) -> Provide
             }
             for tc in cast(list[object], raw_tool_calls)
         ]
+    # Ollama reports prompt_eval_duration and eval_duration in NANOSECONDS.
+    # Defensive read: keys may be absent on older versions or streaming
+    # responses; convert to float milliseconds only when present.
+    _prompt_duration = data.get('prompt_eval_duration')
+    prefill_ms = (_prompt_duration / 1e6) if isinstance(_prompt_duration, (int, float)) else None
+    _eval_duration = data.get('eval_duration')
+    decode_ms = (_eval_duration / 1e6) if isinstance(_eval_duration, (int, float)) else None
     return ProviderApiResponse(
         text=text,
         model=cast(str, data.get('model', default_model)),
         provider='ollama',
         tokens_input=cast(Optional[int], data.get('prompt_eval_count')),
         tokens_output=cast(Optional[int], data.get('eval_count')),
+        prefill_ms=prefill_ms,
+        decode_ms=decode_ms,
         tool_calls=tool_calls,
         stop_reason='tool_use' if tool_calls else 'end_turn',
         response_code=200,
