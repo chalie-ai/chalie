@@ -94,11 +94,6 @@ class FileMapperService:
         return cls._CHALIE_ROOT / "credentials.json"
 
     @classmethod
-    def get_abilities_db_path(cls) -> Path:
-        """Return path to the abilities vector+FTS5 search index."""
-        return cls._ABILITIES_DIR / "assets" / "abilities.sqlite"
-
-    @classmethod
     def get_skills_db_path(cls) -> Path:
         """Return path to the skills vector+FTS5 search index."""
         return cls._ABILITIES_DIR / "assets" / "skills.sqlite"
@@ -112,9 +107,8 @@ class FileMapperService:
     def get_mcp_tools_db_path(cls) -> Path:
         """Return path to the runtime MCP-tools index (gitignored, data/).
 
-        Separate from abilities.sqlite so build_ability_db rebuilds never
-        destroy the dynamically-synced _mcp_* tool rows.  Managed exclusively
-        by McpClientService — never by build_ability_db.
+        Managed exclusively by McpClientService — never rebuilt by the
+        abilities pipeline.
         """
         return cls._DATA_DIR / "mcp_tools.sqlite"
 

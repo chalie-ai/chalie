@@ -83,6 +83,8 @@ class ListAbility(Ability[ListParamsBag]):
     # ListParamsBag.from_params before run() is called.
     PARAMS: ClassVar[type[ParamBag] | None] = ListParamsBag
 
+    SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("checklist", "todo list", "shopping list", "lists")
+
     def get_name(self) -> str:
         return "list"
 

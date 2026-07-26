@@ -1,15 +1,13 @@
 """find_skills — surface curated step-by-step skill playbooks.
 
-Queries skills.sqlite through the SAME shared discovery cascade as find_tools
-(see :class:`abilities._search.SearchableAbility`): a ``query`` array of intents,
+Queries skills.sqlite through the discovery cascade in
+:class:`abilities._search.SearchableAbility`: a ``query`` array of intents,
 each run exact-title → bm25 on the title only (segment-gated) → vector on the
 full prose. Matching playbooks are returned with any personalisation rules
 derived from the user's behavioural patterns (written by SkillAssociationService).
 
-find_skills has no MCP surface and no name-ambiguity guard — that is the only
-way it differs from find_tools ("nothing more"). What it returns differs because
-a skill IS a playbook: the row carries the full ``content`` the model executes,
-not a tool activation.
+What it returns is shaped by what a skill IS — a playbook: the row carries the
+full ``content`` the model executes, not a tool activation.
 
 Returns a sealed :class:`abilities._result.ToolResult` (never a wire envelope):
 

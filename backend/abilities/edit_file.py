@@ -34,6 +34,7 @@ from contracts.params.param_bag import ParamBag
 
 class EditFileAbility(Ability[EditFileParamsBag]):
     DISCOVERABLE: ClassVar[bool] = True
+    SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("file edit", "modify file", "replace text")
 
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.search, Keys.replace_, Keys.path)}
 

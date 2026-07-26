@@ -502,6 +502,7 @@ def lookup(language: str, query: str) -> ToolResult:
 
 class ProgrammingDocsSearchAbility(Ability[ProgrammingDocsSearchParamsBag]):
     PARAMS: ClassVar[type[ParamBag] | None] = ProgrammingDocsSearchParamsBag
+    SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("programming docs", "api docs", "library documentation", "dev docs")
 
     def get_name(self) -> str:
         return "programming_docs_search"

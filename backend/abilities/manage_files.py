@@ -46,6 +46,8 @@ class ManageFilesAbility(Ability[ManageFilesParamsBag]):
     # ManageFilesParamsBag.from_params before run() is called.
     PARAMS: ClassVar[type[ParamBag] | None] = ManageFilesParamsBag
 
+    SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("file management", "create folder", "delete file", "file permissions", "mkdir")
+
     def get_name(self) -> str:
         return "manage_files"
 

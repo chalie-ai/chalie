@@ -60,6 +60,7 @@ class WebDownloadAbility(Ability[WebDownloadParamsBag]):
     # The typed input contract: the dispatch seam builds the bag via
     # WebDownloadParamsBag.from_params before run() is called.
     PARAMS: ClassVar[type[ParamBag] | None] = WebDownloadParamsBag
+    SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("download", "download file", "download url")
 
     def get_name(self) -> str:
         return "web_download"

@@ -48,6 +48,8 @@ class FileWriteAbility(Ability[FileWriteParamsBag]):
     # FileWriteParamsBag.from_params before run() is called.
     PARAMS: ClassVar[type[ParamBag] | None] = FileWriteParamsBag
 
+    SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("write file", "create file", "save file")
+
     def get_name(self) -> str:
         return "file_write"
 

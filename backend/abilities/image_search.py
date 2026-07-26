@@ -47,6 +47,8 @@ class ImageSearchAbility(Ability[ImageSearchParamsBag]):
     # ImageSearchParamsBag.from_params before run() is called.
     PARAMS: ClassVar[type[ParamBag] | None] = ImageSearchParamsBag
 
+    SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("find images", "search images", "picture search")
+
     def get_name(self) -> str:
         return "image_search"
 

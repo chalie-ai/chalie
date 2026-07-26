@@ -60,6 +60,7 @@ _WTTR_BASE = "https://wttr.in"
 
 class WeatherAbility(Ability[WeatherParamsBag]):
     PARAMS: ClassVar[type[ParamBag] | None] = WeatherParamsBag
+    SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("forecast", "weather forecast", "temperature")
 
     def get_name(self) -> str:
         return "weather"

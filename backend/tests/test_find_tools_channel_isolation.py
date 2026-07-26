@@ -21,7 +21,7 @@ These run against the REAL production stack:
 - Real ``MessageProcessor`` instances carrying the REAL channel configs
   (``UserConfig`` / ``DmnConfig`` / ``WebBrowseConfig``).
 - Real ``AbilityRegistry.build_tools()`` resolution against the real registry.
-- Real abilities.sqlite + real EmbeddingService for the query path.
+- Exact-match lookup against ``AbilityRegistry.discovery_aliases()`` (canonical names + ``SEARCHABLE_AS`` aliases, normalized).
 
 No mocks, no stub configs — the configs under test are the ones production runs.
 """
@@ -84,11 +84,11 @@ class TestUserChannelCannotReachRawWebTools:
         )
 
     def test_query_cannot_surface_browser_on_user_channel(self, db: object) -> None:
-        """Even a query that is a perfect semantic match for browser must not
-        inject it — browser is DISCOVERABLE=False, so it never enters the global
-        roster the query path searches over."""
+        """Even an exact-name query for browser must not inject it — browser is
+        DISCOVERABLE=False, so it never enters the alias map the query path
+        resolves against."""
         mp = _mp_for(UserConfig())
-        _find_tools_on(mp, {"query": ["control a headless browser, click buttons and take a screenshot"]})
+        _find_tools_on(mp, {"query": ["web_browse"]})
 
         assert "browser" not in mp.active_tools, (
             "A non-discoverable tool must never be injected via the query path, "

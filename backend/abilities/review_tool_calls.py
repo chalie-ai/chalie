@@ -26,6 +26,7 @@ _PARAMS_SUMMARY_CHARS = 120
 
 class ReviewToolCallsAbility(ReviewWindowAbility[ReviewWindowParamsBag]):
     PARAMS: ClassVar[type[ParamBag] | None] = ReviewWindowParamsBag
+    SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("tool history", "past tool calls", "tool log")
     SYSTEM = True
 
     def get_name(self) -> str:

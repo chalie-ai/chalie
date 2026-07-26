@@ -87,6 +87,7 @@ class ScheduleAbility(Ability[ScheduleParamsBag]):
         "enable": (),
         "disable": (),
     }
+    SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("scheduler", "recurring task", "scheduled tasks", "cron")
 
     # The typed input contract: the dispatch seam builds the bag via
     # ScheduleParamsBag.from_params before run() is called.

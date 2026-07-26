@@ -47,7 +47,7 @@ _CASES: dict[str, tuple[ToolResult, str]] = {
     ),
     "mcp_manager": (
         ToolResult.ok({"id": "x", "name": "weather", "url": "h", "status": "online"}),
-        "`weather` is now available. Call `find_tools` with `weather`",
+        "`weather` is now available. Call `mcp_tools` with action `list`",
     ),
     "web_download": (
         ToolResult.ok({"path": _DL_PATH, "bytes": 1, "content_type": "application/pdf"}),

@@ -49,6 +49,7 @@ class TimerAbility(Ability[TimerParamsBag]):
     # The typed input contract: the dispatch seam builds the bag via
     # TimerParamsBag.from_params before run() is called.
     PARAMS: ClassVar[type[ParamBag] | None] = TimerParamsBag
+    SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("countdown", "set timer", "alarm")
 
     def get_name(self) -> str:
         return "timer"

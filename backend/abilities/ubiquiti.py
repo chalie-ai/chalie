@@ -104,6 +104,7 @@ class UbiquitiAbility(CapabilityAbility):
     ACTION_HANDLERS: ClassVar[dict[str, str]] = {
         action: spec.handler for action, spec in _ACTION_SPEC.items()
     }
+    SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("unifi", "network control", "router")
 
     # Pre-gated by the dispatcher BEFORE run() (and before the policy gate): a
     # known action missing a required param yields one code=missing-params error

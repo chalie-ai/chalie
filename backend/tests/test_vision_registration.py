@@ -12,7 +12,6 @@ background channel. Channel containment for vision is the policy gate above
 roster are orthogonal.
 """
 
-import sqlite3
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import cast
@@ -138,24 +137,22 @@ class TestVisionVisibility:
 
 
 # ---------------------------------------------------------------------------
-# 3. Search index — real rebuilt abilities.sqlite + real registry resolution.
+# 3. Registration — vision is discoverable and its aliases resolve correctly.
 # ---------------------------------------------------------------------------
-
 class TestVisionSearchIndex:
 
     def test_registry_resolves_vision_to_vision_ability(self) -> None:
         assert isinstance(AbilityRegistry.get("vision"), VisionAbility)
 
-    def test_abilities_sqlite_contains_vision_row(self) -> None:
-        db_path = FileMapperService.get_abilities_db_path()
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-        try:
-            row = conn.execute(
-                "SELECT name FROM abilities WHERE name = ?", ("vision",)
-            ).fetchone()
-        finally:
-            conn.close()
-        assert row is not None, (
-            "abilities.sqlite has no 'vision' row — rebuild "
-            "(python -m utils.build_ability_db) did not capture VisionAbility."
-        )
+    def test_vision_is_discoverable_and_aliases_resolve(self) -> None:
+        """Pin the visibility model for vision: it must be in the global
+        discoverable roster AND its SEARCHABLE_AS aliases must resolve to it
+        via the alias map (e.g. "see image" -> "vision")."""
+        assert "vision" in AbilityRegistry.discoverable_names()
+
+        aliases = AbilityRegistry.discovery_aliases()
+        for alias in VisionAbility.SEARCHABLE_AS:
+            canonical = aliases.get(alias)
+            assert canonical == "vision", (
+                f"alias {alias!r} must resolve to 'vision', got {canonical!r}"
+            )

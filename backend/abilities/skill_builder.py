@@ -82,6 +82,7 @@ class SkillBuilderAbility(Ability[SkillBuilderParamsBag]):
     # The typed input contract: the dispatch seam builds the bag via
     # SkillBuilderParamsBag.from_params before run() is called.
     PARAMS: ClassVar[type[ParamBag] | None] = SkillBuilderParamsBag
+    SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("skills", "create skill", "playbook", "skill playbooks")
 
     # SYSTEM=False on the user-facing tool; the SYSTEM variant flips this. Declared
     # here so both names carry a deterministic, introspectable policy identity.

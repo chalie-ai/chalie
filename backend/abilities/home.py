@@ -60,6 +60,7 @@ _MAX_CANDIDATES = 5
 class HomeAbility(CapabilityAbility):
     CAPABILITY_KEY: ClassVar[str] = "home"
     DEFAULT_ACTION: ClassVar[str] = "list_devices"
+    SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("smart home", "home assistant", "lights")
     NOT_CONNECTED_HINT: ClassVar[str] = (
         "Configure the Home Assistant integration in the Brain dashboard."
     )

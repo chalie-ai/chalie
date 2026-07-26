@@ -73,13 +73,18 @@ class Ability(ABC, Generic[B]):
     """
 
     # Global discovery flag. True (the default) means find_tools may surface this
-    # ability — semantically via the abilities.sqlite index (query mode) and by
-    # exact name (select mode). False removes it from the index AND the select
-    # roster entirely: it can ONLY reach a processor by being pinned directly in
-    # that processor's ProcessorConfig.always_available. Internal/framework tools
-    # (the compactors, thinking, find_tools itself, the pattern writers, the raw
-    # web tools, memory) set this False; user-facing tools leave it True.
+    # ability — by exact name or alias lookup through the registry. False removes
+    # it from the discoverable roster entirely: it can ONLY reach a processor by
+    # being pinned directly in that processor's ProcessorConfig.always_available.
+    # Internal/framework tools (the compactors, thinking, find_tools itself, the
+    # pattern writers, the raw web tools, memory) set this False; user-facing
+    # tools leave it True.
     DISCOVERABLE: ClassVar[bool] = True
+
+    # Alternate names a model may use to load this tool by exact match.
+    # Consumed by find_tools discovery; empty default means the canonical
+    # name is the only alias.
+    SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ()
 
     # Settle flag. True (the default) means a tool_calls row for this ability
     # demotes its transcript row's settled=1 back to 0 — the row carries a
@@ -205,6 +210,23 @@ class Ability(ABC, Generic[B]):
             required.append("act_summary")
 
         return schema
+
+    def _append_active(self, names: list[str]) -> None:
+        """Append tool names to ``mp.active_tools`` (skipping dupes) so they are
+        live for the rest of this ACT turn. The activation seam shared by the
+        discovery tools (``find_tools``, ``mcp_tools``); a no-op off-spine
+        (``mp is None``)."""
+        if not names:
+            return
+        proc = self.mp
+        if proc is None:
+            return
+        active = cast("list[str] | None", getattr(proc, "active_tools", None))
+        if active is None:
+            return
+        for name in names:
+            if name not in active:
+                active.append(name)
 
     def classify_action(self, params: dict[str, object]) -> "str | None":
         """Derive the risk class the policy gate keys on, from the inputs alone.

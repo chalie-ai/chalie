@@ -90,6 +90,7 @@ class SearchFilesAbility(Ability[SearchFilesParamsBag]):
     # The typed input contract: the dispatch seam builds the bag via
     # SearchFilesParamsBag.from_params before run() is called.
     PARAMS: ClassVar[type[ParamBag] | None] = SearchFilesParamsBag
+    SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("find files", "file search", "locate files", "grep")
 
     def get_name(self) -> str:
         return "search_files"

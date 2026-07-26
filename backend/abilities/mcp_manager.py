@@ -78,6 +78,8 @@ class McpManagerAbility(Ability[McpManagerParamsBag]):
     # McpManagerParamsBag.from_params before run() is called.
     PARAMS: ClassVar[type[ParamBag] | None] = McpManagerParamsBag
 
+    SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("connect mcp", "add mcp server", "mcp connection")
+
     def get_name(self) -> str:
         return "mcp_manager"
 
@@ -103,14 +105,14 @@ class McpManagerAbility(Ability[McpManagerParamsBag]):
         return "connect to a remote MCP server"
 
     def get_follow_up(self, tr: ToolResult) -> str:
-        """Steer a just-connected server's remote tools into context via find_tools."""
+        """Steer a just-connected server's remote tools into context via mcp_tools."""
         body = tr.body if isinstance(tr.body, dict) else {}
         if body.get("status") != "online":
             return ""
         name = body.get("name")
         return (
-            f"`{name}` is now available. Call `find_tools` with `{name}` and the "
-            "action you want to perform to get its tools in context."
+            f"`{name}` is now available. Call `mcp_tools` with action `list` to "
+            "see its tools, then `activate` the ones you need."
         )
 
     _PARAMETERS: ClassVar[dict[str, object]] = {
@@ -228,10 +230,6 @@ class McpManagerAbility(Ability[McpManagerParamsBag]):
         # Trigger an immediate sync so tools are discoverable in this turn.
         sync = svc.ping_and_sync(server_id)
         if sync["reachable"]:
-            # Build vector embeddings for the newly-synced tools so semantic
-            # queries can reach them immediately.  Add-only — never called on
-            # heartbeat or enable so the 15-min sync path stays zero-cost.
-            svc.embed_server_tools(server_id)
             logger.info(
                 "%s Added server %r — online, %d tools",
                 _LOG_PREFIX, name, sync["tool_count"],

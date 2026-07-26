@@ -12,8 +12,8 @@ from contracts.params.param_bag import ParamBag
 
 @dataclass(frozen=True, slots=True)
 class FindToolsParamsBag(ParamBag):
-    """``query`` — a non-empty array of tool names or described actions to
-    discover; each entry runs the discovery cascade independently."""
+    """``query`` — a non-empty array of tool names; each entry is resolved
+    independently by exact match against the registry's alias map."""
 
     query: list[str]
 

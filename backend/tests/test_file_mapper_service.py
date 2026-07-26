@@ -42,7 +42,6 @@ class TestFileMapperService:
             FileMapperService.get_db_path(),
             FileMapperService.get_schema_path(),
             FileMapperService.get_version_path(),
-            FileMapperService.get_abilities_db_path(),
             FileMapperService.get_skills_db_path(),
             FileMapperService.get_search_providers_db_path(),
             FileMapperService.get_concept_lut_db_path(),

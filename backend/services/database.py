@@ -14,8 +14,8 @@ Two access shapes, one registry:
   it at boot, and reaches the DB through models + ``self.mp.db.transaction()``.
 * **Off-spine** code (mp-less: tool abilities, decay/GC, doc/list CRUD, …)
   reaches the DB through the static accessors :meth:`conn` / :meth:`transaction`,
-  passing a custom path for a dedicated db-file (``abilities.sqlite``,
-  ``mcp_tools.sqlite``, ``skills.sqlite``). It NEVER runs on-spine.
+  passing a custom path for a dedicated db-file (``skills.sqlite``,
+  ``mcp_tools.sqlite``). It NEVER runs on-spine.
 
 Connections are per-thread and per-path: one slot per ``(thread, db_path)``.
 They are never closed in the hot path — a connection lives as long as its

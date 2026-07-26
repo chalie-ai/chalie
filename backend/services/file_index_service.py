@@ -55,7 +55,6 @@ _SKIP_DIR_NAMES: tuple[str, ...] = (
 _SKIP_CHALIE_PATHS: tuple[str, ...] = (
     str(FileMapperService.get_db_path()),
     str(FileMapperService.get_file_index_db_path()),
-    str(FileMapperService.get_abilities_db_path()),
     str(FileMapperService.get_skills_db_path()),
     str(FileMapperService.get_mcp_tools_db_path()),
     str(FileMapperService.get_secure_dir()),

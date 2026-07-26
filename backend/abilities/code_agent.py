@@ -50,6 +50,8 @@ class CodeAgentAbility(DelegateAbility[DelegateParamsBag]):
     # DelegateParamsBag.from_params before run() is called.
     PARAMS: ClassVar[type[ParamBag] | None] = DelegateParamsBag
 
+    SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("coding agent", "code assistant", "coding task", "write code")
+
     _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {

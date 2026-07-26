@@ -158,12 +158,9 @@ class _GatedAbility(Ability):
     binder can no longer supply. Leaves ``DISCOVERABLE`` at its default
     (``True``): a module-level test class is permanently visible to
     ``Ability.__subclasses__()`` for the rest of the process once collected, so
-    it cannot be kept off the registry — ``test_phase4_invariants.py`` already
-    designs around exactly this (its abilities.sqlite/discoverable check is a
-    subset assertion "when other test modules register DISCOVERABLE test
-    doubles into the live registry"). ``test_find_tools_channel_isolation.py``
-    pins the NON-discoverable roster by exact equality instead; staying
-    DISCOVERABLE keeps this fixture off that pinned set."""
+    it cannot be kept off the registry. ``test_find_tools_channel_isolation.py``
+    pins the NON-discoverable roster by exact equality; staying DISCOVERABLE
+    keeps this fixture off that pinned set."""
 
     _release: ClassVar["threading.Event | None"] = None
     _started: ClassVar["threading.Event | None"] = None

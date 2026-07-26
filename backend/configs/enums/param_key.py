@@ -145,6 +145,7 @@ class Keys(StrEnum):
     timeout_s = "timeout_s"
     title_ = "title"  # trailing underscore: bare ``title`` clashes with ``str.title``
     to = "to"
+    tools = "tools"
     triage = "triage"
     uid = "uid"
     unanswered = "unanswered"

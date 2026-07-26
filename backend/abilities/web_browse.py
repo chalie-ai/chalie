@@ -37,6 +37,8 @@ from contracts.params.delegate_params_bag import DelegateParamsBag
 
 
 class WebBrowseAbility(DelegateAbility[DelegateParamsBag]):
+    SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("browse web", "browser", "visit website", "interactive browsing")
+
     def get_name(self) -> str:
         return "web_browse"
 

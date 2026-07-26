@@ -86,6 +86,8 @@ class ChalieDocsAbility(Ability[ChalieDocsParamsBag]):
     # ChalieDocsParamsBag.from_params before run() is called.
     PARAMS: ClassVar[type[ParamBag] | None] = ChalieDocsParamsBag
 
+    SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("chalie documentation", "own documentation", "harness documentation", "self reference", "about chalie")
+
     def get_name(self) -> str:
         return "chalie_docs"
 

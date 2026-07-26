@@ -78,6 +78,8 @@ class PimAbility(DelegateAbility[DelegateParamsBag]):
     # bag via DelegateParamsBag.from_params before run() is called.
     PARAMS: ClassVar[type[ParamBag] | None] = DelegateParamsBag
 
+    SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("email", "calendar", "contacts", "reminders", "mail")
+
     def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 

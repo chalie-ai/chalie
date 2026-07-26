@@ -1,7 +1,7 @@
 """Feature test for BashAbility's mp-gated summary enrichment.
 
-Invariants: abilities.sqlite + SHA drift map are identical across machines at
-build time (self.mp is None); cwd enriches only on a real processor.
+Invariants: SHA drift map is identical across machines at build time
+(self.mp is None); cwd enriches only on a real processor.
 
 Real BashAbility, no mocks — the only injected value is a minimal real
 MP-shaped context carrying a real channel config.

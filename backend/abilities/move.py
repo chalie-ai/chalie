@@ -29,6 +29,8 @@ class MoveAbility(Ability[MoveParamsBag]):
     # MoveParamsBag.from_params before run() is called.
     PARAMS: ClassVar[type[ParamBag] | None] = MoveParamsBag
 
+    SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("move file", "rename file", "rename")
+
     def get_name(self) -> str:
         return "move"
 

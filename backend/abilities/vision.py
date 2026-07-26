@@ -33,6 +33,8 @@ logger = logging.getLogger(__name__)
 
 
 class VisionAbility(DelegateAbility[VisionParamsBag]):
+    SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("see image", "describe image", "analyze image", "look at image")
+
     def get_name(self) -> str:
         return "vision"
 

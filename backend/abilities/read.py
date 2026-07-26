@@ -49,6 +49,7 @@ logger = logging.getLogger(__name__)
 
 class ReadAbility(Ability[ReadParamsBag]):
     PARAMS: ClassVar[type[ParamBag] | None] = ReadParamsBag
+    SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("fetch url", "read file", "open url", "read page", "fetch")
 
     def get_name(self) -> str:
         return "read"

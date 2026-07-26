@@ -1,47 +1,38 @@
-"""Headline feature tests for find_tools — the shared discovery cascade over the
-REAL production abilities.sqlite and the REAL EmbeddingService (ONNX). Zero mocks.
+"""Feature tests for ``find_tools`` — the exact-match discovery contract.
 
-find_tools takes a ``query`` ARRAY of intents — one tool name or one described
-action per entry — and runs each through the shared precise→broad cascade
-(see ``abilities._search.SearchableAbility``): exact name → bm25 on the tool name
-(segment-gated) → vector on the full prose, kept only under the fine-tuned
-ceiling. The first rung that yields wins per entry; a row only the vector
-terminus fails on is reported honestly under ``not_found``.
+``find_tools`` takes a ``query`` ARRAY of tool names — one name per entry — and
+runs each through a single normalized lookup against the registry's alias map
+(canonical names plus each ability's ``SEARCHABLE_AS`` tuple). A hit activates
+the tool and returns it under ``body["injected"]`` with its tooltip; a miss
+lands in ``body["not_found"]`` with a pointer back to the tool list.
 
-These drive the real ``FindToolsAbility.run()`` entry point bound to a real
-MessageProcessor carrying the production UserConfig, then assert the downstream
-``active_tools`` mutation and the model-facing rendered envelope.
+No fuzzy search, no semantic vector rung, no MCP, no ``abilities.sqlite`` —
+this tool is a precise menu.
 """
 
-import sqlite3
 from typing import cast
 
 import pytest
 
 from abilities._result import ToolResult
+from abilities._registry import AbilityRegistry
 from abilities.find_tools import FindToolsAbility
 from configs.channels import UserConfig
 from contracts.params.find_tools_params_bag import FindToolsParamsBag
 from controllers.message_processor import MessageProcessor
 from services.dispatch_service import DispatchService
-from services.file_mapper_service import FileMapperService
 
 pytestmark = pytest.mark.unit
 
 
-def _run(db: sqlite3.Connection, query: object) -> tuple[list[str], dict[str, object], str]:
-    """Drive FindToolsAbility.run() against the real production DB (the ``db``
-    fixture's migrated temp SQLite) on a real MessageProcessor. ``hidden_input``
-    skips the turn-0 input row — these tests only care about the discovery
-    cascade, not transcript persistence. Returns (injected_names, body,
-    rendered_envelope)."""
+def _run(query: object) -> tuple[list[str], dict[str, object], str]:
+    """Drive ``FindToolsAbility.run()`` on a real ``MessageProcessor`` carrying
+    the production ``UserConfig``. Returns ``(injected_names, body, rendered)``."""
     mp = MessageProcessor(UserConfig({"hidden_input": True}), raw_input="find a tool for me")
     mp.active_tools = list(mp.config.always_available or [])
     base = set(mp.active_tools)
     ability = FindToolsAbility()
     ability.mp = mp
-    # Build the bag exactly as the dispatch seam does — from_params returns the
-    # error ToolResult directly, so the error-path tests still see the envelope.
     bag = FindToolsParamsBag.from_params({"query": query})
     result = bag if isinstance(bag, ToolResult) else ability.run(bag)
     injected = [t for t in mp.active_tools if t not in base]
@@ -53,90 +44,108 @@ def _run(db: sqlite3.Connection, query: object) -> tuple[list[str], dict[str, ob
 # ── rung 1 — exact name pins the tool ───────────────────────────────────────────
 
 
-def test_exact_tool_name_pins_it(db: sqlite3.Connection) -> None:
-    injected, _body, rendered = _run(db, ["weather"])
-    assert "weather" in injected, f"exact 'weather' must pin the weather tool. injected={injected!r}"
+def test_exact_tool_name_pins_it() -> None:
+    injected, _body, rendered = _run(["weather"])
+    assert "weather" in injected, f"'weather' must pin the weather tool. injected={injected!r}"
     assert "status=success" in rendered
 
 
-def test_exact_name_normalises_spacing(db: sqlite3.Connection) -> None:
-    """The exact rung normalises punctuation, so the spaced display form 'chalie
-    docs' resolves to the underscored ability name 'chalie_docs'."""
-    injected, _body, _r = _run(db, ["chalie docs"])
+def test_exact_name_normalises_spacing() -> None:
+    """The normaliser collapses punctuation, so 'chalie docs' resolves to
+    the underscored ability name 'chalie_docs'."""
+    injected, _body, _r = _run(["chalie docs"])
     assert "chalie_docs" in injected, f"'chalie docs' must resolve to chalie_docs. injected={injected!r}"
 
 
-def test_no_duplicate_injection(db: sqlite3.Connection) -> None:
-    injected, _body, _r = _run(db, ["weather"])
+def test_no_duplicate_injection() -> None:
+    injected, _body, _r = _run(["weather"])
     assert injected.count("weather") <= 1, f"weather must inject once, not duplicated. injected={injected!r}"
 
 
-# ── rung 3 — semantic prose surfaces the right tool ─────────────────────────────
+# ── aliases — SEARCHABLE_AS entries resolve to the canonical tool ───────────────
 
 
-def test_described_action_surfaces_semantic_match(db: sqlite3.Connection) -> None:
-    """A described action with no exact/segment name match escalates to the vector
-    rung: 'add appointment' surfaces the pim tool. Calendar/email/contacts are
-    delegate-owned (DISCOVERABLE=False) and reachable ONLY through pim, so a
-    calendar-flavoured intent now routes to pim, never to the raw calendar tool."""
-    injected, _body, _r = _run(db, ["add appointment"])
-    assert "pim" in injected, f"'add appointment' must surface pim. injected={injected!r}"
+def test_alias_email_resolves_to_pim() -> None:
+    """``email`` is declared in ``PimAbility.SEARCHABLE_AS`` — it must resolve to
+    the ``pim`` canonical name, not the raw delegate-owned email tool."""
+    injected, _body, _r = _run(["email"])
+    assert "pim" in injected, f"'email' must resolve to pim. injected={injected!r}"
 
 
-@pytest.mark.parametrize(
-    "query",
-    [
-        "all available tools and capabilities",
-        "what can you do",
-        "help with chalie features",
-        "documentation",
-    ],
-)
-def test_implicit_prose_query_surfaces_chalie_docs(db: sqlite3.Connection, query: str) -> None:
-    """The pre-rework regression: a real implicit prose query (no tool name, no
-    markers) returned injected=0 and chalie_docs was never discovered. The vector
-    rung must now surface chalie_docs so the model can use it in the same turn."""
-    injected, _body, rendered = _run(db, [query])
+def test_alias_calendar_resolves_to_pim() -> None:
+    """``calendar`` is declared in ``PimAbility.SEARCHABLE_AS`` — it must resolve
+    to the ``pim`` canonical name."""
+    injected, _body, _r = _run(["calendar"])
+    assert "pim" in injected, f"'calendar' must resolve to pim. injected={injected!r}"
+
+
+# ── chalie_docs aliases and prose rejection ─────────────────────────────────────
+
+
+def test_alias_chalie_documentation_resolves_to_chalie_docs() -> None:
+    """``chalie documentation`` is declared in ``ChalieDocsAbility.SEARCHABLE_AS``
+    and must resolve to the canonical ``chalie_docs`` name."""
+    injected, _body, _r = _run(["chalie documentation"])
     assert "chalie_docs" in injected, (
-        f"implicit query {query!r} must discover chalie_docs (was injected=0 pre-rework). "
-        f"injected={injected!r} rendered={rendered!r}"
+        f"'chalie documentation' must resolve to chalie_docs. injected={injected!r}"
     )
 
 
-# ── ceiling — a junk query escalates to the vector terminus and is dropped ──────
+def test_alias_harness_documentation_resolves_to_chalie_docs() -> None:
+    """``harness documentation`` is declared in ``ChalieDocsAbility.SEARCHABLE_AS``
+    and must resolve to the canonical ``chalie_docs`` name."""
+    injected, _body, _r = _run(["harness documentation"])
+    assert "chalie_docs" in injected, (
+        f"'harness documentation' must resolve to chalie_docs. injected={injected!r}"
+    )
 
 
-def test_junk_query_is_honest_not_found(db: sqlite3.Connection) -> None:
-    """'donut' matches no name and no prose under the fine-tuned ceiling — it must
-    surface nothing and be reported honestly under not_found, never forced in."""
-    injected, body, _r = _run(db, ["donut"])
+def test_prose_query_lands_in_not_found() -> None:
+    """Prose like 'what can you do' no longer discovers anything — it lands
+    honestly in ``not_found`` with the guidance sentence."""
+    injected, body, _r = _run(["what can you do"])
+    assert "chalie_docs" not in injected, (
+        f"prose must NOT discover chalie_docs. injected={injected!r}"
+    )
+    assert any("did not match any tool name" in e for e in cast("list[str]", body["not_found"])), (
+        f"prose must land in not_found with the guidance sentence. body={body!r}"
+    )
+
+
+# ── junk queries are honest not_found ───────────────────────────────────────────
+
+
+def test_junk_query_is_honest_not_found() -> None:
+    """``donut`` matches no name and no alias — it must surface nothing and be
+    reported under ``not_found``, never forced in."""
+    injected, body, _r = _run(["donut"])
     assert injected == [], f"junk 'donut' must inject nothing. injected={injected!r}"
-    assert "donut" in cast("list[str]", body["not_found"]), f"junk query must be reported under not_found. body={body!r}"
+    assert any("donut" in e for e in cast("list[str]", body["not_found"])), (
+        f"junk query must be reported under not_found. body={body!r}"
+    )
 
 
-# ── multi-intent array — each entry routed independently ────────────────────────
-
-
-def test_multi_intent_array_routes_each_entry(db: sqlite3.Connection) -> None:
+def test_multi_intent_array_routes_each_entry() -> None:
     """Each array entry is searched independently: two resolvable intents inject
-    their tools, the junk intent is reported under not_found — partial success is
-    never silent."""
-    injected, body, _r = _run(db, ["weather", "send an email", "pizza"])
+    their tools, the junk intent is reported under ``not_found`` — partial
+    success is never silent."""
+    injected, body, _r = _run(["weather", "email", "pizza"])
     assert "weather" in injected, f"injected={injected!r}"
-    # email is delegate-owned; a 'send an email' intent routes to pim, not the raw
-    # email tool (which is DISCOVERABLE=False).
-    assert "pim" in injected, f"'send an email' must surface pim. injected={injected!r}"
-    assert "pizza" in cast("list[str]", body["not_found"]), f"junk intent must be surfaced. body={body!r}"
+    assert "pim" in injected, f"'email' must resolve to pim. injected={injected!r}"
+    assert any("pizza" in e for e in cast("list[str]", body["not_found"])), (
+        f"junk intent must be surfaced. body={body!r}"
+    )
 
 
-# ── result body shape, dedup, and no legacy tokens ──────────────────────────────
+# ── result body shape, dedup, and no legacy tokens ─────────────────────────────
 
 
-def test_result_body_shape_dedup_and_no_legacy_tokens(db: sqlite3.Connection) -> None:
-    """Success body is {"injected": [{name, summary}, …], "not_found": [...]}; the
-    meta count matches the list length; the injected list is deduped; and none of
-    the dropped legacy fields (input_schema / relevance / added_tools) appear."""
-    _injected, body, rendered = _run(db, ["documentation"])
+def test_result_body_shape_dedup_and_no_legacy_tokens() -> None:
+    """Success body is ``{"injected": [{name, summary}, …], "not_found":
+    [...]}``; the meta count matches the list length; the injected list is
+    deduped; and none of the dropped legacy fields (input_schema / relevance /
+    added_tools) appear."""
+    _injected, body, rendered = _run(["chalie_docs"])
 
     assert "status=success" in rendered
     assert isinstance(body["injected"], list)
@@ -152,39 +161,93 @@ def test_result_body_shape_dedup_and_no_legacy_tokens(db: sqlite3.Connection) ->
         assert legacy not in rendered, f"legacy token {legacy!r} must be gone. rendered={rendered!r}"
 
 
-def test_no_global_cap_large_array_returns_all_deduped(db: sqlite3.Connection) -> None:
+def test_no_global_cap_large_array_returns_all_deduped() -> None:
     """The query array exists so the model can fetch every tool it needs in ONE
-    pass: a large array of distinct exact names must inject ALL of them (more than
-    the old global cap of 6), deduped, never truncated."""
+    pass: a large array of distinct exact names must inject ALL of them
+    (more than the old global cap of 6), deduped, never truncated."""
     names = ["weather", "pim", "timer", "chalie_docs", "web_browse", "web_search", "vision"]
-    injected, _body, _r = _run(db, names + ["weather"])  # trailing dup must collapse
+    injected, body, _r = _run(names + ["weather"])  # trailing dup must collapse
     for n in ("weather", "pim", "timer", "chalie_docs", "web_browse", "web_search", "vision"):
         assert n in injected, f"{n!r} must be injected (no global cap). injected={injected!r}"
     assert len(injected) > 6, f"a large array must exceed the old cap of 6. injected={injected!r}"
     assert len(injected) == len(set(injected)), f"injected must be deduped. injected={injected!r}"
     assert injected.count("weather") == 1, f"duplicate intent must collapse. injected={injected!r}"
+    body_names = [cast("dict[str, object]", row)["name"] for row in cast("list[object]", body["injected"])]
+    assert body_names.count("weather") == 1, (
+        f"the BODY must not over-report a duplicate entry. body_names={body_names!r}"
+    )
 
 
-# ── graceful degradation when the index is unreachable ──────────────────────────
+# ── edge-trim leniency — normalized forms all resolve ──────────────────────────
 
 
-def test_semantic_query_degrades_gracefully_when_db_missing(db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch) -> None:
-    """With the abilities index absent the bm25/vector rungs return empty (never
-    raise); a purely-semantic intent then falls through to an honest not_found
-    rather than crashing the turn."""
-    monkeypatch.setattr(FindToolsAbility, "_DB_PATH", FileMapperService.get_abilities_db_path().parent / "gone.sqlite")
-    _injected, body, rendered = _run(db, ["documentation"])
-    assert "status=success" in rendered, f"a missing index must degrade, not error. rendered={rendered!r}"
-    assert "documentation" in cast("list[str]", body["not_found"]), f"body={body!r}"
+def test_edge_trim_normalized_forms_resolve() -> None:
+    """The normaliser tolerates leading/trailing whitespace, mixed case, and
+    punctuation: ``_weather_``, `` Weather:``, ``WEB_SEARCH``, ``web search!``
+    all resolve to their canonical tools."""
+    injected, _body, _r = _run(["_weather_", " Weather:", "WEB_SEARCH", "web search!"])
+    assert "weather" in injected, f"'_weather_' must resolve to weather. injected={injected!r}"
+    assert "web_search" in injected, f"'WEB_SEARCH'/'web search!' must resolve to web_search. injected={injected!r}"
 
 
 # ── the discoverable roster lives in the tool DESCRIPTION ────────────────────────
 
 
 def test_discoverable_roster_is_in_the_summary() -> None:
-    """The roster of discoverable tools is surfaced in get_summary() (the field
-    weak models actually read), query-first, so the model knows what exists before
-    it queries. Self-no-ops to bare guidance only if the roster were ever empty."""
+    """The roster of discoverable tools is surfaced in ``get_summary()`` (the
+    field weak models actually read), query-first, so the model knows what
+    exists before it queries. Self-no-ops to bare guidance only if the roster
+    were ever empty."""
     summary = FindToolsAbility().get_summary()
     assert "weather" in summary, f"a discoverable tool must appear in the roster. summary={summary!r}"
     assert "Available tools:" in summary, f"summary={summary!r}"
+    assert "mcp_tools" in summary, (
+        f"mcp_tools must appear in the summary roster. summary={summary!r}"
+    )
+
+
+# ── collision guard — duplicate SEARCHABLE_AS entries raise at discovery ─────────
+
+
+class _AliasStub:
+    """Duck-typed registry entry for the collision-guard test. Deliberately NOT
+    an ``Ability`` subclass: a concrete subclass would stay visible to
+    ``Ability.__subclasses__()`` for the rest of the process and poison every
+    later registry rebuild with a permanent alias collision."""
+
+    DISCOVERABLE = True
+    SEARCHABLE_AS = ("shared_alias",)
+
+    def __init__(self, name: str) -> None:
+        self._name = name
+
+    def get_name(self) -> str:
+        return self._name
+
+
+def test_collision_guard_raises_runtime_error_on_duplicate_alias(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two registry entries declaring the same SEARCHABLE_AS alias must make
+    ``AbilityRegistry.discovery_aliases()`` raise ``RuntimeError`` naming both
+    abilities and the alias. Only the registry CACHE is monkeypatched (auto-
+    restored) — the real class table is never touched."""
+    import abilities._registry as _reg_module
+
+    monkeypatch.setattr(
+        _reg_module,
+        "_registry",
+        {"collision_a": _AliasStub("collision_a"), "collision_b": _AliasStub("collision_b")},
+    )
+    with pytest.raises(RuntimeError, match="shared alias") as exc_info:
+        AbilityRegistry.discovery_aliases()
+    err = str(exc_info.value)
+    assert "collision_a" in err and "collision_b" in err, (
+        f"RuntimeError must name both abilities. got={err!r}"
+    )
+
+
+def test_collision_guard_leaves_real_registry_intact() -> None:
+    """After the monkeypatched collision test, the real registry must resolve
+    without collision and still carry the canonical names."""
+    aliases = AbilityRegistry.discovery_aliases()
+    assert isinstance(aliases, dict)
+    assert "weather" in aliases

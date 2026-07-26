@@ -112,6 +112,7 @@ class BashAbility(Ability[BashParamsBag]):
     """Execute shell commands via ``bash -c`` with policy-gated classification."""
 
     PARAMS: ClassVar[type[ParamBag] | None] = BashParamsBag
+    SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("shell", "terminal", "shell command", "run command")
 
     _SUMMARY: ClassVar[str] = (
         "Run a shell command via bash. "
