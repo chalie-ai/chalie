@@ -6,26 +6,10 @@ from typing import Optional
 from configs.enums.provider_type import ProviderType
 from configs.enums.thinking_level import ThinkingLevel
 
-# Hard ceiling on any provider's reported context window.
+# Hard ceiling on any provider's stored context window, applied on every write
+# to ``providers.context_window`` regardless of how much the provider claims to
+# support. Nothing downstream re-checks it: the column is already clamped.
 MAX_CONTEXT_WINDOW = 200_000
-
-# Operating default per platform, used ONLY when nothing truthful is known: the
-# provider row carries no window AND the client's live probe returned None.
-# Deliberately separate from ``ProviderClient.get_context_limit()``, which
-# reports measurements only — a guess must never be persisted onto a provider
-# row, but a send still needs some number to size compaction against. Values are
-# each platform's documented baseline. The unknown-platform floor is deliberately
-# small: compacting too eagerly is recoverable, overshooting the real window is
-# a dead turn.
-DEFAULT_CONTEXT_WINDOW = 8_192
-DEFAULT_CONTEXT_WINDOWS: dict[str, int] = {
-    'anthropic': 200_000,   # Claude 3+ documented window
-    'gemini': 1_000_000,    # Gemini 1.5+ documented window
-    'openai': 128_000,      # GPT-4 class documented window
-    'openai_compatible': 128_000,
-    'codex_cli': 272_000,   # GPT-5 class default reported by the codex CLI
-    'ollama': DEFAULT_CONTEXT_WINDOW,
-}
 
 # Provider prose that means "your request was too big". Some providers have no
 # machine-readable size-fault code — Gemini reports 400/INVALID_ARGUMENT, which
@@ -88,16 +72,30 @@ class ProviderApiRequest:
     # Output-token ceiling — None means "use formula" (see resolve_max_tokens).
     max_tokens: Optional[int] = field(default=None)
 
-    def resolve_max_tokens(self, window: int) -> int:
-        """Return the output-token ceiling for a given context window.
+    # The context window this request will be sent against, stamped by
+    # ProviderService.send() from providers.context_window. Clients read it
+    # rather than asking their provider, so the DB column is the only window
+    # any send is ever sized against.
+    context_window: Optional[int] = field(default=None)
+
+    def resolve_max_tokens(self) -> int:
+        """Return the output-token ceiling for this request.
 
         Uses the explicit max_tokens when set; otherwise reserves the same
         headroom used by the over-cap check (max(10% window, 8 000)) so the
         request-sizing formula and the output ceiling stay symmetric.
+
+        Raises when neither is available: a silent guess here is exactly the
+        fiction ``providers.context_window`` exists to eliminate.
         """
         if self.max_tokens is not None:
             return self.max_tokens
-        return max(int(window * 0.1), 8000)
+        if self.context_window is None:
+            raise ValueError(
+                "resolve_max_tokens() needs either an explicit max_tokens or a "
+                "context_window stamped by ProviderService.send()"
+            )
+        return max(int(self.context_window * 0.1), 8000)
 
 
 @dataclass

@@ -108,6 +108,44 @@ def db(_db_template: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> It
         heartbeat_service._ctx = None
 
 
+#: Deliberately below MAX_CONTEXT_WINDOW (200_000) so a test asserting this
+#: number proves it came from the provider row, not a silently-substituted cap.
+SEEDED_CONTEXT_WINDOW = 120_000
+
+
+@pytest.fixture
+def chat_provider(db: sqlite3.Connection) -> sqlite3.Connection:
+    """Seed a selected CHAT provider whose context window is already pinned.
+
+    Every turn-driving test needs one. The context window is a column on
+    ``providers``, so ``ProviderService`` reads it from the row rather than
+    asking the transport client — which means a test that patches the client but
+    seeds no provider has no window to be sized against, exactly like a real
+    install with nothing configured. Patching the network boundary replaces what
+    the provider *says*; it was never a substitute for the provider *existing*.
+
+    The window is pre-pinned rather than probed so these tests stay hermetic:
+    an unpinned row would send ``pin_context_window`` to the real host.
+    """
+    db.execute(
+        "INSERT INTO providers (name, platform, model, host, context_window) "
+        "VALUES ('test-chat-provider', 'ollama', 'test-model', "
+        "'http://localhost:11434', ?)",
+        (SEEDED_CONTEXT_WINDOW,),
+    )
+    row = db.execute(
+        "SELECT id FROM providers WHERE name = 'test-chat-provider'"
+    ).fetchone()
+    db.execute(
+        "INSERT INTO settings (key, value, value_type, description) "
+        "VALUES ('selected_provider_id', ?, 'int', 'seeded by the chat_provider fixture') "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (str(row["id"]),),
+    )
+    db.commit()
+    return db
+
+
 # ── Vault backup isolation ────────────────────────────────────────
 # Any test that initialises the real vault (directly or via /auth/register)
 # writes a permanent vault_backup_*.json. Redirect the secure dir to a per-test

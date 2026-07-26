@@ -42,7 +42,7 @@ from models.provider_response import ProviderResponse
 from services.processor_config import ProcessorConfig
 from services.websocket import Websocket
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 
 # ProviderService builds its thin transport client via this factory call — the
 # real network boundary (see test_message_processor_runaway_loop.py).

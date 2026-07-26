@@ -14,7 +14,7 @@ from models.provider_response import ProviderResponse
 from services.processor_config import ProcessorConfig
 from models.transcript import Transcript
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 
 # ``ProviderService.send`` (the new spine's provider chokepoint) builds its thin
 # transport client via ``services.llm_clients.factory.build_client`` directly —

@@ -56,7 +56,7 @@ from models.provider_response import ProviderResponse
 from models.turn_execution import TurnExecution
 from services.dispatch_service import _REPEAT_CALL_STEER
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 
 # ProviderService builds its thin transport client via this factory call — the
 # real network boundary (see test_message_processor_runaway_loop.py).

@@ -34,7 +34,7 @@ from models.provider_response import ProviderResponse
 from models.transcript import Transcript
 from models.turn_execution import TurnExecution
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 
 # ProviderService builds its thin transport client via this factory call — the
 # real network boundary (see test_message_markdown_to_html.py for precedent).

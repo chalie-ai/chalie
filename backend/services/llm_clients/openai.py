@@ -71,6 +71,40 @@ _APP_TITLE = "Chalie"
 
 _COMPLETION_USAGE: TypeAlias = "_openai_mod.types.CompletionUsage"
 
+# Published context windows for official OpenAI models. api.openai.com/v1/models
+# returns no size information at all, so for platform='openai' the documented
+# figure IS the measurement — there is nothing else to read. Matched longest
+# prefix first, because 'gpt-4o'/'gpt-4.1' must not be caught by 'gpt-4'.
+# Deliberately NOT used for platform='openai_compatible': a third-party or
+# self-hosted host behind the same API serves whatever it likes under any name,
+# and only its own /models or /props can be believed.
+_OPENAI_PUBLISHED_WINDOWS: tuple[tuple[str, int], ...] = (
+    ('gpt-3.5-turbo', 16_385),
+    ('gpt-4-turbo', 128_000),
+    ('gpt-4.1', 1_047_576),
+    ('gpt-4o', 128_000),
+    ('gpt-4', 8_192),
+    ('gpt-5', 400_000),
+    ('o1', 200_000),
+    ('o3', 200_000),
+    ('o4', 200_000),
+)
+
+
+def _published_openai_window(model: str) -> int | None:
+    """Documented window for an official OpenAI model slug, or None if unknown.
+
+    Unknown means unknown: a new slug gets a loud failure upstream rather than a
+    neighbouring family's number, which could be wrong by two orders of magnitude.
+    """
+    slug = (model or '').lower()
+    for prefix, window in sorted(
+        _OPENAI_PUBLISHED_WINDOWS, key=lambda pair: len(pair[0]), reverse=True,
+    ):
+        if slug.startswith(prefix):
+            return window
+    return None
+
 
 def _openai_convert_messages(messages: "list[_Msg]") -> "list[_Msg]":
     """Convert normalised messages to OpenAI format."""
@@ -300,8 +334,11 @@ class OpenAIClient(ProviderClient):
         """Query the host for the model's real context window, cached per-instance.
 
         Tries the llama.cpp /models endpoint first (meta.n_ctx of the matching
-        entry), then /props (default_generation_settings.n_ctx). Returns None
-        when there is no host or every read fails, and logs a warning.
+        entry), then /props (default_generation_settings.n_ctx), then — for
+        official OpenAI only — the published table, since api.openai.com serves
+        no size information. Returns None when none of those can answer, and
+        logs a warning; the caller turns that into a loud failure rather than a
+        guess.
         """
         if hasattr(self, '_cached_context_limit'):
             return self._cached_context_limit
@@ -311,8 +348,9 @@ class OpenAIClient(ProviderClient):
         raw_limit: int | None = None
         host = cast("str | None", self._config.get('host'))
         # Read the key directly, never through _resolve_api_key: that raises when
-        # the key is absent (vault locked, key-less local host), and a window
-        # probe must degrade to the default rather than take the caller down.
+        # the key is absent, and a key-less local host is a perfectly probeable
+        # one — /models and /props answer unauthenticated. Raising here would
+        # turn "no key needed" into "no window", which is a different fact.
         api_key = self._config.get('api_key')
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
@@ -348,6 +386,11 @@ class OpenAIClient(ProviderClient):
                 except Exception as exc:  # pragma: no cover — network error path
                     logger.debug("[OpenAIClient] /props query failed: %s", exc)
 
+        # 3. Official OpenAI publishes no window on any endpoint, so fall to the
+        #    documented table. Scoped to platform='openai' only — see the table.
+        if raw_limit is None and self._config.get('platform') == 'openai':
+            raw_limit = _published_openai_window(self.model)
+
         if raw_limit is None:
             if host:
                 logger.warning(
@@ -356,7 +399,7 @@ class OpenAIClient(ProviderClient):
                 )
             else:
                 logger.warning(
-                    "[OpenAIClient] No host configured for platform=openai; cannot determine context window for model=%s",
+                    "[OpenAIClient] No published context window for OpenAI model=%s and no host to query",
                     self.model,
                 )
 

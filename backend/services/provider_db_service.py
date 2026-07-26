@@ -3,7 +3,7 @@
 import logging
 from typing import Dict, Optional, List, cast
 
-from exceptions import VaultLockedError
+from exceptions import ProviderError, VaultLockedError
 from models.provider import Provider as ProviderModel
 from models.setting import Setting
 from services.database import Database
@@ -241,16 +241,83 @@ class ProviderDbService:
 
         return self.get_provider_by_id(provider_id)
 
+    def pin_context_window(self, config: Dict[str, object]) -> int:
+        """Return this provider's context window, probing and persisting once.
+
+        The self-heal that runs in front of every LLM call. A row that already
+        carries a window answers immediately; one that does not gets probed,
+        clamped to ``MAX_CONTEXT_WINDOW``, written back, and answered from the
+        column ever after. Nothing downstream is allowed a second opinion — this
+        return value is the only window any send, compaction, or context meter
+        is ever sized against.
+
+        Persisting is what makes the probe a one-off rather than per-call:
+        ``ProviderService.send`` builds a fresh client every time, so a client's
+        per-instance probe cache dies with it and an unseeded row would re-probe
+        on every single send. The cache bust is equally load-bearing — provider
+        rows are served from ``ProviderCacheService`` and invalidation lives at
+        the API layer, so without it the stale ``context_window: None`` would
+        survive in memory and the probe would repeat anyway.
+
+        Raises when the window cannot be determined. A probe fails because the
+        host is unreachable, the vault is locked, or the model is unknown to its
+        platform — in every one of those cases the call this window was being
+        computed for was going nowhere regardless. Substituting a guess would
+        only convert a clear failure into a wrong answer.
+        """
+        platform = cast(str, config.get("platform") or "")
+        model = cast(str, config.get("model") or "")
+
+        stored = config.get("context_window")
+        if isinstance(stored, int) and not isinstance(stored, bool) and stored > 0:
+            return min(stored, MAX_CONTEXT_WINDOW)
+
+        window = self._probe_context_window(
+            platform, model,
+            cast(Optional[str], config.get("host")),
+            cast(Optional[str], config.get("api_key")),
+        )
+        if window is None:
+            raise ProviderError(
+                f"Cannot determine the context window for platform={platform} "
+                f"model={model} — the provider could not be probed. Fix the host "
+                f"or credential, or set the window on the provider explicitly."
+            )
+
+        provider_id = config.get("id")
+        if isinstance(provider_id, int):
+            # Best-effort: a failed write costs one repeated probe, never the turn.
+            try:
+                from services.provider_probe import invalidate_provider_cache  # noqa: PLC0415
+                self.update_provider(provider_id, {"context_window": window})
+                invalidate_provider_cache()
+                logger.info(
+                    "[Provider] Pinned context window %d for id=%s (platform=%s model=%s)",
+                    window, provider_id, platform, model,
+                )
+            except Exception:
+                logger.exception(
+                    "[Provider] Could not persist context window %d for id=%s",
+                    window, provider_id,
+                )
+        else:
+            logger.warning(
+                "[Provider] Probed context window %d for platform=%s model=%s but the "
+                "config carries no row id — cannot persist, so this will re-probe",
+                window, platform, model,
+            )
+        config["context_window"] = window
+        return window
+
     @staticmethod
     def _probe_context_window(
         platform: str, model: str, host: Optional[str], api_key: Optional[str],
     ) -> Optional[int]:
         """Ask the provider for the model's real context window, clamped.
 
-        Returns None when the window cannot be determined — the caller must
-        leave the column alone rather than write a guess. ``get_context_limit``
-        reports measurements only, so None here means "nobody knows", and a send
-        will fall back to the platform default without poisoning the row.
+        Returns None when the window cannot be determined, so a caller writing a
+        row (create/update) leaves the column alone rather than storing a guess,
+        and :meth:`pin_context_window` turns it into a loud failure instead.
 
         Never raises: a provider must remain creatable while its host is down.
         """
@@ -270,7 +337,7 @@ class ProviderDbService:
         if not isinstance(window, int) or window < 1:
             logger.warning(
                 "[Provider] No context window reported for platform=%s model=%s — "
-                "leaving it unset; sends will use the platform default",
+                "leaving it unset; the next send re-probes it",
                 platform, model,
             )
             return None

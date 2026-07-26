@@ -42,16 +42,30 @@ class ProviderRequest(Serializable):
     # Output-token ceiling — None means "use formula" (see resolve_max_tokens).
     max_tokens: Optional[int] = field(default=None)
 
-    def resolve_max_tokens(self, window: int) -> int:
-        """Return the output-token ceiling for a given context window.
+    # The context window this request will be sent against, stamped by
+    # ``ProviderService.send()`` from ``providers.context_window``. Clients read
+    # it rather than asking their provider, so the DB column is the only window
+    # any send is ever sized against.
+    context_window: Optional[int] = field(default=None)
+
+    def resolve_max_tokens(self) -> int:
+        """Return the output-token ceiling for this request.
 
         Uses the explicit ``max_tokens`` when set; otherwise reserves the same
         headroom used by the over-cap check (``max(10% window, 8 000)``) so the
         request-sizing formula and the output ceiling stay symmetric.
+
+        Raises when neither is available: a silent guess here is exactly the
+        fiction ``providers.context_window`` exists to eliminate.
         """
         if self.max_tokens is not None:
             return self.max_tokens
-        return max(int(window * 0.1), 8000)
+        if self.context_window is None:
+            raise ValueError(
+                "resolve_max_tokens() needs either an explicit max_tokens or a "
+                "context_window stamped by ProviderService.send()"
+            )
+        return max(int(self.context_window * 0.1), 8000)
 
     def to_dict(self) -> dict[str, object]:
         """Project the provider-neutral request fields (enums as their value)."""
@@ -64,4 +78,5 @@ class ProviderRequest(Serializable):
             "format": self.format,
             "cache_prefix": self.cache_prefix,
             "max_tokens": self.max_tokens,
+            "context_window": self.context_window,
         }

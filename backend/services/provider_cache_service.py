@@ -66,6 +66,10 @@ class ProviderCacheService:
                 # which provider row backs it, breaking DB lookups keyed by
                 # provider name (e.g. compact_at threshold queries).
                 entry: dict[str, object] = {
+                    # 'id' is what makes the entry writable back: pin_context_window
+                    # persists a freshly probed window onto this row. Without it the
+                    # write is impossible and the probe would repeat on every send.
+                    'id': p['id'],
                     'name': p['name'],
                     'platform': p['platform'],
                     'model': p['model'],
@@ -79,8 +83,8 @@ class ProviderCacheService:
                 if p.get('timeout'):
                     entry['timeout'] = p['timeout']
                 if p.get('context_window'):
-                    # Only when set: absent means "ask the client", which is
-                    # what ProviderService._window_of falls back to.
+                    # Only when set: absent means "unpinned", which makes
+                    # pin_context_window probe and persist it on the next send.
                     entry['context_window'] = p['context_window']
                 providers_dict[cast(str, p['name'])] = entry
 
@@ -130,6 +134,9 @@ class ProviderCacheService:
             selected = service.get_selected_provider()
             if selected:
                 return {
+                    # See get_providers(): 'id' keeps the row writable so
+                    # pin_context_window can persist a probed window.
+                    'id': selected['id'],
                     'platform': selected['platform'],
                     'model': selected['model'],
                     'host': selected.get('host'),

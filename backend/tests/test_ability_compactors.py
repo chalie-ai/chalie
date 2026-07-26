@@ -82,15 +82,17 @@ class _OfflineClient:
 
 
 def _seed_offline_provider_cap_zero(db: sqlite3.Connection) -> int:
-    """A real, selected ``providers`` row with a declared window small
-    enough that the compactor's cap formula (``window - max(0.10*window, 8000)``)
-    lands at/below zero — ``ProviderService.context_limit()`` then returns
-    8000 (patched via ``build_client`` below), and the cap<=0 branch means
-    ``_fit_compaction_input`` never has to call the also-offline-but-unexercised
-    ``ProviderService.measure()`` either. Fully hermetic."""
+    """A real, selected ``providers`` row with a pinned window small enough that
+    the compactor's cap formula (``window - max(0.10*window, 8000)``) lands at or
+    below zero. ``ProviderService.context_limit()`` reads that column straight
+    off the row, and the cap<=0 branch means ``_fit_compaction_input`` never has
+    to call the also-offline-but-unexercised ``ProviderService.measure()``
+    either. Pinning it here rather than leaving it NULL is what keeps the test
+    hermetic — an unpinned row would send ``pin_context_window`` to the host."""
     cur = db.execute(
-        "INSERT INTO providers (name, platform, model, host) "
-        "VALUES ('compactor-test', 'ollama', 'cap-model', 'http://localhost:11434')",
+        "INSERT INTO providers (name, platform, model, host, context_window) "
+        "VALUES ('compactor-test', 'ollama', 'cap-model', "
+        "'http://localhost:11434', 8000)",
     )
     pid = cast(int, cur.lastrowid)
     db.commit()

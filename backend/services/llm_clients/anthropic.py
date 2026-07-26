@@ -217,11 +217,10 @@ class AnthropicClient(ProviderClient):
 
     def send(self, dto: ProviderApiRequest) -> ProviderApiResponse:
         """Transform DTO → Anthropic Messages API → ProviderApiResponse."""
-        # Compute max_tokens using the window already known to ProviderService.send().
-        # The window is not available here; use the DTO's explicit value if set,
-        # else fall back to a safe ceiling matching the old _MAX_TOKENS.
-        window = self.get_context_limit()
-        max_out = dto.resolve_max_tokens(window)
+        # The window is stamped on the DTO by ProviderService.send() straight from
+        # providers.context_window, so max_tokens is sized against the same number
+        # the cap check and the context meter used — never a client-local opinion.
+        max_out = dto.resolve_max_tokens()
 
         client = self._get_client()
         start = time.time()
@@ -271,8 +270,13 @@ class AnthropicClient(ProviderClient):
             response_code=200,
         )
 
-    def get_context_limit(self) -> int:
-        """All Claude 3+ models support 200k context."""
+    def get_context_limit(self) -> int | None:
+        """All Claude 3+ models support 200k context.
+
+        Anthropic publishes no per-model window endpoint, so the documented
+        figure is the measurement — not a fallback. Used only to seed
+        ``providers.context_window``; sends read that column.
+        """
         return 200_000
 
     def estimate_request_tokens(self, dto: ProviderApiRequest) -> int:

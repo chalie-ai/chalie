@@ -55,7 +55,7 @@ from services.time_utils import parse_utc
 from services.websocket import Websocket
 from tests.helpers import make_stub_config
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 
 # ProviderService builds its thin transport client via this factory call — the
 # real network boundary (see test_message_processor_runaway_loop.py). The

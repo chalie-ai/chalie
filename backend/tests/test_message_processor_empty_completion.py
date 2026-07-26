@@ -43,7 +43,7 @@ from models.provider_response import ProviderResponse
 from models.transcript import Transcript
 from models.turn_execution import TurnExecution
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 
 _BUILD_CLIENT = "services.provider_service.build_client"
 

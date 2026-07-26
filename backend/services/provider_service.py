@@ -32,11 +32,6 @@ from configs.enums.provider_type import ProviderType
 from exceptions import ContextLimit, ProviderError
 from models.turn_signal import TurnSignal
 from services.llm_clients.factory import build_client
-from services.provider_api import (
-    DEFAULT_CONTEXT_WINDOW,
-    DEFAULT_CONTEXT_WINDOWS,
-    MAX_CONTEXT_WINDOW,
-)
 
 if TYPE_CHECKING:
     from controllers.message_processor import MessageProcessor
@@ -54,72 +49,17 @@ _LLM_SENTINEL_PATTERNS = (
 logger = logging.getLogger(__name__)
 
 
-def _persist_window(config: dict[str, object], window: int) -> None:
-    """Write a freshly probed window onto the provider row.
+def _window_of(config: dict[str, object]) -> int:
+    """The context window for ``config`` — always ``providers.context_window``.
 
-    Without this, a row that predates window-seeding would make every single
-    send re-probe the host: ``send()`` builds a fresh client per call, so the
-    client's own per-instance cache dies with it. Persisting converges the row
-    on first use, which is why no migration backfill is needed.
-
-    The cache bust is not optional — provider rows are served from
-    ``ProviderCacheService``, and invalidation lives at the API layer
-    (``api/endpoints/providers.py``), not in ``ProviderDbService``. Skipping it
-    would leave the stale ``context_window: None`` in the cached dict and the
-    probe would repeat on every send anyway.
-
-    Best-effort by design: a failure here costs one repeated probe, never the turn.
+    A thin pass-through to :meth:`ProviderDbService.pin_context_window`, which
+    self-heals the column (probe once, clamp, persist) and raises when the
+    window cannot be determined. There is deliberately no fallback here: this
+    layer is a reader of that column, never a second opinion on it.
     """
-    provider_id = config.get("id")
-    if not isinstance(provider_id, int):
-        return
-    try:
-        from services.provider_db_service import ProviderDbService  # noqa: PLC0415
-        from services.provider_probe import invalidate_provider_cache  # noqa: PLC0415
-        ProviderDbService().update_provider(provider_id, {"context_window": window})
-        invalidate_provider_cache()
-        config["context_window"] = window
-        logger.info(
-            "Stored context window %d for provider id=%s (%s)",
-            window, provider_id, config.get("model") or "",
-        )
-    except Exception as exc:
-        logger.warning(
-            "Could not persist context window for provider id=%s: %s", provider_id, exc,
-        )
+    from services.provider_db_service import ProviderDbService  # noqa: PLC0415
 
-
-def _window_of(client: "ProviderClient", config: dict[str, object]) -> int:
-    """The one context-window computation, hard-capped at MAX_CONTEXT_WINDOW.
-
-    Prefers the window stored on the provider row. Only when that is unset does
-    it fall back to the client's own live answer. When the client also cannot
-    tell (no host, transient probe failure, model not advertised), it drops to
-    the platform's documented operating default and logs a WARNING naming
-    provider+model. Never returns None.
-
-    The last step deliberately does NOT use MAX_CONTEXT_WINDOW: that is the most
-    permissive value there is, so a failed probe against a small model would
-    size compaction against 200k and let every turn run until the provider hard-
-    rejects it. An unknown window must degrade conservatively, not optimistically.
-    """
-    provider = cast(str, config.get("platform") or "")
-    stored = config.get("context_window")
-    limit: int | None
-    if isinstance(stored, int) and stored > 0:
-        limit = stored
-    else:
-        limit = client.get_context_limit()
-        if limit is not None:
-            _persist_window(config, min(limit, MAX_CONTEXT_WINDOW))
-    if limit is None:
-        limit = DEFAULT_CONTEXT_WINDOWS.get(provider, DEFAULT_CONTEXT_WINDOW)
-        logger.warning(
-            "No context window available for provider=%s model=%s; using the "
-            "platform default of %d tokens",
-            provider, cast(str, config.get("model") or ""), limit,
-        )
-    return min(limit, MAX_CONTEXT_WINDOW)
+    return ProviderDbService().pin_context_window(config)
 
 
 class ProviderService:
@@ -137,8 +77,11 @@ class ProviderService:
         silent rather than zero — the surface hides a meter it has no reading
         for, and a fabricated 0 would read as a real, empty context."""
         config = self._select(request.type)
+        window = _window_of(config)
+        # Stamp the DTO before the client ever sees it: a client that asked its
+        # own provider would be a second window for the same send.
+        request.context_window = window
         client = build_client(config)
-        window = _window_of(client, config)
         cap = int(0.90 * window)
         measured = client.estimate_request_tokens(cast("ProviderApiRequest", request))
         if measured >= cap:
@@ -169,8 +112,7 @@ class ProviderService:
 
     def context_limit(self, provider_type: ProviderType = ProviderType.CHAT) -> int:
         """Context window for ``provider_type`` — see :func:`_window_of`."""
-        config = self._select(provider_type)
-        return _window_of(build_client(config), config)
+        return _window_of(self._select(provider_type))
 
     def selected_provider(self) -> ProviderClient:
         """The resolved CHAT provider client (e.g. for prompt-template metadata)."""

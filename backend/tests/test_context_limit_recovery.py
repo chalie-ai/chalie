@@ -28,8 +28,10 @@ Four claims, one per branch the recovery actually carries:
    own before it reaches the handler;
 3. a payload that will never shrink is let out after a bounded number of
    attempts instead of recursing forever;
-4. the window is the one stored on the provider row when there is one, and the
-   client's own answer only when there is not — both clamped to the 200k ceiling.
+4. the window every one of the above is measured against comes from
+   ``providers.context_window`` and nowhere else — ``pin_context_window`` reads
+   the column, probes and persists it once when unset, clamps it to 200k, and
+   raises rather than substituting a default when it cannot be determined.
 """
 
 import sqlite3
@@ -42,14 +44,15 @@ import pytest
 
 from configs.channels.user import UserConfig
 from controllers.message_processor import MessageProcessor
-from exceptions import ContextLimit
+from exceptions import ContextLimit, ProviderError
+from models.provider import Provider as ProviderModel
 from models.provider_response import ProviderResponse
 from models.turn_execution import TurnExecution
+from services.database import Database
 from services.provider_api import MAX_CONTEXT_WINDOW
-from contracts.provider_client import ProviderClient
-from services.provider_service import _window_of
+from services.provider_db_service import ProviderDbService
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 
 _BUILD_CLIENT = "services.provider_service.build_client"
 
@@ -200,17 +203,70 @@ def test_unshrinkable_payload_is_let_out_not_spun_on(db: sqlite3.Connection) -> 
     )
 
 
-def test_stored_window_beats_the_client_and_both_obey_the_ceiling() -> None:
-    """The window is the provider row's own ``context_window`` when it has one.
+#: An official-OpenAI config needs no host and no network to be probed — the
+#: published table answers directly — which makes it the honest vehicle for
+#: exercising pin_context_window's real code path with nothing stubbed out.
+def _openai_config(**overrides: object) -> dict[str, object]:
+    return {
+        "platform": "openai", "model": "gpt-4o", "api_key": "k", **overrides,
+    }
 
-    The client's answer is the fallback for a row that does not — a real query
-    for Gemini and Ollama, but a flat constant for an OpenAI-compatible host that
-    cannot know the model behind it. Whichever wins, the 200k ceiling is applied
-    last, so a row claiming a million tokens cannot lift the cap."""
-    client = cast(ProviderClient, _SizedProvider(sizes=[_UNDER_CAP]))
 
-    assert _window_of(client, {"context_window": 64_000}) == 64_000
-    assert _window_of(client, {}) == _CLIENT_WINDOW, "unset row must defer to the client"
-    assert _window_of(client, {"context_window": None}) == _CLIENT_WINDOW
-    assert _window_of(client, {"context_window": 0}) == _CLIENT_WINDOW, "0 is not a window"
-    assert _window_of(client, {"context_window": 5_000_000}) == MAX_CONTEXT_WINDOW
+def test_pin_context_window_prefers_the_column_and_clamps_it() -> None:
+    """A row that carries a window answers from the column, hard-capped at 200k.
+
+    The clamp is applied on the way out as well as on the way in, so a row that
+    predates the ceiling (or was written by hand) still cannot lift the cap."""
+    service = ProviderDbService()
+
+    assert service.pin_context_window(_openai_config(context_window=64_000)) == 64_000
+    assert service.pin_context_window(
+        _openai_config(context_window=5_000_000)
+    ) == MAX_CONTEXT_WINDOW
+
+
+@pytest.mark.parametrize("unpinned", [{}, {"context_window": None}, {"context_window": 0}])
+def test_pin_context_window_probes_an_unpinned_row_and_stamps_it(
+    unpinned: dict[str, object],
+) -> None:
+    """Missing, NULL and 0 all mean *unpinned* — none of them is a window.
+
+    The probed answer is written back onto the config it was handed, which is
+    what stops a single turn probing twice for the same provider."""
+    config = _openai_config(**unpinned)
+
+    assert ProviderDbService().pin_context_window(config) == 128_000
+    assert config["context_window"] == 128_000
+
+
+def test_pin_context_window_persists_so_the_row_converges(db: sqlite3.Connection) -> None:
+    """The probe is a one-off: it lands in the column, not just the return value.
+
+    ``ProviderService.send`` builds a fresh client per call, so a client's own
+    probe cache dies with it — without the write-back every send would re-probe
+    the host forever."""
+    assert db is not None
+    with Database.transaction():
+        row = ProviderModel(
+            name="pin-convergence", platform="openai", model="gpt-4o",
+            host=None, api_key=None, dimensions=None, timeout=120,
+            supports_vision=0, context_window=None,
+        ).save()
+    provider_id = cast(int, row.id)
+    service = ProviderDbService()
+
+    assert service.pin_context_window(_openai_config(id=provider_id)) == 128_000
+
+    stored = service.get_provider_by_id(provider_id) or {}
+    assert stored["context_window"] == 128_000, "the probe must converge the row"
+
+
+def test_pin_context_window_raises_rather_than_guessing() -> None:
+    """A window that cannot be determined is a loud failure, never a default.
+
+    A probe only fails when the host is unreachable, the vault is locked, or the
+    model is unknown to its platform — in every one of those the call this window
+    was being computed for was going nowhere anyway. Substituting a number would
+    turn a clear failure into a wrong answer that silently mis-sizes compaction."""
+    with pytest.raises(ProviderError):
+        ProviderDbService().pin_context_window(_openai_config(model="not-a-real-model"))

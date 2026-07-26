@@ -39,7 +39,7 @@ from controllers.message_processor import MessageProcessor
 from models.provider_response import ProviderResponse
 from services.processor_config import ProcessorConfig
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 
 _BUILD_CLIENT = "services.provider_service.build_client"
 
@@ -89,23 +89,6 @@ def _drain_background_turns(timeout_s: float = 10.0) -> None:
             t.join(timeout=deadline - time.monotonic())
 
 
-def _seed_selected_provider(db: sqlite3.Connection) -> None:
-    """Register one real provider row and select it, through the real settings
-    path. A delegate turn resolves the DELEGATE lane from the DB and hard-fails
-    when nothing is configured (``ProviderService._select``), so the row has to
-    exist for the delegate to reach a provider at all — the transport it then
-    builds is still the patched double."""
-    from services.provider_db_service import ProviderDbService
-
-    cur = db.cursor()
-    cur.execute(
-        "INSERT INTO providers (name, platform, model) "
-        "VALUES ('scripted', 'ollama', 'scripted-usage-type')",
-    )
-    db.commit()
-    ProviderDbService().set_selected_provider(int(cur.lastrowid or 0))
-
-
 def _run(config: ProcessorConfig, raw_input: str) -> _ScriptedProvider:
     """Drive a real turn on *config* to termination, then quiesce any post-turn
     daemon turns inside the patch so the ledger settles before it is read."""
@@ -145,9 +128,12 @@ def test_delegate_with_chat_policy_still_bills_system(db: sqlite3.Connection) ->
     correct for tool gating and was exactly what made the OLD derivation bill the
     user for Chalie's own delegate. Passing CHAT here reproduces that precise
     input; 'system' is the proof the spend axis no longer rides on the policy one.
-    """
-    _seed_selected_provider(db)
 
+    The DELEGATE lane resolves off the same selected row the ``chat_provider``
+    fixture seeds (``_resolve_delegate_provider`` falls back to it when no
+    explicit delegate is set), so the delegate reaches a real provider config —
+    only the transport it then builds is the patched double.
+    """
     provider = _run(WebSearchConfig(PolicyChannel.CHAT), "who won the match")
 
     assert provider.sends >= 1, "delegate never reached the provider"
