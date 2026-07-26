@@ -15,6 +15,13 @@ export interface ConversationSegment {
   tag?: string;
   payload?: Record<string, unknown>;
   synthesis?: string;
+  /**
+   * Rich segments only: the tool call's wall-clock moment, ISO-8601 UTC (null
+   * when the row carried no usable timestamp). Generic card metadata — a card
+   * that needs a time anchor reads it from here rather than from `payload`,
+   * which is the tool body the model reads.
+   */
+  created_at?: string | null;
 }
 
 /** One row inside a turn block (see ConversationTurnBlock.messages). */

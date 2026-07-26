@@ -39,19 +39,23 @@ def _render_rich(title: str, duration: int, ordinal: int = 1) -> str:
     return DispatchService(mp=cast("MessageProcessor", None))._render("timer", tr, ordinal)
 
 
-# ── started_at injection: the real renderer → real parser chain ──────────────────
+# ── The countdown anchor: the real renderer → real parser chain ──────────────────
 #
 # These render the ability's ToolResult through the production formatter with a
 # rich ordinal (the user-broadcast shape) so the persisted ``tool_calls.result``
 # carries the card trailer, then feed it through the real rich_media_parser.parse
 # exactly as the conversation-render path does.
+#
+# The card's wall-clock anchor rides the SEGMENT (``segment["created_at"]``), not
+# the payload. That separation is the point: ``DispatchService._render_rich``
+# REPLACES the model-visible tool body with the payload, so a timestamp in the
+# payload is a timestamp the model reads and may try to reason about.
 
 
-def test_parser_injects_started_at_from_created_at() -> None:
+def test_anchor_rides_the_segment_and_never_the_model_visible_payload() -> None:
     from services.rich_media_parser import parse
 
     raw = _render_rich("Pasta", 600)
-    assert "started_at" not in raw
 
     tool_calls = [{
         "tool_name": "timer",
@@ -67,48 +71,50 @@ def test_parser_injects_started_at_from_created_at() -> None:
     assert seg["tag"] == "timer_1"
     assert cast(dict[str, object], seg["payload"])["title"] == "Pasta"
     assert cast(dict[str, object], seg["payload"])["duration_seconds"] == 600
-    assert cast(dict[str, object], seg["payload"])["started_at"] == "2026-05-03T14:30:00+00:00"
+
+    # The SQLite-format row timestamp is normalised to ISO-8601 UTC for the card.
+    assert seg["created_at"] == "2026-05-03T14:30:00+00:00"
+
+    # The model's view — the rendered body AND the payload — carries no timestamp.
+    assert "2026-05-03" not in raw
+    assert set(cast(dict[str, object], seg["payload"])) == {"title", "duration_seconds"}
 
 
-def test_parser_rejects_unparseable_created_at_sentinel() -> None:
+def test_unparseable_row_timestamp_yields_no_anchor() -> None:
     """``parse_utc`` returns ``datetime.min`` (year 0001) on garbage rather than
-    raising. The enrich hook must reject that sentinel so the FE falls through to
-    its "Invalid timer payload" guard instead of firing the alarm at year 0001."""
+    raising. The parser rejects that sentinel so the card falls through to its
+    invalid-payload guard instead of counting down from year 0001."""
     from services.rich_media_parser import parse
 
-    raw = _render_rich("Pasta", 600)
     tool_calls = [{
         "tool_name": "timer",
         "params": "{}",
-        "result": raw,
+        "result": _render_rich("Pasta", 600),
         "ephemeral": 1,
         "created_at": "this is not a date",
     }]
     segments = parse("<span id='timer_1'>Started.</span>", tool_calls)
-    assert "started_at" not in cast(dict[str, object], segments[0]["payload"])
-    assert "started_at" not in raw
+    assert segments[0]["created_at"] is None
 
 
-def test_parser_skips_injection_when_created_at_missing() -> None:
+def test_missing_row_timestamp_yields_no_anchor() -> None:
     from services.rich_media_parser import parse
 
-    raw = _render_rich("Pasta", 600)
     tool_calls = [{
         "tool_name": "timer",
         "params": "{}",
-        "result": raw,
+        "result": _render_rich("Pasta", 600),
         "ephemeral": 1,
         # created_at deliberately absent
     }]
     segments = parse("<span id='timer_1'>Started.</span>", tool_calls)
-    assert cast(dict[str, object], segments[0]["payload"]).get("started_at") is None
-    assert "started_at" not in raw
+    assert segments[0]["created_at"] is None
 
 
-def test_parser_does_not_inject_started_at_for_non_timer_tools() -> None:
-    """The ``tool_name == "timer"`` gate ensures other rich-media tools (weather,
-    list, …) never get a fabricated ``started_at`` even though their rows also
-    carry a ``created_at`` column."""
+def test_anchor_is_generic_segment_metadata_not_a_timer_special_case() -> None:
+    """Every rich segment carries the anchor — it is "when this tool call ran",
+    not a timer field. Other cards simply ignore it, and no payload is mutated to
+    carry it."""
     from services.rich_media_parser import parse
 
     weather_result = (
@@ -123,4 +129,5 @@ def test_parser_does_not_inject_started_at_for_non_timer_tools() -> None:
         "created_at": "2026-05-03 14:30:00",
     }]
     segments = parse("<span id='weather_1'>Sunny.</span>", tool_calls)
-    assert "started_at" not in cast(dict[str, object], segments[0]["payload"])
+    assert segments[0]["created_at"] == "2026-05-03T14:30:00+00:00"
+    assert set(cast(dict[str, object], segments[0]["payload"])) == {"location", "temperature_c"}

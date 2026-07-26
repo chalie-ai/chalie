@@ -21,7 +21,6 @@ from __future__ import annotations
 import copy
 import typing
 from abc import ABC, abstractmethod
-from datetime import datetime
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, cast
 
 from typing_extensions import TypeVar
@@ -225,13 +224,15 @@ class Ability(ABC, Generic[B]):
         return None
 
     @classmethod
-    def enrich_rich_payload(cls, payload: dict[str, object], created_at: datetime | str | None) -> dict[str, object]:
+    def enrich_rich_payload(cls, payload: dict[str, object]) -> dict[str, object]:
         """Resolve a rich-media payload's runtime state at parse time.
 
-        The default implementation returns the payload unchanged. Override on
-        subclasses whose card needs data that does NOT live in the LLM-visible
-        tool result.
+        The default implementation returns the payload unchanged. Override on a
+        subclass whose card must reflect state that changed AFTER the tool ran —
+        the persisted ``tool_calls.result`` is a frozen snapshot.
 
         Called by ``rich_media_parser.parse()`` exactly once per rich segment.
+        The tool call's wall-clock anchor is NOT passed here: it is generic
+        segment metadata (``segment["created_at"]``), not per-ability state.
         """
         return payload

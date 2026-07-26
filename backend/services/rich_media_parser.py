@@ -6,7 +6,15 @@ plus the turn's ``tool_calls`` rows into an ordered list of typed segments.
 
 Segment shapes:
     {"type": "text", "content": "<safe HTML>"}
-    {"type": "rich", "tag": "weather_1", "synthesis": "<safe HTML>", "payload": {…}}
+    {"type": "rich", "tag": "weather_1", "synthesis": "<safe HTML>", "payload": {…},
+     "created_at": "2026-05-03T14:30:00+00:00"}
+
+``created_at`` is the wall-clock moment the tool call was recorded, normalised
+to ISO-8601 UTC — generic card metadata (every card has one), NOT payload. It
+cannot travel inside ``payload``: ``DispatchService._render_rich`` REPLACES the
+model-visible tool body with the card payload, so a payload field is a field the
+LLM reads. A card needing a time anchor (the timer's countdown) takes it from
+here.
 
 The parser is called at the WS-send boundary and again on the thread-block
 refresh path (``serialize_turn`` — the REST reads + WS refetch) — both against
@@ -20,6 +28,8 @@ import logging
 import re
 from datetime import datetime
 from typing import cast
+
+from services.time_utils import PARSE_SENTINEL, parse_utc
 
 logger = logging.getLogger(__name__)
 
@@ -77,12 +87,12 @@ def _append_tag_segment(match: re.Match[str], tool_calls: list[dict[str, object]
     matched = _find_payload(tag, tool_calls)
     if matched is not None:
         payload, row = matched
-        payload = _enrich_payload(tool_name, payload, row)
         segments.append({
             "type": "rich",
             "tag": tag,
             "synthesis": synthesis,
-            "payload": payload,
+            "payload": _enrich_payload(tool_name, payload),
+            "created_at": _segment_anchor(row),
         })
     else:
         logger.warning("rich_media: orphan tag %s — no matching tool_call result found", tag)
@@ -90,7 +100,21 @@ def _append_tag_segment(match: re.Match[str], tool_calls: list[dict[str, object]
             segments.append({"type": "text", "content": synthesis})
 
 
-def _enrich_payload(tool_name: str, payload: object, row: dict[str, object]) -> object:
+def _segment_anchor(row: dict[str, object]) -> "str | None":
+    """The tool call's wall-clock moment as an ISO-8601 UTC string, or None.
+
+    ``parse_utc`` returns the ``datetime.min`` sentinel on garbage rather than
+    raising; that sentinel is rejected here so a card can never anchor on year
+    0001 (a countdown would instantly fire). A card treats None as "no anchor".
+    """
+    raw = row.get("created_at")
+    if not isinstance(raw, (str, datetime)) or not raw:
+        return None
+    parsed = parse_utc(raw)
+    return None if parsed == PARSE_SENTINEL else parsed.isoformat()
+
+
+def _enrich_payload(tool_name: str, payload: object) -> object:
     """Hand the payload to the matching ability so it can resolve runtime state.
 
     A non-dict payload (i.e. JSON parse failed and ``_extract_data`` returned
@@ -106,7 +130,7 @@ def _enrich_payload(tool_name: str, payload: object, row: dict[str, object]) -> 
     if ability is None:
         return payload
     try:
-        return ability.enrich_rich_payload(payload, cast("datetime | str | None", row.get("created_at")))
+        return ability.enrich_rich_payload(payload)
     except Exception as exc:
         logger.warning(
             "rich_media: enrich_rich_payload(%s) failed — falling back to raw payload: %s",

@@ -33,6 +33,7 @@ const resolved = computed<{ seg: ConversationSegment; richEntry: RichCardEntry |
           :is="item.richEntry.component"
           :payload="item.seg.payload"
           :synthesis="item.seg.synthesis"
+          :created-at="item.seg.created_at"
         />
       </template>
       <!-- Unknown-tag fallback: render synthesis or content as markup. -->

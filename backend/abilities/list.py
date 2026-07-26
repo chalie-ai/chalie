@@ -50,8 +50,6 @@ from contracts.params.list_params_bag import (
 from contracts.params.param_bag import ParamBag
 
 if TYPE_CHECKING:
-    from datetime import datetime
-
     from services.list_service import ListService as _ListService
 
 logger = logging.getLogger(__name__)
@@ -200,7 +198,7 @@ class ListAbility(Ability[ListParamsBag]):
         return self._handle_delete(service, params)
 
     @classmethod
-    def enrich_rich_payload(cls, payload: dict[str, object], created_at: "datetime | str | None") -> dict[str, object]:
+    def enrich_rich_payload(cls, payload: dict[str, object]) -> dict[str, object]:
         """Re-fetch the live list so checkbox state the user toggled out-of-band
         is visible on conversation refresh.
 

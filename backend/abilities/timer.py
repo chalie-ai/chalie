@@ -4,25 +4,26 @@ TimerAbility — Ephemeral countdown widget rendered as a rich-media card.
 Unlike ScheduleAbility (which persists scheduled_items rows in SQLite and
 fires events from a background worker), the timer is purely client-side:
 the ability returns a payload describing ``{title, duration_seconds}``
-and the frontend module computes the remaining time on each render from
-the wall-clock anchor injected by ``RichMediaParser`` from the tool_calls
-row's ``created_at``. No DB, no worker, no scheduler.
+and the frontend card computes the remaining time on each render from the
+wall-clock anchor on its rich segment — ``segment["created_at"]``, which
+``RichMediaParser`` normalises from the tool_calls row. No DB, no worker,
+no scheduler.
 
-The wall-clock anchor (``started_at``) is deliberately NOT in the JSON
-the LLM sees: it is added server-side at parse time so subsequent ACT
-iterations cannot misinterpret a literal timestamp as something they
-need to reason about, and the model never has to fill it.
+The anchor is deliberately NOT in the JSON the LLM sees. It cannot be:
+``DispatchService._render_rich`` REPLACES the model-visible tool body with
+the card payload, so a payload field is a field the model reads — and a
+literal timestamp is something a subsequent ACT iteration would try to
+reason about. Carrying it as segment metadata keeps the model's view to
+``{title, duration_seconds}`` while the card still gets its anchor.
 
 Rich-media rendering:
   A successful timer returns ``ToolResult.ok(payload, rich=payload)`` — the
   ``{title, duration_seconds}`` dict is both the structured body the model
   reads AND the card payload. The dispatcher (``ToolDispatcher._render``) owns
   ordinal assignment + the span-tag instruction and injects the card ONLY when
-  the invoking channel broadcasts to the user. ``started_at`` is grafted onto
-  the card payload later, at parse time, by ``enrich_rich_payload``.
+  the invoking channel broadcasts to the user.
 """
 
-from datetime import datetime, timezone
 from typing import ClassVar
 
 from abilities._ability import Ability
@@ -34,9 +35,6 @@ from contracts.params.timer_params_bag import (
     MIN_DURATION_SECONDS,
     TimerParamsBag,
 )
-from services.time_utils import parse_utc
-
-_PARSE_UTC_SENTINEL = datetime.min.replace(tzinfo=timezone.utc)
 
 
 class TimerAbility(Ability[TimerParamsBag]):
@@ -104,21 +102,6 @@ class TimerAbility(Ability[TimerParamsBag]):
         }
         # body == rich: the model reads the same dict the FE card renders. The
         # dispatcher injects the ordinal + span instruction only on a
-        # user-broadcast turn; started_at is grafted later by enrich_rich_payload.
+        # user-broadcast turn. The countdown's wall-clock anchor is NOT in here —
+        # it rides the rich segment as generic metadata (see the module docstring).
         return ToolResult.ok(payload, rich=payload)
-
-    @classmethod
-    def enrich_rich_payload(cls, payload: dict[str, object], created_at: "datetime | str | None") -> dict[str, object]:
-        """``started_at`` is intentionally absent from the LLM-visible JSON; the FE
-        needs it to compute the countdown so the parser grafts it on at render
-        time. ``parse_utc`` returns a ``datetime.min`` sentinel on garbage rather
-        than raising — that sentinel must be rejected so the FE falls through to
-        its "Invalid timer payload" guard rather than rendering a year-0001
-        countdown that instantly fires the alarm.
-        """
-        if not created_at:
-            return payload
-        parsed = parse_utc(created_at)
-        if parsed == _PARSE_UTC_SENTINEL:
-            return payload
-        return {**payload, "started_at": parsed.isoformat()}
