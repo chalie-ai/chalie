@@ -140,6 +140,25 @@ def _start_model_preload() -> None:
                 svc._ready = True
             logger.exception("[System] ONNX preload failed")
 
+        try:
+            logger.info("[System] Preloading Moonshine STT model (background)...")
+            from services.speech_to_text_service import get_service as _get_stt_service
+            if _get_stt_service().ensure_loaded():
+                logger.info("[System] Moonshine STT ready")
+            else:
+                logger.error("[System] Moonshine STT preload failed — loader returned False (see [Voice] logs)")
+        except Exception as e:
+            logger.exception(f"[System] Moonshine STT preload failed: {e}")
+
+        try:
+            logger.info("[System] Preloading Kokoro TTS model (background)...")
+            from services.voice_transcript_service import get_service as _get_tts_service
+            if _get_tts_service().ensure_loaded():
+                logger.info("[System] Kokoro TTS ready")
+            else:
+                logger.error("[System] Kokoro TTS preload failed — loader returned False (see [VoiceTranscript] logs)")
+        except Exception as e:
+            logger.exception(f"[System] Kokoro TTS preload failed: {e}")
     import threading as _threading
     _threading.stack_size(2 * 1024 * 1024)
     _threading.Thread(target=_preload_models, name="model-preload", daemon=True).start()
