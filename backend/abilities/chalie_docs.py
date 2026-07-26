@@ -58,7 +58,7 @@ _QUERY_URLS: dict[str, list[str]] = {
         "https://chalie.ai/how-it-works/",
     ],
     "tools": [
-        "https://chalie.ai/guide/getting-started/",
+        "https://chalie.ai/abilities/",
     ],
     "releases": [
         "https://chalie.ai/releases/",
