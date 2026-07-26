@@ -341,6 +341,8 @@ CREATE TABLE IF NOT EXISTS llm_call_log (
     tokens_cache_create INTEGER NOT NULL DEFAULT 0,
     tokens_thinking INTEGER NOT NULL DEFAULT 0,
     latency_ms INTEGER NOT NULL DEFAULT 0,
+    prefill_ms REAL,                         -- NULL = provider reported no timing split; never 0-coerced
+    decode_ms REAL,                          -- NULL = provider reported no timing split; never 0-coerced
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
