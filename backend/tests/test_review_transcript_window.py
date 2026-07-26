@@ -33,10 +33,16 @@ def _seed(channel: str, content: str, created_at: str) -> None:
 
 
 def _seed_window_rows(db: sqlite3.Connection) -> None:
-    _seed("user", "approved email draft", "2026-04-07T14:30:00+00:00")  # in window
-    _seed("subagent", "subagent task result", "2026-04-07T14:31:00+00:00")  # in window
-    _seed("user", "old unrelated chat", "2026-04-07T14:00:00+00:00")  # 30 min before — out of window
-    _seed("other", "irrelevant channel row", "2026-04-07T14:32:00+00:00")  # in window, wrong channel
+    """Timestamps here are SPACE-separated on purpose — that is what production
+    writes, because ``transcript.created_at`` takes the schema default
+    ``datetime('now')``. Seeding ISO-``T`` instead (as this file used to) makes
+    every assertion below pass against a window query that returns nothing in
+    production: ``' '`` sorts below ``'T'``, so an ISO-``T`` bound excludes every
+    real row. Keep this format aligned with the column, not with ``isoformat()``."""
+    _seed("user", "approved email draft", "2026-04-07 14:30:00")  # in window
+    _seed("subagent", "subagent task result", "2026-04-07 14:31:00")  # in window
+    _seed("user", "old unrelated chat", "2026-04-07 14:00:00")  # 30 min before — out of window
+    _seed("other", "irrelevant channel row", "2026-04-07 14:32:00")  # in window, wrong channel
 
 
 def test_returns_only_user_rows_in_window_by_default(db: sqlite3.Connection) -> None:

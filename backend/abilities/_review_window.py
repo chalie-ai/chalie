@@ -102,9 +102,10 @@ class ReviewWindowAbility(Ability[TBag], ABC):
                 hint=_ISO_HINT,
             )
 
-        # 4. Window: anchor ± buffer minutes, as ISO strings for the SQL bind.
-        lo = (anchor - timedelta(minutes=buffer)).isoformat()
-        hi = (anchor + timedelta(minutes=buffer)).isoformat()
+        # 4. Window: anchor ± buffer minutes, rendered in the subclass's own
+        #    column format (see _bound — a mismatch matches NOTHING, silently).
+        lo = self._bound(anchor - timedelta(minutes=buffer))
+        hi = self._bound(anchor + timedelta(minutes=buffer))
 
         # 5. Fetch — the ONE windowed query, wrapped in a NARROW sqlite3.Error so
         #    a corrupt / dropped table is a LOUD query-failed, never a silent
@@ -143,6 +144,15 @@ class ReviewWindowAbility(Ability[TBag], ABC):
         """The half-window in minutes. ``review_transcript`` overrides to read
         its bag's clamped ``buffer_minutes``; validation happened in the bag."""
         return 5
+
+    def _bound(self, moment: datetime) -> str:
+        """One window bound, in the SAME text format the subclass's table stores
+        ``created_at`` in. ``_fetch`` compares strings, so a bound in a different
+        format matches NOTHING and returns an empty window with no error:
+        ``' '`` (0x20) sorts below ``'T'`` (0x54), so an ISO-T bound excludes
+        every space-separated row. The default matches ``tool_calls``, written by
+        ``utc_now().isoformat()``; ``review_transcript`` overrides it."""
+        return moment.isoformat()
 
     @abstractmethod
     def _fetch(self, lo: str, hi: str, params: TBag) -> "list[dict[str, object]]":

@@ -15,6 +15,7 @@ declares only the clamped buffer, the windowed ``transcript`` SELECT, and the
 structured row shape.
 """
 
+from datetime import datetime
 from typing import ClassVar, cast
 
 from configs.enums.param_key import Keys
@@ -92,6 +93,12 @@ class ReviewTranscriptAbility(ReviewWindowAbility[ReviewTranscriptParamsBag]):
 
     def _buffer(self, params: ReviewTranscriptParamsBag) -> int:
         return params.buffer_minutes
+
+    def _bound(self, moment: datetime) -> str:
+        # transcript.created_at takes the schema default datetime('now') — naive
+        # UTC, space-separated — unlike tool_calls, which stores isoformat(). The
+        # base's ISO-T default would match no row at all.
+        return moment.strftime("%Y-%m-%d %H:%M:%S")
 
     def _fetch(self, lo: str, hi: str, params: ReviewTranscriptParamsBag) -> "list[dict[str, object]]":
         from models.transcript import Transcript
