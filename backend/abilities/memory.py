@@ -81,7 +81,7 @@ class MemoryAbility(Ability[MemoryParamsBag]):
                     "(rules, decisions, analysis). misc: short-lived "
                     "scratchpad for Chalie's own working notes — NOT a "
                     "dumping ground for user-supplied bulk content (use the "
-                    "`document` tool for that)."
+                    "`file_write` tool for that)."
                 ),
             },
             Keys.key: {

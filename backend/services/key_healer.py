@@ -30,9 +30,8 @@ the ACTION_REQUIRED pre-gate, the policy gate, or ``run()`` ever sees the params
    :class:`KeyHealer`.
 
 Resolution is two-pass and **declared-canonical-first**, so a parameter that is
-itself a synonym of another (calendar's ``summary`` vs ``title``; ``document``'s
-``id`` vs the ``list`` tool's ``id`` alias) always wins as itself and is never
-rewritten away. An unrecognised key passes through **verbatim** (never the lossy
+itself a synonym of another (calendar's ``summary`` vs ``title``) always wins as
+itself and is never rewritten away. An unrecognised key passes through **verbatim** (never the lossy
 lower-cased form), so MCP camelCase keys (``serverName``) and any out-of-band key
 survive intact for the tool or framework to handle.
 

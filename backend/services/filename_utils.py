@@ -6,9 +6,9 @@ extension. ``secure_filename`` may return an empty string for names that are
 entirely unsafe (e.g. ``".."`` or non-ASCII-only names), so callers must supply
 their own domain-specific fallback when the result is empty.
 
-Consumers: api/upload.py and api/documents.py (chat attachment + document
-uploads). Both previously hand-rolled near-identical sanitizers; this is the
-single shared implementation.
+Consumers: api/endpoints/threads.py (chat attachment uploads) and
+services/file_parser_service.py (file ingest). Both call sites share this
+single implementation instead of hand-rolling near-identical sanitizers.
 """
 
 import os

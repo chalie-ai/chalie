@@ -722,10 +722,9 @@ class MessageProcessor:
 
         Only files inside the tmp-upload sandbox are accepted; anything else is
         refused loudly. The file is ingested (extracted, copied flat to
-        data/documents/uploads/, indexed) rather than uploaded through the
-        document ability, so its content appears on the turn-zero act trail
-        as a ``read`` or ``vision`` tool call — the model sees exactly what
-        it would if a human had handed it the file.
+        data/documents/uploads/, indexed), so its content appears on the
+        turn-zero act trail as a ``read`` or ``vision`` tool call — the model
+        sees exactly what it would if a human had handed it the file.
 
         On ingest ValueError (extraction failure), falls back to the manual
         move into uploads/ with a warning, then still dispatches ``read`` so

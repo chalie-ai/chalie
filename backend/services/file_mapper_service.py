@@ -116,8 +116,8 @@ class FileMapperService:
     def get_file_index_db_path(cls) -> Path:
         """Return path to the file-index FTS5 search database (gitignored, data/).
 
-        Managed exclusively by FileIndexService — never touched by the
-        document pipeline or any other service.
+        Managed exclusively by FileIndexService — never touched by any
+        other service.
         """
         return cls._DATA_DIR / "file_index.sqlite"
 

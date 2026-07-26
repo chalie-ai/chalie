@@ -1,6 +1,6 @@
 """TextReader — the single place a URL or filesystem path becomes plain text.
 
-Shared by the ``read`` tool and the document ingest pipeline. Returns the FULL
+Shared by the ``read`` tool and the file-ingest pipeline. Returns the FULL
 text verbatim: no truncation (the caller truncates to ``max_chars``) and no
 whitespace munging. Every failure is a raise, never an empty string.
 

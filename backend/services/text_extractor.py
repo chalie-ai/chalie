@@ -2,12 +2,12 @@
 Text Extractor — Shared text extraction library for files and HTML strings.
 
 Pure functions — no database, no MemoryStore, no Chalie services.
-Used by the document upload pipeline and the `read` innate skill
+Used by the file-ingest pipeline and the `read` innate skill
 (URL fetch + local file read).
 
 TEXT ONLY. An image carries no text to extract — it is DESCRIBED by
 ``services.image_description.ImageDescription`` (the vision tool's describe core),
-and the document pipeline routes it there on mime before ever reaching this module.
+and the file-ingest pipeline routes it there on mime before ever reaching this module.
 Images are rejected loudly here rather than silently plain-read (see extract_text).
 
 Supported formats (heavy-library imports are lazy):

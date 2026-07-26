@@ -13,7 +13,6 @@ from __future__ import annotations
 KIND_USER_SPECIFIC = "user_specific"
 KIND_SYSTEM = "system"
 KIND_MISC = "misc"
-KIND_DOCUMENT = "document"
 KIND_BEHAVIORAL_PATTERN = "behavioral_pattern"
 KIND_PLACE = "place"
 KIND_CONTACT = "contact"
@@ -25,10 +24,9 @@ KIND_DISCOVERY = "discovery"
 KIND_MACHINE_STATE = "machine_state"
 
 # The kinds a user or agent may write through the memory tools (``save_graph``,
-# ``memory`` store). ``document`` is fragment-based (ingest-only) and
-# ``behavioral_pattern`` is extracted by the pattern worker — neither is
-# writable as a free ``(key, value)`` pair, so both are EXCLUDED from the
-# storable set (they remain in the vocabulary above for reference).
+# ``memory`` store). ``behavioral_pattern`` is extracted by the pattern worker —
+# never writable as a free ``(key, value)`` pair, so it is EXCLUDED from the
+# storable set (it remains in the vocabulary above for reference).
 VALID_KINDS = frozenset({
     KIND_USER_SPECIFIC, KIND_SYSTEM, KIND_MISC,
     KIND_PLACE, KIND_CONTACT, KIND_DISCOVERY,

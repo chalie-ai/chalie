@@ -6,9 +6,10 @@ The model thinks as little as possible: it names WHAT to act on by visible text
 delegate run (key = the invoking mp's transcript uid); every successful call
 returns the same JSON envelope DICT with a mechanical `changed` diff (the
 dispatcher renders it as compact JSON — never a pre-dumped JSON string).
-Screenshots ingest through the same document pipeline chat attachments use, so
-the page's vision description is produced at ingest time and rides back inline in
-the screenshot result — the agent sees the page without a separate vision call.
+Screenshots ingest through the same file-ingest pipeline (FileParserService)
+chat attachments use, so the page's vision description is produced at ingest
+time and rides back inline in the screenshot result — the agent sees the page
+without a separate vision call.
 
 Every result is an :class:`abilities._result.ToolResult` built only via
 ``ok()`` / ``err()``. Errors carry a STABLE KEBAB-CASE ``code`` (never the
@@ -57,7 +58,7 @@ class BrowserAbility(Ability[BrowserParamsBag]):
             "Drive a web page step by step: open a URL, read it, find text on it, "
             "click buttons and links by their visible label, fill and submit forms, "
             "scroll, go back, read an element's exact computed colours and fonts, "
-            "and capture screenshots into the document store. The "
+            "and capture screenshots into the documents folder. The "
             "page stays open between calls; every action returns the same JSON "
             "envelope describing the page and what just changed."
         )

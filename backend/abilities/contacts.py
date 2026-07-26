@@ -16,7 +16,7 @@ the ``CapabilityAbility`` handler-dispatch base.
 ``get`` carries a precision contract — ``resolve()`` is fuzzy (FTS5 prefix-match
 over the contact kind, no score threshold), so taking ``matches[0]`` could hand
 back the wrong person. A relevance predicate splits the fuzzy candidates into
-three fixed outcomes (calendar / document precedent):
+three fixed outcomes (calendar precedent):
 
 * exactly 1 relevant → that contact.
 * ≥2 relevant → ``code=ambiguous-match`` with the candidate rows in the body —
