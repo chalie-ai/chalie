@@ -10,8 +10,8 @@ layer expansion, response formatting, and recall telemetry.
 
 Every action method returns an ``abilities._result.ToolResult`` — never a
 string. ``recall`` returns a STRUCTURED body
-(``{"results": [{id, content, score, kind, created_at}, …]}``, +
-``fallback`` on explicit recalls). When some (not all) backend lanes
+(``{"results": [{id, content, score, kind, created_at}, …], "rule": …}`` on a
+hit; a ``no_results`` error on a miss). When some (not all) backend lanes
 error, recall succeeds with ``meta degraded=true`` so the partial result
 is honest. A dead retrieval backend surfaces as
 ``ToolResult.err(code='memory-backend-error')`` rather than a silent
@@ -27,10 +27,12 @@ memories. The caller's channel is recorded only for ``memory_recall_log``
 provenance and the per-channel feeling-of-knowing signal, never as a recall
 scope.
 
-Two recall callers stay distinct only in their side-effects:
-``caller='seed'`` is the silent turn-0 auto-seed (no fallback hint, no
-fan-out). ``caller='llm_recall'`` is the explicit recall — appends the
-fallback hint routing misses to ``find_tools``.
+The turn-0 auto-seed (``caller='seed'``) and the explicit model recall
+(``caller='llm_recall'``) are behaviourally identical: same ranked retrieval,
+same standing rule on a hit, same ``no_results`` error on a miss. ``caller``
+survives only as ``memory_recall_log`` provenance and the render label — the
+seed renders inside a ``[background_memory]`` block, an explicit recall as a
+normal tool-call row.
 """
 
 from __future__ import annotations
@@ -63,16 +65,17 @@ LOG_PREFIX = "[MEMORY]"
 # top_patterns), never semantically, so they are not a recall lane.
 _DG_RECALL_KINDS = ["user_specific", "system", "misc", "place", "discovery"]
 
-# Guardrail appended to every explicit (model-invoked) recall, hit or miss:
-# memory is context, never ground truth — live state must be re-checked
-# through a tool. `find_tools` is the one surface that lists every available
-# tool, so the hint routes there instead of naming stores that may not exist
-# (the old `document`/`schedule` wording outlived the document subsystem's
-# deletion and sent the model to a dead tool). The turn-0 auto-seed recall
-# (_auto=True) stays silent — no hint, no fan-out.
-_RECALL_FALLBACK_HINT = (
-    f"Memory helps you remember facts and situations however ALWAYS double-check "
-    f"live state with a tool via `{FindToolsAbility.NAME}`."
+# The standing rule on EVERY recall, seed and explicit alike: memory is past
+# state, never present ground truth, so live state must be re-checked through a
+# tool. It rides the result set on a hit and the no-results error on a miss —
+# unconditionally, never gated by caller. `find_tools` is the one surface that
+# lists every available tool, so the rule routes there instead of naming stores
+# that may not exist (the old `document`/`schedule` wording outlived the document
+# subsystem's deletion and sent the model to a dead tool).
+_RECALL_RULE = (
+    f"HARD RULE: these results are memories of past interactions with the user, "
+    f"NOT the present state of the world. NEVER assume they are still valid — always "
+    f"re-verify live state with a tool (via `{FindToolsAbility.NAME}`) before acting on them."
 )
 
 # Stable, machine-readable code surfaced when EVERY retrieval backend a recall
@@ -88,6 +91,13 @@ _BACKEND_ERROR_HINT = (
 
 _LOCATION_SEARCH_CONFIDENCE = 0.9
 _LOCATION_SEARCH_RELEVANCE = "high"
+
+# Cap on ``low``-relevance rows a single recall may surface (the 3 highest-
+# confidence lows survive; ``medium``/``high`` are uncapped). A long-lived box
+# accumulates dozens of weak-match memories; without this the turn-0 seed dumps
+# ~19 all-``low`` rows every turn, drowning live tool use. Applies to the seed
+# and explicit recalls alike — it runs before the caller split.
+_MAX_LOW_RELEVANCE = 3
 
 
 class MemoryService:
@@ -313,9 +323,10 @@ class MemoryService:
                 hint="pass a 'query' (a topic) and/or a 'location'.",
             )
 
-        # The turn-0 background seed (_auto=True) stays silent (no fallback hint);
-        # an explicit model-invoked recall carries the fallback guardrail. Both run
-        # the identical ranked retrieval — the radius split is gone.
+        # The turn-0 background seed (_auto=True) and an explicit model recall are
+        # behaviourally identical here — same retrieval, same rule, same no-results
+        # error. ``caller`` survives only as telemetry provenance (memory_recall_log)
+        # and the render label (seed → [background_memory]).
         caller = "seed" if params.auto else "llm_recall"
 
         limit = 10
@@ -382,25 +393,29 @@ class MemoryService:
                 LOG_PREFIX, len(errored), len(statuses), "; ".join(errored),
             )
 
+        results = self._cap_low_relevance(results)
+
         partial = sum(1 for r in results if cast("float", r.get("confidence", 0)) < 0.5)
         self._store_fok_signal(partial)
 
-        # An empty explicit recall is an ERROR, not a success with zero rows — a
-        # weak model reads `status=success` as "the call worked, move on"; the
-        # loud miss forces the pivot to live tools. The silent turn-0 seed keeps
-        # returning ok: an error row on every cold turn would be pure noise.
-        if caller != "seed" and not results:
+        # A recall that finds nothing is an ERROR for every caller — the seed no
+        # longer special-cases to a quiet success. A weak model reads
+        # `status=success` as "the call worked, move on" and settles on fabricated
+        # content; the loud miss (carrying the rule) forces the pivot to live tools.
+        if not results:
             return ToolResult.no_results(
-                hint=_RECALL_FALLBACK_HINT,
+                hint=_RECALL_RULE,
                 query=query or location,
                 degraded=degraded,
             )
 
-        body: dict[str, object] = {"results": self._recall_payload(results)}
-        # Explicit recalls carry the fallback guardrail in the structured body; the
-        # silent turn-0 seed (caller='seed') carries no fallback and fires no fan-out.
-        if caller != "seed":
-            body["fallback"] = _RECALL_FALLBACK_HINT
+        # A hit always carries the rule as part of the result set — no caller gate,
+        # no conditional. It renders inside the [background_memory] block for the
+        # seed and the [memory] row for an explicit recall, via the shared body.
+        body: dict[str, object] = {
+            "results": self._recall_payload(results),
+            "rule": _RECALL_RULE,
+        }
 
         return ToolResult.ok(
             body,
@@ -434,7 +449,7 @@ class MemoryService:
                 # Empty reflect is an ERROR (same contract as recall): a zero-hit
                 # deep search must read as a loud miss, not a quiet success.
                 return ToolResult.no_results(
-                    hint=_RECALL_FALLBACK_HINT,
+                    hint=_RECALL_RULE,
                     action="reflect",
                     query=query,
                 )
@@ -570,6 +585,24 @@ class MemoryService:
         if score >= 0.4:
             return "medium"
         return "low"
+
+    @staticmethod
+    def _cap_low_relevance(
+        results: list[dict[str, object]],
+    ) -> list[dict[str, object]]:
+        """Trim ``low``-relevance rows to ``_MAX_LOW_RELEVANCE``, keeping the
+        highest-confidence lows and preserving the original order; ``medium``/
+        ``high`` rows are never dropped. This is the lever against weak-match
+        accumulation drowning live tool use (see the constant's note)."""
+        lows = sorted(
+            (r for r in results if r.get("relevance") == "low"),
+            key=lambda r: cast("float", r.get("confidence", 0.0) or 0.0),
+            reverse=True,
+        )
+        if len(lows) <= _MAX_LOW_RELEVANCE:
+            return results
+        drop = {id(r) for r in lows[_MAX_LOW_RELEVANCE:]}
+        return [r for r in results if id(r) not in drop]
 
     @staticmethod
     def _search_data_graph(query: str, limit: int) -> tuple[list[dict[str, object]], str]:

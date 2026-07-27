@@ -3,9 +3,12 @@ relative-floor telemetry. All exercised through the real production
 path via DispatchService.dispatch("memory") with zero mocks.
 
 Pinned behaviors:
-1. An explicit recall that finds nothing is a LOUD no-results error carrying the
-   guardrail hint (memory = context, find_tools = ground truth); no fan-out.
-2. Turn-0 auto-seed (_auto=True) is silent — stays success, no guardrail hint, no fan-out.
+1. A recall that finds nothing is a LOUD no-results error for EVERY caller —
+   explicit and turn-0 seed alike — carrying the hard rule (memory = past state,
+   find_tools = ground truth); no fan-out.
+2. A recall that surfaces memories carries the same hard rule in its result set,
+   regardless of caller; that positive path needs the live embedding pipeline and
+   is covered by live-fire, not this suite.
 3. Recall-log uses floor_cut_count / final_rrf_count fields under the correct caller.
 """
 
@@ -18,7 +21,7 @@ from controllers.message_processor import MessageProcessor
 
 pytestmark = pytest.mark.unit
 
-_HINT_LEAD = "Memory helps you remember facts and situations"
+_HINT_LEAD = "HARD RULE: these results are memories"
 
 
 def _build_user_mp(text: str) -> MessageProcessor:
@@ -108,7 +111,7 @@ def test_explicit_recall_carries_guardrail_and_fires_no_fanout(db: sqlite3.Conne
     assert cast(int, tel["final_rrf_count"]) >= 0
 
 
-def test_turn0_seed_recall_is_silent_and_logs_seed_telemetry(db: sqlite3.Connection) -> None:
+def test_turn0_seed_recall_errors_on_empty_and_logs_seed_telemetry(db: sqlite3.Connection) -> None:
     mp = _build_user_mp("what did we talk about at home last week")
 
     out = mp.dispatch_service.dispatch(
@@ -116,12 +119,12 @@ def test_turn0_seed_recall_is_silent_and_logs_seed_telemetry(db: sqlite3.Connect
         {"action": "recall", "query": "what did we talk about at home last week", "_auto": True},
     )
 
-    # The silent seed stays a success even when empty (an error row on every
-    # cold turn would be pure noise) and never nags with the fallback hint...
-    assert "status=success" in out, f"seed recall must never error on empty: {out!r}"
-    assert _HINT_LEAD not in out, f"seed recall leaked the guardrail hint: {out!r}"
+    # The seed no longer special-cases: an empty recall is a loud no-results error
+    # for every caller, carrying the hard rule so the model pivots to live tools.
+    assert "code=no-results" in out, f"empty seed must error like any recall: {out!r}"
+    assert _HINT_LEAD in out, f"empty seed must carry the hard rule: {out!r}"
     from typing import cast
-    # ...and never fans out to the other stores either.
+    # ...and never fans out to the other stores.
     names = _tool_names_recorded(db, cast(int, mp.uid))
     assert "document" not in names and "schedule" not in names, (
         f"seed recall fanned out to other stores: {names!r}"
