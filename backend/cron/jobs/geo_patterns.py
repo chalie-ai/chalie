@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from cron.jobs._cursor_gated import CursorGatedJob
+
+if TYPE_CHECKING:
+    from configs.channels import GeoConfig
 
 
 class GeoPatternsJob(CursorGatedJob):
@@ -24,7 +29,7 @@ class GeoPatternsJob(CursorGatedJob):
         # Only located user geo-activity rows advance the cursor.
         return Transcript.latest_id([Channel.USER.value], require_location=True) or 0
 
-    def _make_config(self, window_start: int, window_end: int):
+    def _make_config(self, window_start: int, window_end: int) -> GeoConfig:
         from configs.channels import GeoConfig  # noqa: PLC0415
 
         return GeoConfig(window_start, window_end)

@@ -9,8 +9,12 @@ Not registered directly (underscore-prefixed base).
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
 from cron.base import IdleGatedJob
+
+if TYPE_CHECKING:
+    from services.processor_config import ProcessorConfig
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +29,7 @@ class CursorGatedJob(IdleGatedJob):
         """Newest transcript id in this job's window. Subclass hook."""
         raise NotImplementedError
 
-    def _make_config(self, window_start: int, window_end: int):
+    def _make_config(self, window_start: int, window_end: int) -> ProcessorConfig:
         """Build the ProcessorConfig for this job's pass. Subclass hook."""
         raise NotImplementedError
 

@@ -46,9 +46,11 @@ _BUILD_CLIENT = "services.provider_service.build_client"
 
 class _ScriptedProvider:
     """A real functional double at the network boundary: implements the thin
-    client protocol and answers with one benign terminal response (empty text, no
-    tool calls) so the turn completes in a single step — one CHAT call, hence
-    exactly one ledger row per turn."""
+    client protocol and answers with one benign terminal response (non-empty
+    text, no tool calls) so the turn settles in a single step — one CHAT call,
+    hence exactly one ledger row per turn. The text must be non-empty: an empty
+    completion trips the processor's empty-completion steer, which re-sends and
+    would append extra ledger rows."""
 
     def __init__(self) -> None:
         self.sends = 0
@@ -62,7 +64,7 @@ class _ScriptedProvider:
     def send(self, _dto: object) -> ProviderResponse:
         self.sends += 1
         return ProviderResponse(
-            text="",
+            text="ok.",
             model="scripted-usage-type",
             tool_calls=None,
             tokens_input=100,

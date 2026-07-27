@@ -87,7 +87,7 @@ class FactRow(DataGraphRow):
 
     @classmethod
     def supersede_value(cls, key: str, old_value: str, value: str,
-                        source: str | None = None) -> tuple[Self, str, str] | None:
+                        source: str | None = None) -> tuple[Self, str, str | None] | None:
         """Value-addressed demote+insert on the live rows of ``key``.
 
         Finds a target row among the live set (``active = 1 AND deleted_at IS

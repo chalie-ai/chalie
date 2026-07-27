@@ -47,7 +47,7 @@ def _build_user_mp(text: str) -> MessageProcessor:
     return mp
 
 
-def _row_state(db: sqlite3.Connection, row_id: int) -> tuple[int, float, str | None]:
+def _row_state(db: sqlite3.Connection, row_id: "int | str | None") -> tuple[int, float, str | None]:
     row = db.execute(
         "SELECT active, retrieval_weight, valid_to FROM data_graph WHERE id = ?",
         (row_id,),

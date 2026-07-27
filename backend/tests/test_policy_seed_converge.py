@@ -12,6 +12,7 @@ still-seeded permission.  Real convergence, real seed file, real SQLite; the
 only patch is the DB path (mirrors test_policy_migration.py).
 """
 import json
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import patch
 
@@ -26,7 +27,7 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.fixture()
-def seeded_db(tmp_path: Path):
+def seeded_db(tmp_path: Path) -> Iterator[Path]:
     """A booted DB: converged schema + policy defaults applied, exactly as
     _init_database does it."""
     db_path = tmp_path / "converge.db"

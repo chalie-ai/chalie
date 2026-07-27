@@ -8,7 +8,12 @@ the idle-window and min-interval gates are inherited from ``IdleGatedJob``.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from cron.jobs._cursor_gated import CursorGatedJob
+
+if TYPE_CHECKING:
+    from configs.channels import PatternConfig
 
 
 class PatternMatchJob(CursorGatedJob):
@@ -43,7 +48,7 @@ class PatternMatchJob(CursorGatedJob):
         # the load discards.
         return Transcript.latest_id([Channel.USER.value]) or 0
 
-    def _make_config(self, window_start: int, window_end: int):
+    def _make_config(self, window_start: int, window_end: int) -> PatternConfig:
         from configs.channels import PatternConfig  # noqa: PLC0415
 
         return PatternConfig(window_start, window_end)
