@@ -63,18 +63,16 @@ LOG_PREFIX = "[MEMORY]"
 # top_patterns), never semantically, so they are not a recall lane.
 _DG_RECALL_KINDS = ["user_specific", "system", "misc", "place", "discovery"]
 
-# Guardrail appended to every explicit (model-invoked) recall. An empty recall
-# means the fact is not stored — the model's next move is tool discovery, not
-# another reworded recall. `find_tools` is the one surface that lists every
-# available tool, so the hint routes there instead of naming stores that may
-# not exist (the old `document`/`schedule` wording outlived the document
-# subsystem's deletion and sent the model to a dead tool). The turn-0
-# auto-seed recall (_auto=True) stays silent — no hint, no fan-out.
+# Guardrail appended to every explicit (model-invoked) recall, hit or miss:
+# memory is context, never ground truth — live state must be re-checked
+# through a tool. `find_tools` is the one surface that lists every available
+# tool, so the hint routes there instead of naming stores that may not exist
+# (the old `document`/`schedule` wording outlived the document subsystem's
+# deletion and sent the model to a dead tool). The turn-0 auto-seed recall
+# (_auto=True) stays silent — no hint, no fan-out.
 _RECALL_FALLBACK_HINT = (
-    f"If memory holds nothing relevant, the fact is not stored — do not re-query "
-    f"memory with reworded queries. For live or time-sensitive data (weather, "
-    f"news, prices, current events), call `{FindToolsAbility.NAME}` and use the tool it "
-    f"surfaces this turn."
+    f"Memory helps you remember facts and situations however ALWAYS double-check "
+    f"live state with a tool via `{FindToolsAbility.NAME}`."
 )
 
 # Stable, machine-readable code surfaced when EVERY retrieval backend a recall
@@ -387,6 +385,17 @@ class MemoryService:
         partial = sum(1 for r in results if cast("float", r.get("confidence", 0)) < 0.5)
         self._store_fok_signal(partial)
 
+        # An empty explicit recall is an ERROR, not a success with zero rows — a
+        # weak model reads `status=success` as "the call worked, move on"; the
+        # loud miss forces the pivot to live tools. The silent turn-0 seed keeps
+        # returning ok: an error row on every cold turn would be pure noise.
+        if caller != "seed" and not results:
+            return ToolResult.no_results(
+                hint=_RECALL_FALLBACK_HINT,
+                query=query or location,
+                degraded=degraded,
+            )
+
         body: dict[str, object] = {"results": self._recall_payload(results)}
         # Explicit recalls carry the fallback guardrail in the structured body; the
         # silent turn-0 seed (caller='seed') carries no fallback and fires no fan-out.
@@ -422,7 +431,13 @@ class MemoryService:
         if not raw_episodes:
             dg_hits, _ = self._search_data_graph(query, 2)
             if not dg_hits:
-                return ToolResult.ok("", action="reflect", query=query, results=0)
+                # Empty reflect is an ERROR (same contract as recall): a zero-hit
+                # deep search must read as a loud miss, not a quiet success.
+                return ToolResult.no_results(
+                    hint=_RECALL_FALLBACK_HINT,
+                    action="reflect",
+                    query=query,
+                )
             body = self._format_reflect(query, None, [], dg_hits)
             return ToolResult.ok(body, action="reflect", query=query)
 

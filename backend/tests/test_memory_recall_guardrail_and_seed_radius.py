@@ -3,8 +3,9 @@ relative-floor telemetry. All exercised through the real production
 path via DispatchService.dispatch("memory") with zero mocks.
 
 Pinned behaviors:
-1. Explicit recall carries a fallback guardrail routing misses to find_tools but fires no fan-out.
-2. Turn-0 auto-seed (_auto=True) is silent — no guardrail hint, no fan-out.
+1. An explicit recall that finds nothing is a LOUD no-results error carrying the
+   guardrail hint (memory = context, find_tools = ground truth); no fan-out.
+2. Turn-0 auto-seed (_auto=True) is silent — stays success, no guardrail hint, no fan-out.
 3. Recall-log uses floor_cut_count / final_rrf_count fields under the correct caller.
 """
 
@@ -17,7 +18,7 @@ from controllers.message_processor import MessageProcessor
 
 pytestmark = pytest.mark.unit
 
-_HINT_LEAD = "If memory holds nothing relevant"
+_HINT_LEAD = "Memory helps you remember facts and situations"
 
 
 def _build_user_mp(text: str) -> MessageProcessor:
@@ -76,7 +77,13 @@ def test_explicit_recall_carries_guardrail_and_fires_no_fanout(db: sqlite3.Conne
         "memory", {"action": "recall", "query": "what is my home wifi password"}
     )
 
-    # The guardrail is present and routes misses to tool discovery — it must
+    # An empty explicit recall is a loud no-results ERROR, never a quiet
+    # success with zero rows — a weak model reads status=success as "the call
+    # worked, move on" and settles on fabricated content.
+    assert "code=no-results" in out
+    assert "No results found." in out
+
+    # The guardrail hint is present and routes to tool discovery — it must
     # never name tools that are not in the registry (the document subsystem
     # is deleted; its stale mention sent the model to a dead tool).
     assert _HINT_LEAD in out
@@ -109,7 +116,9 @@ def test_turn0_seed_recall_is_silent_and_logs_seed_telemetry(db: sqlite3.Connect
         {"action": "recall", "query": "what did we talk about at home last week", "_auto": True},
     )
 
-    # The silent seed never nags the model with the fallback hint...
+    # The silent seed stays a success even when empty (an error row on every
+    # cold turn would be pure noise) and never nags with the fallback hint...
+    assert "status=success" in out, f"seed recall must never error on empty: {out!r}"
     assert _HINT_LEAD not in out, f"seed recall leaked the guardrail hint: {out!r}"
     from typing import cast
     # ...and never fans out to the other stores either.
@@ -154,6 +163,10 @@ def test_invalidated_fact_never_surfaces_in_recall(db: sqlite3.Connection) -> No
         out = _build_user_mp("where do I live").dispatch_service.dispatch(
             "memory", {"action": "recall", "query": "residence city Valletta"}
         )
+        # A fully-empty recall is now a loud no-results error — for this
+        # test's purpose that IS the empty result set.
+        if "code=no-results" in out:
+            return []
         head = out.index("]\n") + 2
         tail = out.index("\n[end:memory]")
         return cast("list[object]", json.loads(out[head:tail])["results"])

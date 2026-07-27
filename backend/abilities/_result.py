@@ -97,11 +97,21 @@ class ToolResult:
         if self.status == "success" and self.code is not None:
             raise ValueError("a success ToolResult must not carry a code")
 
-    # ── Construction — the only two sanctioned entry points ────────────────────
+    # ── Construction — the only sanctioned entry points ────────────────────────
 
     @classmethod
     def ok(cls, body: "str | Mapping[str, object] | Sequence[object]", *, rich: "dict[str, object] | None" = None, **meta: object) -> "ToolResult":
         return cls(status="success", body=body, meta=dict(meta), rich=rich)
+
+    @classmethod
+    def no_results(cls, *, hint: str | None = None, **meta: object) -> "ToolResult":
+        """The uniform empty-read contract: a read/search action that found
+        NOTHING returns a loud ``status=error, code=no-results`` — never a
+        quiet success with zero rows. A weak model reads ``status=success``
+        as "the call worked, move on" and settles on fabricated content; the
+        error forces the miss to register. Reserved for a healthy store with
+        no matching rows — infrastructure failures keep their own codes."""
+        return cls.err("No results found.", code="no-results", hint=hint, valid=(), **meta)
 
     @classmethod
     def err(
