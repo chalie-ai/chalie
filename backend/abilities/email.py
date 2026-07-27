@@ -233,6 +233,8 @@ def _shape_result(action: str, body: dict[str, object]) -> ToolResult:
             }
             for e in cast(list[dict[str, object]], body.get("emails", []))
         ]
+        if not rows:
+            return ToolResult.no_results(action=action)
         return ToolResult.ok({"emails": rows}, action=action, count=len(rows))
 
     if action == "read":

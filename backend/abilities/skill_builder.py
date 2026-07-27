@@ -395,6 +395,8 @@ def _handle_list() -> ToolResult:
         }
         for row in rows
     ]
+    if not skills:
+        return ToolResult.no_results(action="list")
     return ToolResult.ok(skills, action="list", count=len(skills))
 
 

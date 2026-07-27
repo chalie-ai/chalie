@@ -148,6 +148,11 @@ class SearchAbility(Ability[SearchParamsBag]):
         from tools.search.render import render_records
         body = render_records(items)
 
+        if not items:
+            if fell_back or meta.get("ddg_supplement"):
+                return ToolResult.no_results(fallback=_DDG)
+            return ToolResult.no_results()
+
         if fell_back or meta.get("ddg_supplement"):
             return ToolResult.ok(body, count=len(items), fallback=_DDG)
         return ToolResult.ok(body, count=len(items))

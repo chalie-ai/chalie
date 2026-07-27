@@ -177,6 +177,8 @@ class PlaceAbility(Ability[PlaceParamsBag]):
     def _handle_list(self) -> ToolResult:
         rows = [r.to_dict() for r in PlaceRow.live().get()]
         places = [_row_to_place(r) for r in rows if r]
+        if not places:
+            return ToolResult.no_results()
         return ToolResult.ok(places, count=len(places))
 
     def _handle_get(self, name: str) -> ToolResult:

@@ -229,6 +229,8 @@ class ListAbility(Ability[ListParamsBag]):
             }
             for lst in service.get_all_lists()
         ]
+        if not rows:
+            return ToolResult.no_results()
         return ToolResult.ok(rows, count=len(rows))
 
     def _handle_create(self, service: "_ListService", params: ListCreateParams) -> ToolResult:

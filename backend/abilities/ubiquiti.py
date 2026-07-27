@@ -307,10 +307,13 @@ def _shape_result(action: str, body: dict[str, object]) -> ToolResult:
 
     for row_key in _LIST_BODIES:
         if row_key in body and isinstance(body[row_key], list):
+            rows = cast(list[object], body[row_key])
+            if not rows:
+                return ToolResult.no_results(action=action)
             return ToolResult.ok(
-                {row_key: body[row_key]},
+                {row_key: rows},
                 action=action,
-                count=body.get("count", len(cast(list[object], body[row_key]))),
+                count=body.get("count", len(rows)),
             )
 
     # device_status / site_health / control / write echoes: structured already.

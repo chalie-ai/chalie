@@ -100,29 +100,33 @@ def test_alias_harness_documentation_resolves_to_chalie_docs() -> None:
     )
 
 
-def test_prose_query_lands_in_not_found() -> None:
-    """Prose like 'what can you do' no longer discovers anything — it lands
-    honestly in ``not_found`` with the guidance sentence."""
-    injected, body, _r = _run(["what can you do"])
+def test_prose_query_is_loud_no_results() -> None:
+    """Prose like 'what can you do' no longer discovers anything — an all-miss
+    is a loud no-results error with the pick-an-exact-name hint."""
+    injected, _body, rendered = _run(["what can you do"])
     assert "chalie_docs" not in injected, (
         f"prose must NOT discover chalie_docs. injected={injected!r}"
     )
-    assert any("did not match any tool name" in e for e in cast("list[str]", body["not_found"])), (
-        f"prose must land in not_found with the guidance sentence. body={body!r}"
+    assert "status=error" in rendered and "code=no-results" in rendered, (
+        f"all-miss must be a loud no-results error. rendered={rendered!r}"
+    )
+    assert "Pick an exact tool name" in rendered, (
+        f"the guidance hint is missing. rendered={rendered!r}"
     )
 
 
-# ── junk queries are honest not_found ───────────────────────────────────────────
+# ── junk queries are a loud all-miss ────────────────────────────────────────────
 
 
-def test_junk_query_is_honest_not_found() -> None:
-    """``donut`` matches no name and no alias — it must surface nothing and be
-    reported under ``not_found``, never forced in."""
-    injected, body, _r = _run(["donut"])
+def test_junk_query_is_loud_no_results() -> None:
+    """``donut`` matches no name and no alias — it must inject nothing and
+    surface as a no-results error, never be forced in."""
+    injected, _body, rendered = _run(["donut"])
     assert injected == [], f"junk 'donut' must inject nothing. injected={injected!r}"
-    assert any("donut" in e for e in cast("list[str]", body["not_found"])), (
-        f"junk query must be reported under not_found. body={body!r}"
+    assert "status=error" in rendered and "code=no-results" in rendered, (
+        f"all-miss must be a loud no-results error. rendered={rendered!r}"
     )
+    assert "No results found." in rendered
 
 
 def test_multi_intent_array_routes_each_entry() -> None:

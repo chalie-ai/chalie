@@ -107,15 +107,15 @@ def test_activate_appends_online_tool_to_active_tools(
     )
 
 
-def test_activate_with_unknown_tool_is_honest_not_found(db: sqlite3.Connection) -> None:
-    """An unknown name lands in ``body["not_found"]`` as a guidance sentence and
-    never touches ``active_tools``."""
-    result, body, mp = _run("activate", ["_mcp_unknown_tool"])
+def test_activate_with_unknown_tool_is_loud_no_results(db: sqlite3.Connection) -> None:
+    """An unknown name is an all-miss: a loud no-results error pointing back at
+    action 'list', and it never touches ``active_tools``."""
+    result, _body, mp = _run("activate", ["_mcp_unknown_tool"])
 
-    assert result.status == "success"
-    not_found = cast("list[str]", body["not_found"])
-    assert len(not_found) == 1
-    assert "is not an online MCP tool" in not_found[0], f"got={not_found!r}"
+    assert result.status == "error"
+    assert result.code == "no-results"
+    assert result.hint == "Use action 'list' to see the exact tool names."
+    assert result.meta["not_found_count"] == 1
     assert "_mcp_unknown_tool" not in mp.active_tools
 
 

@@ -6,8 +6,9 @@ Result contract:
   success body is a JSON list of ``{title, source, url, published_at, snippet}``
   rows (``snippet`` is the description truncated) with a ``count`` meta —
   verbatim, machine-readable headlines the model quotes instead of re-prosing a
-  blob. Zero articles from a provider that ANSWERED is a success with ``count=0``
-  and an explicit empty list, never a blank body and never an error.
+  blob. Zero articles from a provider that ANSWERED is a loud
+  ``code=no-results`` error, never a quiet zero-row success; the ``degraded``
+  meta is preserved on that error when the category path was degraded.
 
   A provider that is unreachable raises ``NewsFetchError`` from the service; the
   ability maps it to ``code=provider-unreachable`` with a recovery hint — a dead
@@ -152,6 +153,11 @@ class NewsAbility(Ability[NewsParamsBag]):
             }
             for a in top
         ]
+
+        if not rows:
+            if degraded:
+                return ToolResult.no_results(degraded=True)
+            return ToolResult.no_results()
 
         if degraded:
             return ToolResult.ok(rows, count=len(rows), degraded=True)

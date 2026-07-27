@@ -209,10 +209,13 @@ class McpManagerAbility(Ability[McpManagerParamsBag]):
     # ── Sub-action handlers ───────────────────────────────────────────────────
 
     def _do_list(self, params: McpManagerListParams) -> ToolResult:
-        """Empty inventory is SUCCESS (``[]``, ``count=0``) — never an error."""
+        """Empty inventory is a loud ``code=no-results`` — never a quiet success
+        with zero rows."""
         from services.mcp_client_service import McpClientService  # noqa: PLC0415
         svc = McpClientService()
         rows = [self._server_row(svc, s) for s in svc.list_servers()]
+        if not rows:
+            return ToolResult.no_results()
         return ToolResult.ok(rows, count=len(rows))
 
     def _do_add(self, params: McpManagerAddParams) -> ToolResult:

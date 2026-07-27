@@ -368,17 +368,11 @@ def _search(params: ScheduleSearchParams, mp: object = None) -> ToolResult:
 
         emb = get_embedding_service().generate_embedding(params.query, mp=mp)
         if not emb:
-            return ToolResult.ok(
-                {"status": "success", "action_performed": "search", "records": []},
-                action="search", count=0,
-            )
+            return ToolResult.no_results(action="search")
 
         blob = pack_embedding(emb)
         if blob is None:
-            return ToolResult.ok(
-                {"status": "success", "action_performed": "search", "records": []},
-                action="search", count=0,
-            )
+            return ToolResult.no_results(action="search")
 
         rows = ScheduledItem.vector_search(blob, params.limit)
 
@@ -387,6 +381,9 @@ def _search(params: ScheduleSearchParams, mp: object = None) -> ToolResult:
             rec = _serialise_item_row(dict(row))
             rec["distance"] = float(row["distance"])
             records.append(rec)
+
+        if not records:
+            return ToolResult.no_results(action="search")
 
         return ToolResult.ok(
             {"status": "success", "action_performed": "search", "records": records},
@@ -402,6 +399,8 @@ def _list() -> ToolResult:
     try:
         rows = ScheduledItem.by_start_at(_COLS)
         records = [_serialise_item_row(row) for row in rows]
+        if not records:
+            return ToolResult.no_results(action="list")
         return ToolResult.ok(
             {"status": "success", "action_performed": "list", "records": records},
             action="list", count=len(records),

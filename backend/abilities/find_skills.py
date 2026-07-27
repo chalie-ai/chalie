@@ -14,8 +14,8 @@ Returns a sealed :class:`abilities._result.ToolResult` (never a wire envelope):
 * matches → a JSON list, one row per skill ``{"name": <title>, "content": <full
   playbook content>, "rules": [{"pattern_name", "rule"}, …]}`` with ``meta
   count=<n>``.
-* zero hits against a HEALTHY index → SUCCESS with ``count=0`` and a body
-  ``{"matches": [], "note": …}`` — never an error.
+* zero hits against a HEALTHY index → ``err(code="no-results")`` with the
+  broaden suggestion as ``hint`` — a loud miss, never a quiet zero-row success.
 * a missing/blank query → ``err(code="missing-params")`` naming ``query``.
 * the index file missing OR a sqlite error while probing it →
   ``err(code="skill-index-error")``. This is the loud guardrail: a corrupt or
@@ -163,12 +163,10 @@ class FindSkillsAbility(SearchableAbility):
     def _result(self, ids: list[int]) -> ToolResult:
         """Build the success ToolResult from the cascade's winning skill ids.
 
-        Zero hits past a healthy probe is a genuine no-match SUCCESS, never an error."""
+        Zero hits past a healthy probe is a loud ``no-results`` error, never a
+        quiet zero-row success."""
         if not ids:
-            return ToolResult.ok(
-                {"matches": [], "note": f"No skill playbooks found. {_BROADEN_HINT}"},
-                count=0,
-            )
+            return ToolResult.no_results(hint=f"No skill playbooks found. {_BROADEN_HINT}")
         matches = [self._row(skill_id) for skill_id in ids]
         return ToolResult.ok(matches, count=len(matches))
 

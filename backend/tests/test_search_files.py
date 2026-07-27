@@ -124,13 +124,12 @@ def test_glob_recursive(tmp_path: Path) -> None:
     assert names == ["found.log", "top.log"]
 
 
-def test_glob_no_match_is_success_with_broaden_note(tmp_path: Path) -> None:
+def test_glob_no_match_is_loud_no_results(tmp_path: Path) -> None:
     tr = _run("glob", "*.nonexistent", str(tmp_path))
-    assert tr.status == "success"
-    assert tr.code is None
-    assert _glob_files(tr) == []
-    assert tr.meta["count"] == 0
-    assert "broaden" in str(tr.body).lower()
+    assert tr.status == "error"
+    assert tr.code == "no-results"
+    assert tr.body == "No results found."
+    assert "broaden" in str(tr.hint).lower()
 
 
 # ── pagination (5 results per page) ───────────────────────────────
@@ -267,14 +266,13 @@ def test_grep_rows_span_multiple_files(tmp_path: Path) -> None:
     assert tr.meta["count"] == 2
 
 
-def test_grep_no_match_is_success_with_broaden_note(tmp_path: Path) -> None:
+def test_grep_no_match_is_loud_no_results(tmp_path: Path) -> None:
     (tmp_path / "a.py").write_text("nothing here\n")
     tr = _run("grep", "NONEXISTENT", str(tmp_path))
-    assert tr.status == "success"
-    assert tr.code is None
-    assert _grep_rows(tr) == []
-    assert tr.meta["count"] == 0
-    assert "broaden" in str(tr.body).lower()
+    assert tr.status == "error"
+    assert tr.code == "no-results"
+    assert tr.body == "No results found."
+    assert "broaden" in str(tr.hint).lower()
 
 
 def test_grep_context_lines_default_and_override(tmp_path: Path) -> None:
@@ -379,15 +377,13 @@ def test_content_blank_or_missing_query_returns_empty_query_error() -> None:
     assert missing.code == "empty-query"
 
 
-def test_content_no_hit_is_success_not_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_content_no_hit_is_loud_no_results(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(FileMapperService, "_DATA_DIR", tmp_path)
     tr = _run("content", "NoSuchTermAnywhereInTheIndex12345")
-    assert tr.status == "success"
-    assert tr.code is None
-    assert isinstance(tr.body, dict)
-    assert tr.body["files"] == []
-    assert tr.meta["count"] == 0
-    assert "broaden" in str(tr.body).lower()
+    assert tr.status == "error"
+    assert tr.code == "no-results"
+    assert tr.body == "No results found."
+    assert "broaden" in str(tr.hint).lower()
 
 
 def test_content_bag_routes_to_content_params_with_default_page() -> None:

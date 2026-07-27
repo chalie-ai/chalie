@@ -56,6 +56,11 @@ _ENTITY_ACTIONS = ("get_state", "control", "subscribe_events")
 # automation error so a weak model can re-issue with the right id.
 _MAX_CANDIDATES = 5
 
+# List actions and the row key their handler body carries, so run() can detect
+# a genuinely empty result (never inside the shared _capability.py dispatcher,
+# which also serves non-read actions).
+_LIST_ROW_KEYS = {"list_devices": "devices", "list_automations": "automations"}
+
 
 class HomeAbility(CapabilityAbility):
     CAPABILITY_KEY: ClassVar[str] = "home"
@@ -193,7 +198,16 @@ class HomeAbility(CapabilityAbility):
         # Connected + entity verified (or a non-addressed action, or not connected
         # — the base emits the canonical not-connected error in that case): the
         # base owns dispatch and result wrapping.
-        return self._dispatch(action, dict(params.extra))
+        result = self._dispatch(action, dict(params.extra))
+        row_key = _LIST_ROW_KEYS.get(action)
+        if (
+            row_key is not None
+            and result.status == "success"
+            and isinstance(result.body, dict)
+            and not result.body.get(row_key)
+        ):
+            return ToolResult.no_results(action=action)
+        return result
 
     # ── Guardrails ─────────────────────────────────────────────────────────────
 

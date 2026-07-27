@@ -217,7 +217,14 @@ class CalendarAbility(CapabilityAbility):
             err = _normalise_datetimes(handler_params, (Keys.date_from, Keys.date_to))
             if err is not None:
                 return err
-            return self._dispatch(action, handler_params)
+            result = self._dispatch(action, handler_params)
+            if (
+                result.status == "success"
+                and isinstance(result.body, dict)
+                and not result.body.get("events")
+            ):
+                return ToolResult.no_results(action=action)
+            return result
 
         # get_event validates its uid-or-title either/or in the handler.
         if action == "get_event":

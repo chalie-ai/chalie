@@ -123,12 +123,11 @@ class ReviewWindowAbility(Ability[TBag], ABC):
                 hint="the conversation store could not be read; try again.",
             )
 
-        # 6. Empty window — a SUCCESS (nothing failed), never an error. The body
-        #    TELLS the model what to try next; count=0 is the branchable signal.
+        # 6. Empty window — a loud code=no-results, never a quiet success with
+        #    zero rows. The per-tool hint TELLS the model what to try next.
         if not records:
-            return ToolResult.ok(
-                self._empty_hint(date_time, buffer),
-                count=0,
+            return ToolResult.no_results(
+                hint=self._empty_hint(date_time, buffer),
                 anchor=date_time,
                 buffer=buffer,
             )

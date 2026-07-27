@@ -99,7 +99,7 @@ class ImageSearchAbility(Ability[ImageSearchParamsBag]):
             )
 
         if not results:
-            return ToolResult.ok(f'No images found for "{query}".', count=0)
+            return ToolResult.no_results(hint=f'No images found for "{query}".')
 
         try:
             checked, degraded, skipped = self._verify(query, results)
@@ -150,7 +150,7 @@ class ImageSearchAbility(Ability[ImageSearchParamsBag]):
                 ],
             }
             return ToolResult.ok(body, rich=rich, count=len(checked), degraded=degraded)
-        return ToolResult.ok(body, count=len(checked), degraded=degraded)
+        return ToolResult.no_results(hint=body, degraded=degraded)
 
     def _verify(
         self, query: str, results: list[dict[str, str]]

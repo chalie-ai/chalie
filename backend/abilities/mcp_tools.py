@@ -121,6 +121,8 @@ class McpToolsAbility(Ability):
                 server_dicts.append(server_info)
 
             body = {"servers": server_dicts}
+            if not server_dicts:
+                return ToolResult.no_results()
             return ToolResult.ok(
                 body,
                 server_count=len(server_dicts),
@@ -166,6 +168,12 @@ class McpToolsAbility(Ability):
                 "activated": activated,
                 "not_found": not_found,
             }
+
+            if not activated and not_found:
+                return ToolResult.no_results(
+                    hint="Use action 'list' to see the exact tool names.",
+                    not_found_count=len(not_found),
+                )
 
             return ToolResult.ok(
                 body,

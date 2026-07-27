@@ -163,6 +163,7 @@ class ContactsAbility(Ability[ContactsParamsBag]):
             not_connected = self._not_connected("list")
             if not_connected is not None:
                 return not_connected
+            return ToolResult.no_results(action="list")
 
         body = {
             "action_performed": "list",
@@ -171,7 +172,7 @@ class ContactsAbility(Ability[ContactsParamsBag]):
         }
         return ToolResult.ok(
             body,
-            rich=dict(body) if contacts else None,
+            rich=dict(body),
             action="list",
             count=len(contacts),
         )

@@ -96,7 +96,9 @@ class FindToolsAbility(Ability):
         [...]}`` with ``injected``/``not_found`` counts in the meta, so a weak
         model can always tell what it actually got. ``not_found`` lists entries
         that did not match any canonical name or alias, with guidance to pick
-        from the tool list."""
+        from the tool list. When every entry misses (``injected`` empty) this
+        returns a loud ``code=no-results`` error instead of a quiet zero-row
+        success; a partial hit (some names matched) stays a success."""
         rows = params.query
 
         from abilities._registry import AbilityRegistry
@@ -123,6 +125,11 @@ class FindToolsAbility(Ability):
             "injected": [{"name": n, "summary": self._summary_for(n)} for n in injected],
             "not_found": not_found,
         }
+        if not injected:
+            return ToolResult.no_results(
+                hint="Pick an exact tool name from the list in this tool's description.",
+                not_found=len(not_found),
+            )
         if not_found:
             return ToolResult.ok(body, injected=len(injected), not_found=len(not_found))
         return ToolResult.ok(body, injected=len(injected))

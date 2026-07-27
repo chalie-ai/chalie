@@ -25,7 +25,8 @@ Returns a sealed :class:`abilities._result.ToolResult` (never a wire envelope):
   walk, so a read can never park forever on a special file.
 * A walk that hits the time budget or the result ceiling sets
   ``meta truncated=true`` so the cut is never silent.
-* Zero hits → SUCCESS with ``count=0`` and a broaden suggestion in the body.
+* Zero hits → ``err(code="no-results")`` with the broaden suggestion as
+  ``hint`` — never a quiet zero-row success.
 * Bad inputs → ``err()`` with a stable kebab ``code`` (``unknown-action`` /
   ``invalid-param`` / ``empty-query`` / ``directory-not-found`` /
   ``not-a-directory`` / ``invalid-regex``).
@@ -286,6 +287,13 @@ def _gather(action: str, query: str, root: Path, context_lines: int) -> tuple[li
 
 def _paginate(action: str, results: Sequence[object], page: int, truncated: bool) -> ToolResult:
     total = len(results)
+    if not total:
+        kind = "files matched" if action == "glob" else "matches found"
+        hint = f"No {kind}. {_BROADEN_HINT}"
+        if truncated:
+            hint = f"{hint} {_NARROW_HINT}"
+        return ToolResult.no_results(hint=hint, truncated=truncated)
+
     page_count = max(1, (total + _RESULTS_PER_PAGE - 1) // _RESULTS_PER_PAGE)
     page = min(page, page_count)
     start = (page - 1) * _RESULTS_PER_PAGE
@@ -295,9 +303,6 @@ def _paginate(action: str, results: Sequence[object], page: int, truncated: bool
     body: dict[str, object] = {key: shown}
 
     notes: list[str] = []
-    if not total:
-        kind = "files matched" if action == "glob" else "matches found"
-        notes.append(f"No {kind}. {_BROADEN_HINT}")
     if page_count > 1:
         notes.append(
             "Result list is too large to fit in 1 response, use the `page` "
