@@ -159,8 +159,7 @@ class steer_probe(Ability):
     lives on the class (not needed here) rather than on a per-instance
     constructor the binder can no longer supply."""
 
-    def get_name(self) -> str:
-        return "steer_probe"
+    NAME = "steer_probe"
 
     def get_search_tooltip(self) -> str:
         return "repeat-call steer test fixture"

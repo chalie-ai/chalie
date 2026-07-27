@@ -1,8 +1,9 @@
 """The ``Ability`` ABC — describes and runs one tool, nothing more.
 
-An Ability declares what a tool *is* through five zero-arg getters
-(``get_name`` / ``get_summary`` / ``get_examples`` / ``get_search_tooltip`` /
-``get_parameters``) and how it *runs* (``run()``). The full LLM-facing tool
+An Ability declares what a tool *is* through the ``NAME`` class constant and
+four zero-arg getters (``get_summary`` / ``get_examples`` /
+``get_search_tooltip`` / ``get_parameters``) and how it *runs* (``run()``).
+The full LLM-facing tool
 descriptor is assembled in ONE place — the ``final`` ``get_input_schema()`` — which
 is also the SINGLE site that injects the ``act_summary`` framework field.
 Subclasses cannot override it; they only fill in the getters. The ``async``
@@ -113,6 +114,11 @@ class Ability(ABC, Generic[B]):
     # compile-time bag): their run() receives the raw params dict.
     PARAMS: ClassVar["type[ParamBag] | None"] = None
 
+    # The ability's canonical, immutable identifier — the key used by the
+    # registry, the dispatcher, the policy gate, and the tool descriptor.
+    # Subclasses MUST set this; the registry raises on missing or empty NAME.
+    NAME: ClassVar[str]
+
     def __init__(self, mp: "MessageProcessor | None" = None) -> None:
         self.mp = mp
         # Set by DispatchService._run() immediately before run(): the flattened
@@ -120,11 +126,7 @@ class Ability(ABC, Generic[B]):
         # when no client context is stored yet (fresh boot, no heartbeat).
         self.telemetry: "dict[str, object] | None" = None
 
-    # ── Metadata getters — every concrete ability implements all five ──────────
-
-    @abstractmethod
-    def get_name(self) -> str:
-        ...
+    # ── Metadata getters — every concrete ability implements all four ──────────
 
     @abstractmethod
     def get_summary(self) -> str:
@@ -194,7 +196,7 @@ class Ability(ABC, Generic[B]):
         ``DelegateAbility`` for delegate tools only). ``final`` — do not override;
         enrich ``get_parameters()`` / ``get_summary()`` instead."""
         return {
-            "name": self.get_name(),
+            "name": self.NAME,
             "description": self.get_summary(),
             "input_schema": self._inject_framework_fields(self.get_parameters()),
         }

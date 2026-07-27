@@ -34,6 +34,7 @@ from contracts.params.param_bag import ParamBag
 
 class EditFileAbility(Ability[EditFileParamsBag]):
     DISCOVERABLE: ClassVar[bool] = True
+    NAME: ClassVar[str] = "edit_file"
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("file edit", "modify file", "replace text")
 
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.search, Keys.replace_, Keys.path)}
@@ -42,8 +43,6 @@ class EditFileAbility(Ability[EditFileParamsBag]):
     # EditFileParamsBag.from_params before run() is called.
     PARAMS: ClassVar[type[ParamBag] | None] = EditFileParamsBag
 
-    def get_name(self) -> str:
-        return "edit_file"
 
     def get_summary(self) -> str:
         return (
@@ -103,10 +102,12 @@ class EditFileAbility(Ability[EditFileParamsBag]):
 
         target = Path(params.path)
         if not target.exists():
+            from abilities.read import ReadAbility  # noqa: PLC0415
+
             return ToolResult.err(
                 f"{params.path} does not exist.",
                 code="not-found",
-                hint="check the path with the read tool.",
+                hint=f"check the path with the {ReadAbility.NAME} tool.",
             )
 
         if target.is_dir():

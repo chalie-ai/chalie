@@ -30,9 +30,7 @@ class MoveAbility(Ability[MoveParamsBag]):
     PARAMS: ClassVar[type[ParamBag] | None] = MoveParamsBag
 
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("move file", "rename file", "rename")
-
-    def get_name(self) -> str:
-        return "move"
+    NAME: ClassVar[str] = "move"
 
     def get_summary(self) -> str:
         return "Move or rename a file or folder from one absolute path to another."

@@ -46,11 +46,10 @@ _BROADEN_HINT = "Try broadening the query or describing the task differently."
 
 class FindSkillsAbility(SearchableAbility):
     PARAMS: ClassVar[type[ParamBag] | None] = FindSkillsParamsBag
+    NAME: ClassVar[str] = "find_skills"
 
     DISCOVERABLE: ClassVar[bool] = False  # framework discovery tool; always pinned, never discovered
 
-    def get_name(self) -> str:
-        return "find_skills"
 
     def get_summary(self) -> str:
         return (

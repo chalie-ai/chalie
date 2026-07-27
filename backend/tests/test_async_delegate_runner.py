@@ -162,12 +162,11 @@ class _GatedAbility(Ability):
     pins the NON-discoverable roster by exact equality; staying DISCOVERABLE
     keeps this fixture off that pinned set."""
 
+    NAME: ClassVar[str] = "test_runner_gated"
+
     _release: ClassVar["threading.Event | None"] = None
     _started: ClassVar["threading.Event | None"] = None
     _done: ClassVar["list[bool] | None"] = None
-
-    def get_name(self) -> str:
-        return "test_runner_gated"
 
     def get_search_tooltip(self) -> str:
         return "block until released — runner feature-test fixture"

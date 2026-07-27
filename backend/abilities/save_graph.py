@@ -14,6 +14,7 @@ from models.tool_call import ToolCall
 class SaveGraph(Ability[SaveGraphParamsBag]):
     SYSTEM = True
     DISCOVERABLE: ClassVar[bool] = False  # pattern-write tool; pinned on the pattern configs only
+    NAME: ClassVar[str] = "save_graph"
 
     def _seen_from_trail(self) -> set[tuple[str, str, str]]:
         """Build the dedup set from this turn's prior save_graph rows."""
@@ -55,15 +56,14 @@ class SaveGraph(Ability[SaveGraphParamsBag]):
     # SaveGraphParamsBag.from_params before run() is called.
     PARAMS: ClassVar[type[ParamBag] | None] = SaveGraphParamsBag
 
-    def get_name(self) -> str:
-        return "save_graph"
-
     def get_summary(self) -> str:
+        from abilities.save_pattern import SavePattern  # noqa: PLC0415
+
         return (
             "Record a durable fact about the user that is NOT a repeating "
             "behaviour (preferences, identity, relationships, places, "
             "documents, timestamped events). Pick the right `kind`. Use "
-            "save_pattern for repeating behaviours. Allowed kinds: "
+            f"{SavePattern.NAME} for repeating behaviours. Allowed kinds: "
             f"{', '.join(ALLOWED_KINDS)}."
         )
 

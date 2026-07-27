@@ -32,6 +32,7 @@ class FindToolsAbility(Ability):
     """
 
     PARAMS: ClassVar[type[ParamBag] | None] = FindToolsParamsBag
+    NAME: ClassVar[str] = "find_tools"
 
     DISCOVERABLE: ClassVar[bool] = False  # the discovery entry point itself; pinned, never discovered
 
@@ -50,8 +51,6 @@ class FindToolsAbility(Ability):
         "required": [Keys.query],
     }
 
-    def get_name(self) -> str:
-        return "find_tools"
 
     def get_summary(self) -> str:
         base = (
@@ -159,4 +158,3 @@ class FindToolsAbility(Ability):
             return ""
         parts = [f"`{k}` ({v})" for k, v in index.items()]
         return ", ".join(parts)
-

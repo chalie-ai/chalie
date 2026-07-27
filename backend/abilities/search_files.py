@@ -91,17 +91,18 @@ class SearchFilesAbility(Ability[SearchFilesParamsBag]):
     # SearchFilesParamsBag.from_params before run() is called.
     PARAMS: ClassVar[type[ParamBag] | None] = SearchFilesParamsBag
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("find files", "file search", "locate files", "grep")
-
-    def get_name(self) -> str:
-        return "search_files"
+    NAME: ClassVar[str] = "search_files"
 
     def get_summary(self) -> str:
+        from abilities.bash import BashAbility  # noqa: PLC0415
+        from abilities.read import ReadAbility  # noqa: PLC0415
+
         return (
             "Locate files on disk by name (glob), by live content (grep), or by "
             "pre-built index (content). The index action is fast/fuzzy/binary-capable "
             "but may lag the live filesystem by a moment; glob and grep are live/exact. "
-            "Use this BEFORE reaching for bash when you need to find a file you "
-            "don't already know the path of. Use in conjunction with the `read` "
+            f"Use this BEFORE reaching for {BashAbility.NAME} when you need to find a file you "
+            f"don't already know the path of. Use in conjunction with the `{ReadAbility.NAME}` "
             "tool to then get a located file's contents into context."
         )
 

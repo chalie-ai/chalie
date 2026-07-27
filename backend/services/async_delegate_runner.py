@@ -101,7 +101,7 @@ class AsyncDelegateRunner:
         this delegate's own dedicated inert MP.
         Copies the calling thread's contextvars so locale/timezone propagate
         exactly as on the synchronous path."""
-        name = ability.get_name()
+        name = ability.NAME
         delegate_id = f"{name}_{uuid4().hex[:8]}"
         dedicated_mp = self._dedicated_mp(mp)
         delegate = _Delegate(name, summary, utc_now(), threading.Event(), dedicated_mp)
@@ -242,7 +242,7 @@ class AsyncDelegateRunner:
                 if dedicated_mp is None:
                     body = None
                 else:
-                    body = dedicated_mp.dispatch_service.dispatch(ability.get_name(), params)
+                    body = dedicated_mp.dispatch_service.dispatch(ability.NAME, params)
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "[AsyncDelegateRunner] execution failed for %s: %s",
@@ -252,7 +252,7 @@ class AsyncDelegateRunner:
 
             if cancel_event.is_set():
                 body = (
-                    f"`{ability.get_name()}` was cancelled by the user. "
+                    f"`{ability.NAME}` was cancelled by the user. "
                     "Ask the user for follow-up actions."
                 )
                 logger.info(

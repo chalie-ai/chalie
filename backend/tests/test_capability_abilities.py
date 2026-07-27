@@ -40,7 +40,7 @@ def test_email_calendar_contacts_are_registered() -> None:
     for name in ("email", "calendar", "contacts"):
         ability = AbilityRegistry.get(name)
         assert isinstance(ability, Ability), f"{name} is not an Ability subclass"
-        assert ability.get_name() == name
+        assert ability.NAME == name
         assert isinstance(ability.get_summary(), str) and ability.get_summary()
         assert isinstance(ability.get_parameters(), dict)
         # 6–8 keeps the find_tools embedding/FTS index balanced across abilities.

@@ -1,8 +1,11 @@
 """AbilityContract — the full contract every tool ability satisfies.
 
-Declares the complete method surface of the ability family:
+Declares the complete surface of the ability family:
 
-- ``get_name`` / ``get_summary`` / ``get_examples`` / ``get_search_tooltip`` /
+- ``NAME`` — **required** ClassVar: the tool's registry name, the single
+  authority every caller reads (the registry raises on a missing, empty, or
+  duplicate NAME at load time).
+- ``get_summary`` / ``get_examples`` / ``get_search_tooltip`` /
   ``get_parameters`` / ``run`` — **required**. Each concrete ability supplies
   them (enforced by :class:`abilities._ability.Ability`'s ``@abstractmethod`` at
   instantiation).
@@ -40,7 +43,9 @@ class AbilityContract(Protocol[B_contra]):
     # params dict). See abilities._ability.Ability.PARAMS.
     PARAMS: ClassVar[type[ParamBag] | None]
 
-    def get_name(self) -> str: ...
+    # The tool's registry name — the single authority every caller reads.
+    # See abilities._ability.Ability.NAME.
+    NAME: ClassVar[str]
 
     def get_summary(self) -> str: ...
 

@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 class SavePattern(Ability[SavePatternParamsBag]):
     SYSTEM = True
     DISCOVERABLE: ClassVar[bool] = False  # pattern-write tool; pinned on the pattern configs only
+    NAME: ClassVar[str] = "save_pattern"
 
     # Action-less single-purpose tool: the dispatcher pre-gate rejects a MISSING
     # or empty name/frequency/summary/evidence_transcript_ids as
@@ -28,9 +29,6 @@ class SavePattern(Ability[SavePatternParamsBag]):
     # The typed input contract: the dispatch seam builds the bag via
     # SavePatternParamsBag.from_params before run() is called.
     PARAMS: ClassVar[type[ParamBag] | None] = SavePatternParamsBag
-
-    def get_name(self) -> str:
-        return "save_pattern"
 
     def get_summary(self) -> str:
         return (

@@ -23,6 +23,16 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from abilities.edit_file import EditFileAbility
+from abilities.file_write import FileWriteAbility
+from abilities.manage_files import ManageFilesAbility
+from abilities.memory import MemoryAbility
+from abilities.move import MoveAbility
+from abilities.programming_docs_search import ProgrammingDocsSearchAbility
+from abilities.read import ReadAbility
+from abilities.run_script import RunScriptAbility
+from abilities.search_files import SearchFilesAbility
+from abilities.web_search import WebSearchAbility
 from configs.enums.channels import Channel
 from services.file_mapper_service import FileMapperService
 from services.processor_config import ProcessorConfig
@@ -36,13 +46,13 @@ if TYPE_CHECKING:
 # one remains delegate-exclusive (run_script) — DISCOVERABLE=False and
 # reachable ONLY through this always_available list.
 _PINNED_TOOLS: tuple[str, ...] = (
-    "read",
-    "search_files",
-    "file_write",
-    "manage_files",
-    "move",
-    "edit_file",
-    "run_script",
+    ReadAbility.NAME,
+    SearchFilesAbility.NAME,
+    FileWriteAbility.NAME,
+    ManageFilesAbility.NAME,
+    MoveAbility.NAME,
+    EditFileAbility.NAME,
+    RunScriptAbility.NAME,
 )
 
 
@@ -55,7 +65,7 @@ class CodeAgentConfig(ProcessorConfig):
             channel=Channel.DELEGATE_CODE_AGENT.value,
             role="code_agent",
             policy_channel=policy_channel,
-            always_available=[*_PINNED_TOOLS, "memory", "web_search", "programming_docs_search"],
+            always_available=[*_PINNED_TOOLS, MemoryAbility.NAME, WebSearchAbility.NAME, ProgrammingDocsSearchAbility.NAME],
             skip_transcript=False,  # write a delegate-channel transcript row so
             skip_input_row=False,   # _setup assigns the uid the act-trail needs
             suppress_history=True,
@@ -66,13 +76,13 @@ class CodeAgentConfig(ProcessorConfig):
     @property
     def system_prompt(self) -> str:
         workspace = FileMapperService.get_code_agent_workspace_path()
-        return f"""You are Chalie's coding agent. You receive one coding task; tools: read, search_files, file_write (full-content writes; you must read an existing file before overwriting it), manage_files (create empty file/folder, delete, update_permission), move (rename/relocate via current_path/new_path), edit_file (replace ONE occurrence of a literal string in a single file — the search text must be unique in the file; include surrounding context to disambiguate), run_script (executes a .ts file with Deno, full permissions). memory, web_search, programming_docs_search for research.
+        return f"""You are Chalie's coding agent. You receive one coding task; tools: {ReadAbility.NAME}, {SearchFilesAbility.NAME}, {FileWriteAbility.NAME} (full-content writes; you must read an existing file before overwriting it), {ManageFilesAbility.NAME} (create empty file/folder, delete, update_permission), {MoveAbility.NAME} (rename/relocate via current_path/new_path), {EditFileAbility.NAME} (replace ONE occurrence of a literal string in a single file — the search text must be unique in the file; include surrounding context to disambiguate), {RunScriptAbility.NAME} (executes a .ts file with Deno, full permissions). {MemoryAbility.NAME}, {WebSearchAbility.NAME}, {ProgrammingDocsSearchAbility.NAME} for research.
 
 All file paths passed to tools must be absolute.
 
 Files SHOULD be created and modified inside {workspace} unless the task says otherwise — it is a convention, not an enforced boundary.
 
-Prefer edit_file for targeted edits and file_write for full rewrites; verify your own work by running it before declaring done; no conversation history, work only from the task.
+Prefer {EditFileAbility.NAME} for targeted edits and {FileWriteAbility.NAME} for full rewrites; verify your own work by running it before declaring done; no conversation history, work only from the task.
 
 Your final answer is a hand-off — the caller sees only what you write, so it must stand alone. It must ALWAYS be one of the following:
 - If you created a new script, describe in detail what it does and how it works.

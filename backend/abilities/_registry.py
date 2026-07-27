@@ -27,11 +27,21 @@ def _load() -> dict[str, Ability]:
             continue
         module_name = f"abilities.{path.stem}"
         importlib.import_module(module_name)
-
     result: dict[str, Ability] = {}
     for subclass in _all_concrete_subclasses(Ability):
         instance = subclass()
-        result[instance.get_name()] = instance
+        name = getattr(instance, "NAME", None)
+        if not isinstance(name, str) or not name:
+            raise ValueError(
+                f"Ability {subclass.__name__} has no valid NAME; "
+                "must be a non-empty string"
+            )
+        if name in result:
+            raise ValueError(
+                f"Duplicate ability NAME '{name}' in {subclass.__name__} "
+                f"and {result[name].__class__.__name__}"
+            )
+        result[name] = instance
     return result
 
 
@@ -108,18 +118,18 @@ class AbilityRegistry:
         for ability in _get_registry().values():
             if not ability.DISCOVERABLE:
                 continue
-            for alias in (ability.get_name(), *ability.SEARCHABLE_AS):
+            for alias in (ability.NAME, *ability.SEARCHABLE_AS):
                 norm = re.sub(r"[^a-z0-9]+", " ", alias.lower()).strip()
                 if not norm:
                     continue
                 existing = out.get(norm)
-                if existing is not None and existing != ability.get_name():
+                if existing is not None and existing != ability.NAME:
                     raise RuntimeError(
                         f"Ability alias collision: abilities '{existing}' and "
-                        f"'{ability.get_name()}' both normalize to alias "
+                        f"'{ability.NAME}' both normalize to alias "
                         f"'{norm}'"
                     )
-                out[norm] = ability.get_name()
+                out[norm] = ability.NAME
         return out
 
     @staticmethod

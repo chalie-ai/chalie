@@ -73,17 +73,18 @@ class RunScriptAbility(Ability[RunScriptParamsBag]):
     # The typed input contract: the dispatch seam builds the bag via
     # RunScriptParamsBag.from_params before run() is called.
     PARAMS: ClassVar[type[ParamBag] | None] = RunScriptParamsBag
-
-    def get_name(self) -> str:
-        return "run_script"
+    NAME: ClassVar[str] = "run_script"
 
     def get_summary(self) -> str:
+        from abilities.code_agent import CodeAgentAbility  # noqa: PLC0415
+        from abilities.file_write import FileWriteAbility  # noqa: PLC0415
+
         return (
             "Run an existing TypeScript (.ts) file with Deno, with full "
             "permissions (file, network, env, and every other capability). "
-            "Scripts conventionally live in the code_agent workspace (the "
+            f"Scripts conventionally live in the {CodeAgentAbility.NAME} workspace (the "
             "default place the coding agent writes them), but any absolute "
-            ".ts path can be executed. Write the script with file_write "
+            f".ts path can be executed. Write the script with {FileWriteAbility.NAME} "
             "first, then run it here. Optional args are passed to the "
             "script and readable inside it as Deno.args."
         )

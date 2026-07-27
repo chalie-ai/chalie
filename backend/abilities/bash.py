@@ -112,19 +112,18 @@ class BashAbility(Ability[BashParamsBag]):
     """Execute shell commands via ``bash -c`` with policy-gated classification."""
 
     PARAMS: ClassVar[type[ParamBag] | None] = BashParamsBag
+    NAME: ClassVar[str] = "bash"
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("shell", "terminal", "shell command", "run command")
 
     _SUMMARY: ClassVar[str] = (
         "Run a shell command via bash. "
-        "DO USE bash when you need to perform CLI actions which are NOT "
+        f"DO USE {NAME} when you need to perform CLI actions which are NOT "
         "possible via any other available tool. "
-        "DO NOT USE bash for: downloading files (use web_download), "
+        f"DO NOT USE {NAME} for: downloading files (use web_download), "
         "file operations (use read, file_write, edit_file, manage_files, "
         "search_files)."
     )
 
-    def get_name(self) -> str:
-        return "bash"
 
     def get_search_tooltip(self) -> str:
         return "Shell command execution"

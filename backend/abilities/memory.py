@@ -37,9 +37,7 @@ class MemoryAbility(Ability[MemoryParamsBag]):
     # The typed input contract: the dispatch seam builds the bag via
     # MemoryParamsBag.from_params before run() is called.
     PARAMS: ClassVar[type[ParamBag] | None] = MemoryParamsBag
-
-    def get_name(self) -> str:
-        return "memory"
+    NAME: ClassVar[str] = "memory"
 
     def get_summary(self) -> str:
         return "Store, recall, or forget first-party facts about the user — traits, preferences, relationships, goals, and habits."

@@ -47,9 +47,7 @@ class NewsAbility(Ability[NewsParamsBag]):
     # The typed input contract: the dispatch seam builds the bag via
     # NewsParamsBag.from_params before run() is called.
     PARAMS: ClassVar[type[ParamBag] | None] = NewsParamsBag
-
-    def get_name(self) -> str:
-        return "news"
+    NAME: ClassVar[str] = "news"
 
     def get_summary(self) -> str:
         return "Search news articles across global sources by query, with optional category filtering for broad topic browsing."
@@ -71,7 +69,9 @@ class NewsAbility(Ability[NewsParamsBag]):
 
     def get_follow_up(self, tr: ToolResult) -> str:
         """Pivot to web search when the headlines miss the user's intent."""
-        return "If the results don't match the context you're looking for, pivot to using the `search` tool to get data from other sources online."
+        from abilities.search import SearchAbility  # noqa: PLC0415
+
+        return f"If the results don't match the context you're looking for, pivot to using the `{SearchAbility.NAME}` tool to get data from other sources online."
 
     _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
@@ -176,4 +176,3 @@ class NewsAbility(Ability[NewsParamsBag]):
         if not country:
             return "US"
         return cls._COUNTRY_CODE_MAP.get(cast("str", country).lower().strip(), "US")
-

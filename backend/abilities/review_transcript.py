@@ -33,9 +33,7 @@ class ReviewTranscriptAbility(ReviewWindowAbility[ReviewTranscriptParamsBag]):
     PARAMS: ClassVar[type[ParamBag] | None] = ReviewTranscriptParamsBag
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("conversation history", "chat history", "transcript")
     SYSTEM = True
-
-    def get_name(self) -> str:
-        return "review_transcript"
+    NAME: ClassVar[str] = "review_transcript"
 
     def get_summary(self) -> str:
         return (

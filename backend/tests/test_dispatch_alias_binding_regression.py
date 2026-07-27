@@ -14,6 +14,6 @@ pytestmark = pytest.mark.unit
 
 
 def test_real_tool_resolves_from_registry() -> None:
-    names = {a.get_name() for a in AbilityRegistry.all()}
+    names = {a.NAME for a in AbilityRegistry.all()}
     assert "memory" in names
     assert "find_tools" in names

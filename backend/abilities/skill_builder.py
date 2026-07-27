@@ -10,8 +10,8 @@ ONE module, ONE behaviour: :class:`SkillBuilderAbility` owns every handler and
 background ``SkillSuggestionMessageProcessor`` — it differs ONLY in its name
 (``skill_manager``) and ``SYSTEM = True``; it shares the parent's handlers
 verbatim. There is NO per-name content rewriting: the dispatcher renders the
-wire envelope under ``get_name()``, so the ACT trail already shows the right
-identity. A skill whose body legitimately contains the substring
+wire envelope under the ability's ``NAME``, so the ACT trail already shows the
+right identity. A skill whose body legitimately contains the substring
 ``skill_builder`` is therefore stored and returned byte-identical under either
 tool — the old blanket ``content.replace('skill_builder', 'skill_manager')``
 that corrupted such bodies is gone.
@@ -51,7 +51,7 @@ _LOG_PREFIX = "[SKILL_BUILDER]"
 # Internal/meta tools that should not appear in skill content guidance.
 _META_TOOLS = frozenset({
     "find_tools", "find_skills", "skill_builder", "skill_manager",
-    "subagent", "review_tool_calls", "review_transcript",
+    "review_tool_calls", "review_transcript",
     "save_graph", "save_pattern",
 })
 
@@ -87,9 +87,7 @@ class SkillBuilderAbility(Ability[SkillBuilderParamsBag]):
     # SYSTEM=False on the user-facing tool; the SYSTEM variant flips this. Declared
     # here so both names carry a deterministic, introspectable policy identity.
     SYSTEM: ClassVar[bool] = False
-
-    def get_name(self) -> str:
-        return "skill_builder"
+    NAME: ClassVar[str] = "skill_builder"
 
     def get_summary(self) -> str:
         return (
@@ -444,12 +442,12 @@ class SkillManagerAbility(SkillBuilderAbility):
     Used exclusively by ``SkillSuggestionMessageProcessor`` (the background
     skill-creation loop). It inherits EVERYTHING — handlers, ``run()``, all five
     metadata getters, ``ACTION_REQUIRED`` — from the parent unchanged; it differs
-    ONLY in ``get_name()`` (so the ACT trail and the policy gate see
+    ONLY in ``NAME`` (so the ACT trail and the policy gate see
     ``skill_manager``) and ``SYSTEM = True`` (the tool is in
     ``PolicyManager.INTERNAL`` and bypasses the gate).
 
     There is NO per-name content rewriting: the dispatcher renders the envelope
-    under ``get_name()`` already, so a skill body containing the literal string
+    under ``NAME`` already, so a skill body containing the literal string
     ``skill_builder`` survives a ``skill_manager`` operation byte-identical.
     """
 
@@ -457,6 +455,4 @@ class SkillManagerAbility(SkillBuilderAbility):
     # Override the parent's discoverability: skill_manager is pinned exclusively on
     # SkillSuggestionConfig.always_available; skill_builder (the parent) stays discoverable.
     DISCOVERABLE: ClassVar[bool] = False
-
-    def get_name(self) -> str:
-        return "skill_manager"
+    NAME: ClassVar[str] = "skill_manager"

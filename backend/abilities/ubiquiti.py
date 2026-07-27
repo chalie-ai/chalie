@@ -133,9 +133,7 @@ class UbiquitiAbility(CapabilityAbility):
         "update_traffic_rule": (Keys.rule_id, Keys.updates),
         "authorize_guest": (Keys.target,),
     }
-
-    def get_name(self) -> str:
-        return "ubiquiti"
+    NAME: ClassVar[str] = "ubiquiti"
 
     def get_summary(self) -> str:
         return (

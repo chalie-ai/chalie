@@ -92,11 +92,12 @@ class ScheduleAbility(Ability[ScheduleParamsBag]):
     # The typed input contract: the dispatch seam builds the bag via
     # ScheduleParamsBag.from_params before run() is called.
     PARAMS: ClassVar[type[ParamBag] | None] = ScheduleParamsBag
-
-    def get_name(self) -> str:
-        return "schedule"
+    NAME: ClassVar[str] = "schedule"
 
     def get_summary(self) -> str:
+        from abilities.pim import PimAbility  # noqa: PLC0415
+        from abilities.timer import TimerAbility  # noqa: PLC0415
+
         return (
             "Create, list, cancel, or enable/disable recurring scheduled tasks — a "
             "crontab-driven prompt that wakes Chalie to act on a schedule (produce a "
@@ -105,9 +106,9 @@ class ScheduleAbility(Ability[ScheduleParamsBag]):
             "day-of-month, or any combination (e.g. 'every 5 minutes', 'every weekday "
             "at 9am', 'the 1st of each month'). Disable pauses a task without deleting "
             "it; enable resumes it. To remind the user of an appointment or a one-off "
-            "errand at a time, use the `pim` tool (it creates a real calendar event) — "
-            "not `schedule`. For a short ephemeral countdown the user wants to watch "
-            "tick down on screen (focus blocks, kitchen timers), use the `timer` tool."
+            f"errand at a time, use the `{PimAbility.NAME}` tool (it creates a real calendar event) — "
+            f"not `{self.NAME}`. For a short ephemeral countdown the user wants to watch "
+            f"tick down on screen (focus blocks, kitchen timers), use the `{TimerAbility.NAME}` tool."
         )
 
     def get_examples(self) -> list[str]:
@@ -132,13 +133,13 @@ class ScheduleAbility(Ability[ScheduleParamsBag]):
                 "type": "string",
                 "enum": ["create", "list", "search", "cancel", "update", "enable", "disable"],
                 "description": (
-                    "The scheduler action to perform. `schedule` runs a recurring "
+                    f"The scheduler action to perform. `{NAME}` runs a recurring "
                     "prompt that wakes Chalie to act — it does NOT notify the user. "
                     "To remind the user of an appointment or errand at a time, STOP "
                     "— use the `pim` tool (it creates a real calendar event) instead. "
                     "For a short ephemeral countdown (e.g. 'set a 5 minute timer', "
                     "'start a 25 minute focus block'), STOP — call the `timer` tool "
-                    "instead of `schedule`."
+                    f"instead of `{NAME}`."
                 ),
             },
             Keys.message: {

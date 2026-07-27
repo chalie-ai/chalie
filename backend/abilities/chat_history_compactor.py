@@ -106,11 +106,10 @@ Rules:
 
 class ChatHistoryCompactor(Ability[ChatHistoryCompactorParamsBag]):
     DISCOVERABLE: ClassVar[bool] = False  # internal-only compaction tool; pinned, never discovered
+    NAME: ClassVar[str] = "chat_history_compactor"
     counts_as_settle: ClassVar[bool] = False  # never demotes a settle0
     PARAMS: ClassVar[type[ParamBag] | None] = ChatHistoryCompactorParamsBag
 
-    def get_name(self) -> str:
-        return "chat_history_compactor"
 
     def get_summary(self) -> str:
         return "Internal-only chat-history compaction. Never user-invocable."

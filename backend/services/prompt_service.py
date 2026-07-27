@@ -39,6 +39,7 @@ import json
 import logging
 from typing import TYPE_CHECKING, cast
 
+from abilities.review_transcript import ReviewTranscriptAbility
 from configs.channels.dmn import DmnConfig
 from configs.channels.external_agent import EAMPConfig
 from configs.channels.user import UserConfig
@@ -317,11 +318,11 @@ class PromptService:
         if self.mp.post_compaction_continuation:
             query = self.mp.raw_input
             parts.append(
-                "You are continuing after a mid-turn compaction. "
+                f"You are continuing after a mid-turn compaction. "
                 f"The user query was: {query}. "
-                "Read the Checkpoint section above to recover what you were "
-                "working on, and use the review_transcript tool to read the "
-                "previous turns of this conversation."
+                f"Read the Checkpoint section above to recover what you were "
+                f"working on, and use the {ReviewTranscriptAbility.NAME} tool to read the "
+                f"previous turns of this conversation."
             )
 
         parts.append(f"user: {self.mp.raw_input}")

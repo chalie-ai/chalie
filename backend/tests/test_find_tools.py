@@ -219,10 +219,7 @@ class _AliasStub:
     SEARCHABLE_AS = ("shared_alias",)
 
     def __init__(self, name: str) -> None:
-        self._name = name
-
-    def get_name(self) -> str:
-        return self._name
+        self.NAME = name
 
 
 def test_collision_guard_raises_runtime_error_on_duplicate_alias(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -67,6 +67,6 @@ _CASES: dict[str, tuple[ToolResult, str]] = {
 @pytest.mark.parametrize("name", sorted(_CASES))
 def test_dynamic_override_echoes_live_value_from_result(name: str) -> None:
     representative, must_contain = _CASES[name]
-    ability = next(a for a in AbilityRegistry.all() if a.get_name() == name)
+    ability = next(a for a in AbilityRegistry.all() if a.NAME == name)
     nudge = ability.get_follow_up(representative)
     assert must_contain in nudge, f"{name} nudge dropped its live value: {nudge!r}"

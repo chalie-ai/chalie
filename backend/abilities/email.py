@@ -51,6 +51,7 @@ _RECIPIENT_ACTIONS = ("send", "draft", "forward")
 
 class EmailAbility(CapabilityAbility):
     DISCOVERABLE: ClassVar[bool] = False  # pim-delegate-exclusive; pinned on PimConfig only
+    NAME: ClassVar[str] = "email"
     CAPABILITY_KEY: ClassVar[str] = "mail"
     DEFAULT_ACTION: ClassVar[str] = "search"
     NOT_CONNECTED_HINT: ClassVar[str] = (
@@ -84,8 +85,6 @@ class EmailAbility(CapabilityAbility):
         "forward": (Keys.uid, Keys.to),
     }
 
-    def get_name(self) -> str:
-        return "email"
 
     def get_summary(self) -> str:
         return (

@@ -81,6 +81,7 @@ class ChalieDocsAbility(Ability[ChalieDocsParamsBag]):
     #: dispatcher's ACTION_REQUIRED pre-gate rejects a call with no query as
     #: ``code=missing-params`` BEFORE run() (and before the policy gate).
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.query,)}
+    NAME: ClassVar[str] = "chalie_docs"
 
     # The typed input contract: the dispatch seam builds the bag via
     # ChalieDocsParamsBag.from_params before run() is called.
@@ -88,8 +89,6 @@ class ChalieDocsAbility(Ability[ChalieDocsParamsBag]):
 
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("chalie documentation", "own documentation", "harness documentation", "self reference", "about chalie")
 
-    def get_name(self) -> str:
-        return "chalie_docs"
 
     def get_summary(self) -> str:
         return "Look up Chalie's own documentation — what it is, its tools, release history, or codebase."

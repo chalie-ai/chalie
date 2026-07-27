@@ -115,7 +115,7 @@ class ReviewWindowAbility(Ability[TBag], ABC):
         except sqlite3.Error as exc:
             logger.error(
                 "[%s] window query failed for date_time=%r: %s",
-                self.get_name(), date_time, exc, exc_info=True,
+                self.NAME, date_time, exc, exc_info=True,
             )
             return ToolResult.err(
                 f"query-failed: {exc}",

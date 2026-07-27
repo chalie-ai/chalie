@@ -431,12 +431,14 @@ def lookup(language: str, query: str) -> ToolResult:
     real base/landing page does, succeed with ``meta degraded=true`` — a true
     page, just less precise than the symbol the model asked for.
     """
+    from abilities.search import SearchAbility  # noqa: PLC0415
+
     source = resolve_source(language)
     if source is None:
         return ToolResult.err(
             f"Unknown language/framework: {language}.",
             code="unknown-source",
-            hint="pick a supported language id, or use the search tool",
+            hint=f"pick a supported language id, or use the {SearchAbility.NAME} tool",
             valid=tuple(s.id for s in SOURCES),
         )
 
@@ -493,7 +495,7 @@ def lookup(language: str, query: str) -> ToolResult:
     return ToolResult.err(
         f"Could not reach {source.name} documentation for '{query}'.",
         code="source-unavailable",
-        hint="try another source or the search tool",
+        hint=f"try another source or the {SearchAbility.NAME} tool",
         source=source.id,
     )
 
@@ -503,9 +505,7 @@ def lookup(language: str, query: str) -> ToolResult:
 class ProgrammingDocsSearchAbility(Ability[ProgrammingDocsSearchParamsBag]):
     PARAMS: ClassVar[type[ParamBag] | None] = ProgrammingDocsSearchParamsBag
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("programming docs", "api docs", "library documentation", "dev docs")
-
-    def get_name(self) -> str:
-        return "programming_docs_search"
+    NAME: ClassVar[str] = "programming_docs_search"
 
     def get_summary(self) -> str:
         return "Search official documentation for 12 programming languages and 11 frameworks by language name and query."
@@ -527,12 +527,14 @@ class ProgrammingDocsSearchAbility(Ability[ProgrammingDocsSearchParamsBag]):
 
     def get_follow_up(self, tr: ToolResult) -> str:
         """Read the full document behind the capped excerpt."""
+        from abilities.read import ReadAbility  # noqa: PLC0415
+
         rows = tr.body if isinstance(tr.body, list) else []
         first = rows[0] if rows and isinstance(rows[0], dict) else None
         url = first.get("url") if first else None
         if not url:
             return ""
-        return f"The excerpt is capped. Use the `read({url})` tool to fetch the full document contents."
+        return f"The excerpt is capped. Use the `{ReadAbility.NAME}({url})` tool to fetch the full document contents."
 
     # The enum is DERIVED from the source table, so a schema-obedient model can
     # never name a language the ability then rejects as unknown — the schema and

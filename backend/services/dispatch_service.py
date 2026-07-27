@@ -50,6 +50,7 @@ from typing import TYPE_CHECKING, Callable, cast
 from abilities._mcp_ability import _MCPAbility
 from services.key_healer import KeyHealer
 from abilities._registry import AbilityRegistry
+from abilities.find_tools import FindToolsAbility
 from abilities._result import ToolResult
 from exceptions import VaultLockedError
 from models.tool_call import ToolCall
@@ -302,7 +303,7 @@ class DispatchService:
         act_summary (popped from params by ``dispatch()``) is the live summary;
         it is NOT a run() argument."""
         run_async = bool(params.pop("async", False))
-        tool_name = ability.get_name()
+        tool_name = ability.NAME
 
         call_id = self.mp.tool_call_service.start(
             tool_name=tool_name, params=params, summary=act_summary,
@@ -434,10 +435,10 @@ class DispatchService:
             logger.error(
                 "[DispatchService] %s.run() returned a non-ToolResult (%s) — every "
                 "ability must return abilities._result.ToolResult via ok()/err().",
-                ability.get_name(), offending,
+                ability.NAME, offending,
             )
             return ToolResult.err(
-                f"{ability.get_name()} returned a non-canonical result of type "
+                f"{ability.NAME} returned a non-canonical result of type "
                 f"{offending}; abilities must return a ToolResult.",
                 code="non-canonical-result",
             )
@@ -537,11 +538,11 @@ _FOLLOW_UP_BLOCK = "[follow_up_instruction]\n{text}\n[end:follow_up_instruction]
 # Appended to the SECOND (and later) identical error a tool returns in one turn,
 # to break a retry loop. Written plainly so smaller models act on it.
 _REPEAT_ERROR_STEER = (
-    "\n\n[loop-guard] You already made this exact call this turn and got the same "
-    "error. Do NOT call it again the same way. First, look up the tool's correct "
-    "inputs with the `find_tools` tool and fix your input, then try once more. If "
-    "it still fails, stop retrying: tell the user what error you are getting, that "
-    "this tool may not be working right now, and ask them how they want to proceed."
+    f"\n\n[loop-guard] You already made this exact call this turn and got the same "
+    f"error. Do NOT call it again the same way. First, look up the tool's correct "
+    f"inputs with the `{FindToolsAbility.NAME}` tool and fix your input, then try once more. If "
+    f"it still fails, stop retrying: tell the user what error you are getting, that "
+    f"this tool may not be working right now, and ask them how they want to proceed."
 )
 
 #: Repeat-call steer fires when the runaway guard has already tallied this many

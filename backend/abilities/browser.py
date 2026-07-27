@@ -49,9 +49,8 @@ logger = logging.getLogger(__name__)
 
 class BrowserAbility(Ability[BrowserParamsBag]):
     DISCOVERABLE: ClassVar[bool] = False  # delegate-exclusive; pinned on WebBrowseConfig only
+    NAME: ClassVar[str] = "browser"
 
-    def get_name(self) -> str:
-        return "browser"
 
     def get_summary(self) -> str:
         return (

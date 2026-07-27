@@ -42,6 +42,7 @@ class ImageSearchAbility(Ability[ImageSearchParamsBag]):
     # save_graph.py, save_pattern.py). The pre-gate is truthiness-based; the
     # bag's from_params rejects the whitespace-only residue.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.query,)}
+    NAME: ClassVar[str] = "image_search"
 
     # The typed input contract: the dispatch seam builds the bag via
     # ImageSearchParamsBag.from_params before run() is called.
@@ -49,8 +50,6 @@ class ImageSearchAbility(Ability[ImageSearchParamsBag]):
 
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("find images", "search images", "picture search")
 
-    def get_name(self) -> str:
-        return "image_search"
 
     def get_summary(self) -> str:
         return (

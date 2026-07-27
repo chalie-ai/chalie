@@ -41,6 +41,7 @@ import logging
 from typing import TYPE_CHECKING, Literal, cast, overload
 
 from abilities._result import ToolResult
+from abilities.find_tools import FindToolsAbility
 from models.episode import Episode
 from models.memory_recall_log import MemoryRecallLog
 
@@ -70,10 +71,10 @@ _DG_RECALL_KINDS = ["user_specific", "system", "misc", "place", "discovery"]
 # subsystem's deletion and sent the model to a dead tool). The turn-0
 # auto-seed recall (_auto=True) stays silent — no hint, no fan-out.
 _RECALL_FALLBACK_HINT = (
-    "If memory holds nothing relevant, the fact is not stored — do not re-query "
-    "memory with reworded queries. For live or time-sensitive data (weather, "
-    "news, prices, current events), call `find_tools` and use the tool it "
-    "surfaces this turn."
+    f"If memory holds nothing relevant, the fact is not stored — do not re-query "
+    f"memory with reworded queries. For live or time-sensitive data (weather, "
+    f"news, prices, current events), call `{FindToolsAbility.NAME}` and use the tool it "
+    f"surfaces this turn."
 )
 
 # Stable, machine-readable code surfaced when EVERY retrieval backend a recall

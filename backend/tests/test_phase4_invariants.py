@@ -21,7 +21,7 @@ def test_save_pattern_save_graph_are_registered_abilities() -> None:
     assert issubclass(SavePattern, Ability)
     assert issubclass(SaveGraph, Ability)
 
-    registry_names = {a.get_name() for a in _reg_module.AbilityRegistry.all()}
+    registry_names = {a.NAME for a in _reg_module.AbilityRegistry.all()}
     assert "save_pattern" in registry_names
     assert "save_graph" in registry_names
 

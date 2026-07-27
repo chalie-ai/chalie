@@ -59,6 +59,7 @@ _MAX_CANDIDATES = 5
 
 class HomeAbility(CapabilityAbility):
     CAPABILITY_KEY: ClassVar[str] = "home"
+    NAME: ClassVar[str] = "home"
     DEFAULT_ACTION: ClassVar[str] = "list_devices"
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("smart home", "home assistant", "lights")
     NOT_CONNECTED_HINT: ClassVar[str] = (
@@ -88,9 +89,6 @@ class HomeAbility(CapabilityAbility):
         "trigger_automation": (Keys.automation_id,),
         "subscribe_events": (Keys.entity_id,),
     }
-
-    def get_name(self) -> str:
-        return "home"
 
     def get_summary(self) -> str:
         return (
@@ -263,4 +261,4 @@ class HomeAbility(CapabilityAbility):
         closest = cls._closest(needle, candidates)
         if closest:
             return f"closest matches: {', '.join(closest)} — re-issue with an exact id."
-        return f"call home with action={list_action} to see the real ids."
+        return f"call {cls.NAME} with action={list_action} to see the real ids."

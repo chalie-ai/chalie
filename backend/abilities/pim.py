@@ -27,8 +27,6 @@ from contracts.params.delegate_params_bag import DelegateParamsBag
 
 
 class PimAbility(DelegateAbility[DelegateParamsBag]):
-    def get_name(self) -> str:
-        return "pim"
 
     def get_summary(self) -> str:
         return (
@@ -79,6 +77,7 @@ class PimAbility(DelegateAbility[DelegateParamsBag]):
     PARAMS: ClassVar[type[ParamBag] | None] = DelegateParamsBag
 
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("email", "calendar", "contacts", "reminders", "mail")
+    NAME: ClassVar[str] = "pim"
 
     def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS

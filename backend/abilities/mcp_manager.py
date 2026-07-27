@@ -79,9 +79,7 @@ class McpManagerAbility(Ability[McpManagerParamsBag]):
     PARAMS: ClassVar[type[ParamBag] | None] = McpManagerParamsBag
 
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("connect mcp", "add mcp server", "mcp connection")
-
-    def get_name(self) -> str:
-        return "mcp_manager"
+    NAME: ClassVar[str] = "mcp_manager"
 
     def get_summary(self) -> str:
         return (
@@ -106,12 +104,14 @@ class McpManagerAbility(Ability[McpManagerParamsBag]):
 
     def get_follow_up(self, tr: ToolResult) -> str:
         """Steer a just-connected server's remote tools into context via mcp_tools."""
+        from abilities.mcp_tools import McpToolsAbility  # noqa: PLC0415
+
         body = tr.body if isinstance(tr.body, dict) else {}
         if body.get("status") != "online":
             return ""
         name = body.get("name")
         return (
-            f"`{name}` is now available. Call `mcp_tools` with action `list` to "
+            f"`{name}` is now available. Call `{McpToolsAbility.NAME}` with action `list` to "
             "see its tools, then `activate` the ones you need."
         )
 

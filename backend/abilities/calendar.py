@@ -67,6 +67,7 @@ _TARGET_ADDRESSED_WRITES = ("update_event", "delete_event")
 
 class CalendarAbility(CapabilityAbility):
     DISCOVERABLE: ClassVar[bool] = False  # pim-delegate-exclusive; pinned on PimConfig only
+    NAME: ClassVar[str] = "calendar"
     CAPABILITY_KEY: ClassVar[str] = "mail"
     DEFAULT_ACTION: ClassVar[str] = "list_events"
     NOT_CONNECTED_HINT: ClassVar[str] = (
@@ -95,8 +96,6 @@ class CalendarAbility(CapabilityAbility):
         "delete_event": (),
     }
 
-    def get_name(self) -> str:
-        return "calendar"
 
     def get_summary(self) -> str:
         return (
@@ -311,5 +310,3 @@ def _require_target(params: dict[str, object]) -> ToolResult | None:
         code="missing-target",
         hint="pass the event's uid, or a title to match.",
     )
-
-

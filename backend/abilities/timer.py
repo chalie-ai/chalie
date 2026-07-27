@@ -50,9 +50,7 @@ class TimerAbility(Ability[TimerParamsBag]):
     # TimerParamsBag.from_params before run() is called.
     PARAMS: ClassVar[type[ParamBag] | None] = TimerParamsBag
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("countdown", "set timer", "alarm")
-
-    def get_name(self) -> str:
-        return "timer"
+    NAME: ClassVar[str] = "timer"
 
     def get_summary(self) -> str:
         return "Start a live countdown timer with a title — renders an in-chat card with pause, stop, and an alarm when it ends."

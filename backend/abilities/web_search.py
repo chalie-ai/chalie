@@ -50,9 +50,7 @@ from contracts.params.delegate_params_bag import DelegateParamsBag
 
 class WebSearchAbility(DelegateAbility[DelegateParamsBag]):
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("search web", "search the web", "internet search", "google")
-
-    def get_name(self) -> str:
-        return "web_search"
+    NAME: ClassVar[str] = "web_search"
 
     def get_summary(self) -> str:
         return (

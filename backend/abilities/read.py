@@ -50,9 +50,7 @@ logger = logging.getLogger(__name__)
 class ReadAbility(Ability[ReadParamsBag]):
     PARAMS: ClassVar[type[ParamBag] | None] = ReadParamsBag
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("fetch url", "read file", "open url", "read page", "fetch")
-
-    def get_name(self) -> str:
-        return "read"
+    NAME: ClassVar[str] = "read"
 
     def get_summary(self) -> str:
         return "Fetch and extract clean text from any URL or local file — web pages, PDFs, DOCX, PPTX, and plain text."
@@ -127,10 +125,12 @@ class ReadAbility(Ability[ReadParamsBag]):
         except PermissionError as e:
             return ToolResult.err(str(e), code="no-read-permission", source=source)
         except SourceIsImage as e:
+            from abilities.vision import VisionAbility  # noqa: PLC0415
+
             return ToolResult.err(
                 str(e),
                 code="not-text",
-                hint="use the vision tool to see it",
+                hint=f"use the {VisionAbility.NAME} tool to see it",
                 source=source,
             )
         except NoTextContent as e:

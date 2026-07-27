@@ -43,6 +43,7 @@ class FileWriteAbility(Ability[FileWriteParamsBag]):
     #: would be falsely rejected there. The bag's from_params guards a MISSING
     #: contents key by presence.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.path,)}
+    NAME: ClassVar[str] = "file_write"
 
     # The typed input contract: the dispatch seam builds the bag via
     # FileWriteParamsBag.from_params before run() is called.
@@ -50,14 +51,14 @@ class FileWriteAbility(Ability[FileWriteParamsBag]):
 
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("write file", "create file", "save file")
 
-    def get_name(self) -> str:
-        return "file_write"
 
     def get_summary(self) -> str:
+        from abilities.read import ReadAbility  # noqa: PLC0415
+
         # At build/introspection time (mp is None) return the bare base text so
         # the search index + SHA map stay machine-independent. On a live request
         # append the docs-placement steer with the resolved path.
-        base = "Write content to a file. You MUST call the 'read' tool on the target path before writing."
+        base = f"Write content to a file. You MUST call the '{ReadAbility.NAME}' tool on the target path before writing."
         if self.mp is None:
             return base
         return (
@@ -182,18 +183,22 @@ class FileWriteAbility(Ability[FileWriteParamsBag]):
                     last_match = row
 
         if last_match is None:
+            from abilities.read import ReadAbility  # noqa: PLC0415
+
             return ToolResult.err(
                 f"You must read {target} before overwriting it.",
                 code="read-required",
-                hint=f"call the 'read' tool on {target} first, then retry the write",
+                hint=f"call the '{ReadAbility.NAME}' tool on {target} first, then retry the write",
             )
         # Truncation is flagged in the envelope OPEN TAG (its first line) only —
         # matching the whole result would false-positive on file content that
         # happens to contain the marker.
         if "truncated=true" in (last_match.result or "").split("\n", 1)[0]:
+            from abilities.edit_file import EditFileAbility  # noqa: PLC0415
+
             return ToolResult.err(
                 f"Your last read of {target} was truncated — a full overwrite would destroy the unread portion.",
                 code="truncated-read",
-                hint="use edit_file for targeted changes, or re-read with a higher max_chars to get the full file first.",
+                hint=f"use {EditFileAbility.NAME} for targeted changes, or re-read with a higher max_chars to get the full file first.",
             )
         return None

@@ -28,9 +28,7 @@ class ReviewToolCallsAbility(ReviewWindowAbility[ReviewWindowParamsBag]):
     PARAMS: ClassVar[type[ParamBag] | None] = ReviewWindowParamsBag
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("tool history", "past tool calls", "tool log")
     SYSTEM = True
-
-    def get_name(self) -> str:
-        return "review_tool_calls"
+    NAME: ClassVar[str] = "review_tool_calls"
 
     def get_summary(self) -> str:
         return "Retrieve raw tool call records within ±5 minutes of a timestamp to inspect details not captured in turn synthesis."
@@ -52,13 +50,15 @@ class ReviewToolCallsAbility(ReviewWindowAbility[ReviewWindowParamsBag]):
 
     def get_follow_up(self, tr: ToolResult) -> str:
         """Direct the model to the untruncated transcript for the same window."""
+        from abilities.review_transcript import ReviewTranscriptAbility  # noqa: PLC0415
+
         anchor = tr.meta.get("anchor")
         if not anchor:
             return ""
         return (
             "Params are clipped to ~120 chars and full results are omitted. For the "
             "exact wording a user or assistant used in that window, call "
-            f"`review_transcript(date_time={anchor})` to read the untruncated messages."
+            f"`{ReviewTranscriptAbility.NAME}(date_time={anchor})` to read the untruncated messages."
         )
 
     _PARAMETERS: ClassVar[dict[str, object]] = {

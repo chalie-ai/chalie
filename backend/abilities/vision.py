@@ -35,9 +35,6 @@ logger = logging.getLogger(__name__)
 class VisionAbility(DelegateAbility[VisionParamsBag]):
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("see image", "describe image", "analyze image", "look at image")
 
-    def get_name(self) -> str:
-        return "vision"
-
     def get_summary(self) -> str:
         return (
             "Use this tool to read and see the contents of an image. It gives you "
@@ -68,6 +65,7 @@ class VisionAbility(DelegateAbility[VisionParamsBag]):
     # The typed input contract: the dispatch seam builds the bag via
     # VisionParamsBag.from_params before run() is called.
     PARAMS: ClassVar[type[ParamBag] | None] = VisionParamsBag
+    NAME: ClassVar[str] = "vision"
 
     _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",

@@ -61,14 +61,14 @@ class WebDownloadAbility(Ability[WebDownloadParamsBag]):
     # WebDownloadParamsBag.from_params before run() is called.
     PARAMS: ClassVar[type[ParamBag] | None] = WebDownloadParamsBag
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("download", "download file", "download url")
-
-    def get_name(self) -> str:
-        return "web_download"
+    NAME: ClassVar[str] = "web_download"
 
     def get_summary(self) -> str:
+        from abilities.read import ReadAbility  # noqa: PLC0415
+
         return (
             "Download a file from the internet to a temporary location for later "
-            "reading or processing. Use in conjunction with the `read` tool to then "
+            f"reading or processing. Use in conjunction with the `{ReadAbility.NAME}` tool to then "
             "get the file's contents into context."
         )
 
@@ -87,10 +87,12 @@ class WebDownloadAbility(Ability[WebDownloadParamsBag]):
 
     def get_follow_up(self, tr: ToolResult) -> str:
         """Read the downloaded file's content straight from its path."""
+        from abilities.read import ReadAbility  # noqa: PLC0415
+
         path = tr.body.get("path") if isinstance(tr.body, dict) else None
         if not path:
             return ""
-        return f"File downloaded. Use the `read({path})` tool to fetch its content."
+        return f"File downloaded. Use the `{ReadAbility.NAME}({path})` tool to fetch its content."
 
     _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",

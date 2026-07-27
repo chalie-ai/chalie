@@ -38,20 +38,18 @@ from contracts.params.delegate_params_bag import DelegateParamsBag
 
 class WebBrowseAbility(DelegateAbility[DelegateParamsBag]):
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("browse web", "browser", "visit website", "interactive browsing")
-
-    def get_name(self) -> str:
-        return "web_browse"
+    NAME: ClassVar[str] = "web_browse"
 
     def get_summary(self) -> str:
         return (
-            "Spawn a subagent with full web browser control to perform an action on "
-            "one or more websites. It drives a real browser — rendering pages, "
-            "filling forms, navigating multi-step flows — and inspects screenshots "
-            "with its own vision. Screenshots are saved as image files whose "
-            "path any vision tool can view later. Use for acting on a specific site — "
-            "not for general lookups. Give the subagent one narrow, concrete goal; "
-            "fire several in parallel for different tasks on the same site rather "
-            "than handing one subagent a broad, generic goal."
+            "Spawn a background browsing agent with full web browser control to "
+            "perform an action on one or more websites. It drives a real browser — "
+            "rendering pages, filling forms, navigating multi-step flows — and "
+            "inspects screenshots with its own vision. Screenshots are saved as "
+            "image files whose path any vision tool can view later. Use for acting "
+            "on a specific site — not for general lookups. Give it one narrow, "
+            "concrete goal; fire several in parallel for different tasks on the "
+            "same site rather than handing one agent a broad, generic goal."
         )
 
     def get_examples(self) -> list[str]:
@@ -71,7 +69,9 @@ class WebBrowseAbility(DelegateAbility[DelegateParamsBag]):
 
     def get_follow_up(self, tr: ToolResult) -> str:
         """Pull the full text of a page the agent reached."""
-        return "To get a full textual version of this page call the `read` tool."
+        from abilities.read import ReadAbility  # noqa: PLC0415
+
+        return f"To get a full textual version of this page call the `{ReadAbility.NAME}` tool."
 
     _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",

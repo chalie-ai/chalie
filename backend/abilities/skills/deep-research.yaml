@@ -6,8 +6,8 @@ version: 1
 ---
 
 1. Use `memory` to recall any prior research, related findings, or user preferences — then ask for the specific question, scope (company vs. industry vs. policy/tech), and preferred output length.
-2. Break the topic into 3–6 parallel sub-questions (what, why, how, who, trends, counter-claims) and assign each to a `subagent` to search independently, keeping raw search context out of the main thread.
-3. Each `subagent` uses `search` and `news` to gather sources and `read` to extract content from the most authoritative URLs, then returns distilled notes — never raw results.
+2. Break the topic into 3–6 parallel sub-questions (what, why, how, who, trends, counter-claims) and fire each as a background research thread using `search` and `news` with `async: true`, keeping raw search context out of the main thread.
+3. Each thread uses `search` and `news` to gather sources and `read` to extract content from the most authoritative URLs, then returns distilled notes — never raw results.
 4. Use `file_write` to build a citation registry from the distilled notes: record source URL, type (news/official/academic/industry), recency date, and authority level for every claim.
 5. Use `file_write` to construct an evidence-mapped outline, flagging claims lacking two independent sources and any counter-claims or competing perspectives.
 6. Use `file_write` to draft the report from the outline and citation registry, embedding confidence markers (confirmed / likely / contested / unverified) per major claim.

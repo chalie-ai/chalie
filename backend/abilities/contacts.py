@@ -49,6 +49,7 @@ from models.contact import ContactRow
 
 class ContactsAbility(Ability[ContactsParamsBag]):
     DISCOVERABLE: ClassVar[bool] = False  # pim-delegate-exclusive; pinned on PimConfig only
+    NAME: ClassVar[str] = "contacts"
     CAPABILITY_KEY: ClassVar[str] = "mail"
     NOT_CONNECTED_HINT: ClassVar[str] = (
         "Configure the mail integration in the Brain dashboard."
@@ -65,9 +66,6 @@ class ContactsAbility(Ability[ContactsParamsBag]):
         "list": (),
         "get": (Keys.identifier,),
     }
-
-    def get_name(self) -> str:
-        return "contacts"
 
     def get_summary(self) -> str:
         return (
@@ -193,7 +191,7 @@ class ContactsAbility(Ability[ContactsParamsBag]):
             return ToolResult.err(
                 f"No contact matching {identifier!r} was found.",
                 code="not-found",
-                hint="call contacts with action=list to see what exists.",
+                hint=f"call {self.NAME} with action=list to see what exists.",
                 action="get",
             )
 
@@ -233,7 +231,7 @@ class ContactsAbility(Ability[ContactsParamsBag]):
         cap = load_capabilities().get(self.CAPABILITY_KEY)
         if cap is None or not cap.is_connected():
             return ToolResult.err(
-                f"{self.get_name().capitalize()} capability not connected.",
+                f"{self.NAME.capitalize()} capability not connected.",
                 code="not-connected",
                 hint=self.NOT_CONNECTED_HINT,
                 action=action,

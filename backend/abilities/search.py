@@ -58,9 +58,7 @@ class SearchAbility(Ability[SearchParamsBag]):
     # The typed input contract: the dispatch seam builds the bag via
     # SearchParamsBag.from_params before run() is called.
     PARAMS: ClassVar[type[ParamBag] | None] = SearchParamsBag
-
-    def get_name(self) -> str:
-        return "search"
+    NAME: ClassVar[str] = "search"
 
     def get_summary(self) -> str:
         return "Search Wikipedia, GitHub, Reddit, arXiv, news, and more with automatic provider routing from a plain language query."
@@ -82,7 +80,9 @@ class SearchAbility(Ability[SearchParamsBag]):
 
     def get_follow_up(self, tr: ToolResult) -> str:
         """Nudge to fetch a promising result's full page before quoting it."""
-        return "For the pages that are aligned with your query, use the `read(url=…)` tool with that result's url to get the full content of the page before quoting it or stating its claims as fact."
+        from abilities.read import ReadAbility  # noqa: PLC0415
+
+        return f"For the pages that are aligned with your query, use the `{ReadAbility.NAME}(url=…)` tool with that result's url to get the full content of the page before quoting it or stating its claims as fact."
 
     def get_parameters(self) -> dict[str, object]:
         return {

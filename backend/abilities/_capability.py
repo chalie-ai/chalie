@@ -81,7 +81,7 @@ class CapabilityAbility(Ability[CapabilityParamsBag], ABC):
         cap = load_capabilities().get(self.CAPABILITY_KEY)
         if cap is None or not cap.is_connected():
             return ToolResult.err(
-                f"{self.get_name().capitalize()} capability not connected.",
+                f"{self.NAME.capitalize()} capability not connected.",
                 code="not-connected",
                 hint=self.NOT_CONNECTED_HINT,
                 action=action,
@@ -90,7 +90,7 @@ class CapabilityAbility(Ability[CapabilityParamsBag], ABC):
         handler_name = self.ACTION_HANDLERS.get(action)
         if handler_name is None:
             return ToolResult.err(
-                f"Unknown {self.get_name()} action: {action}",
+                f"Unknown {self.NAME} action: {action}",
                 code="unknown-action",
                 valid=tuple(self.ACTION_HANDLERS),
                 action=action,

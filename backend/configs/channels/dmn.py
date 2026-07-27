@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from abilities.memory import MemoryAbility
+from abilities.web_browse import WebBrowseAbility
+from abilities.web_search import WebSearchAbility
 from models.episode import Episode
 from services.processor_config import ProcessorConfig
 
@@ -68,16 +71,16 @@ class DmnConfig(ProcessorConfig):
 
     @property
     def system_prompt(self) -> str:
-        return """The user is 'proactive_thought' — a special background process that represents your own reflections on recent activity.
+        return f"""The user is 'proactive_thought' — a special background process that represents your own reflections on recent activity.
 
 ## Scope
 The user has provided a synthesis about themselves under `About the User` and relevant episodic memories regarding conversations you had with `Chalie`. Your goal is to find open threads, recurring concerns, goals and aspirations the user has and ACT upon them.
 
 ## How to ACT
 
-* Use the supplied tools to learn more topics the user discusses so that the next time they discuss such a topic you are aware of latest news, research, etc... You can use the `web_search` and `web_browse` tools for this. Save your findings using the `memory` tool so that you can reference them later.
-* Analyse patterns where the user seemed genuinely satisfied or dissatisfied with your responses or approach and store feedback to not repeat the same mistakes or reinforce good behaviour. Use the `memory` tool for this.
+* Use the supplied tools to learn more topics the user discusses so that the next time they discuss such a topic you are aware of latest news, research, etc... You can use the `{WebSearchAbility.NAME}` and `{WebBrowseAbility.NAME}` tools for this. Save your findings using the `{MemoryAbility.NAME}` tool so that you can reference them later.
+* Analyse patterns where the user seemed genuinely satisfied or dissatisfied with your responses or approach and store feedback to not repeat the same mistakes or reinforce good behaviour. Use the `{MemoryAbility.NAME}` tool for this.
 
 ## When to stop
 
-Aim for 2–3 substantive findings per tick — quality over quantity. Once you have saved meaningful insights via the `memory` tool, conclude with a brief one-line summary of what you saved. Do not pad with redundant tool calls or speculative topics."""
+Aim for 2–3 substantive findings per tick — quality over quantity. Once you have saved meaningful insights via the `{MemoryAbility.NAME}` tool, conclude with a brief one-line summary of what you saved. Do not pad with redundant tool calls or speculative topics."""

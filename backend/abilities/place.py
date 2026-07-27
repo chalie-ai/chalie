@@ -72,9 +72,7 @@ class PlaceAbility(Ability[PlaceParamsBag]):
     PARAMS: ClassVar[type[ParamBag] | None] = PlaceParamsBag
 
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("location", "places", "nearby", "point of interest")
-
-    def get_name(self) -> str:
-        return "place"
+    NAME: ClassVar[str] = "place"
 
     def get_summary(self) -> str:
         return (

@@ -84,9 +84,7 @@ class ListAbility(Ability[ListParamsBag]):
     PARAMS: ClassVar[type[ParamBag] | None] = ListParamsBag
 
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("checklist", "todo list", "shopping list", "lists")
-
-    def get_name(self) -> str:
-        return "list"
+    NAME: ClassVar[str] = "list"
 
     def get_summary(self) -> str:
         return "Create and manage named lists — shopping, to-do, chores — addressed by name or id."

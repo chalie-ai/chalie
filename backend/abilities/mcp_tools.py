@@ -19,6 +19,7 @@ class McpToolsAbility(Ability):
     action ``"activate"`` with exact tool names to enable them for this turn."""
 
     PARAMS: ClassVar[type[ParamBag] | None] = McpToolsParamsBag
+    NAME: ClassVar[str] = "mcp_tools"
 
     DISCOVERABLE: ClassVar[bool] = True
 
@@ -38,9 +39,6 @@ class McpToolsAbility(Ability):
         },
         "required": [Keys.action],
     }
-
-    def get_name(self) -> str:
-        return "mcp_tools"
 
     def get_summary(self) -> str:
         return (

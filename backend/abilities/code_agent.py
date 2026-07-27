@@ -44,6 +44,7 @@ class CodeAgentAbility(DelegateAbility[DelegateParamsBag]):
     # with ``code=missing-params`` BEFORE the policy gate and BEFORE run() — so an
     # empty instruction never spawns an expensive delegate on an empty goal.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.instructions,)}
+    NAME: ClassVar[str] = "code_agent"
 
     # The typed input contract: the dispatch seam builds the bag via
     # The dispatch seam builds the shared delegate bag via
@@ -67,8 +68,6 @@ class CodeAgentAbility(DelegateAbility[DelegateParamsBag]):
         "required": [Keys.instructions],
     }
 
-    def get_name(self) -> str:
-        return "code_agent"
 
     def get_summary(self) -> str:
         return (
