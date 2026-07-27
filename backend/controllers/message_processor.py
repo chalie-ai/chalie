@@ -698,7 +698,8 @@ class MessageProcessor:
         attachments in parallel before the first send. The recall dispatches like a
         normal tool call — ``_auto`` marks it the framework seed (``caller='seed'``
         in ``handle_recall``); the recorded row grounds the model's first request
-        and is turn-scoped, so it drops at the next turn.
+        and is turn-scoped, so it drops at the next turn. ``PromptService.act_trail``
+        renders it as a ``[background_memory]`` block, not a tool-call row.
 
         ``seeding_turn_zero`` is raised for the duration: seed dispatches are
         recorded on the trail but never surface a live pill (§6.10 — the WS

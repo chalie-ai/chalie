@@ -39,6 +39,7 @@ import json
 import logging
 from typing import TYPE_CHECKING, cast
 
+from abilities.memory import MemoryAbility
 from abilities.review_transcript import ReviewTranscriptAbility
 from configs.channels.dmn import DmnConfig
 from configs.channels.external_agent import EAMPConfig
@@ -238,18 +239,32 @@ class PromptService:
         leaves context once that exchange synthesises (its synthesis carries
         forward via Previous Messages). A mid-exchange compaction resets the
         visible trail: only calls after the most recent ``chat_history_compactor``
-        marker render, mirroring the pre-rewrite ``_render_act_trail``."""
+        marker render, mirroring the pre-rewrite ``_render_act_trail``.
+
+        The turn-0 auto-seed recall (``"_auto": true`` in its params) renders as
+        a ``[background_memory]`` context block instead of a tool-call row — a
+        seed presented as a call teaches the model that every turn opens with a
+        memory invocation. Same envelope body, relabeled wrapper; the
+        ``tool_calls`` row is untouched (episodic dedup and telemetry read it
+        there)."""
         calls = self.mp.tool_call_service.by_exchange()
         last_compaction = max(
             (cast("int", call.id) for call in calls if call.tool_name == "chat_history_compactor"),
             default=0,
         )
-        lines = [
-            f"[{call.tool_name}] {call.params} → {call.result}"
-            for call in calls
-            if call.tool_name != "chat_history_compactor" and cast("int", call.id) > last_compaction
-        ]
-        return "\n".join(lines)
+        parts: list[str] = []
+        for call in calls:
+            if call.tool_name == "chat_history_compactor" or cast("int", call.id) <= last_compaction:
+                continue
+            result = call.result
+            if call.tool_name == MemoryAbility.NAME and '"_auto": true' in call.params:
+                body = result.split("\n", 1)[1] if "\n" in result else result
+                parts.append(
+                    f"[background_memory]\n{body}".replace("[end:memory]", "[end:background_memory]")
+                )
+                continue
+            parts.append(f"[{call.tool_name}] {call.params} → {result}")
+        return "\n".join(parts)
 
     # ── dispatch + safe-fragment helpers ─────────────────────────────────────
 

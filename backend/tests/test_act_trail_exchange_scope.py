@@ -100,6 +100,38 @@ def test_reply_exchange_sees_only_its_own_tool_calls(db: sqlite3.Connection) -> 
     )
 
 
+def test_seed_recall_renders_as_background_memory_block(db: sqlite3.Connection) -> None:
+    """The turn-0 auto-seed recall (``"_auto": true`` params) renders as a
+    ``[background_memory]`` context block — same envelope body, relabeled
+    wrapper, no ``[memory] {params} → …`` tool-call row. An explicit
+    model-invoked recall on the same trail still renders as a normal row."""
+    ch = "user"
+    turn = 1
+
+    uid = _input_row(ch, turn, "what's on today?")
+    step = _assistant_row(ch, turn, "checking")
+    seed_env = '[memory(status=success, query=x, results=1)]\n{"results":[{"id":"residence"}]}\n[end:memory]'
+    _tool_call(
+        step, "memory",
+        {"action": "recall", "query": "what's on today?", "_auto": True},
+        seed_env,
+    )
+    explicit_env = "[memory(status=error, code=no-results)]\nNo results found.\n[end:memory]"
+    _tool_call(step, "memory", {"action": "recall", "query": "wifi password"}, explicit_env)
+
+    from services.prompt_service import PromptService
+
+    rendered = PromptService(_bare_mp(ch, turn, uid=uid)).act_trail()
+
+    assert "[background_memory]" in rendered
+    assert "[end:background_memory]" in rendered
+    assert '{"results":[{"id":"residence"}]}' in rendered
+    assert '"_auto"' not in rendered, "the seed rendered as a tool-call row (params leaked)"
+    assert '[memory] {"action": "recall", "query": "wifi password"}' in rendered, (
+        "the explicit recall no longer renders as a normal tool-call row"
+    )
+
+
 def test_non_forked_turn_renders_whole_trail(db: sqlite3.Connection) -> None:
     """A single-exchange turn is unchanged: the exchange floor is its input row,
     the turn's lowest id, so every call still renders (no regression)."""
