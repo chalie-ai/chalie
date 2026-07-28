@@ -6,8 +6,8 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Feature tests — code_agent's file toolset (edit_file,
-manage_files, move, run_script).
+"""Feature tests — code_agent's file toolset (edit_file, make_dir, delete,
+set_permissions, move, run_script).
 
 These run the REAL ``Ability.run()`` implementations against a real
 ``tmp_path`` directory and, for ``run_script``, a REAL Deno subprocess.
@@ -26,13 +26,17 @@ from pathlib import Path
 
 import pytest
 
-from abilities.manage_files import ManageFilesAbility
+from abilities.delete import DeleteAbility
+from abilities.make_dir import MakeDirAbility
 from abilities.move import MoveAbility
 from abilities.edit_file import EditFileAbility
 from abilities.run_script import RunScriptAbility
+from abilities.set_permissions import SetPermissionsAbility
 from configs.enums.param_key import Keys
-from contracts.params.manage_files_params_bag import ManageFilesParamsBag
+from contracts.params.delete_params_bag import DeleteParamsBag
+from contracts.params.make_dir_params_bag import MakeDirParamsBag
 from contracts.params.move_params_bag import MoveParamsBag
+from contracts.params.set_permissions_params_bag import SetPermissionsParamsBag
 from contracts.params.edit_file_params_bag import EditFileParamsBag
 from contracts.params.run_script_params_bag import RunScriptParamsBag
 from tests._tool_result_harness import built
@@ -128,48 +132,113 @@ def test_edit_file_errors(tmp_path: Path) -> None:
     assert result.code == "invalid-path"
 
 
-# ── manage_files ─────────────────────────────────────────────────────────────
+# ── make_dir ─────────────────────────────────────────────────────────────────
 
-def test_manage_files_create(tmp_path: Path) -> None:
-    """manage_files action=create makes an empty file at the given path."""
-    target = tmp_path / "new_file.txt"
-    result = ManageFilesAbility().run(built(ManageFilesParamsBag.from_params({
-        Keys.action: "create",
+def test_make_dir_creates_a_directory_with_parents(tmp_path: Path) -> None:
+    """make_dir creates the directory AND any missing parents in one call."""
+    target = tmp_path / "outer" / "inner"
+
+    result = MakeDirAbility().run(built(MakeDirParamsBag.from_params({
         Keys.path: str(target),
     })))
 
     assert result.status == "success"
-    assert target.exists()
-    assert target.read_text(encoding="utf-8") == ""
+    assert target.is_dir()
+    assert (tmp_path / "outer").is_dir()
 
 
-def test_manage_files_delete(tmp_path: Path) -> None:
-    """manage_files action=delete removes the file; missing target errors."""
+def test_make_dir_makes_a_directory_not_a_file(tmp_path: Path) -> None:
+    """A path with no trailing slash is STILL a directory.
+
+    The tool it replaces switched between file and folder on a trailing slash
+    (a heuristic a small model routinely got wrong). make_dir has one outcome,
+    so the same argument that used to produce an empty FILE now produces a
+    DIRECTORY — this is the assertion that pins the split."""
+    target = tmp_path / "no_trailing_slash"
+
+    result = MakeDirAbility().run(built(MakeDirParamsBag.from_params({
+        Keys.path: str(target),
+    })))
+
+    assert result.status == "success"
+    assert target.is_dir()
+    assert not target.is_file()
+
+
+def test_make_dir_refuses_an_existing_path(tmp_path: Path) -> None:
+    """An existing directory — and an existing FILE at the same path — are both
+    already-exists, never a silent success."""
+    existing_dir = tmp_path / "already"
+    existing_dir.mkdir()
+    existing_file = tmp_path / "occupied.txt"
+    existing_file.write_text("content", encoding="utf-8")
+
+    for path in (existing_dir, existing_file):
+        result = MakeDirAbility().run(built(MakeDirParamsBag.from_params({
+            Keys.path: str(path),
+        })))
+        assert result.status == "error", path
+        assert result.code == "already-exists", path
+
+    # The occupied file is untouched — the refusal did not truncate it.
+    assert existing_file.read_text(encoding="utf-8") == "content"
+
+
+def test_make_dir_requires_an_absolute_path(tmp_path: Path) -> None:
+    """A relative path is refused with invalid-path and creates nothing."""
+    assert tmp_path is not None
+
+    result = MakeDirAbility().run(built(MakeDirParamsBag.from_params({
+        Keys.path: "relative/dir",
+    })))
+
+    assert result.status == "error"
+    assert result.code == "invalid-path"
+
+
+# ── delete ───────────────────────────────────────────────────────────────────
+
+def test_delete_removes_a_file(tmp_path: Path) -> None:
+    """delete removes the file; deleting it again is a loud not-found."""
     target = tmp_path / "to_delete.txt"
     target.write_text("content", encoding="utf-8")
 
-    result = ManageFilesAbility().run(built(ManageFilesParamsBag.from_params({
-        Keys.action: "delete",
+    result = DeleteAbility().run(built(DeleteParamsBag.from_params({
         Keys.path: str(target),
     })))
     assert result.status == "success"
     assert not target.exists()
 
-    missing = ManageFilesAbility().run(built(ManageFilesParamsBag.from_params({
-        Keys.action: "delete",
+    missing = DeleteAbility().run(built(DeleteParamsBag.from_params({
         Keys.path: str(target),
     })))
     assert missing.status == "error"
     assert missing.code == "not-found"
 
 
-def test_manage_files_update_permission(tmp_path: Path) -> None:
-    """manage_files action=update_permission changes the file mode on disk."""
+def test_delete_removes_a_folder_recursively(tmp_path: Path) -> None:
+    """delete on a folder removes the folder and everything inside it."""
+    target = tmp_path / "tree"
+    (target / "nested").mkdir(parents=True)
+    (target / "nested" / "leaf.txt").write_text("content", encoding="utf-8")
+
+    result = DeleteAbility().run(built(DeleteParamsBag.from_params({
+        Keys.path: str(target),
+    })))
+
+    assert result.status == "success"
+    assert not target.exists()
+
+
+# ── set_permissions ──────────────────────────────────────────────────────────
+
+def test_set_permissions_changes_the_mode_on_disk(tmp_path: Path) -> None:
+    """set_permissions chmods the real file; the new mode is readable from the
+    filesystem, not just echoed back by the tool."""
     target = tmp_path / "perm_file.txt"
     target.write_text("content", encoding="utf-8")
 
-    result = ManageFilesAbility().run(built(ManageFilesParamsBag.from_params({
-        Keys.action: "update_permission",
+    result = SetPermissionsAbility().run(built(SetPermissionsParamsBag.from_params({
         Keys.path: str(target),
         Keys.permission_code: "0755",
     })))
@@ -177,6 +246,36 @@ def test_manage_files_update_permission(tmp_path: Path) -> None:
 
     mode = os.stat(target).st_mode & 0o7777
     assert mode == 0o755
+
+
+def test_set_permissions_rejects_a_bad_code_before_touching_the_file(
+    tmp_path: Path,
+) -> None:
+    """An unparseable permission code is invalid-param and the mode on disk is
+    unchanged — validation happens before the chmod syscall."""
+    target = tmp_path / "perm_file.txt"
+    target.write_text("content", encoding="utf-8")
+    os.chmod(target, 0o644)
+
+    result = SetPermissionsAbility().run(built(SetPermissionsParamsBag.from_params({
+        Keys.path: str(target),
+        Keys.permission_code: "99999",
+    })))
+
+    assert result.status == "error"
+    assert result.code == "invalid-param"
+    assert os.stat(target).st_mode & 0o7777 == 0o644
+
+
+def test_set_permissions_on_a_missing_path_is_not_found(tmp_path: Path) -> None:
+    """A path that does not exist is not-found, never a silent success."""
+    result = SetPermissionsAbility().run(built(SetPermissionsParamsBag.from_params({
+        Keys.path: str(tmp_path / "nope.txt"),
+        Keys.permission_code: "0644",
+    })))
+
+    assert result.status == "error"
+    assert result.code == "not-found"
 
 
 # ── move ─────────────────────────────────────────────────────────────────────

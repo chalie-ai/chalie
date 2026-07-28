@@ -19,7 +19,7 @@ counted, including one the first edit had already invalidated. The second edit
 then anchors on text the file no longer contains, returns ``not-found``, and the
 model retries it until the runaway backstop kills the turn.
 
-``file_write`` alone opts into the extra ``truncated-read`` refusal (cases 1-2):
+``write_file`` alone opts into the extra ``truncated-read`` refusal (cases 1-2):
 a truncated read is fatal to a whole-file overwrite, which would destroy the tail
 the model never saw, and harmless to an anchored edit, which only touches text
 the model quoted back verbatim. Truncation itself comes from
@@ -30,7 +30,7 @@ row — the exact field the guard reads back.
 
 Cases 1-7 drive the REAL production entry point end to end: a real
 ``MessageProcessor`` turn against the real SQLite DB (``db`` fixture), the real
-``DispatchService``, the real ``read``/``file_write``/``edit_file`` abilities, and
+``DispatchService``, the real ``read``/``write_file``/``edit_file`` abilities, and
 real files on disk under ``tmp_path``. The only substitution is the LLM network
 boundary (``services.provider_service.build_client``), scripted to replay one tool
 call per step — mirrors ``test_dispatch_repeat_call_steer.py``. All three tools
@@ -172,7 +172,7 @@ def test_truncated_read_blocks_overwrite_file_unchanged(
     db: sqlite3.Connection, tmp_path: Path,
 ) -> None:
     """A read that truncated the file (max_chars=100 on content > 100 chars)
-    refuses the very next file_write on the same path with
+    refuses the very next write_file on the same path with
     code=truncated-read, and the file on disk is left byte-identical."""
     assert db is not None
     target = tmp_path / "notes.txt"
@@ -185,7 +185,7 @@ def test_truncated_read_blocks_overwrite_file_unchanged(
         ),
         ProviderResponse(
             text="", model="scripted",
-            tool_calls=[_tool("file_write", path=str(target), contents="attempted-overwrite-A")],
+            tool_calls=[_tool("write_file", path=str(target), contents="attempted-overwrite-A")],
         ),
         ProviderResponse(text="All done.", model="scripted", tool_calls=None),
     )
@@ -193,7 +193,7 @@ def test_truncated_read_blocks_overwrite_file_unchanged(
     mp = _run(provider, "read the notes file then overwrite it")
 
     reads = [c for c in mp.tool_call_service.by_turn() if c.tool_name == "read"]
-    writes = [c for c in mp.tool_call_service.by_turn() if c.tool_name == "file_write"]
+    writes = [c for c in mp.tool_call_service.by_turn() if c.tool_name == "write_file"]
 
     assert len(reads) == 1
     assert "truncated=true" in _open_tag(reads[0].result), reads[0].result
@@ -213,7 +213,7 @@ def test_fresh_full_read_after_truncated_read_allows_overwrite(
 ) -> None:
     """Most-recent-read semantics: after case 1's refusal, re-reading the SAME
     target with no truncation (max_chars large enough for the full content)
-    makes the following file_write succeed and rewrite the file — the newer
+    makes the following write_file succeed and rewrite the file — the newer
     full read overrides the older truncated one."""
     assert db is not None
     target = tmp_path / "notes.txt"
@@ -226,7 +226,7 @@ def test_fresh_full_read_after_truncated_read_allows_overwrite(
         ),
         ProviderResponse(
             text="", model="scripted",
-            tool_calls=[_tool("file_write", path=str(target), contents="attempted-overwrite-A")],  # refused
+            tool_calls=[_tool("write_file", path=str(target), contents="attempted-overwrite-A")],  # refused
         ),
         ProviderResponse(
             text="", model="scripted",
@@ -234,7 +234,7 @@ def test_fresh_full_read_after_truncated_read_allows_overwrite(
         ),
         ProviderResponse(
             text="", model="scripted",
-            tool_calls=[_tool("file_write", path=str(target), contents="final-content-B")],  # allowed
+            tool_calls=[_tool("write_file", path=str(target), contents="final-content-B")],  # allowed
         ),
         ProviderResponse(text="All done.", model="scripted", tool_calls=None),
     )
@@ -242,7 +242,7 @@ def test_fresh_full_read_after_truncated_read_allows_overwrite(
     mp = _run(provider, "read the notes file, retry after a fresh full read")
 
     reads = [c for c in mp.tool_call_service.by_turn() if c.tool_name == "read"]
-    writes = [c for c in mp.tool_call_service.by_turn() if c.tool_name == "file_write"]
+    writes = [c for c in mp.tool_call_service.by_turn() if c.tool_name == "write_file"]
 
     assert len(reads) == 2
     assert "truncated=true" in _open_tag(reads[0].result), reads[0].result
@@ -263,7 +263,7 @@ def test_fresh_full_read_after_truncated_read_allows_overwrite(
 def test_write_without_prior_read_this_turn_is_refused(
     db: sqlite3.Connection, tmp_path: Path,
 ) -> None:
-    """Regression pin for the pre-existing behaviour: file_write on an existing
+    """Regression pin for the pre-existing behaviour: write_file on an existing
     file with NO prior read this turn is refused with code=read-required, and
     the file on disk is left untouched."""
     assert db is not None
@@ -273,14 +273,14 @@ def test_write_without_prior_read_this_turn_is_refused(
     provider = _ScriptedProvider(
         ProviderResponse(
             text="", model="scripted",
-            tool_calls=[_tool("file_write", path=str(target), contents="no-read-content")],
+            tool_calls=[_tool("write_file", path=str(target), contents="no-read-content")],
         ),
         ProviderResponse(text="All done.", model="scripted", tool_calls=None),
     )
 
     mp = _run(provider, "overwrite the notes file without reading it first")
 
-    writes = [c for c in mp.tool_call_service.by_turn() if c.tool_name == "file_write"]
+    writes = [c for c in mp.tool_call_service.by_turn() if c.tool_name == "write_file"]
 
     assert len(writes) == 1
     assert writes[0].state == ToolCall.ERROR
@@ -295,7 +295,7 @@ def test_write_without_prior_read_this_turn_is_refused(
 def test_edit_without_prior_read_this_turn_is_refused(
     db: sqlite3.Connection, tmp_path: Path,
 ) -> None:
-    """The guard is not file_write's alone: an anchored edit on a file the model
+    """The guard is not write_file's alone: an anchored edit on a file the model
     has not read this turn is refused with code=read-required, and the file on
     disk is left untouched."""
     assert db is not None
@@ -458,7 +458,7 @@ def test_failed_edit_does_not_invalidate_the_read(
     assert target.read_text(encoding="utf-8") == "alpha\nBETA\ngamma\n"
 
 
-# ── Case 9: the staleness rule binds file_write too ──────────────────────────
+# ── Case 9: the staleness rule binds write_file too ──────────────────────────
 
 
 def test_second_write_behind_one_read_is_refused_as_stale(
@@ -477,18 +477,18 @@ def test_second_write_behind_one_read_is_refused_as_stale(
         ),
         ProviderResponse(
             text="", model="scripted",
-            tool_calls=[_tool("file_write", path=str(target), contents="first-write\n")],
+            tool_calls=[_tool("write_file", path=str(target), contents="first-write\n")],
         ),
         ProviderResponse(
             text="", model="scripted",
-            tool_calls=[_tool("file_write", path=str(target), contents="second-write\n")],
+            tool_calls=[_tool("write_file", path=str(target), contents="second-write\n")],
         ),
         ProviderResponse(text="I need to re-read.", model="scripted", tool_calls=None),
     )
 
     mp = _run(provider, "read the notes file then overwrite it twice")
 
-    assert _codes(_calls(mp, "file_write")) == ["status=success", "code=read-required"]
+    assert _codes(_calls(mp, "write_file")) == ["status=success", "code=read-required"]
     assert target.read_text(encoding="utf-8") == "first-write\n"
 
 

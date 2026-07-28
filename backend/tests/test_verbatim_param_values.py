@@ -20,7 +20,7 @@ replace="")`` deleted only ``"DELETE THIS LINE"`` and left a blank line behind,
 because the trailing newline never reached the ability. The same trim made
 indentation edits, whole-file clears, and whitespace-only replacements
 impossible, and it silently dropped the trailing newline from every file
-``file_write`` has ever written.
+``write_file`` has ever written.
 
 The fix is an opt-OUT: scrubbing stays the global rule and an ability names the
 few params that must arrive untouched. Cases 1-4 drive real turns end to end;
@@ -32,7 +32,7 @@ Cases 1-4 use the real production entry point: a real ``MessageProcessor`` turn
 against the real SQLite DB (``db`` fixture), the real ``DispatchService``, the
 real abilities, and real files under ``tmp_path``. The only substitution is the
 LLM network boundary (``services.provider_service.build_client``), scripted to
-replay one tool call per step. ``edit_file`` and ``file_write`` both carry a
+replay one tool call per step. ``edit_file`` and ``write_file`` both carry a
 seeded ``allow`` policy row on the ``chat`` channel
 (``abilities/assets/policy_defaults.json``), so no policy seeding is needed.
 """
@@ -53,7 +53,7 @@ from models.tool_call import ToolCall
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 
 # ProviderService builds its thin transport client via this factory call — the
-# real network boundary (see test_file_write_truncated_read_guard.py).
+# real network boundary (see test_read_guard.py).
 _BUILD_CLIENT = "services.provider_service.build_client"
 
 
@@ -240,7 +240,7 @@ def test_edit_file_can_clear_a_file_to_zero_bytes(
 # ── Case 4: a written file keeps the trailing newline the model chose ────────
 
 
-def test_file_write_keeps_the_trailing_newline(
+def test_write_file_keeps_the_trailing_newline(
     db: sqlite3.Connection, tmp_path: Path,
 ) -> None:
     """``contents`` is stored, not interpreted: the file on disk is byte-identical
@@ -252,14 +252,14 @@ def test_file_write_keeps_the_trailing_newline(
     provider = _ScriptedProvider(
         ProviderResponse(
             text="", model="scripted",
-            tool_calls=[_tool("file_write", path=str(target), contents="alpha\nomega\n")],
+            tool_calls=[_tool("write_file", path=str(target), contents="alpha\nomega\n")],
         ),
         ProviderResponse(text="Written.", model="scripted", tool_calls=None),
     )
 
     mp = _run(provider, "write a two-line file")
 
-    _assert_succeeded(mp, "file_write")
+    _assert_succeeded(mp, "write_file")
     assert target.read_text(encoding="utf-8") == "alpha\nomega\n"
 
 

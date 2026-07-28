@@ -147,7 +147,7 @@ class SkillBuilderAbility(Ability[SkillBuilderParamsBag]):
                 "description": (
                     "The skill body as numbered steps (1. 2. 3. …). "
                     "Each step MUST: start with a verb, reference a tool name in backticks "
-                    "(e.g. `memory`, `search`, `file_write`), and describe one clear action. "
+                    "(e.g. `memory`, `search`, `write_file`), and describe one clear action. "
                     f"Available tools: {_discover_tool_names()}. "
                     "Pattern — good: '1. Use `memory` to recall dietary preferences and restrictions.' "
                     "Pattern — bad: '1. Think about what the user might want.' (no tool, vague). "

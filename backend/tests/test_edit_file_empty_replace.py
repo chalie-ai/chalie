@@ -36,7 +36,7 @@ own right ("a known action missing required params → a SINGLE
 at all before this file.
 
 Cases 1-3 drive the REAL production entry point end to end, like
-``test_file_write_truncated_read_guard.py``: a real ``MessageProcessor`` turn
+``test_read_guard.py``: a real ``MessageProcessor`` turn
 against the real SQLite DB (``db`` fixture), the real ``DispatchService`` (so
 the pre-gate genuinely runs), the real ``edit_file`` ability, and a real file
 on disk under ``tmp_path``. The only substitution is the LLM network boundary
@@ -63,7 +63,7 @@ from models.tool_call import ToolCall
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 
 # ProviderService builds its thin transport client via this factory call — the
-# real network boundary (see test_file_write_truncated_read_guard.py).
+# real network boundary (see test_read_guard.py).
 _BUILD_CLIENT = "services.provider_service.build_client"
 
 # A span bracketed by keepers, so a deletion that removes too much (or the

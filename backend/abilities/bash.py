@@ -122,8 +122,8 @@ class BashAbility(Ability[BashParamsBag]):
         f"DO USE {NAME} when you need to perform CLI actions which are NOT "
         "possible via any other available tool. "
         f"DO NOT USE {NAME} for: downloading files (use web_download), "
-        "file operations (use read, file_write, edit_file, manage_files, "
-        "search_files)."
+        "file operations (use read, write_file, edit_file, make_dir, delete, "
+        "set_permissions, search_files)."
     )
 
 
@@ -162,8 +162,9 @@ class BashAbility(Ability[BashParamsBag]):
                     "Shell command to run via bash -c. "
                     "MUST NOT be used when other tools apply: "
                     "use read for file/URL reading, search_files for finding files, "
-                    "file_write for writing files, manage_files for chmod, "
-                    "web_download for downloads, file_write for saving notes."
+                    "write_file for writing files, make_dir for directories, "
+                    "delete for removals, set_permissions for chmod, "
+                    "web_download for downloads, write_file for saving notes."
                 ),
             },
             Keys.timeout_s: {

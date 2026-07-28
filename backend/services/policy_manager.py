@@ -53,9 +53,9 @@ VALID_SETTINGS = {"internal", "allow", "ask", "deny"}
 # one delegate config) — the user-facing permission is the OUTER delegate tool
 # (``web_search`` covers search/news/web_download, ``web_browse`` covers browser,
 # ``pim`` covers email/calendar/contacts, ``code_agent`` covers ``run_script``).
-# The general file primitives (read / file_write / edit_file / move /
-# manage_files) are NOT here: they carry seeded ``allow`` rows, so the user can
-# tighten them per channel. ANY action on INTERNAL tools runs unconditionally;
+# The general file primitives (read / write_file / edit_file / move / make_dir /
+# delete / set_permissions) are NOT here: they carry seeded ``allow`` rows, so
+# the user can tighten them per channel. ANY action on INTERNAL tools runs unconditionally;
 # they never appear in the Brain policy surface, and the reap pass removes any
 # stale rows for them so this frozenset stays the single source of truth.
 INTERNAL = frozenset({

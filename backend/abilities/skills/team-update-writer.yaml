@@ -9,7 +9,7 @@ version: 1
 2. Use `memory` to recall any stored format preferences, then identify the communication type from the user's request: 3P update (Progress/Plans/Problems), newsletter, FAQ roundup, or general status report.
 3. Use `calendar` to check the current week's events and completed milestones that should be referenced in the update.
 4. Use `memory` to gather any stored accomplishments or blockers, then ask the user to confirm or add: key accomplishments, plans for next period, blockers or problems, and any items to include or exclude.
-5. Use `file_write` to draft the communication using the appropriate structure — for 3P: Progress (shipped, completed), Plans (next period goals), Problems (blockers needing help); for newsletters: headline, team updates, metrics, and next steps.
-6. Use `file_write` to write in active voice using "we" — lead with the most important information, include metrics and specifics where available, and keep it scannable.
+5. Use `write_file` to draft the communication using the appropriate structure — for 3P: Progress (shipped, completed), Plans (next period goals), Problems (blockers needing help); for newsletters: headline, team updates, metrics, and next steps.
+6. Use `write_file` to write in active voice using "we" — lead with the most important information, include metrics and specifics where available, and keep it scannable.
 7. Present the draft to the user for review and refine based on feedback.
-8. Use `email` to send the approved update, or use `file_write` to save it for distribution through another channel.
+8. Use `email` to send the approved update, or use `write_file` to save it for distribution through another channel.

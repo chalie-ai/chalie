@@ -245,8 +245,17 @@ def test_summary_excludes_tools_already_loaded_in_context() -> None:
     """A tool the model can already call is noise in a menu whose only job is
     loading tools it cannot — so anything in ``mp.active_tools`` is dropped, and a
     category emptied by that drops with it rather than leaving a bare heading."""
-    loaded = ["find_tools", "read", "file_write", "edit_file", "move",
-              "manage_files", "search_files"]
+    # Derived, not hardcoded: the "emptied category drops" half of this test
+    # only holds if EVERY File Operations tool is loaded, and that roster grows
+    # (write_file / make_dir / delete / set_permissions replaced one merged
+    # tool). A literal list silently stops testing the second assertion the day
+    # a tool is added to the category.
+    file_ops = [
+        name for name in AbilityRegistry.discoverable_names()
+        if AbilityRegistry.get(name).CATEGORY is AbilityCategory.FILE_OPERATIONS
+    ]
+    assert len(file_ops) == 8, f"expected the 8 file primitives, got {sorted(file_ops)}"
+    loaded = ["find_tools", *file_ops]
     summary = FindToolsAbility(mp=_mp_with_loaded(loaded)).get_summary()
 
     for name in loaded:

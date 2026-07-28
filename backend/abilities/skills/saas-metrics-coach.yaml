@@ -10,6 +10,6 @@ version: 1
 3. Use `code_agent` to calculate: ARR, MRR growth percentage, monthly churn rate, CAC, LTV, LTV:CAC ratio, CAC payback period, and NRR.
 4. Use `search` to benchmark each metric against industry standards for the user's market segment (Enterprise, Mid-Market, SMB, or PLG) and stage (Early, Growth, or Scale), labeling each as HEALTHY, WATCH, or CRITICAL.
 5. Use `code_agent` to identify the top 2 to 3 metrics at WATCH or CRITICAL status, ordered by business impact.
-6. Use `file_write` to state for each priority issue: what is happening (one sentence), why it matters, and two to three specific actions to take this month.
+6. Use `write_file` to state for each priority issue: what is happening (one sentence), why it matters, and two to three specific actions to take this month.
 7. Present the report in a fixed structure: Metrics at a Glance table, Overall Picture (2-3 sentences), Priority Issues, What is Working (genuine strengths only), and a 90-Day Focus with a single numeric target.
-8. Use `file_write` to save the health report and use `memory` to store the metrics baseline for trend tracking.
+8. Use `write_file` to save the health report and use `memory` to store the metrics baseline for trend tracking.

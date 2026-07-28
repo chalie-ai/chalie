@@ -80,7 +80,7 @@ class FindToolsAbility(Ability):
         return [
             'Check the weather — query ["weather"]',
             'Search the web — query ["web_search"]',
-            'Work with files — query ["manage_files", "file_write"]',
+            'Work with files — query ["write_file", "make_dir", "delete"]',
             'Read a page or file — query ["read"]',
             'Email or calendar — query ["pim"]',
             'Set a timer — query ["timer"]',

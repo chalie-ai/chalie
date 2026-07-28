@@ -77,14 +77,14 @@ class RunScriptAbility(Ability[RunScriptParamsBag]):
 
     def get_summary(self) -> str:
         from abilities.code_agent import CodeAgentAbility  # noqa: PLC0415
-        from abilities.file_write import FileWriteAbility  # noqa: PLC0415
+        from abilities.write_file import WriteFileAbility  # noqa: PLC0415
 
         return (
             "Run an existing TypeScript (.ts) file with Deno, with full "
             "permissions (file, network, env, and every other capability). "
             f"Scripts conventionally live in the {CodeAgentAbility.NAME} workspace (the "
             "default place the coding agent writes them), but any absolute "
-            f".ts path can be executed. Write the script with {FileWriteAbility.NAME} "
+            f".ts path can be executed. Write the script with {WriteFileAbility.NAME} "
             "first, then run it here. Optional args are passed to the "
             "script and readable inside it as Deno.args."
         )
@@ -111,7 +111,7 @@ class RunScriptAbility(Ability[RunScriptParamsBag]):
                 "type": "string",
                 "description": (
                     "Absolute path to the .ts file to run. The file must "
-                    "already exist — create it first with file_write."
+                    "already exist — create it first with write_file."
                 ),
             },
             Keys.args: {
@@ -155,7 +155,7 @@ class RunScriptAbility(Ability[RunScriptParamsBag]):
             return ToolResult.err(
                 f"{params.path} does not exist.",
                 code="not-found",
-                hint="use file_write to create the script first.",
+                hint="use write_file to create the script first.",
             )
 
         if script_path.suffix != ".ts":

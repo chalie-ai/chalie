@@ -11,5 +11,5 @@ version: 1
 4. Use `read` to extract specs, pricing, and availability from the most relevant product pages or comparison sites.
 5. Use `search` to find independent user reviews for the top 3 candidates — look for patterns in complaints and praise rather than single reviews.
 6. Use `browser` if a retailer site requires JS to display pricing or availability correctly.
-7. Use `file_write` to produce a comparison table: product name, price, key specs, and pros/cons — then give a clear recommendation with the single most important reason for the choice.
+7. Use `write_file` to produce a comparison table: product name, price, key specs, and pros/cons — then give a clear recommendation with the single most important reason for the choice.
 8. Use `list` to add the recommended item to a shopping list if the user wants to track it.

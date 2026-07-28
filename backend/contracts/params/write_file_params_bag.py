@@ -1,4 +1,4 @@
-"""FileWriteParamsBag — the typed input contract of the ``file_write`` ability."""
+"""WriteFileParamsBag — the typed input contract of the ``write_file`` ability."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from contracts.params.param_bag import ParamBag
 
 
 @dataclass(frozen=True, slots=True)
-class FileWriteParamsBag(ParamBag):
+class WriteFileParamsBag(ParamBag):
     """``path`` — absolute path to write to, required. ``contents`` — the file
     body, required by PRESENCE, not truthiness: an empty string is valid user
     data (writes a 0-byte file / truncates), so only a genuinely absent key or

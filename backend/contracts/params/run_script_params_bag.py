@@ -13,7 +13,7 @@ from contracts.params.param_bag import ParamBag
 @dataclass(frozen=True, slots=True)
 class RunScriptParamsBag(ParamBag):
     """``path`` — absolute path to the .ts file to run, required; the model
-    must create it first with file_write. ``args`` — optional command-line
+    must create it first with write_file. ``args`` — optional command-line
     arguments passed to the script (readable inside it as Deno.args); defaults
     to an empty list. A non-list value for ``args`` is rejected here with
     ``code="invalid-args"`` to match the ability's original error contract."""

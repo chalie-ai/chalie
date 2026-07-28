@@ -6,10 +6,10 @@ version: 1
 ---
 
 1. Use `memory` to recall any relevant background or previous analysis on this issue.
-2. State the problem clearly as a single observable symptom or failure, then use `file_write` to capture the Why chain.
-3. Ask "Why did this happen?" and record the first-level cause via `file_write`.
-4. For each answer, ask "Why?" again and record each level via `file_write` until reaching a systemic or process-level root cause (typically 4-6 iterations).
-5. When multiple branches of causes emerge, use `file_write` to trace each branch separately — capture all paths to prevent missed root causes.
+2. State the problem clearly as a single observable symptom or failure, then use `write_file` to capture the Why chain.
+3. Ask "Why did this happen?" and record the first-level cause via `write_file`.
+4. For each answer, ask "Why?" again and record each level via `write_file` until reaching a systemic or process-level root cause (typically 4-6 iterations).
+5. When multiple branches of causes emerge, use `write_file` to trace each branch separately — capture all paths to prevent missed root causes.
 6. Use `search` to validate the root cause against known patterns, documentation, or prior incidents.
 7. Propose solutions that address the root cause rather than the surface symptom — confirm plausibility via `search` if the domain is technical or specialised.
-8. Use `file_write` to save the complete 5 Whys chain and proposed solutions for future reference.
+8. Use `write_file` to save the complete 5 Whys chain and proposed solutions for future reference.

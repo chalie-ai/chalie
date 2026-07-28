@@ -11,5 +11,5 @@ version: 1
 4. Use `memory` to recall any prior product context, positioning, or ICP notes that should inform the evaluation.
 5. Use `search` to benchmark the product's positioning and messaging against 2–3 direct competitors' homepages.
 6. Use `memory` to evaluate each in-scope dimension against best practices: clarity of the core value proposition, evidence of user benefit (vs. features), navigation findability, and CTA prominence.
-7. Use `file_write` to produce a structured audit report: one section per dimension with a score (1–5), what works, what is broken or unclear, and a specific recommended fix with an example.
-8. Use `file_write` to save the full audit report with prioritised recommendations ranked by expected impact.
+7. Use `write_file` to produce a structured audit report: one section per dimension with a score (1–5), what works, what is broken or unclear, and a specific recommended fix with an example.
+8. Use `write_file` to save the full audit report with prioritised recommendations ranked by expected impact.

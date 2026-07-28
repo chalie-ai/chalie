@@ -79,10 +79,10 @@ def read_guard(
         return None
 
     from abilities.edit_file import EditFileAbility  # noqa: PLC0415
-    from abilities.file_write import FileWriteAbility  # noqa: PLC0415
+    from abilities.write_file import WriteFileAbility  # noqa: PLC0415
     from abilities.read import ReadAbility  # noqa: PLC0415
 
-    mutators = (FileWriteAbility.NAME, EditFileAbility.NAME)
+    mutators = (WriteFileAbility.NAME, EditFileAbility.NAME)
     last_read: ToolCall | None = None
     stale_by: ToolCall | None = None
     # ``by_turn`` yields the turn's calls in autoincrement-id order, so "newer

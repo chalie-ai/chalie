@@ -8,8 +8,8 @@ version: 1
 1. Use `memory` to recall any stored red lines or prior contract preferences, then ask the user to paste the contract text or provide a URL and clarify the agreement type (employment, SaaS terms, partnership, NDA, vendor, lease, etc.).
 2. Use `read` to fetch the contract if provided as a URL.
 3. Use `memory` to recall any prior contract preferences, red lines, or legal notes the user has stored.
-4. Use `file_write` to extract and record the key structural elements: parties, effective date, term/duration, payment/compensation, scope of services or obligations, and termination conditions.
-5. Use `file_write` to flag any clauses that are unusual, one-sided, or potentially risky: auto-renewal, arbitration/jurisdiction, IP assignment, liability caps, non-compete or non-solicit, penalty clauses, or data handling terms.
-6. Use `file_write` to produce a plain-language summary: one paragraph per major section, written as if explaining to a non-lawyer — note what each party is committing to.
-7. Use `file_write` to list the top 3–5 points to negotiate or clarify before signing, with a brief explanation of why each matters.
-8. Use `file_write` to save the review summary — note that this is not legal advice and the user should consult a solicitor for binding agreements.
+4. Use `write_file` to extract and record the key structural elements: parties, effective date, term/duration, payment/compensation, scope of services or obligations, and termination conditions.
+5. Use `write_file` to flag any clauses that are unusual, one-sided, or potentially risky: auto-renewal, arbitration/jurisdiction, IP assignment, liability caps, non-compete or non-solicit, penalty clauses, or data handling terms.
+6. Use `write_file` to produce a plain-language summary: one paragraph per major section, written as if explaining to a non-lawyer — note what each party is committing to.
+7. Use `write_file` to list the top 3–5 points to negotiate or clarify before signing, with a brief explanation of why each matters.
+8. Use `write_file` to save the review summary — note that this is not legal advice and the user should consult a solicitor for binding agreements.

@@ -8,8 +8,8 @@ version: 1
 1. Use `memory` to recall any prior context or past attempts related to the problem.
 2. Establish the background section: capture why this problem matters, who it affects, and its business or personal impact — use `search` to verify any facts or figures cited.
 3. Use `memory` to surface the current condition: record facts, data points, and examples of what is actually happening now.
-4. Define the goal or target using `file_write` as scratch space: specify what success looks like in measurable, time-bound terms.
+4. Define the goal or target using `write_file` as scratch space: specify what success looks like in measurable, time-bound terms.
 5. Apply 5 Whys or Fishbone thinking to identify the fundamental root cause, not just symptoms — use `search` to validate hypotheses against known patterns or documentation.
-6. Record countermeasures with `file_write`: list specific actions that address the root cause directly, categorised by timeframe (immediate, short-term, long-term).
-7. Note the implementation plan inline via `file_write`: specify who does what by when, including dependencies and milestones.
-8. Use `file_write` to save the completed A3 analysis, including success metrics, monitoring approach, and review dates to verify the fix holds.
+6. Record countermeasures with `write_file`: list specific actions that address the root cause directly, categorised by timeframe (immediate, short-term, long-term).
+7. Note the implementation plan inline via `write_file`: specify who does what by when, including dependencies and milestones.
+8. Use `write_file` to save the completed A3 analysis, including success metrics, monitoring approach, and review dates to verify the fix holds.

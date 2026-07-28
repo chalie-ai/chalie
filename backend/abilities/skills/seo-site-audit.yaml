@@ -10,6 +10,6 @@ version: 1
 3. Use the `read` tool to fetch and inspect the site's homepage and key landing pages for title tags, meta descriptions, heading structure, and content quality.
 4. Use the `search` tool to check how the site currently appears in search results for its target keywords.
 5. Use the `search` tool to identify competitor pages that outrank the site on core topics and surface gap opportunities.
-6. Use `file_write` to audit findings across three categories: Technical SEO (indexation, speed signals, mobile), On-Page SEO (title tags, meta descriptions, heading hierarchy, internal links), and Content (thin content, keyword gaps, topical authority).
-7. Use `file_write` to record for each issue: what is wrong, the SEO impact level (High/Medium/Low), evidence found, and a specific fix recommendation.
+6. Use `write_file` to audit findings across three categories: Technical SEO (indexation, speed signals, mobile), On-Page SEO (title tags, meta descriptions, heading hierarchy, internal links), and Content (thin content, keyword gaps, topical authority).
+7. Use `write_file` to record for each issue: what is wrong, the SEO impact level (High/Medium/Low), evidence found, and a specific fix recommendation.
 8. Deliver a prioritized action plan grouped as: Critical fixes → High-impact improvements → Quick wins, then save the audit summary to `memory`.

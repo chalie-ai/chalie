@@ -6,10 +6,10 @@ version: 1
 ---
 
 1. Use `memory` to recall any prior prompt work or specification preferences — then ask the user to share the prompt they want to improve and what they will use it for.
-2. Use `file_write` to analyse the original prompt and list its weaknesses: ambiguous terms, missing trigger conditions, unmeasurable outcomes, absent constraints, or undefined audience.
-3. Use `file_write` to apply EARS syntax transformation — rewrite each requirement using the appropriate pattern: Ubiquitous ("shall"), Event-driven ("When X, shall"), State-driven ("While X, shall"), Conditional ("If X, shall"), or Unwanted-behaviour ("shall prevent").
-4. Use `file_write` to ground the rewritten requirements in a relevant domain framework (e.g. GTD, BJ Fogg, WCAG) — name the framework and explain how it informs each requirement.
-5. Use `file_write` to extract 2–3 concrete use-case examples with real data values rather than placeholders, and embed them in the specification.
-6. Use `file_write` to format the final output using the Role / Skills / Workflows / Examples / Output-format structure: one paragraph each.
+2. Use `write_file` to analyse the original prompt and list its weaknesses: ambiguous terms, missing trigger conditions, unmeasurable outcomes, absent constraints, or undefined audience.
+3. Use `write_file` to apply EARS syntax transformation — rewrite each requirement using the appropriate pattern: Ubiquitous ("shall"), Event-driven ("When X, shall"), State-driven ("While X, shall"), Conditional ("If X, shall"), or Unwanted-behaviour ("shall prevent").
+4. Use `write_file` to ground the rewritten requirements in a relevant domain framework (e.g. GTD, BJ Fogg, WCAG) — name the framework and explain how it informs each requirement.
+5. Use `write_file` to extract 2–3 concrete use-case examples with real data values rather than placeholders, and embed them in the specification.
+6. Use `write_file` to format the final output using the Role / Skills / Workflows / Examples / Output-format structure: one paragraph each.
 7. Present the refined prompt alongside a before/after comparison, highlighting the specific improvements made.
-8. Use `file_write` to save the refined specification if the user wants to keep it.
+8. Use `write_file` to save the refined specification if the user wants to keep it.

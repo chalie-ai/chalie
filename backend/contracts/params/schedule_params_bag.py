@@ -1,8 +1,7 @@
 """ScheduleParamsBag — the typed input contract of the ``schedule`` ability.
 
-The multi-action shape (exemplar: ``ManageFilesParamsBag``): the router reads
-``action`` once and fans out to the per-action leaf; ``run()`` narrows back to
-a leaf via ``isinstance``. ``ScheduleUpdateParams`` SUBCLASSES
+The multi-action shape: the router reads ``action`` once and fans out to the
+per-action leaf; ``run()`` narrows back to a leaf via ``isinstance``. ``ScheduleUpdateParams`` SUBCLASSES
 ``ScheduleCreateParams``: update is a compose (cancel + create), so its leaf
 carries every create field plus the target ``item_id`` — one validation path
 for both actions, and an update bag IS a create bag wherever the create

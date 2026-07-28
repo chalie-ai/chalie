@@ -7,9 +7,9 @@ version: 1
 
 1. Use `memory` to recall the company's current stated strategic priorities and any prior alignment assessments.
 2. Use `memory` to recall stored OKRs or priorities, then ask the user to state the company's single most important strategic priority in one sentence — if it takes a paragraph, flag that the strategy is not clear enough to cascade.
-3. Use `file_write` to map the goal cascade: company OKRs down to department OKRs down to team OKRs, identifying which company goal each lower-level goal is meant to support.
-4. Use `file_write` to detect orphan goals (team goals with no parent company OKR), conflicting goals (two teams' goals that produce worse outcomes when both succeed), and coverage gaps (company OKRs with no team owning them).
-5. Use `file_write` to produce an alignment report listing all detected orphans, conflicts, and gaps with recommended fixes.
-6. Use `file_write` to recommend explicit ownership assignments for any unowned company OKRs.
-7. Use `file_write` to save the cascade map and alignment report.
+3. Use `write_file` to map the goal cascade: company OKRs down to department OKRs down to team OKRs, identifying which company goal each lower-level goal is meant to support.
+4. Use `write_file` to detect orphan goals (team goals with no parent company OKR), conflicting goals (two teams' goals that produce worse outcomes when both succeed), and coverage gaps (company OKRs with no team owning them).
+5. Use `write_file` to produce an alignment report listing all detected orphans, conflicts, and gaps with recommended fixes.
+6. Use `write_file` to recommend explicit ownership assignments for any unowned company OKRs.
+7. Use `write_file` to save the cascade map and alignment report.
 8. Use `memory` to store the alignment findings so they can be referenced in the next planning cycle.

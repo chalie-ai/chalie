@@ -7,9 +7,9 @@ version: 1
 
 1. Use `memory` to recall any known writing preferences or past style guidance for the user.
 2. Use `read` to load the text if it is at a URL or file path, then identify its purpose and intended audience.
-3. Apply active voice and positive form throughout: rewrite passive constructions and replace negatives ("not clear") with direct assertions ("unclear") — capture the revised draft via `file_write`.
-4. Use definite, specific, concrete language: replace vague phrases with precise words and cut filler, redundancy, and throat-clearing — update the draft via `file_write` with each pass.
-5. Keep related words together and place emphatic words at sentence endings for maximum impact — note changes inline via `file_write`.
-6. Ensure each paragraph covers one topic and opens with a clear topic sentence — restructure via `file_write` where needed.
+3. Apply active voice and positive form throughout: rewrite passive constructions and replace negatives ("not clear") with direct assertions ("unclear") — capture the revised draft via `write_file`.
+4. Use definite, specific, concrete language: replace vague phrases with precise words and cut filler, redundancy, and throat-clearing — update the draft via `write_file` with each pass.
+5. Keep related words together and place emphatic words at sentence endings for maximum impact — note changes inline via `write_file`.
+6. Ensure each paragraph covers one topic and opens with a clear topic sentence — restructure via `write_file` where needed.
 7. Present the revised text to the user with a brief note on key changes, then ask if further refinement is needed.
-8. Use `file_write` to save the final version if the user wants to keep it.
+8. Use `write_file` to save the final version if the user wants to keep it.

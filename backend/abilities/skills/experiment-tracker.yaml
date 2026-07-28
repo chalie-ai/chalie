@@ -8,8 +8,8 @@ version: 1
 1. Ask the user to describe the goal of the experiment; use `memory` to recall any prior experiments on the same topic.
 2. Ask what they have already tried; use `memory` to check whether prior attempts are already logged.
 3. Use `memory` to recall any prior related experiments or context that might inform the approach.
-4. Use `file_write` to draft a hypothesis and a concise plan: state the specific change to try, why it is expected to work, and how success will be measured.
-5. Use `file_write` to create or update an experiment log with: goal, hypothesis, plan, attempt number, and expected outcome.
-6. After the user executes the experiment and reports back, use `file_write` to record the actual outcome in the experiment log — categorise as Success, Partial, or Failure.
-7. If the outcome was not a success, use `file_write` to log what was learned, update the hypothesis, and draft the next attempt's plan — repeating from step 4.
+4. Use `write_file` to draft a hypothesis and a concise plan: state the specific change to try, why it is expected to work, and how success will be measured.
+5. Use `write_file` to create or update an experiment log with: goal, hypothesis, plan, attempt number, and expected outcome.
+6. After the user executes the experiment and reports back, use `write_file` to record the actual outcome in the experiment log — categorise as Success, Partial, or Failure.
+7. If the outcome was not a success, use `write_file` to log what was learned, update the hypothesis, and draft the next attempt's plan — repeating from step 4.
 8. When the experiment succeeds, produce a summary of what worked, why, and what to watch out for, then save it to `memory`.

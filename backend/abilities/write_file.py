@@ -1,4 +1,4 @@
-"""FileWriteAbility — write content to a file at a caller-supplied absolute path.
+"""WriteFileAbility — write content to a file at a caller-supplied absolute path.
 
 Act-trail guard: if the target file already exists, the shared
 :func:`abilities._read_guard.read_guard` must clear the overwrite first — the
@@ -18,20 +18,20 @@ Returns a sealed :class:`abilities._result.ToolResult` (never a wire envelope):
   ``read-required`` / ``truncated-read``) — errors never masquerade as success.
 """
 
-from pathlib import Path
 from typing import ClassVar
 
 from abilities._ability import Ability
+from abilities._paths import absolute_target
 from abilities._read_guard import read_guard
 from abilities._result import ToolResult
 from configs.enums.param_key import Keys
-from contracts.params.file_write_params_bag import FileWriteParamsBag
+from contracts.params.write_file_params_bag import WriteFileParamsBag
 from contracts.params.param_bag import ParamBag
 from services.file_mapper_service import FileMapperService
 from configs.enums.ability_category import AbilityCategory
 
 
-class FileWriteAbility(Ability[FileWriteParamsBag]):
+class WriteFileAbility(Ability[WriteFileParamsBag]):
     #: Action-less tool — the ``""`` key drives the dispatcher's ACTION_REQUIRED
     #: pre-gate to reject a missing/blank ``path`` with ``code=missing-params``
     #: BEFORE run(). ``contents`` is deliberately NOT listed: the pre-gate check
@@ -45,12 +45,12 @@ class FileWriteAbility(Ability[FileWriteParamsBag]):
     #: ``path`` is still scrubbed.
     VERBATIM: ClassVar[tuple[str, ...]] = (Keys.contents,)
 
-    NAME: ClassVar[str] = "file_write"
+    NAME: ClassVar[str] = "write_file"
     CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.FILE_OPERATIONS
 
     # The typed input contract: the dispatch seam builds the bag via
-    # FileWriteParamsBag.from_params before run() is called.
-    PARAMS: ClassVar[type[ParamBag] | None] = FileWriteParamsBag
+    # WriteFileParamsBag.from_params before run() is called.
+    PARAMS: ClassVar[type[ParamBag] | None] = WriteFileParamsBag
 
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("write file", "create file", "save file")
 
@@ -103,18 +103,13 @@ class FileWriteAbility(Ability[FileWriteParamsBag]):
     def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    def run(self, params: FileWriteParamsBag) -> ToolResult:
+    def run(self, params: WriteFileParamsBag) -> ToolResult:
         path_str = params.path
         contents = params.contents
 
-        if not Path(path_str).is_absolute():
-            return ToolResult.err(
-                f"Path is not absolute: {path_str!r}.",
-                code="invalid-path",
-                hint="pass an absolute path (one starting from the filesystem root).",
-            )
-
-        target = Path(path_str).resolve()
+        target = absolute_target(path_str)
+        if isinstance(target, ToolResult):
+            return target
 
         existed = target.exists()
         if existed:

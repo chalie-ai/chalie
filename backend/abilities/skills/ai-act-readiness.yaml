@@ -7,9 +7,9 @@ version: 1
 
 1. Use `memory` to recall any prior AI Act assessments or compliance decisions for the system in scope.
 2. Confirm the AI system's description using `memory` to surface any stored context: what it does, who uses it, where it is deployed, and the organization's role (provider, deployer, importer, or distributor).
-3. Screen for Article 5 prohibited practices — use `file_write` to record findings as you go; if any of the 8 prohibited categories apply, stop and note that the system cannot be placed on the EU market.
+3. Screen for Article 5 prohibited practices — use `write_file` to record findings as you go; if any of the 8 prohibited categories apply, stop and note that the system cannot be placed on the EU market.
 4. Classify the system's risk tier under Article 6 and Annex III using `search` to confirm current Annex III category boundaries: minimal risk, limited risk, high-risk, or GPAI — note that the Annex III carve-out does not apply if the system profiles natural persons.
-5. For high-risk systems, use `file_write` to determine and record whether conformity assessment requires Module A (internal control with harmonized standards) or Module H (full QMS with notified body, required for biometrics).
-6. Check Article 50 transparency obligations and use `file_write` to record the assessment: AI interaction disclosure, synthetic content marking, emotion recognition disclosure, and deepfake labeling — these obligations are in force from 2 August 2025.
+5. For high-risk systems, use `write_file` to determine and record whether conformity assessment requires Module A (internal control with harmonized standards) or Module H (full QMS with notified body, required for biometrics).
+6. Check Article 50 transparency obligations and use `write_file` to record the assessment: AI interaction disclosure, synthetic content marking, emotion recognition disclosure, and deepfake labeling — these obligations are in force from 2 August 2025.
 7. Use `search` to verify whether any applicable harmonized standards have been published that enable presumption of conformity.
-8. Use `file_write` to save a compliance readiness report listing each question, the verdict, and the outstanding actions required before EU deployment.
+8. Use `write_file` to save a compliance readiness report listing each question, the verdict, and the outstanding actions required before EU deployment.
