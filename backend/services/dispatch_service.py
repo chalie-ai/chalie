@@ -364,7 +364,15 @@ class DispatchService:
                 valid=tuple(k for k in action_map if k),
             )
 
-        missing = [p for p in action_map[key] if not params.get(p)]
+        # Non-empty is the global rule; ``ALLOW_EMPTY`` opts a param out of it.
+        # An opted-out param is still required to be PRESENT — only its emptiness
+        # stops being a failure, so ``replace=""`` reaches the ability while a
+        # genuinely absent ``replace`` is still reported missing.
+        exempt = ability.ALLOW_EMPTY
+        missing = [
+            p for p in action_map[key]
+            if (p not in params if p in exempt else not params.get(p))
+        ]
         if missing:
             named = ", ".join(missing)
             return ToolResult.err(

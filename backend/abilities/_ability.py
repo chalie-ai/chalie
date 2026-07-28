@@ -114,6 +114,13 @@ class Ability(ABC, Generic[B]):
     # "no pre-validation" so unmigrated tools are untouched by the contract.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {}
 
+    # Param names exempt from the dispatcher pre-gate's non-empty requirement:
+    # they are still required to be PRESENT in the input (``p not in params``
+    # triggers ``missing-params``), but an empty string (``""``) is a legitimate
+    # value for them. The default is empty — every param is non-empty by
+    # default — so an ability with no ``ALLOW_EMPTY`` behaves exactly as before.
+    ALLOW_EMPTY: ClassVar[tuple[str, ...]] = ()
+
     # The ability's typed input contract: every first-party ability sets its
     # ParamBag class here and run() receives an instance the dispatcher builds
     # via the bag's from_params factory — a bad input comes back from the bag

@@ -17,7 +17,7 @@ Single-file, single-occurrence: ``path`` MUST point to an existing file, and
 the ``search`` string must match the file content exactly once — zero matches
 and ambiguous (2+) matches are both loud errors, never silent no-ops. The
 search is literal and whitespace-significant — no regex, no glob, no
-directory walk.
+directory walk. An empty ``replace`` deletes the matched text.
 """
 
 from __future__ import annotations
@@ -38,6 +38,7 @@ class EditFileAbility(Ability[EditFileParamsBag]):
     NAME: ClassVar[str] = "edit_file"
     CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.FILE_OPERATIONS
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("file edit", "modify file", "replace text")
+    ALLOW_EMPTY: ClassVar[tuple[str, ...]] = (Keys.replace_,)
 
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.search, Keys.replace_, Keys.path)}
 
@@ -82,7 +83,7 @@ class EditFileAbility(Ability[EditFileParamsBag]):
             },
             Keys.replace_: {
                 "type": "string",
-                "description": "The replacement text. Whitespace-significant.",
+                "description": "The replacement text. Whitespace-significant. An empty string deletes the matched text.",
             },
             Keys.path: {
                 "type": "string",
