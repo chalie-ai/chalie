@@ -33,6 +33,7 @@ from contracts.params.manage_files_params_bag import (
     ManageFilesUpdatePermissionParams,
 )
 from contracts.params.param_bag import ParamBag
+from configs.enums.ability_category import AbilityCategory
 
 
 class ManageFilesAbility(Ability[ManageFilesParamsBag]):
@@ -48,6 +49,7 @@ class ManageFilesAbility(Ability[ManageFilesParamsBag]):
 
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("file management", "create folder", "delete file", "file permissions", "mkdir")
     NAME: ClassVar[str] = "manage_files"
+    CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.FILE_OPERATIONS
 
     def get_summary(self) -> str:
         return (

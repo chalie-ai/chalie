@@ -18,11 +18,21 @@ from abilities._result import ToolResult
 from abilities._registry import AbilityRegistry
 from abilities.find_tools import FindToolsAbility
 from configs.channels import UserConfig
+from configs.enums.ability_category import AbilityCategory
 from contracts.params.find_tools_params_bag import FindToolsParamsBag
 from controllers.message_processor import MessageProcessor
 from services.dispatch_service import DispatchService
 
 pytestmark = pytest.mark.unit
+
+
+def _mp_with_loaded(names: list[str]) -> MessageProcessor:
+    """A real MessageProcessor whose ``active_tools`` is exactly *names* — the one
+    field ``get_summary()`` subtracts from the menu. Real, not a stub: the summary
+    reads it off the live processor on every ``build_tools`` pass."""
+    mp = MessageProcessor(UserConfig({"hidden_input": True}), raw_input="find a tool for me")
+    mp.active_tools = list(names)
+    return mp
 
 
 def _run(query: object) -> tuple[list[str], dict[str, object], str]:
@@ -199,15 +209,75 @@ def test_edge_trim_normalized_forms_resolve() -> None:
 
 def test_discoverable_roster_is_in_the_summary() -> None:
     """The roster of discoverable tools is surfaced in ``get_summary()`` (the
-    field weak models actually read), query-first, so the model knows what
-    exists before it queries. Self-no-ops to bare guidance only if the roster
-    were ever empty."""
+    field weak models actually read), so the model knows what exists before it
+    queries. Off-spine (``mp is None``) nothing is loaded, so the FULL roster
+    renders — which is also what keeps this text deterministic."""
     summary = FindToolsAbility().get_summary()
-    assert "weather" in summary, f"a discoverable tool must appear in the roster. summary={summary!r}"
-    assert "Available tools:" in summary, f"summary={summary!r}"
-    assert "mcp_tools" in summary, (
-        f"mcp_tools must appear in the summary roster. summary={summary!r}"
+    assert "**Available Tools**" in summary, f"summary={summary!r}"
+    for name in AbilityRegistry.discoverable_names():
+        assert f"- `{name}`: " in summary, (
+            f"discoverable tool '{name}' missing from the menu. summary={summary!r}"
+        )
+
+
+def test_summary_lists_each_tool_under_its_category_heading() -> None:
+    """Every rendered line sits under its ability's own CATEGORY heading, and the
+    headings come out in ``AbilityCategory`` declaration order — the enum is the
+    only ordering authority, there is no second sort key to drift from it."""
+    summary = FindToolsAbility().get_summary()
+
+    headings = [c for c in AbilityCategory if f"\n{c.value}:\n" in f"\n{summary}\n"]
+    positions = [summary.index(f"{c.value}:") for c in headings]
+    assert positions == sorted(positions), (
+        f"headings must render in enum declaration order. got={headings}"
     )
+
+    for name in AbilityRegistry.discoverable_names():
+        ability = AbilityRegistry.get(name)
+        assert ability.CATEGORY is not None
+        block = summary.split(f"{ability.CATEGORY.value}:\n", 1)[1].split("\n\n", 1)[0]
+        assert f"- `{name}`: {ability.get_search_tooltip()}" in block, (
+            f"'{name}' is not listed under '{ability.CATEGORY.value}'. block={block!r}"
+        )
+
+
+def test_summary_excludes_tools_already_loaded_in_context() -> None:
+    """A tool the model can already call is noise in a menu whose only job is
+    loading tools it cannot — so anything in ``mp.active_tools`` is dropped, and a
+    category emptied by that drops with it rather than leaving a bare heading."""
+    loaded = ["find_tools", "read", "file_write", "edit_file", "move",
+              "manage_files", "search_files"]
+    summary = FindToolsAbility(mp=_mp_with_loaded(loaded)).get_summary()
+
+    for name in loaded:
+        assert f"- `{name}`: " not in summary, (
+            f"'{name}' is already loaded and must not be offered. summary={summary!r}"
+        )
+    assert f"{AbilityCategory.FILE_OPERATIONS.value}:" not in summary, (
+        f"an emptied category must not render a bare heading. summary={summary!r}"
+    )
+    # Everything NOT loaded is still on offer.
+    assert "- `weather`: " in summary, f"summary={summary!r}"
+    assert f"{AbilityCategory.INFORMATION.value}:" in summary, f"summary={summary!r}"
+
+
+def test_summary_says_so_when_every_tool_is_already_loaded() -> None:
+    """An empty "**Available Tools**" heading reads as "no tools exist" — the
+    opposite of the truth. With nothing left to offer, say nothing is left."""
+    everything = sorted(AbilityRegistry.discoverable_names())
+    summary = FindToolsAbility(mp=_mp_with_loaded(everything)).get_summary()
+
+    assert "**Available Tools**" not in summary, f"summary={summary!r}"
+    assert "already loaded in context" in summary, f"summary={summary!r}"
+
+
+def test_summary_tells_the_model_how_to_call_find_tools() -> None:
+    """The menu is useless without the calling convention above it: names go in
+    ``query``, verbatim."""
+    summary = FindToolsAbility().get_summary()
+    assert "`find_tools`" in summary, f"summary={summary!r}"
+    assert "VERBATIM" in summary, f"summary={summary!r}"
+    assert "`query`" in summary, f"summary={summary!r}"
 
 
 # ── collision guard — duplicate SEARCHABLE_AS entries raise at discovery ─────────

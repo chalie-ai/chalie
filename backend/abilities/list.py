@@ -48,6 +48,7 @@ from contracts.params.list_params_bag import (
     ListViewParams,
 )
 from contracts.params.param_bag import ParamBag
+from configs.enums.ability_category import AbilityCategory
 
 if TYPE_CHECKING:
     from services.list_service import ListService as _ListService
@@ -85,6 +86,7 @@ class ListAbility(Ability[ListParamsBag]):
 
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("checklist", "todo list", "shopping list", "lists")
     NAME: ClassVar[str] = "list"
+    CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.PRODUCTIVITY
 
     def get_summary(self) -> str:
         return "Create and manage named lists — shopping, to-do, chores — addressed by name or id."

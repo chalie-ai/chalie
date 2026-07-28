@@ -16,6 +16,7 @@ from typing import ClassVar, cast
 
 from abilities._ability import Ability
 from abilities._result import ToolResult
+from configs.enums.ability_category import AbilityCategory
 from configs.enums.param_key import Keys
 from contracts.params.find_tools_params_bag import FindToolsParamsBag
 from contracts.params.param_bag import ParamBag
@@ -52,13 +53,28 @@ class FindToolsAbility(Ability):
     }
 
 
+    # The two standing lines above the menu. Static: they describe how to call
+    # find_tools, which never varies by request — only the menu below them does.
+    _INTRO: ClassVar[str] = (
+        "Use this tool (`find_tools`) to load more tools into context so that you "
+        "can perform more actions.\n"
+        "To use the `find_tools` simply supply the list of tool names VERBATIM "
+        "from the list below in the `query` parameter."
+    )
+
+    # Shown instead of the menu once every discoverable tool is already loaded.
+    # An empty "**Available Tools**" heading would read as "no tools exist"; this
+    # says the opposite — they are all here, call one directly.
+    _NOTHING_LEFT: ClassVar[str] = (
+        "Every available tool is already loaded in context — there is nothing "
+        "left to load. Call the tool you need directly."
+    )
+
     def get_summary(self) -> str:
-        base = (
-            "Tools are loaded by exact name from the list below (canonical name or a close variant) — "
-            "one name per array entry; describing an action does not work."
-        )
-        roster = self._build_tools_index()
-        return f"{base} Available tools: {roster}" if roster else base
+        menu = self._build_tools_index()
+        if not menu:
+            return f"{self._INTRO}\n\n{self._NOTHING_LEFT}"
+        return f"{self._INTRO}\n\n**Available Tools**\n{menu}"
 
     def get_examples(self) -> list[str]:
         return [
@@ -78,7 +94,7 @@ class FindToolsAbility(Ability):
     def get_follow_up(self, tr: ToolResult) -> str:
         """Announce the freshly-activated tools by name — live for this turn."""
         injected = tr.body.get("injected") if isinstance(tr.body, dict) else None
-        rows = cast("list[dict[str, str]]", injected) if isinstance(injected, list) else []
+        rows = injected if isinstance(injected, list) else []
         names = [n["name"] for n in rows]
         if not names:
             return ""
@@ -151,17 +167,38 @@ class FindToolsAbility(Ability):
             return ""
 
     def _build_tools_index(self) -> str:
+        """The discoverable roster grouped under its category headings, minus
+        whatever is already loaded.
+
+        A tool the model can already call is noise in a menu whose only purpose is
+        loading tools it cannot — so anything in ``mp.active_tools`` is dropped,
+        and a category left with no tools disappears with it rather than rendering
+        an empty heading. Categories come out in ``AbilityCategory`` declaration
+        order, tools alphabetically inside each.
+
+        Off-spine (``mp is None`` — introspection, index build) nothing is loaded,
+        so the full roster renders and the text stays deterministic.
+        """
         from abilities._registry import AbilityRegistry
 
-        index = {}
+        loaded = set(cast("list[str]", getattr(self.mp, "active_tools", None) or []))
+
+        grouped: dict[AbilityCategory, list[str]] = {}
         for name in sorted(AbilityRegistry.discoverable_names()):
+            if name in loaded:
+                continue
             try:
                 ability = AbilityRegistry.get(name)
-                index[name] = ability.get_search_tooltip() or ability.get_summary()
             except KeyError:
-                pass
+                continue
+            category = ability.CATEGORY
+            if category is None:  # unreachable — the registry rejects it at load
+                continue
+            tooltip = ability.get_search_tooltip() or ability.get_summary()
+            grouped.setdefault(category, []).append(f"- `{name}`: {tooltip}")
 
-        if not index:
-            return ""
-        parts = [f"`{k}` ({v})" for k, v in index.items()]
-        return ", ".join(parts)
+        return "\n\n".join(
+            "\n".join([f"{category.value}:", *grouped[category]])
+            for category in AbilityCategory
+            if category in grouped
+        )

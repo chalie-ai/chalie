@@ -46,6 +46,7 @@ import pytest
 
 from abilities._ability import Ability
 from abilities._result import ToolResult
+from configs.enums.ability_category import AbilityCategory
 from configs.enums.policy_channel import PolicyChannel
 from models.policy import Policy
 from models.provider_response import ProviderResponse
@@ -163,6 +164,9 @@ class _GatedAbility(Ability):
     keeps this fixture off that pinned set."""
 
     NAME: ClassVar[str] = "test_runner_gated"
+    # Required because the fixture stays DISCOVERABLE (see above); the registry
+    # rejects a discoverable ability with no find_tools heading.
+    CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.SYSTEM
 
     _release: ClassVar["threading.Event | None"] = None
     _started: ClassVar["threading.Event | None"] = None

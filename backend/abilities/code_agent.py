@@ -36,6 +36,7 @@ from configs.enums.param_key import Keys
 from contracts.params.delegate_params_bag import DelegateParamsBag
 from contracts.params.param_bag import ParamBag
 from services.file_mapper_service import FileMapperService
+from configs.enums.ability_category import AbilityCategory
 
 
 class CodeAgentAbility(DelegateAbility[DelegateParamsBag]):
@@ -45,6 +46,7 @@ class CodeAgentAbility(DelegateAbility[DelegateParamsBag]):
     # empty instruction never spawns an expensive delegate on an empty goal.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.instructions,)}
     NAME: ClassVar[str] = "code_agent"
+    CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.DELEGATE
 
     # The typed input contract: the dispatch seam builds the bag via
     # The dispatch seam builds the shared delegate bag via

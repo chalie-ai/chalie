@@ -27,6 +27,7 @@ from contracts.params.review_transcript_params_bag import (
     MAX_BUFFER_MINUTES,
     ReviewTranscriptParamsBag,
 )
+from configs.enums.ability_category import AbilityCategory
 
 
 class ReviewTranscriptAbility(ReviewWindowAbility[ReviewTranscriptParamsBag]):
@@ -34,6 +35,7 @@ class ReviewTranscriptAbility(ReviewWindowAbility[ReviewTranscriptParamsBag]):
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("conversation history", "chat history", "transcript")
     SYSTEM = True
     NAME: ClassVar[str] = "review_transcript"
+    CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.CONVERSATION
 
     def get_summary(self) -> str:
         return (

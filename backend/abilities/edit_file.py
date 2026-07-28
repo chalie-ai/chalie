@@ -30,11 +30,13 @@ from abilities._result import ToolResult
 from configs.enums.param_key import Keys
 from contracts.params.edit_file_params_bag import EditFileParamsBag
 from contracts.params.param_bag import ParamBag
+from configs.enums.ability_category import AbilityCategory
 
 
 class EditFileAbility(Ability[EditFileParamsBag]):
     DISCOVERABLE: ClassVar[bool] = True
     NAME: ClassVar[str] = "edit_file"
+    CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.FILE_OPERATIONS
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("file edit", "modify file", "replace text")
 
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.search, Keys.replace_, Keys.path)}
@@ -69,7 +71,7 @@ class EditFileAbility(Ability[EditFileParamsBag]):
         ]
 
     def get_search_tooltip(self) -> str:
-        return "replace literal text in a single file (must be unique)"
+        return "Find and replace text in file"
 
     _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",

@@ -17,6 +17,7 @@ from abilities._result import ToolResult
 from configs.enums.param_key import Keys
 from contracts.params.move_params_bag import MoveParamsBag
 from contracts.params.param_bag import ParamBag
+from configs.enums.ability_category import AbilityCategory
 
 
 class MoveAbility(Ability[MoveParamsBag]):
@@ -31,6 +32,7 @@ class MoveAbility(Ability[MoveParamsBag]):
 
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("move file", "rename file", "rename")
     NAME: ClassVar[str] = "move"
+    CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.FILE_OPERATIONS
 
     def get_summary(self) -> str:
         return "Move or rename a file or folder from one absolute path to another."
@@ -46,7 +48,7 @@ class MoveAbility(Ability[MoveParamsBag]):
         ]
 
     def get_search_tooltip(self) -> str:
-        return "Moving and renaming files"
+        return "Move or Rename file"
 
     _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",

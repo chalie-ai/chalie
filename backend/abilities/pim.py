@@ -24,6 +24,7 @@ from abilities._result import ToolResult
 from configs.channels.pim import PimConfig
 from contracts.params.param_bag import ParamBag
 from contracts.params.delegate_params_bag import DelegateParamsBag
+from configs.enums.ability_category import AbilityCategory
 
 
 class PimAbility(DelegateAbility[DelegateParamsBag]):
@@ -78,6 +79,7 @@ class PimAbility(DelegateAbility[DelegateParamsBag]):
 
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("email", "calendar", "contacts", "reminders", "mail")
     NAME: ClassVar[str] = "pim"
+    CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.DELEGATE
 
     def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS

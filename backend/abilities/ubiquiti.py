@@ -33,6 +33,7 @@ from abilities._capability import CapabilityAbility
 from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 from contracts.params.capability_params_bag import CapabilityParamsBag
+from configs.enums.ability_category import AbilityCategory
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[UBIQUITI ABILITY]"
@@ -134,6 +135,7 @@ class UbiquitiAbility(CapabilityAbility):
         "authorize_guest": (Keys.target,),
     }
     NAME: ClassVar[str] = "ubiquiti"
+    CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.SMART_HOME
 
     def get_summary(self) -> str:
         return (

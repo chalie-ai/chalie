@@ -30,6 +30,7 @@ from configs.enums.param_key import Keys
 from contracts.params.param_bag import ParamBag
 from contracts.params.weather_params_bag import WeatherParamsBag
 from services.time_utils import utc_now
+from configs.enums.ability_category import AbilityCategory
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,7 @@ class WeatherAbility(Ability[WeatherParamsBag]):
     PARAMS: ClassVar[type[ParamBag] | None] = WeatherParamsBag
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("forecast", "weather forecast", "temperature")
     NAME: ClassVar[str] = "weather"
+    CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.INFORMATION
 
     def get_summary(self) -> str:
         return "Get current weather and tomorrow's forecast for a city or device coordinates."

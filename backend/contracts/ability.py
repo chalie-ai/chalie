@@ -25,6 +25,8 @@ from typing import TYPE_CHECKING, Any, ClassVar, Protocol
 
 from typing_extensions import TypeVar
 
+from configs.enums.ability_category import AbilityCategory
+
 if TYPE_CHECKING:
     from abilities._result import ToolResult
     from contracts.params.param_bag import ParamBag
@@ -46,6 +48,11 @@ class AbilityContract(Protocol[B_contra]):
     # The tool's registry name — the single authority every caller reads.
     # See abilities._ability.Ability.NAME.
     NAME: ClassVar[str]
+
+    # The find_tools menu heading this tool renders under. Like NAME it is
+    # registry-validated at load time (required iff DISCOVERABLE), which is why
+    # it is mirrored here. See abilities._ability.Ability.CATEGORY.
+    CATEGORY: ClassVar[AbilityCategory | None]
 
     def get_summary(self) -> str: ...
 

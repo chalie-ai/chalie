@@ -41,6 +41,16 @@ def _load() -> dict[str, Ability]:
                 f"Duplicate ability NAME '{name}' in {subclass.__name__} "
                 f"and {result[name].__class__.__name__}"
             )
+        # A discoverable tool with no CATEGORY has no heading to render under in
+        # the find_tools menu, so it would be listed nowhere while still being
+        # activatable by name — invisible in the one surface that advertises it.
+        # Fail at load rather than ship a tool the model cannot find.
+        if instance.DISCOVERABLE and instance.CATEGORY is None:
+            raise ValueError(
+                f"Ability '{name}' ({subclass.__name__}) is DISCOVERABLE but "
+                "declares no CATEGORY; every discoverable ability must set one "
+                "so it renders under a heading in the find_tools menu"
+            )
         result[name] = instance
     return result
 

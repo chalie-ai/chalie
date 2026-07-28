@@ -55,6 +55,7 @@ from contracts.params.search_files_params_bag import (
     SearchFilesParamsBag,
 )
 from services.file_index_service import FileIndexService
+from configs.enums.ability_category import AbilityCategory
 
 _CONTENT_LIMIT = 50
 _RESULTS_PER_PAGE = 5
@@ -93,6 +94,7 @@ class SearchFilesAbility(Ability[SearchFilesParamsBag]):
     PARAMS: ClassVar[type[ParamBag] | None] = SearchFilesParamsBag
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("find files", "file search", "locate files", "grep")
     NAME: ClassVar[str] = "search_files"
+    CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.FILE_OPERATIONS
 
     def get_summary(self) -> str:
         from abilities.bash import BashAbility  # noqa: PLC0415

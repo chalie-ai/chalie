@@ -27,6 +27,7 @@ from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 from contracts.params.param_bag import ParamBag
 from contracts.params.vision_params_bag import VisionParamsBag
+from configs.enums.ability_category import AbilityCategory
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,7 @@ class VisionAbility(DelegateAbility[VisionParamsBag]):
     # VisionParamsBag.from_params before run() is called.
     PARAMS: ClassVar[type[ParamBag] | None] = VisionParamsBag
     NAME: ClassVar[str] = "vision"
+    CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.DELEGATE
 
     _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",

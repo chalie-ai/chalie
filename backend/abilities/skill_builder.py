@@ -43,6 +43,7 @@ from utils.skills_io import (
     skill_yaml_path,
     write_skill_file,
 )
+from configs.enums.ability_category import AbilityCategory
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +89,7 @@ class SkillBuilderAbility(Ability[SkillBuilderParamsBag]):
     # here so both names carry a deterministic, introspectable policy identity.
     SYSTEM: ClassVar[bool] = False
     NAME: ClassVar[str] = "skill_builder"
+    CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.PRODUCTIVITY
 
     def get_summary(self) -> str:
         return (

@@ -19,6 +19,7 @@ from abilities._result import ToolResult, truncate
 from configs.enums.param_key import Keys
 from contracts.params.bash_params_bag import BashParamsBag
 from contracts.params.param_bag import ParamBag
+from configs.enums.ability_category import AbilityCategory
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +114,7 @@ class BashAbility(Ability[BashParamsBag]):
 
     PARAMS: ClassVar[type[ParamBag] | None] = BashParamsBag
     NAME: ClassVar[str] = "bash"
+    CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.SYSTEM
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("shell", "terminal", "shell command", "run command")
 
     _SUMMARY: ClassVar[str] = (

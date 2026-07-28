@@ -37,6 +37,7 @@ from contracts.params.programming_docs_search_params_bag import ProgrammingDocsS
 from services.text_extractor import extract_html
 from services.web_fetch import API, fetch_text
 from exceptions import FetchBlocked
+from configs.enums.ability_category import AbilityCategory
 
 # ── Tunables ──────────────────────────────────────────────────────────────────
 
@@ -506,6 +507,7 @@ class ProgrammingDocsSearchAbility(Ability[ProgrammingDocsSearchParamsBag]):
     PARAMS: ClassVar[type[ParamBag] | None] = ProgrammingDocsSearchParamsBag
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("programming docs", "api docs", "library documentation", "dev docs")
     NAME: ClassVar[str] = "programming_docs_search"
+    CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.INFORMATION
 
     def get_summary(self) -> str:
         return "Search official documentation for 12 programming languages and 11 frameworks by language name and query."

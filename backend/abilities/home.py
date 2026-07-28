@@ -38,6 +38,7 @@ from abilities._capability import CapabilityAbility
 from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 from contracts.params.capability_params_bag import CapabilityParamsBag
+from configs.enums.ability_category import AbilityCategory
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -65,6 +66,7 @@ _LIST_ROW_KEYS = {"list_devices": "devices", "list_automations": "automations"}
 class HomeAbility(CapabilityAbility):
     CAPABILITY_KEY: ClassVar[str] = "home"
     NAME: ClassVar[str] = "home"
+    CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.SMART_HOME
     DEFAULT_ACTION: ClassVar[str] = "list_devices"
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("smart home", "home assistant", "lights")
     NOT_CONNECTED_HINT: ClassVar[str] = (

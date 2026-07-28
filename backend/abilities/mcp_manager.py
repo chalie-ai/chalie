@@ -54,6 +54,7 @@ from contracts.params.mcp_manager_params_bag import (
     McpManagerParamsBag,
 )
 from contracts.params.param_bag import ParamBag
+from configs.enums.ability_category import AbilityCategory
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +81,7 @@ class McpManagerAbility(Ability[McpManagerParamsBag]):
 
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("connect mcp", "add mcp server", "mcp connection")
     NAME: ClassVar[str] = "mcp_manager"
+    CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.EXTENSIONS
 
     def get_summary(self) -> str:
         return (

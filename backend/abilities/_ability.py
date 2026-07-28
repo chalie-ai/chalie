@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Generic, cast
 from typing_extensions import TypeVar
 
 from abilities._result import ToolResult
+from configs.enums.ability_category import AbilityCategory
 from contracts.params.param_bag import ParamBag
 
 if TYPE_CHECKING:
@@ -86,6 +87,13 @@ class Ability(ABC, Generic[B]):
     # Consumed by find_tools discovery; empty default means the canonical
     # name is the only alias.
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ()
+
+    # The heading this tool is listed under in the find_tools menu. REQUIRED on
+    # every DISCOVERABLE ability — the registry raises at load time when one is
+    # missing, so a new tool cannot silently join the roster with no heading to
+    # render under. None is correct (and enforced-as-fine) only for
+    # DISCOVERABLE=False abilities, which never appear in the menu at all.
+    CATEGORY: ClassVar[AbilityCategory | None] = None
 
     # Settle flag. True (the default) means a tool_calls row for this ability
     # demotes its transcript row's settled=1 back to 0 — the row carries a

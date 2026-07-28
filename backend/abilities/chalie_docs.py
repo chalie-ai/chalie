@@ -45,6 +45,7 @@ from contracts.params.param_bag import ParamBag
 from services.file_mapper_service import FileMapperService
 from services.text_reader import TextReader
 from exceptions import FetchBlocked, NoReadableContent
+from configs.enums.ability_category import AbilityCategory
 
 _VERSION_FILE = FileMapperService.get_version_path()
 
@@ -82,6 +83,7 @@ class ChalieDocsAbility(Ability[ChalieDocsParamsBag]):
     #: ``code=missing-params`` BEFORE run() (and before the policy gate).
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.query,)}
     NAME: ClassVar[str] = "chalie_docs"
+    CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.INFORMATION
 
     # The typed input contract: the dispatch seam builds the bag via
     # ChalieDocsParamsBag.from_params before run() is called.

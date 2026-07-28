@@ -31,6 +31,7 @@ from contracts.params.file_write_params_bag import FileWriteParamsBag
 from contracts.params.param_bag import ParamBag
 from models.tool_call import ToolCall
 from services.file_mapper_service import FileMapperService
+from configs.enums.ability_category import AbilityCategory
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,7 @@ class FileWriteAbility(Ability[FileWriteParamsBag]):
     #: contents key by presence.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.path,)}
     NAME: ClassVar[str] = "file_write"
+    CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.FILE_OPERATIONS
 
     # The typed input contract: the dispatch seam builds the bag via
     # FileWriteParamsBag.from_params before run() is called.
@@ -77,7 +79,7 @@ class FileWriteAbility(Ability[FileWriteParamsBag]):
         ]
 
     def get_search_tooltip(self) -> str:
-        return "File writing and creation"
+        return "Create or Save file"
 
     _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",

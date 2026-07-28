@@ -43,6 +43,7 @@ from contracts.params.param_bag import ParamBag
 from contracts.params.read_params_bag import ReadParamsBag
 from exceptions import FetchBlocked, NoReadableContent, NoTextContent, NotAFile, SourceIsImage, SystemPathBlocked
 from services.text_reader import TextReader
+from configs.enums.ability_category import AbilityCategory
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,7 @@ class ReadAbility(Ability[ReadParamsBag]):
     PARAMS: ClassVar[type[ParamBag] | None] = ReadParamsBag
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("fetch url", "read file", "open url", "read page", "fetch")
     NAME: ClassVar[str] = "read"
+    CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.FILE_OPERATIONS
 
     def get_summary(self) -> str:
         return "Fetch and extract clean text from any URL or local file — web pages, PDFs, DOCX, PPTX, and plain text."
@@ -68,7 +70,7 @@ class ReadAbility(Ability[ReadParamsBag]):
         ]
 
     def get_search_tooltip(self) -> str:
-        return "fetch URL or file contents"
+        return "Read contents of file or URL"
 
     _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",

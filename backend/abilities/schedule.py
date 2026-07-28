@@ -55,6 +55,7 @@ from contracts.params.schedule_params_bag import (
 from models.scheduled_item import ScheduledItem
 from services.database import Database
 from services.locale_service import format_date
+from configs.enums.ability_category import AbilityCategory
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[SCHEDULER SKILL]"
@@ -93,6 +94,7 @@ class ScheduleAbility(Ability[ScheduleParamsBag]):
     # ScheduleParamsBag.from_params before run() is called.
     PARAMS: ClassVar[type[ParamBag] | None] = ScheduleParamsBag
     NAME: ClassVar[str] = "schedule"
+    CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.PRODUCTIVITY
 
     def get_summary(self) -> str:
         from abilities.pim import PimAbility  # noqa: PLC0415

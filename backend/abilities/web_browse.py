@@ -34,11 +34,13 @@ from abilities._result import ToolResult
 from configs.channels.web_browse import WebBrowseConfig
 from contracts.params.param_bag import ParamBag
 from contracts.params.delegate_params_bag import DelegateParamsBag
+from configs.enums.ability_category import AbilityCategory
 
 
 class WebBrowseAbility(DelegateAbility[DelegateParamsBag]):
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("browse web", "browser", "visit website", "interactive browsing")
     NAME: ClassVar[str] = "web_browse"
+    CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.DELEGATE
 
     def get_summary(self) -> str:
         return (

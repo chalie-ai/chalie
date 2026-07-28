@@ -34,6 +34,7 @@ from contracts.params.place_params_bag import (
 )
 from models.place import PlaceRow
 from services.place_service import PlaceService
+from configs.enums.ability_category import AbilityCategory
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,7 @@ class PlaceAbility(Ability[PlaceParamsBag]):
 
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("location", "places", "nearby", "point of interest")
     NAME: ClassVar[str] = "place"
+    CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.INFORMATION
 
     def get_summary(self) -> str:
         return (

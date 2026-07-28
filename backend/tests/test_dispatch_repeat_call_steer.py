@@ -46,6 +46,7 @@ import pytest
 from abilities._ability import Ability
 from abilities._result import ToolResult
 from configs.channels.user import UserConfig
+from configs.enums.ability_category import AbilityCategory
 from configs.enums.policy_channel import PolicyChannel
 from controllers.message_processor import (
     _RUNAWAY_TOOL_CALL_LIMIT,
@@ -160,6 +161,9 @@ class steer_probe(Ability):
     constructor the binder can no longer supply."""
 
     NAME = "steer_probe"
+    # Required because the fixture is deliberately DISCOVERABLE; the registry
+    # rejects a discoverable ability with no find_tools heading.
+    CATEGORY = AbilityCategory.SYSTEM
 
     def get_search_tooltip(self) -> str:
         return "repeat-call steer test fixture"

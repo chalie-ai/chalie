@@ -37,6 +37,7 @@ from contracts.params.param_bag import ParamBag
 from contracts.params.web_download_params_bag import WebDownloadParamsBag
 from exceptions import DownloadTooLarge, FetchBlocked
 from services.web_fetch import DOWNLOAD, stream_to_file
+from configs.enums.ability_category import AbilityCategory
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,7 @@ class WebDownloadAbility(Ability[WebDownloadParamsBag]):
     PARAMS: ClassVar[type[ParamBag] | None] = WebDownloadParamsBag
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("download", "download file", "download url")
     NAME: ClassVar[str] = "web_download"
+    CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.WEB
 
     def get_summary(self) -> str:
         from abilities.read import ReadAbility  # noqa: PLC0415

@@ -8,6 +8,7 @@ from abilities._result import ToolResult
 from configs.enums.param_key import Keys
 from contracts.params.mcp_tools_params_bag import McpToolsParamsBag
 from contracts.params.param_bag import ParamBag
+from configs.enums.ability_category import AbilityCategory
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,7 @@ class McpToolsAbility(Ability):
 
     PARAMS: ClassVar[type[ParamBag] | None] = McpToolsParamsBag
     NAME: ClassVar[str] = "mcp_tools"
+    CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.EXTENSIONS
 
     DISCOVERABLE: ClassVar[bool] = True
 

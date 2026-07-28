@@ -18,6 +18,7 @@ from abilities._review_window import ReviewWindowAbility
 from contracts.params.param_bag import ParamBag
 from contracts.params.review_window_params_bag import ReviewWindowParamsBag
 from models.tool_call import ToolCall
+from configs.enums.ability_category import AbilityCategory
 
 # Tool-call params summaries can be large; clip so one row stays a single readable
 # line of structured JSON.
@@ -29,6 +30,7 @@ class ReviewToolCallsAbility(ReviewWindowAbility[ReviewWindowParamsBag]):
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("tool history", "past tool calls", "tool log")
     SYSTEM = True
     NAME: ClassVar[str] = "review_tool_calls"
+    CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.CONVERSATION
 
     def get_summary(self) -> str:
         return "Retrieve raw tool call records within ±5 minutes of a timestamp to inspect details not captured in turn synthesis."

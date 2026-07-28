@@ -28,6 +28,7 @@ from contracts.params.image_search_params_bag import ImageSearchParamsBag
 from contracts.params.param_bag import ParamBag
 from exceptions import DownloadTooLarge, FetchBlocked
 from tools.image_search import fetcher
+from configs.enums.ability_category import AbilityCategory
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,7 @@ class ImageSearchAbility(Ability[ImageSearchParamsBag]):
     # bag's from_params rejects the whitespace-only residue.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.query,)}
     NAME: ClassVar[str] = "image_search"
+    CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.WEB
 
     # The typed input contract: the dispatch seam builds the bag via
     # ImageSearchParamsBag.from_params before run() is called.

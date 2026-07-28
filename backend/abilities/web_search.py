@@ -46,11 +46,13 @@ from abilities._result import ToolResult
 from configs.channels.web_search import WebSearchConfig
 from contracts.params.param_bag import ParamBag
 from contracts.params.delegate_params_bag import DelegateParamsBag
+from configs.enums.ability_category import AbilityCategory
 
 
 class WebSearchAbility(DelegateAbility[DelegateParamsBag]):
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("search web", "search the web", "internet search", "google")
     NAME: ClassVar[str] = "web_search"
+    CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.DELEGATE
 
     def get_summary(self) -> str:
         return (

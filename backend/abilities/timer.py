@@ -35,6 +35,7 @@ from contracts.params.timer_params_bag import (
     MIN_DURATION_SECONDS,
     TimerParamsBag,
 )
+from configs.enums.ability_category import AbilityCategory
 
 
 class TimerAbility(Ability[TimerParamsBag]):
@@ -51,6 +52,7 @@ class TimerAbility(Ability[TimerParamsBag]):
     PARAMS: ClassVar[type[ParamBag] | None] = TimerParamsBag
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("countdown", "set timer", "alarm")
     NAME: ClassVar[str] = "timer"
+    CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.PRODUCTIVITY
 
     def get_summary(self) -> str:
         return "Start a live countdown timer with a title — renders an in-chat card with pause, stop, and an alarm when it ends."
