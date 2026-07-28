@@ -87,10 +87,10 @@ class ReviewToolCallsAbility(ReviewWindowAbility[ReviewWindowParamsBag]):
         """Excludes legacy ``tool_name='narration'`` rows.
 
         Narration as a separate tool_calls row was removed — mid-turn assistant
-        text is no longer persisted at all (a turn emits one end message), so no
-        new narration rows are written. The literal filter stays only to hide any
-        such rows left in an existing DB from before that change; it is not a
-        live tool name."""
+        text now lands as ordinary transcript rows instead, so no new narration
+        rows are written. The literal filter stays only to hide any such rows
+        left in an existing DB from before that change; it is not a live tool
+        name."""
         return (
             ToolCall.filter("created_at", lo, ">=")
             .filter("created_at", hi, "<=")

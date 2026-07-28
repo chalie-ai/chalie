@@ -246,17 +246,46 @@ class PromptService:
         seed presented as a call teaches the model that every turn opens with a
         memory invocation. Same envelope body, relabeled wrapper; the
         ``tool_calls`` row is untouched (episodic dedup and telemetry read it
-        there)."""
+        there).
+
+        Interim-prose interleave: before the first surviving call anchored to
+        each assistant row of the current exchange, ``act_trail`` emits a line
+        ``[interim_response] <row content with newlines flattened to spaces>``.
+        Calls anchored directly to the input row (``transcript_id == mp.uid``)
+        render without an interim prefix; an assistant row anchoring no calls
+        (the final synthesis) never triggers an interim line; assistant rows
+        from a prior exchange never surface — ``exchange_assistant_rows``
+        floors at ``mp.uid`` so only this exchange's steps are in the lookup.
+        A chat-history compaction anchors to one assistant row and becomes the
+        interim cutoff: that row's interim prose AND its ordinary calls are
+        dropped (``call.id <= last_compaction``), while rows written after the
+        compactor marker still render with their interim prose."""
         calls = self.mp.tool_call_service.by_exchange()
         last_compaction = max(
             (cast("int", call.id) for call in calls if call.tool_name == "chat_history_compactor"),
             default=0,
         )
+        cutoff = max(
+            (call.transcript_id for call in calls if call.tool_name == "chat_history_compactor"),
+            default=0,
+        )
+        interim_rows = self.mp.transcript_service.exchange_assistant_rows()
+        interim: dict[int, str] = {}
+        for row in interim_rows:
+            content = cast("str", row.to_dict().get("content") or "")
+            if not content or not content.strip():
+                continue
+            interim[cast("int", row.id)] = content.replace("\n", " ").strip()
+        emitted: set[int] = set()
         parts: list[str] = []
         for call in calls:
             if call.tool_name == "chat_history_compactor" or cast("int", call.id) <= last_compaction:
                 continue
             result = call.result
+            tid = call.transcript_id
+            if tid in interim and tid > cutoff and tid not in emitted:
+                parts.append(f"[interim_response] {interim[tid]}")
+                emitted.add(tid)
             if call.tool_name == MemoryAbility.NAME and '"_auto": true' in call.params:
                 body = result.split("\n", 1)[1] if "\n" in result else result
                 parts.append(

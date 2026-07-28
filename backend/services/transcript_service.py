@@ -95,6 +95,25 @@ class TranscriptService:
             .get()
         )
 
+    def exchange_assistant_rows(self) -> list[Transcript]:
+        """The CURRENT exchange's assistant rows — the interim-step prose that
+        anchors tool calls in this exchange, feeding the act-trail interleave.
+        Filtered to this MP's channel and turn, role ``assistant``, ordered by
+        id ASC; when ``self.mp.uid`` is set (a real input row exists) only rows
+        written after it survive — the uid is the exchange floor, mirroring
+        ``ToolCall.by_exchange``'s ``transcript_id >= uid`` bound. When
+        ``self.mp.uid`` is None (channels without an input row) there is no
+        floor, so every assistant row of the turn is returned."""
+        q = (
+            Transcript.filter("channel", self.mp.channel)
+            .filter("turn_id", self.mp.turn_id)
+            .filter("role", "assistant")
+            .order_by("id ASC")
+        )
+        if self.mp.uid is not None:
+            q = q.filter("id", self.mp.uid, ">")
+        return q.get()
+
     def window(self) -> list[Transcript]:
         """The pattern channel's id-bounded window over the ``user`` channel's
         content rows (ported from ``Transcript.window(["user"], after_id,
