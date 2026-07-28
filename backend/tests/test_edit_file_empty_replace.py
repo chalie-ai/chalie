@@ -163,6 +163,12 @@ def test_empty_replace_deletes_the_matched_text(
     target.write_text(_ORIGINAL_CONTENT, encoding="utf-8")
 
     provider = _ScriptedProvider(
+        # The read is the protocol, not scaffolding: abilities/_read_guard.py
+        # refuses an edit the model has not read for on this turn.
+        ProviderResponse(
+            text="", model="scripted",
+            tool_calls=[_tool("read", source=str(target))],
+        ),
         ProviderResponse(
             text="", model="scripted",
             tool_calls=[_tool(

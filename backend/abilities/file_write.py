@@ -1,12 +1,11 @@
 """FileWriteAbility — write content to a file at a caller-supplied absolute path.
 
-Act-trail guard: if the target file already exists, a prior ``read`` call on
-the same resolved path in the current turn is required before the write is
-executed — so an overwrite is never blind. The guard keys on the turn (every
-tool call the turn recorded), not on the single input row, so a ``read`` issued
-on any assistant step of the turn satisfies it. If the most recent matching
-read was truncated the write is refused too — a full overwrite would drop the
-tail the model never saw.
+Act-trail guard: if the target file already exists, the shared
+:func:`abilities._read_guard.read_guard` must clear the overwrite first — the
+model's most recent ``read`` of the path has to be newer than the most recent
+successful change to it on this turn, so an overwrite is never blind. This tool
+opts into the extra ``truncated-read`` refusal: a full overwrite would drop the
+tail a truncated read never showed the model.
 
 Returns a sealed :class:`abilities._result.ToolResult` (never a wire envelope):
 
@@ -19,21 +18,17 @@ Returns a sealed :class:`abilities._result.ToolResult` (never a wire envelope):
   ``read-required`` / ``truncated-read``) — errors never masquerade as success.
 """
 
-import json
-import logging
 from pathlib import Path
 from typing import ClassVar
 
 from abilities._ability import Ability
+from abilities._read_guard import read_guard
 from abilities._result import ToolResult
 from configs.enums.param_key import Keys
 from contracts.params.file_write_params_bag import FileWriteParamsBag
 from contracts.params.param_bag import ParamBag
-from models.tool_call import ToolCall
 from services.file_mapper_service import FileMapperService
 from configs.enums.ability_category import AbilityCategory
-
-logger = logging.getLogger(__name__)
 
 
 class FileWriteAbility(Ability[FileWriteParamsBag]):
@@ -123,7 +118,7 @@ class FileWriteAbility(Ability[FileWriteParamsBag]):
 
         existed = target.exists()
         if existed:
-            refusal = self._overwrite_guard(target)
+            refusal = read_guard(self.mp, target, refuse_truncated=True)
             if refusal is not None:
                 return refusal
 
@@ -148,65 +143,3 @@ class FileWriteAbility(Ability[FileWriteParamsBag]):
         return ToolResult.ok(
             {"path": str(target), "bytes": bytes_written, "created": not existed}
         )
-
-    def _overwrite_guard(self, target: Path) -> ToolResult | None:
-        """The act-trail read-before-write check — the refusal to return, or
-        ``None`` when the overwrite may proceed.
-
-        Bypasses (returns ``None``) when there is no live processor or the
-        turn has no turn_id / channel — the act-trail cannot be inspected
-        there, so the write is allowed as before. Otherwise the MOST RECENT
-        ``read`` row on this turn matching ``target`` decides: no row →
-        ``read-required``; a row whose read was truncated → ``truncated-read``
-        (a full overwrite would destroy the portion the model never saw).
-        """
-        proc = self.mp
-        if proc is None:
-            return None
-        turn_id = getattr(proc, "turn_id", None)
-        channel = getattr(getattr(proc, "config", None), "channel", None)
-        if turn_id is None or channel is None:
-            logger.warning("file_write read-guard: active processor has no turn — guard bypassed")
-            return None
-
-        target_str = str(target)
-        last_match: ToolCall | None = None
-        for row in ToolCall.by_turn(channel, turn_id):
-            if row.tool_name != "read":
-                continue
-            try:
-                p = json.loads(row.params)
-            except (json.JSONDecodeError, TypeError):
-                continue
-            source = p.get("source") or p.get("path") or p.get("url", "")
-            if not source:
-                continue
-            # `read` expands ``~`` before reading, but records the raw arg — so the
-            # guard must expanduser too, or a tilde-path read would never match.
-            try:
-                if Path(source).expanduser().resolve() == target:
-                    last_match = row
-            except (ValueError, OSError):
-                if source == target_str:
-                    last_match = row
-
-        if last_match is None:
-            from abilities.read import ReadAbility  # noqa: PLC0415
-
-            return ToolResult.err(
-                f"You must read {target} before overwriting it.",
-                code="read-required",
-                hint=f"call the '{ReadAbility.NAME}' tool on {target} first, then retry the write",
-            )
-        # Truncation is flagged in the envelope OPEN TAG (its first line) only —
-        # matching the whole result would false-positive on file content that
-        # happens to contain the marker.
-        if "truncated=true" in (last_match.result or "").split("\n", 1)[0]:
-            from abilities.edit_file import EditFileAbility  # noqa: PLC0415
-
-            return ToolResult.err(
-                f"Your last read of {target} was truncated — a full overwrite would destroy the unread portion.",
-                code="truncated-read",
-                hint=f"use {EditFileAbility.NAME} for targeted changes, or re-read with a higher max_chars to get the full file first.",
-            )
-        return None

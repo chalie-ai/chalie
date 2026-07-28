@@ -147,6 +147,12 @@ def test_edit_file_deletes_a_whole_line_including_its_newline(
     target.write_text("alpha\nDELETE THIS LINE\nomega\n", encoding="utf-8")
 
     provider = _ScriptedProvider(
+        # The read is the protocol, not scaffolding: abilities/_read_guard.py
+        # refuses an edit the model has not read for on this turn.
+        ProviderResponse(
+            text="", model="scripted",
+            tool_calls=[_tool("read", source=str(target))],
+        ),
         ProviderResponse(
             text="", model="scripted",
             tool_calls=[_tool(
@@ -174,6 +180,12 @@ def test_edit_file_can_indent_a_line(db: sqlite3.Connection, tmp_path: Path) -> 
     target.write_text("def f():\nreturn 1\n", encoding="utf-8")
 
     provider = _ScriptedProvider(
+        # The read is the protocol, not scaffolding: abilities/_read_guard.py
+        # refuses an edit the model has not read for on this turn.
+        ProviderResponse(
+            text="", model="scripted",
+            tool_calls=[_tool("read", source=str(target))],
+        ),
         ProviderResponse(
             text="", model="scripted",
             tool_calls=[_tool(
@@ -203,6 +215,12 @@ def test_edit_file_can_clear_a_file_to_zero_bytes(
     target.write_text("only line\n", encoding="utf-8")
 
     provider = _ScriptedProvider(
+        # The read is the protocol, not scaffolding: abilities/_read_guard.py
+        # refuses an edit the model has not read for on this turn.
+        ProviderResponse(
+            text="", model="scripted",
+            tool_calls=[_tool("read", source=str(target))],
+        ),
         ProviderResponse(
             text="", model="scripted",
             tool_calls=[_tool(

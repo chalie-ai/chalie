@@ -18,6 +18,13 @@ the ``search`` string must match the file content exactly once — zero matches
 and ambiguous (2+) matches are both loud errors, never silent no-ops. The
 search is literal and whitespace-significant — no regex, no glob, no
 directory walk. An empty ``replace`` deletes the matched text.
+
+Act-trail guard: the shared :func:`abilities._read_guard.read_guard` must clear
+the edit first — the model's most recent ``read`` of the path has to be newer
+than the most recent successful change to it on this turn. A stale anchor
+otherwise returns ``not-found``, which the model reads as "retry" rather than
+"look again", and it loops. Unlike a whole-file overwrite, a truncated read is
+fine here: an anchored edit only touches text the model quoted back verbatim.
 """
 
 from __future__ import annotations
@@ -26,6 +33,7 @@ from pathlib import Path
 from typing import ClassVar
 
 from abilities._ability import Ability
+from abilities._read_guard import read_guard
 from abilities._result import ToolResult
 from configs.enums.param_key import Keys
 from contracts.params.edit_file_params_bag import EditFileParamsBag
@@ -55,8 +63,13 @@ class EditFileAbility(Ability[EditFileParamsBag]):
 
 
     def get_summary(self) -> str:
+        from abilities.read import ReadAbility  # noqa: PLC0415
+
         return (
             "Replace a single occurrence of literal text in a single file. "
+            f"You MUST call the '{ReadAbility.NAME}' tool on the target path "
+            "before editing, and again after any edit of your own, so `search` "
+            "matches the file as it stands now. "
             "Point ``path`` at an absolute file path, ``search`` for the exact "
             "literal text to find (whitespace-significant), and ``replace`` "
             "for the replacement text. The search string must appear exactly "
@@ -126,6 +139,15 @@ class EditFileAbility(Ability[EditFileParamsBag]):
                 code="invalid-path",
                 hint="point path at a single file.",
             )
+
+        # A blind edit anchors on text the model never saw — or saw before its own
+        # earlier edit moved it — and comes back not-found, which reads to the
+        # model as "try again" rather than "look again". Refuse once here instead
+        # of letting it retry into the runaway backstop. ``truncated-read`` is NOT
+        # opted into: an anchored edit only touches text the model quoted back.
+        refusal = read_guard(self.mp, target.resolve(), refuse_truncated=False)
+        if refusal is not None:
+            return refusal
 
         content = target.read_text(encoding="utf-8")
         count = content.count(params.search)
