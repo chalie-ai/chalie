@@ -31,6 +31,7 @@ Domain-specific terminology used throughout the Chalie system.
 | `MCP` | Model Context Protocol connection to a remote MCP server. | `_mcp_notes_create_document` |
 | `always_available` | Tools pinned in every LLM call on a channel. | `["find_skills", "find_tools", "memory"]` |
 | `DISCOVERABLE` | Ability trait; when False the tool only reaches the model by being pinned. | `thinking`, `browser` are non-discoverable |
+| `CATEGORY` | Ability trait; the heading the tool is listed under in the `find_tools` menu. Required on every discoverable ability — the registry refuses to load one without it. The enum's declaration order is the menu's render order. | `read` → `File Operations`, `pim` → `Delegate (subagent)` |
 | `counts_as_settle` | Ability trait; when True a tool_calls row demotes its row's `settled=1` to 0. | `bash` (True), `thinking` (False) |
 | `episode` | A narrative memory unit (a transcript-window gist) with salience 1–10 and decay. | `gist='Discussed travel to Japan'`, `salience=7` |
 | `salience` | Per-episode importance score (1–10). | `salience=8` |
