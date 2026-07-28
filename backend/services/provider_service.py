@@ -126,7 +126,14 @@ class ProviderService:
         )
 
     def sanitize_args(self, value: object) -> object:
-        """Strip leaked provider sentinel tokens (``<|...|>``) from tool args, recursively."""
+        """Strip leaked provider sentinel tokens (``<|...|>``) from tool args and trim
+        surrounding whitespace, recursively.
+
+        The trim is right for an argument the tool INTERPRETS — a path, a query, a
+        city name — where padding is noise from the model's formatting. It is wrong
+        for one the tool STORES, so an ability names those params in
+        ``Ability.VERBATIM`` and :meth:`DispatchService._scrub_values` routes them
+        around this method entirely."""
         if isinstance(value, str):
             for pattern in _LLM_SENTINEL_PATTERNS:
                 value = pattern.sub("", value)

@@ -121,6 +121,16 @@ class Ability(ABC, Generic[B]):
     # default — so an ability with no ``ALLOW_EMPTY`` behaves exactly as before.
     ALLOW_EMPTY: ClassVar[tuple[str, ...]] = ()
 
+    # Param names whose VALUES reach run() exactly as the model sent them — the
+    # dispatch seam's scrub (leaked provider sentinel tokens out, surrounding
+    # whitespace trimmed) is skipped for them. Declare a param here when the
+    # tool STORES its value rather than interpreting it: file content,
+    # replacement text. For those, a leading tab or a trailing newline is data
+    # the model chose byte by byte, not noise to tidy away — trimming it is a
+    # silent rewrite of the user's file. The default is empty, so every param is
+    # scrubbed unless it opts out.
+    VERBATIM: ClassVar[tuple[str, ...]] = ()
+
     # The ability's typed input contract: every first-party ability sets its
     # ParamBag class here and run() receives an instance the dispatcher builds
     # via the bag's from_params factory — a bad input comes back from the bag

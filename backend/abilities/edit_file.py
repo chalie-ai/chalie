@@ -40,6 +40,13 @@ class EditFileAbility(Ability[EditFileParamsBag]):
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("file edit", "modify file", "replace text")
     ALLOW_EMPTY: ClassVar[tuple[str, ...]] = (Keys.replace_,)
 
+    #: ``search`` and ``replace`` are literal file bytes, not instructions to
+    #: interpret: the anchor must match the file character for character, and the
+    #: replacement is written as-is. Trimming either would make a whole-line edit
+    #: ("DELETE THIS LINE\n" -> "") impossible, break indentation fixes, and turn a
+    #: whitespace-only replacement into a deletion. ``path`` is still scrubbed.
+    VERBATIM: ClassVar[tuple[str, ...]] = (Keys.search, Keys.replace_)
+
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.search, Keys.replace_, Keys.path)}
 
     # The typed input contract: the dispatch seam builds the bag via

@@ -44,6 +44,12 @@ class FileWriteAbility(Ability[FileWriteParamsBag]):
     #: would be falsely rejected there. The bag's from_params guards a MISSING
     #: contents key by presence.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.path,)}
+
+    #: ``contents`` is the file body, written byte for byte — the leading indent
+    #: and the trailing newline are the model's choice, not noise to tidy away.
+    #: ``path`` is still scrubbed.
+    VERBATIM: ClassVar[tuple[str, ...]] = (Keys.contents,)
+
     NAME: ClassVar[str] = "file_write"
     CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.FILE_OPERATIONS
 

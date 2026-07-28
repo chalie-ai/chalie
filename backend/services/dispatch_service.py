@@ -121,25 +121,34 @@ class DispatchService:
         self, tool_name: str, params: dict[str, object],
     ) -> "tuple[dict[str, object], str | None, Ability | None]":
         """Turn a raw provider tool call into its EXECUTED identity, without running
-        or recording anything: strip LLM sentinel tokens from the values, lift out
-        the model's ``act_summary`` narration, bind the ability, and heal the
-        argument KEYS against its declared schema (a stray-quote/case/alias key
-        rewritten to its canonical parameter). Returns
-        ``(healed_params, act_summary, ability)``; ``ability`` is ``None`` for an
-        unknown tool, in which case the params are sanitised + act_summary-stripped
-        but not healed (no schema to heal against).
+        or recording anything: lift out the model's ``act_summary`` narration, bind
+        the ability, heal the argument KEYS against its declared schema (a
+        stray-quote/case/alias key rewritten to its canonical parameter), then
+        scrub the argument VALUES. Returns ``(healed_params, act_summary,
+        ability)``; ``ability`` is ``None`` for an unknown tool, in which case the
+        params are scrubbed but not healed (no schema to heal against).
+
+        Keys are healed BEFORE the values are scrubbed so that an ability's
+        ``VERBATIM`` exemption — declared in canonical parameter names — still
+        applies when the model reached that parameter through a variant key.
+        Healing reads keys only and copies every value through untouched, so the
+        order is immaterial to the healing itself. ``act_summary`` is lifted first
+        and scrubbed on its own: it is a framework field, absent from every
+        ability's declared schema, so the healer must never see it.
 
         The ONE canonicalisation recipe: :meth:`dispatch` runs it to execute the
         call, and :meth:`canonical_params` runs it to give the runaway guard a key
         byte-identical to what will actually execute — so the two can never drift.
         A registry/schema fault must never break dispatch, so a heal failure logs
-        and falls back to the raw (sanitised) params.
+        and falls back to the raw params.
         """
-        params = cast("dict[str, object]", self.mp.provider_service.sanitize_args(dict(params)))
-        act_summary = cast("str | None", params.pop("act_summary", None))
+        params = dict(params)
+        act_summary = cast(
+            "str | None", self.mp.provider_service.sanitize_args(params.pop("act_summary", None)),
+        )
         ability = self._bind(tool_name)
         if ability is None:
-            return params, act_summary, None
+            return self._scrub_values(params, ()), act_summary, None
         try:
             params = KeyHealer().heal(params, ability.get_parameters())
         except Exception:  # noqa: BLE001
@@ -147,7 +156,21 @@ class DispatchService:
                 "[DispatchService] key canonicalisation failed for %s — "
                 "proceeding with raw params", tool_name,
             )
-        return params, act_summary, ability
+        return self._scrub_values(params, ability.VERBATIM), act_summary, ability
+
+    def _scrub_values(
+        self, params: dict[str, object], verbatim: tuple[str, ...],
+    ) -> dict[str, object]:
+        """Every argument VALUE through the provider scrub — leaked sentinel tokens
+        out, surrounding whitespace trimmed — EXCEPT the params the ability named
+        in ``VERBATIM``, which pass through exactly as the model sent them.
+
+        The scrub is right for an argument the tool INTERPRETS (a path, a query, a
+        city) and wrong for one it STORES: trimming ``"    return x\\n"`` down to
+        ``"return x"`` silently rewrites content the model chose byte by byte, and
+        the tool then writes the rewritten version to the user's file."""
+        scrub = self.mp.provider_service.sanitize_args
+        return {key: value if key in verbatim else scrub(value) for key, value in params.items()}
 
     def canonical_params(self, tool_name: str, params: dict[str, object]) -> dict[str, object]:
         """The params ``run()`` will actually receive for *tool_name* — sanitised,
