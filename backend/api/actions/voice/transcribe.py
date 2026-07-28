@@ -18,7 +18,7 @@ from api.response.response import Response
 from api.response.voice import TranscriptionResponse
 from services.speech_to_text_service import MAX_AUDIO_SECONDS
 from services.speech_to_text_service import get_service as stt_service
-from services.voice_transcript_service import get_service as tts_service
+from services.voice_transcript_service import VoiceTranscriptService
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +85,10 @@ class VoiceTranscribeAction(Action):
         ``Retry-After``; a still-loading model does, letting the client retry
         without polling blind.
         """
-        missing = tts_service().missing_model_files() + stt_service().missing_model_files()
+        missing = (
+            VoiceTranscriptService.missing_model_files()
+            + stt_service().missing_model_files()
+        )
         if missing:
             return self._unavailable(
                 f"Voice models not installed ({', '.join(missing)})", _MODELS_MISSING_HINT,

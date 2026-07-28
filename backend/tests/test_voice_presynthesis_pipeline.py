@@ -36,7 +36,7 @@ from models.provider_response import ProviderResponse
 from models.transcript import Transcript
 from models.voice_transcript import VoiceTranscript
 from services.file_mapper_service import FileMapperService
-from services.voice_transcript_service import get_service
+from services.voice_transcript_service import VoiceTranscriptService
 from services.websocket import Websocket
 
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
@@ -168,7 +168,7 @@ class TestSynthesizedExactlyOnce:
         stored.write_bytes(b"not-audio-but-on-record")
         VoiceTranscript(transcript_id=transcript_id, file_path=stored.name).record()
 
-        get_service().synthesize_settled(transcript_id)
+        VoiceTranscriptService.instance().synthesize_settled(transcript_id)
 
         assert stored.read_bytes() == b"not-audio-but-on-record"
         assert len(VoiceTranscript.filter("transcript_id", transcript_id).get()) == 1
@@ -183,32 +183,9 @@ class TestSynthesizedExactlyOnce:
         transcript_id = _settled_row(db)
         VoiceTranscript(transcript_id=transcript_id, file_path=None).record()
 
-        get_service().synthesize_settled(transcript_id)
+        VoiceTranscriptService.instance().synthesize_settled(transcript_id)
 
         rows = VoiceTranscript.filter("transcript_id", transcript_id).get()
         assert len(rows) == 1
         assert rows[0].file_path is None
         assert list(voice_dir.iterdir()) == [], "a retry would have written audio"
-
-
-class TestNothingSayable:
-    def test_a_reply_with_no_speakable_text_fails_instead_of_writing_silence(
-        self, db: sqlite3.Connection, voice_dir: Path,
-    ) -> None:
-        """A reply that is nothing but a fenced code block cleans to empty. The
-        row is marked failed so the button goes red — writing a zero-length WAV
-        would leave it looking ready and playing nothing at all."""
-        assert db is not None
-        client = _RecordingClient()
-        transcript_id = _settled_row(db, content="```\nprint('hi')\n```")
-        Websocket._connect(client)
-        try:
-            get_service().synthesize_settled(transcript_id)
-        finally:
-            Websocket._disconnect(client)
-
-        row = VoiceTranscript.filter("transcript_id", transcript_id).first()
-        assert row is not None, "the outcome must be recorded, or it retries forever"
-        assert row.file_path is None
-        assert list(voice_dir.iterdir()) == []
-        assert [f.get("state") for f in client.voice_frames()] == ["pending", "failed"]

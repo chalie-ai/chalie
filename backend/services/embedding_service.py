@@ -113,7 +113,13 @@ def _build_session(providers: Optional[List[str]] = None) -> tuple[object, Path]
     opts.intra_op_num_threads = _resolve_thread_count()
     opts.inter_op_num_threads = 1
     opts.enable_mem_pattern = True
-    opts.enable_cpu_mem_arena = True
+    # Arena OFF: ORT's BFCArena never returns scratch to the OS — it grows to
+    # the largest activation ever allocated and holds it for the process
+    # lifetime. Batch shape here is (32 x longest text in the batch), so one
+    # long web page permanently raises the floor for every later batch.
+    # Measured on gte-modernbert-base over an alternating short/long workload:
+    # steady state 3,482 MiB with the arena on vs 773 MiB with it off.
+    opts.enable_cpu_mem_arena = False
 
     if optimized_path.exists():
         load_path = optimized_path

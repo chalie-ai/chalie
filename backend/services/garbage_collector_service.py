@@ -41,7 +41,7 @@ from dataclasses import dataclass
 from models.tool_call import ToolCall
 from models.transcript import Transcript
 from services.database import Database
-from services.voice_transcript_service import get_service as get_voice_service
+from services.voice_transcript_service import VoiceTranscriptService
 
 
 @dataclass
@@ -78,7 +78,7 @@ class GarbageCollectorService:
         with Database.transaction():
             ids = Transcript.unlinked_ids()
             tool_calls_swept = ToolCall.delete_by_transcripts(ids)
-            get_voice_service().delete_for_transcripts(ids)
+            VoiceTranscriptService.instance().delete_for_transcripts(ids)
             transcripts_deleted = Transcript.delete_by_ids(ids)
         tool_calls_orphans_reaped = ToolCall.decay()
         return GarbageCollectionResult(

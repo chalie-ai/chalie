@@ -14,7 +14,7 @@ from api.action import Action
 from api.endpoint import DocumentedResponse
 from api.response.voice import VoiceHealthResponse
 from services.speech_to_text_service import get_service as stt_service
-from services.voice_transcript_service import get_service as tts_service
+from services.voice_transcript_service import VoiceTranscriptService
 
 _MODELS_MISSING_HINT = "Voice models are missing from this install. Reinstall Chalie to restore them."
 
@@ -44,7 +44,7 @@ class VoiceHealthAction(Action):
                 hint=stt.install_hint,
             ).single()
 
-        tts = tts_service()
+        tts = VoiceTranscriptService.instance()
         if tts.is_loaded and stt.is_loaded:
             return VoiceHealthResponse(status="ok").single()
         if tts.is_loading or stt.is_loading:
@@ -65,5 +65,5 @@ class VoiceHealthAction(Action):
     @staticmethod
     def _warm() -> None:
         """Load both models off the request thread so the probe stays non-blocking."""
-        tts_service().ensure_loaded()
+        VoiceTranscriptService.instance().ensure_loaded()
         stt_service().ensure_loaded()

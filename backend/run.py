@@ -152,8 +152,8 @@ def _start_model_preload() -> None:
 
         try:
             logger.info("[System] Preloading Kokoro TTS model (background)...")
-            from services.voice_transcript_service import get_service as _get_tts_service
-            if _get_tts_service().ensure_loaded():
+            from services.voice_transcript_service import VoiceTranscriptService
+            if VoiceTranscriptService.instance().ensure_loaded():
                 logger.info("[System] Kokoro TTS ready")
             else:
                 logger.error("[System] Kokoro TTS preload failed — loader returned False (see [VoiceTranscript] logs)")
@@ -389,8 +389,11 @@ def _warmup_models() -> None:
     import threading as _t
     try:
         from services.speech_to_text_service import get_service as stt_service
-        from services.voice_transcript_service import get_service
-        _t.Thread(target=get_service().ensure_loaded, name="voice-tts-warmup", daemon=True).start()
+        from services.voice_transcript_service import VoiceTranscriptService
+        _t.Thread(
+            target=VoiceTranscriptService.instance().ensure_loaded,
+            name="voice-tts-warmup", daemon=True,
+        ).start()
         _t.Thread(target=stt_service().ensure_loaded, name="voice-stt-warmup", daemon=True).start()
     except Exception as e:
         logger.warning(f"[Startup] Voice warm-up skipped: {e}")

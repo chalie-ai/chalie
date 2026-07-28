@@ -590,9 +590,10 @@ class MessageProcessor:
         settle_id = Transcript.settle0(self.channel, self.turn_id)
         if settle_id is None:
             return
-        from services.voice_transcript_service import get_service  # noqa: PLC0415
+        from services.voice_transcript_service import VoiceTranscriptService  # noqa: PLC0415
         Thread(
-            target=get_service().synthesize_settled, args=(settle_id,), daemon=True,
+            target=VoiceTranscriptService.instance().synthesize_settled,
+            args=(settle_id,), daemon=True,
         ).start()
 
     def _proactive_suggestion(self) -> None:

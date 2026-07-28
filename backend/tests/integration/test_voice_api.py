@@ -5,7 +5,7 @@ from typing import cast
 import pytest
 from flask.testing import FlaskClient
 
-from services.voice_transcript_service import get_service
+from services.voice_transcript_service import VoiceTranscriptService
 
 
 def _voice_available(client: FlaskClient) -> bool:
@@ -61,7 +61,7 @@ def test_synthesize_returns_single_wav_blob(authed_client: tuple[FlaskClient, sq
     if not _voice_available(client):
         pytest.skip('Voice models not available in this environment')
 
-    _, _sr, body = get_service().synthesize('Hello world.')
+    _, _sr, body = VoiceTranscriptService.instance().synthesize('Hello world.')
 
     assert body[:4] == b'RIFF', 'Output must start with RIFF WAV header'
     assert body[8:12] == b'WAVE', 'Output must contain WAVE marker'
@@ -85,14 +85,14 @@ def test_synthesize_rejects_empty_text(authed_client: tuple[FlaskClient, sqlite3
 
     for text in ('', '   ', '\n\t  \n'):
         with pytest.raises(ValueError, match='Text is required'):
-            get_service().synthesize(text)
+            VoiceTranscriptService.instance().synthesize(text)
 
 
 @pytest.mark.integration
 def test_synthesize_markdown_input_produces_audio(authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
     """Markdown-rich LLM response (bold, italic, code span, list, link) → non-trivial WAV.
 
-    Regression guard for the _clean_for_tts pipeline: if markdown markers
+    Regression guard for the clean_for_tts pipeline: if markdown markers
     survive into the phonemizer as literal characters, Kokoro either skips them
     silently or produces very short audio. Duration > 0.5s is the observable
     proxy that real speech was synthesized.
@@ -110,7 +110,7 @@ def test_synthesize_markdown_input_produces_audio(authed_client: tuple[FlaskClie
         "The _language_ was designed for readability."
     )
 
-    _, _sr, body = get_service().synthesize(markdown_text)
+    _, _sr, body = VoiceTranscriptService.instance().synthesize(markdown_text)
     assert _wav_duration(body) > 0.5, 'Markdown-rich text must produce substantial audio'
 
 
@@ -118,7 +118,7 @@ def test_synthesize_markdown_input_produces_audio(authed_client: tuple[FlaskClie
 def test_synthesize_html_input_produces_audio(authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
     """HTML input (<p>, <strong>, <em>) strips cleanly and synthesizes to audio.
 
-    If the HTML pre-pass in _clean_for_tts is removed or broken, literal tag
+    If the HTML pre-pass in clean_for_tts is removed or broken, literal tag
     text reaches the phonemizer and produces garbled or empty output.
     """
     client, _db, _store = authed_client
@@ -131,7 +131,7 @@ def test_synthesize_html_input_produces_audio(authed_client: tuple[FlaskClient, 
         '<p>It sits on the <em>Seine</em> river.</p>'
     )
 
-    _, _sr, body = get_service().synthesize(html_text)
+    _, _sr, body = VoiceTranscriptService.instance().synthesize(html_text)
     assert _wav_duration(body) > 0.1, 'HTML input must produce audible audio'
 
 
@@ -148,7 +148,7 @@ def test_synthesize_url_input_produces_audio(authed_client: tuple[FlaskClient, s
     if not _voice_available(client):
         pytest.skip('Voice models not available in this environment')
 
-    _, _sr, body = get_service().synthesize(
+    _, _sr, body = VoiceTranscriptService.instance().synthesize(
         'Read more at http://google.com/search for details.',
     )
     assert _wav_duration(body) > 0.1, 'URL-containing input must produce audio'

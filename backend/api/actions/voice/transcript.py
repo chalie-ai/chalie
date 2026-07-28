@@ -20,7 +20,7 @@ from exceptions import NotFoundError
 from models.transcript import Transcript
 from models.voice_transcript import VoiceTranscript
 from services.file_mapper_service import FileMapperService
-from services.voice_transcript_service import get_service
+from services.voice_transcript_service import VoiceTranscriptService
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +85,7 @@ class VoiceTranscriptAction(Action):
             raise NotFoundError("No speech for this message")
 
         threading.Thread(
-            target=get_service().synthesize_settled,
+            target=VoiceTranscriptService.instance().synthesize_settled,
             args=(transcript_id,),
             daemon=True,
         ).start()
