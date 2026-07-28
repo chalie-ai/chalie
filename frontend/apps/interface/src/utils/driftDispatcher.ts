@@ -255,10 +255,13 @@ function _dispatchTurnSignal(data: WsPushEvent): boolean {
  * Turn lifecycle — the DB-backed turn_executions row, pushed whole on every
  * state flip (see services/execution_tracker.py). `working` flips the
  * data-working attribute and re-fetches (renders the user bubble — no
- * optimistic echo). `completed` clears working, drops the live trail, marks
- * data-done UNLESS the settled turn is the one open in the panel (D16), then
- * hands settle bookkeeping to the `finishTurn` session hook. `crashed` does
- * the same but additionally raises the 'turn failed' toast. `cancelled` is
+ * optimistic echo). `completed` clears working, drops the live trail,
+ * re-fetches the settled block (see the terminal-branch comment — clearing
+ * the DOM attributes alone leaves the RENDERED block still holding the
+ * `working: true` snapshot it was mounted with), and marks data-done UNLESS
+ * the settled turn is the one open in the panel (D16), then hands settle
+ * bookkeeping to the `finishTurn` session hook. `crashed` does the same but
+ * additionally raises the 'turn failed' toast. `cancelled` is
  * its own branch (see `_dispatchCancelled`) — a normal settle would leave a
  * fully-rendered, discarded response looking exactly like a completed one,
  * when the whole point of cancel is that it never counted.
@@ -306,6 +309,26 @@ function _dispatchTurnExecution(data: WsPushEvent): boolean {
 
   setTurnWorking(exec.turn_id, type, false);
   clearLiveTurn(type, exec.turn_id);
+  // The settled block has to be REFETCHED, not just marked done. Everything
+  // above is a DOM-attribute effect; the rendered block is still the snapshot
+  // taken while the turn was alive (`working: true`), so TurnView keeps
+  // appending its live-act row and renders "thinking…" forever — and, having
+  // just had its pills cleared, as the bare placeholder. `crashed` is the
+  // deterministic case: it carries no `updated` signal of its own (only
+  // TranscriptService.append_assistant and the gist daemon emit those), and a
+  // crashed turn frequently has no assistant row at all, so nothing else ever
+  // arrives to settle it. `completed` shares the hole and is merely masked by
+  // append_assistant's final 'updated' winning the race — so both settle here,
+  // through one common path. `force` is belt-and-braces, NOT the cancelled
+  // branch's reason (whose block genuinely shrinks): a settled turn is
+  // immutable — nothing appends after finish() — so this snapshot can never
+  // be STRICTLY older than what's rendered, and the guard would re-apply it
+  // on an equal version anyway. It is set because the failure mode here is a
+  // UI stuck thinking forever, so the settle must not be defeatable by any
+  // version-guard edge.
+  void _refetchAndUpsert(exec.turn_id, type, { force: true }).catch((err: unknown) => {
+    console.warn('[driftDispatcher] settle refetch failed for turn', exec.turn_id, type, err);
+  });
   if (exec.state === 'crashed') {
     h.setErrorMessage('Turn failed unexpectedly');
   }

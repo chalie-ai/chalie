@@ -206,9 +206,11 @@ export function resolveScopeContainer(threadId: number | null, type: string): HT
 // ── D13 — version guard ──────────────────────────────────────────────────────
 
 export interface UpsertOptions {
-  /** Bypass the monotonic version guard. Used ONLY by the post-cancel
-   *  reconcile: a cancelled turn's server-stripped block can legitimately
-   *  shrink (see driftDispatcher's cancelled-branch comment). */
+  /** Bypass the monotonic version guard. Two callers, both terminal: the
+   *  post-cancel reconcile, whose server-stripped block can legitimately
+   *  shrink (see driftDispatcher's cancelled-branch comment), and the
+   *  completed/crashed settle, where the turn is immutable and the settled
+   *  block must land (see driftDispatcher's terminal-branch comment). */
   force?: boolean;
 }
 
