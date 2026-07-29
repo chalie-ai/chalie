@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import ClassVar, Optional, cast
 
 from contracts.provider_client import ProviderClient
+from services.llm_clients.context_window import default_window_for_model
 from services.llm_clients.thinking_map import CODEX_REASONING_EFFORTS
 from exceptions import (
     ContextLimit,
@@ -365,9 +366,22 @@ class CodexCliClient(ProviderClient):
         )
 
     def get_context_limit(self) -> int | None:
-        """Return the model's context window from codex's local cache, or None
-        when the cache has no entry for this slug."""
-        return codex_model_context_window(self.model)
+        """Return the model's context window from codex's local cache.
+
+        The cache is authoritative when it knows the slug. When it does not, the
+        window still comes back measured — codex runs locally, so there is no
+        reachability question to answer, and a family default beats the loud
+        failure an unset window causes on every turn.
+        """
+        cached = codex_model_context_window(self.model)
+        if cached is not None:
+            return cached
+        window = default_window_for_model(self.model)
+        logger.info(
+            "[CodexCliClient] No cached context window for model=%s — using the "
+            "family default %d", self.model, window,
+        )
+        return window
 
     def estimate_request_tokens(self, dto: ProviderApiRequest) -> int:
         """Estimate token cost using the same heuristic as OpenAIClient.

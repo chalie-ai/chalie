@@ -28,6 +28,7 @@ import requests
 
 from configs.enums.thinking_level import ThinkingLevel
 from contracts.provider_client import ProviderClient
+from services.llm_clients.context_window import default_window_for_model
 from services.llm_clients.thinking_map import OLLAMA_THINK
 from exceptions import (
     ContextLimit,
@@ -260,10 +261,15 @@ class OllamaClient(ProviderClient):
             raise  # pragma: no cover — _handle_http_error always raises
 
     def get_context_limit(self) -> int | None:
-        """Query Ollama for model's context window size, cached per-instance.
+        """Query Ollama for the model's context window size, cached per-instance.
 
-        Returns None when the query fails or the key is absent — Ollama models
-        vary too much for a safe conservative default.
+        ``/api/show`` answering is itself the liveness proof, so a host that
+        replies without a ``context_length`` in ``model_info`` still yields a
+        family-based default rather than nothing — an unmeasured provider raises
+        on every turn, which is strictly worse than a conservative window.
+
+        Returns None only when the host cannot be reached or refuses the model:
+        a briefly-down Ollama must not stamp a fabricated window onto its row.
         """
         if hasattr(self, '_cached_context_limit'):
             return self._cached_context_limit
@@ -281,8 +287,24 @@ class OllamaClient(ProviderClient):
                     if 'context_length' in key.lower():
                         raw_limit = int(val)
                         break
+                if raw_limit is None:
+                    raw_limit = default_window_for_model(self.model)
+                    logger.info(
+                        "[OllamaClient] /api/show reported no context_length for model=%s "
+                        "— using the family default %d",
+                        self.model, raw_limit,
+                    )
+            else:
+                logger.warning(
+                    "[OllamaClient] /api/show returned HTTP %s for model=%s — "
+                    "leaving the window unset; the next send re-probes it",
+                    resp.status_code, self.model,
+                )
         except Exception as exc:
-            logger.debug("[OllamaClient] Failed to get context limit: %s", exc)
+            logger.warning(
+                "[OllamaClient] Could not reach %s to size model=%s: %s",
+                self.host, self.model, exc,
+            )
 
         self._cached_context_limit: int | None = raw_limit
         return self._cached_context_limit

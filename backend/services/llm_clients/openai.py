@@ -53,6 +53,7 @@ from exceptions import (
     ProviderTimeoutError,
     RateLimitError,
 )
+from services.llm_clients.context_window import default_window_for_model
 from services.llm_clients.thinking_map import (
     OPENAI_COMPATIBLE_NONE_BODY,
     OPENAI_NONE_FALLBACK_EFFORT,
@@ -91,16 +92,6 @@ _OPENAI_PUBLISHED_WINDOWS: tuple[tuple[str, int], ...] = (
     ('o4', 200_000),
 )
 
-# Family-based default window for a hosted (openai_compatible) model that
-# volunteers no size of its own on a completion. Modern large families run
-# 128k+; anything unrecognised gets a conservative 32k so an unknown model is
-# never over-promised a window it cannot honour. Matched as a substring so
-# vendor-prefixed slugs ('zai-org/GLM-4.6') still resolve to their family.
-_LARGE_WINDOW_FAMILIES: tuple[str, ...] = ('glm', 'claude', 'gpt')
-_DEFAULT_LARGE_WINDOW = 128_000
-_DEFAULT_WINDOW = 32_000
-
-
 def _published_openai_window(model: str) -> int | None:
     """Documented window for an official OpenAI model slug, or None if unknown.
 
@@ -114,14 +105,6 @@ def _published_openai_window(model: str) -> int | None:
         if slug.startswith(prefix):
             return window
     return None
-
-
-def _default_window_for_model(model: str) -> int:
-    """A sensible window for a hosted model the server told us nothing about."""
-    slug = (model or '').lower()
-    if any(family in slug for family in _LARGE_WINDOW_FAMILIES):
-        return _DEFAULT_LARGE_WINDOW
-    return _DEFAULT_WINDOW
 
 
 def _openai_convert_messages(messages: "list[_Msg]") -> "list[_Msg]":
@@ -386,17 +369,13 @@ class OpenAIClient(ProviderClient):
         if hasattr(self, '_cached_context_limit'):
             return self._cached_context_limit
 
-        host = cast("str | None", self._config.get('host'))
-        if host:
+        # Official OpenAI publishes no window on any endpoint, so the documented
+        # table is the authoritative answer where it has one. A slug it does not
+        # know (a model newer than the table) still gets measured — it falls
+        # through to the same ping every hosted provider uses.
+        window = None if self._config.get('host') else _published_openai_window(self.model)
+        if window is None:
             window = self._probe_via_ping()
-        else:
-            # Official OpenAI publishes no window on any endpoint.
-            window = _published_openai_window(self.model)
-            if window is None:
-                logger.warning(
-                    "[OpenAIClient] No published context window for OpenAI model=%s and no host to query",
-                    self.model,
-                )
 
         self._cached_context_limit: int | None = window
         return self._cached_context_limit
@@ -444,7 +423,7 @@ class OpenAIClient(ProviderClient):
         window = self._window_from_response(resp)
         source = 'response' if window is not None else 'family-default'
         if window is None:
-            window = _default_window_for_model(self.model)
+            window = default_window_for_model(self.model)
         logger.info(
             "[OpenAIClient] Context-window ping ok for model=%s (prompt_tokens=%d) — window=%d (%s)",
             self.model, prompt_tokens, window, source,

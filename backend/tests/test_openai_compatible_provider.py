@@ -274,7 +274,7 @@ class TestOpenAICompatibleProvider:
         assert stored['context_window'] == MAX_CONTEXT_WINDOW
 
     def test_a_host_that_reports_no_size_still_gets_a_usable_window(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
-        from services.llm_clients.openai import _DEFAULT_WINDOW
+        from services.llm_clients.context_window import DEFAULT_WINDOW as _DEFAULT_WINDOW
 
         client, _, _store = authed_client
         _unlock_vault()

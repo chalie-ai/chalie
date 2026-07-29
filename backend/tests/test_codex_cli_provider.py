@@ -210,9 +210,16 @@ class TestCodexCliProvider:
         home = _install_codex_home(tmp_path)
         monkeypatch.setenv('CODEX_HOME', str(home))
 
+        from services.llm_clients.context_window import DEFAULT_WINDOW
+
+        # The cache is authoritative when it knows the slug.
         assert CodexCliClient({'platform': 'codex_cli', 'model': 'gpt-5.5'}).get_context_limit() == 272000
-        # Unknown slug → None (contract: "I don't know" instead of fabricating).
-        assert CodexCliClient({'platform': 'codex_cli', 'model': 'nope'}).get_context_limit() is None
+
+        # Unknown slug → a family default, NOT None. codex runs locally, so a
+        # cache miss says nothing about reachability; returning None here made
+        # pin_context_window raise and killed every turn on a slug newer than
+        # the cache. An unmeasured window is worse than a conservative one.
+        assert CodexCliClient({'platform': 'codex_cli', 'model': 'nope'}).get_context_limit() == DEFAULT_WINDOW
 
     # ------------------------------------------------------------------
     # send() — the full subprocess path via a real stub binary.

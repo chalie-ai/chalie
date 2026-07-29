@@ -102,6 +102,7 @@ from exceptions import (
     ProviderTimeoutError,
     RateLimitError,
 )
+from services.llm_clients.context_window import default_window_for_model
 from services.llm_clients.thinking_map import GEMINI_NONE_FALLBACK_BUDGET, GEMINI_THINKING_BUDGETS
 from services.provider_api import (
     ProviderApiRequest,
@@ -406,10 +407,14 @@ class GeminiClient(ProviderClient):
         )
 
     def get_context_limit(self) -> int | None:
-        """Query Gemini API for model's input token limit, cached.
+        """Query the Gemini API for the model's input token limit, cached.
 
-        Returns None when the SDK call fails — Gemini exposes the limit for
-        most models, but a transient failure should not be masked by a guess.
+        The SDK answering is the liveness proof: a model it describes without an
+        ``input_token_limit`` still yields a family-based default, because an
+        unmeasured provider raises on every turn.
+
+        Returns None only when the SDK call itself fails — a transient outage
+        must not stamp a fabricated window onto the row.
         """
         if hasattr(self, '_cached_context_limit'):
             return self._cached_context_limit
@@ -418,12 +423,24 @@ class GeminiClient(ProviderClient):
             from services.llm_service import _resolve_api_key  # noqa: PLC0415
             client = genai.Client(api_key=_resolve_api_key(self._config))
             model_info = client.models.get(model=self.model)
-            self._cached_context_limit: int | None = cast(int, model_info.input_token_limit)
-            return self._cached_context_limit
+            reported = model_info.input_token_limit
         except Exception as exc:
-            logger.debug("[GeminiClient] Failed to get context limit: %s", exc)
-            self._cached_context_limit = None
+            logger.warning(
+                "[GeminiClient] Could not size model=%s: %s — leaving the window "
+                "unset; the next send re-probes it", self.model, exc,
+            )
+            self._cached_context_limit: int | None = None
             return self._cached_context_limit
+
+        if isinstance(reported, int) and reported > 0:
+            self._cached_context_limit = cast(int, reported)
+        else:
+            self._cached_context_limit = default_window_for_model(self.model)
+            logger.info(
+                "[GeminiClient] No input_token_limit reported for model=%s — "
+                "using the family default %d", self.model, self._cached_context_limit,
+            )
+        return self._cached_context_limit
 
     def estimate_request_tokens(self, dto: ProviderApiRequest) -> int:
         """Estimate using build_request_body + heuristic estimate_tokens."""
