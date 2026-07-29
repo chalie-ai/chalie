@@ -45,6 +45,7 @@ function msg(
     role,
     content,
     timestamp: '2026-01-01 00:00:00',
+    day: '2026-01-01',
     turn_id: turnId,
     ...(threadMessage ? { thread_message: true } : {}),
     ...(toolCalls ? { tool_calls: toolCalls } : {}),

@@ -23,7 +23,7 @@ function block(messages: ConversationMessage[]): ConversationTurnBlock {
 }
 
 function msg(role: ConversationMessage['role'], overrides: Partial<ConversationMessage> = {}): ConversationMessage {
-  return { id: '1', role, content: '', timestamp: '2026-01-01 00:00:00', turn_id: 1, ...overrides };
+  return { id: '1', role, content: '', timestamp: '2026-01-01 00:00:00', day: '2026-01-01', turn_id: 1, ...overrides };
 }
 
 describe('blockSpeechText', () => {

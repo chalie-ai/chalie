@@ -3,7 +3,6 @@ import type { App, AppContext, Component } from 'vue';
 import TurnView from '../components/conversation/TurnView.vue';
 import type { ConversationTurnBlock } from '../api/conversation';
 import { clearLiveTurnsForToolCallsResolved } from './liveActTrail';
-import { localDayKey } from './time';
 
 let appContext: AppContext | null = null;
 
@@ -261,14 +260,13 @@ export function upsertTurn(
   return host;
 }
 
-/** Stamp the host's local calendar day (block's first-row timestamp, falling
- *  back to last activity) so the date-divider reconciler (utils/daymarks.ts)
- *  can group turns by day without re-reading block internals. Left unset when
- *  no parseable timestamp exists — such a turn simply joins the group above it. */
+/** Stamp the host's local calendar day (backend-supplied `day` key, formatted
+ *  YYYY-MM-DD) so the date-divider reconciler (utils/daymarks.ts) can group
+ *  turns by day without re-parsing timestamps. Left unset when no message
+ *  carries the key — such a turn simply joins the group above it. */
 function stampDay(host: HTMLElement, block: ConversationTurnBlock): void {
-  const iso = block.messages[0]?.timestamp ?? block.last_activity_at;
-  const d = iso ? new Date(iso) : null;
-  if (d && !Number.isNaN(d.getTime())) host.dataset.day = localDayKey(d);
+  const day = block.messages[0]?.day;
+  if (day) host.dataset.day = day;
 }
 
 /** Stamp `data-working` on a just-(re)mounted turn's own root element

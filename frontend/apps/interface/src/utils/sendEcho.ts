@@ -126,6 +126,11 @@ export function mountSendEcho(
     role: 'user',
     content: text,
     timestamp: new Date().toISOString(),
+    // Empty by design: the day key is the backend's to assign (it resolves the
+    // user's configured timezone, which the browser can't). The echo host is
+    // never day-grouped — it carries no `data-day`, so syncDaymarks skips it —
+    // and the real row arrives stamped moments later.
+    day: '',
     turn_id: null,
     attachments: echoAttachments(files),
   };

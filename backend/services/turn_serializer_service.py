@@ -23,7 +23,7 @@ from typing import cast
 
 from services.database import Database
 from services.file_mapper_service import FileMapperService
-from services.locale_service import CHAT_TIMESTAMP_FMT, format_date
+from services.locale_service import CHAT_DAY_FMT, CHAT_TIMESTAMP_FMT, format_date
 from services.rich_media_parser import parse as _parse_rich_media
 from configs.channels import config_for
 from models.tool_call import ToolCall
@@ -111,12 +111,13 @@ def _group_calls_by_transcript(calls: list[dict[str, object]]) -> dict[int, list
 
 
 def _base_message(r: dict[str, object]) -> dict[str, object]:
-    """The role/content/timestamp shape common to every projected message."""
+    """The role/content/timestamp/day shape common to every projected message."""
     return {
         "id": str(cast("int", r['id'])),
         "role": r['role'],
         "content": r['content'] or "",
         "timestamp": format_date(cast("str", r['created_at']), CHAT_TIMESTAMP_FMT, for_ui=True) or "",
+        "day": format_date(cast("str", r['created_at']), CHAT_DAY_FMT, for_ui=True) or "",
         "turn_id": r['turn_id'],
     }
 

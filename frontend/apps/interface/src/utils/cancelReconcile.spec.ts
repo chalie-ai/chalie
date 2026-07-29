@@ -39,7 +39,7 @@ function block(turnId: number, messageIds: number[]): ConversationTurnBlock {
     duration_ms: 0,
     type: 'user',
     messages: messageIds.map((id) => ({
-      id: String(id), role: 'user', content: `msg ${id}`, timestamp: '2026-01-01 00:00:00', turn_id: turnId,
+      id: String(id), role: 'user', content: `msg ${id}`, timestamp: '2026-01-01 00:00:00', day: '2026-01-01', turn_id: turnId,
     })),
   };
 }
@@ -126,7 +126,7 @@ describe('reconcileCancelledTurn', () => {
     // never be trusted over what the fetch actually returned.
     threadMock.mockResolvedValue({
       turn_id: 6, gist: null, preview: 'x', last_activity_at: null, working: false, duration_ms: 0, type: 'scheduled',
-      messages: [{ id: '60', role: 'user', content: 'hi', timestamp: '2026-01-01 00:00:00', turn_id: 6 }],
+      messages: [{ id: '60', role: 'user', content: 'hi', timestamp: '2026-01-01 00:00:00', day: '2026-01-01', turn_id: 6 }],
     });
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => { /* silence */ });
 
