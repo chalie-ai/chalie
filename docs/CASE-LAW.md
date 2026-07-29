@@ -31,3 +31,11 @@ Entry format: **Teaches** (principles) · **What happened** · **The ruling**.
 **What happened.** A processing chain carried in-memory state from instance to instance — touched-record ids, counters, snapshots — held up by a config hook on every class in the chain, a copy loop, and a regression test to police it all. The state drifted anyway and shipped a subtle decay bug.
 
 **The ruling.** Every carried value was already derivable from two queries against the durable store. The hook, the loop, the policing test, and the bug were deleted together. When a continuation "loses" state, the question is *which query rebuilds it* — never *how do we carry it*.
+
+## Case IV — The honest answer that killed every turn (2026-07)
+
+**Teaches P4 · P10.**
+
+**What happened.** Sizing a model's context window returned `None` when the client could not name a figure, on the reasoning that admitting ignorance beats fabricating a number. Four of the five provider clients could reach that branch — a model slug newer than a local cache, a hosted endpoint that serves completions but publishes no window, a transient SDK error. The caller in front of every request raises when the window is unknown, so each of those branches was not a missing measurement: it was a provider that could not answer a single message. A test asserted the `None` and locked the behaviour in as intended.
+
+**The ruling.** `None` was conflating two different states — *I could not reach it* and *it answered but named no size* — and only the first deserves it. A provider that answers is now always sized: its own reported figure where it has one, otherwise a default read from the model family, chosen by one owner module rather than copied into five clients. A provider that cannot be reached still returns `None`, so a host that is briefly down never stamps a guessed window onto its record. Before adding a return value that means "I don't know", find out what the caller does with it — a truthful sentinel that reliably breaks the feature is a bug wearing honesty as a costume. When one value carries two failure modes, split the value, not the caller.
