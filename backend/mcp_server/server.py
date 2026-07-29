@@ -6,7 +6,7 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""MCP server using FastMCP — single ``talk_to_chalie`` tool for external agents.
+"""MCP server built on the SDK's ``MCPServer`` — single ``talk_to_chalie`` tool for external agents.
 
 Streamable HTTP on a dedicated port (default 8462). Bearer tokens validated by
 ASGI middleware against ``wrapper_tokens`` (same as the REST API).
@@ -19,7 +19,7 @@ import re
 import sqlite3
 
 import uvicorn
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 from starlette.applications import Starlette
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
@@ -101,13 +101,14 @@ class BearerTokenMiddleware(BaseHTTPMiddleware):
         return wrapper_id
 
 
-def create_mcp_server(host: str = "0.0.0.0", port: int = _DEFAULT_PORT) -> FastMCP:
-    """Create and configure the MCP server with the talk_to_chalie tool."""
-    mcp = FastMCP(
-        name=_MCP_SERVER_NAME,
-        host=host,
-        port=port,
-    )
+def create_mcp_server() -> MCPServer:
+    """Create and configure the MCP server with the talk_to_chalie tool.
+
+    Bind host and port are not set here — the constructor no longer takes them
+    (they are applied where they matter: ``host`` in ``_build_app`` and ``port``
+    by ``uvicorn.run`` in ``run_mcp_server``).
+    """
+    mcp = MCPServer(name=_MCP_SERVER_NAME)
 
     @mcp.tool()
     async def talk_to_chalie(
@@ -162,9 +163,14 @@ def create_mcp_server(host: str = "0.0.0.0", port: int = _DEFAULT_PORT) -> FastM
     return mcp
 
 
-def _build_app(mcp: FastMCP) -> Starlette:
+def _build_app(mcp: MCPServer) -> Starlette:
     """Wrap the MCP Starlette app with bearer token auth middleware."""
-    app = mcp.streamable_http_app()
+    # host="0.0.0.0" is load-bearing, not cosmetic: the SDK auto-enables
+    # DNS-rebinding protection (localhost-only allowed_hosts) ONLY when host is a
+    # loopback address. Passing the real bind host keeps that protection OFF, so
+    # networked external agents can connect — the permissive transport 1.x always
+    # ran. Do not "simplify" this back to the default.
+    app = mcp.streamable_http_app(host="0.0.0.0")
     app.add_middleware(BearerTokenMiddleware)
     return app
 
@@ -187,7 +193,7 @@ def run_mcp_server() -> None:
     _ensure_mcp_token()
 
     logger.info("[MCP] Starting MCP server on port %d", port)
-    mcp = create_mcp_server(host="0.0.0.0", port=port)
+    mcp = create_mcp_server()
     app = _build_app(mcp)
 
     uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")

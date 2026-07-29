@@ -56,7 +56,13 @@ dependencies = [
     # serializes outbound responses on a single typed contract.
     "pydantic>=2.6",
     "rapidfuzz>=3.0.0",
-    "mcp>=1.24.0",
+    # mcp: bounded below the next major. 2.0 renamed the server class
+    # (FastMCP→MCPServer), the client transport (streamablehttp_client→
+    # streamable_http_client, now 2-tuple + http_client=), and camelCase result
+    # fields → snake_case. An unbounded constraint let a fresh (unpinned) install
+    # auto-resolve to that breaking major the day it landed on PyPI. Bump the
+    # ceiling only alongside a matching port.
+    "mcp>=2.0.0,<3.0.0",
     "uvicorn>=0.34.0",
     "geopy>=2.4.0",
     # Natural-language due_at parsing for the schedule ability ("tomorrow 9am",

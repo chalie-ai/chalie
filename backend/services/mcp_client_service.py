@@ -141,23 +141,28 @@ async def _async_list_tools(host: str, headers: dict[str, str]) -> list[dict[str
     Each returned dict has 'name', 'description', and 'inputSchema' keys
     matching the MCP protocol ToolDescription shape.
     """
-    from mcp.client.streamable_http import streamablehttp_client
+    from mcp.client.streamable_http import streamable_http_client
     from mcp.client.session import ClientSession
+    # create_mcp_http_client builds an httpx client with headers AND the SDK's
+    # recommended MCP timeouts. It is imported from its definition module because
+    # the transport package does not re-export it (mypy --strict no_implicit_reexport).
+    from mcp.shared._httpx_utils import create_mcp_http_client
 
-    async with streamablehttp_client(host, headers=headers) as (read, write, _):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            result = await session.list_tools()
-            return [
-                {
-                    "name": t.name,
-                    "description": t.description or "",
-                    "inputSchema": (
-                        t.inputSchema if isinstance(t.inputSchema, dict) else {}
-                    ),
-                }
-                for t in result.tools
-            ]
+    async with create_mcp_http_client(headers=headers) as client:
+        async with streamable_http_client(host, http_client=client) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                result = await session.list_tools()
+                return [
+                    {
+                        "name": t.name,
+                        "description": t.description or "",
+                        "inputSchema": (
+                            t.input_schema if isinstance(t.input_schema, dict) else {}
+                        ),
+                    }
+                    for t in result.tools
+                ]
 
 
 async def _async_call_tool(
@@ -165,18 +170,20 @@ async def _async_call_tool(
 ) -> object:
     """Connect to a remote MCP server and call a single tool.
 
-    Returns the full ``CallToolResult`` so the caller can read ``isError`` and
-    ``structuredContent`` alongside the content blocks — an MCP tool signalling
-    failure via ``isError=true`` must NOT be mistaken for success, and structured
+    Returns the full ``CallToolResult`` so the caller can read ``is_error`` and
+    ``structured_content`` alongside the content blocks — an MCP tool signalling
+    failure via ``is_error=True`` must NOT be mistaken for success, and structured
     JSON must be preserved as structure rather than collapsed into a blob.
     """
-    from mcp.client.streamable_http import streamablehttp_client
+    from mcp.client.streamable_http import streamable_http_client
     from mcp.client.session import ClientSession
+    from mcp.shared._httpx_utils import create_mcp_http_client
 
-    async with streamablehttp_client(host, headers=headers) as (read, write, _):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            return await session.call_tool(remote_tool, params)
+    async with create_mcp_http_client(headers=headers) as client:
+        async with streamable_http_client(host, http_client=client) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                return await session.call_tool(remote_tool, params)
 
 
 # ── McpClientService ──────────────────────────────────────────────────────────
@@ -484,7 +491,7 @@ class McpClientService:
         )
         return {
             "server": server["name"],
-            "is_error": bool(getattr(result, "isError", False)),
+            "is_error": bool(getattr(result, "is_error", False)),
             "body": self._shape_tool_result(result),
         }
 
