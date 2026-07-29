@@ -8,6 +8,7 @@
 # window onto its row.
 
 import json
+import secrets
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -114,6 +115,53 @@ class TestContextWindowAlwaysMeasured:
         try:
             client = OllamaClient({'platform': 'ollama', 'model': 'absent', 'host': host})
             assert client.get_context_limit() is None
+        finally:
+            server.shutdown()
+
+    # ------------------------------------------------------------------
+    # openai_compatible — a refusal is an answer, not a silence.
+    # ------------------------------------------------------------------
+
+    @pytest.mark.parametrize("status,message", [
+        # The one that actually bites: every reasoning model rejects max_tokens.
+        (400, "Unsupported parameter: 'max_tokens' is not supported with this "
+              "model. Use 'max_completion_tokens' instead."),
+        (401, "Incorrect API key provided."),
+        (404, "The model does not exist."),
+    ])
+    def test_a_host_that_refuses_the_ping_is_still_sized(self, status: int, message: str) -> None:
+        from services.llm_clients.openai import OpenAIClient
+
+        # Any HTTP status proves the host is up. 429 and 5xx take the same
+        # branch (all APIStatusError) and are left out only because the SDK
+        # retries them, which would buy nothing but wall-clock here.
+        class _Refuse(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:
+                payload = json.dumps({
+                    "error": {"message": message, "type": "invalid_request_error"},
+                }).encode()
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), _Refuse)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            client = OpenAIClient({
+                'platform': 'openai_compatible',
+                'model': 'gpt-5-nano',
+                'host': f"http://127.0.0.1:{server.server_port}/v1",
+                'api_key': secrets.token_hex(16),
+            })
+            # Not None. None would make pin_context_window raise, so the user
+            # would see "cannot determine the context window" instead of the
+            # message above — which is the one that tells them what to fix.
+            assert client.get_context_limit() == DEFAULT_LARGE_WINDOW
         finally:
             server.shutdown()
 

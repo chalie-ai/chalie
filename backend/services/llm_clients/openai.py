@@ -388,7 +388,14 @@ class OpenAIClient(ProviderClient):
         is then taken from a size field on the response if one is present, else
         a family-based default. Returns None (never raises) when the host cannot
         be reached, so the row is left unset for the next send to re-probe.
+
+        A refusal is not a silence. Any HTTP status — a 400 rejecting a
+        parameter, a 401, a 404, a 429 — came from a host that is up, so it
+        sizes like any other live provider and lets the real fault surface at
+        send time, where the message actually names it.
         """
+        import openai as openai_mod  # noqa: PLC0415
+
         try:
             client = self._get_client()
             create = cast(
@@ -403,6 +410,19 @@ class OpenAIClient(ProviderClient):
                 }],
                 max_tokens=5,
             )
+        except openai_mod.APIStatusError as exc:
+            # The host answered, and an answer is the liveness this probe exists
+            # to establish. Reasoning models reject max_tokens outright (they
+            # require max_completion_tokens), so a plain 400 here is routine —
+            # returning None for it would make pin_context_window raise and kill
+            # every turn for a provider whose only real problem is elsewhere.
+            window = default_window_for_model(self.model)
+            logger.warning(
+                "[OpenAIClient] Context-window ping for model=%s was refused with "
+                "HTTP %s (%s) — the host is up, so sizing it at %d (family-default)",
+                self.model, exc.status_code, exc, window,
+            )
+            return window
         except Exception as exc:
             logger.warning(
                 "[OpenAIClient] Context-window ping failed for model=%s: %s",
