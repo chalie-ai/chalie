@@ -25,6 +25,7 @@ No mocks: a real inert ``MessageProcessor`` appends real rows to the real,
 fully-migrated SQLite database, exactly as production does.
 """
 
+import json
 import re
 import sqlite3
 from typing import cast
@@ -50,6 +51,20 @@ _MONTHS = {
 def _messages(turn_id: int) -> list[dict[str, object]]:
     result = _serializer().serialize(_CHANNEL, turn_id)
     return cast("list[dict[str, object]]", result["messages"])
+
+
+def _seed_timezone(db: sqlite3.Connection, tz_name: str) -> None:
+    """Put a real timezone in the real telemetry table, the way a heartbeat does.
+
+    Without this the table is empty, ``get_timezone()`` falls back to UTC
+    (``locale_service.py``), and every assertion below would hold just as well
+    if the timezone conversion were removed entirely.
+    """
+    from services.heartbeat_service import heartbeat_service
+    heartbeat_service._ctx = None
+    db.execute("DELETE FROM telemetry")
+    db.execute("INSERT INTO telemetry (key, value) VALUES (?, ?)", ("timezone", json.dumps(tz_name)))
+    db.commit()
 
 
 def test_every_projected_message_carries_a_full_calendar_day(db: sqlite3.Connection) -> None:
@@ -109,6 +124,33 @@ def test_day_is_stable_across_every_row_of_one_turn(db: sqlite3.Connection) -> N
     days = {cast("str", m["day"]) for m in _messages(turn_id)}
 
     assert len(days) == 1, f"one turn projected rows across multiple days: {days}"
+
+
+def test_day_is_the_users_local_calendar_day_not_the_utc_one(db: sqlite3.Connection) -> None:
+    """``day`` must be resolved through the user's configured timezone, which is
+    the whole reason the backend owns this key — the browser cannot know that
+    timezone. Pinning a row to 23:40 UTC puts the two calendars on *different
+    dates*: still 27 Jul in UTC, already 28 Jul in Malta (UTC+2 in July). A turn
+    the user sent just after their midnight has to file under the day they
+    experienced, and this is the only test here that can tell the difference —
+    under the default UTC fallback the local and UTC renderings are identical,
+    so dropping the conversion would otherwise go unnoticed.
+    """
+    turn_id = 9405
+    mp = MessageProcessor(UserConfig(), turn_id, "Just past midnight, my time.")  # inert (I2)
+    mp.uid = mp.transcript_service.append_input(mp.raw_input)
+    # Rewrite the stored instant rather than the clock: created_at is UTC text
+    # ("2026-07-29 15:44:24"), so this is exactly a row written at 23:40 UTC.
+    db.execute("UPDATE transcript SET created_at = ? WHERE turn_id = ?", ("2026-07-27 23:40:00", turn_id))
+    db.commit()
+    _seed_timezone(db, "Europe/Malta")
+
+    message = _messages(turn_id)[0]
+
+    # 2026-07-27 would be the UTC date — seeing it means the conversion is gone.
+    assert message["day"] == "2026-07-28", "day must follow the user's calendar, not UTC's"
+    # The displayed time moves with it; the two renderings never disagree.
+    assert message["timestamp"] == "28 Jul 01:40"
 
 
 def test_day_survives_the_rest_contract(
