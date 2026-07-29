@@ -77,7 +77,8 @@ _COMPLETION_USAGE: TypeAlias = "_openai_mod.types.CompletionUsage"
 # prefix first, because 'gpt-4o'/'gpt-4.1' must not be caught by 'gpt-4'.
 # Deliberately NOT used for platform='openai_compatible': a third-party or
 # self-hosted host behind the same API serves whatever it likes under any name,
-# and only its own /models or /props can be believed.
+# so that path pings the host to confirm it answers and falls back to a
+# family-based default (see _default_window_for_model).
 _OPENAI_PUBLISHED_WINDOWS: tuple[tuple[str, int], ...] = (
     ('gpt-3.5-turbo', 16_385),
     ('gpt-4-turbo', 128_000),
@@ -89,6 +90,15 @@ _OPENAI_PUBLISHED_WINDOWS: tuple[tuple[str, int], ...] = (
     ('o3', 200_000),
     ('o4', 200_000),
 )
+
+# Family-based default window for a hosted (openai_compatible) model that
+# volunteers no size of its own on a completion. Modern large families run
+# 128k+; anything unrecognised gets a conservative 32k so an unknown model is
+# never over-promised a window it cannot honour. Matched as a substring so
+# vendor-prefixed slugs ('zai-org/GLM-4.6') still resolve to their family.
+_LARGE_WINDOW_FAMILIES: tuple[str, ...] = ('glm', 'claude', 'gpt')
+_DEFAULT_LARGE_WINDOW = 128_000
+_DEFAULT_WINDOW = 32_000
 
 
 def _published_openai_window(model: str) -> int | None:
@@ -104,6 +114,14 @@ def _published_openai_window(model: str) -> int | None:
         if slug.startswith(prefix):
             return window
     return None
+
+
+def _default_window_for_model(model: str) -> int:
+    """A sensible window for a hosted model the server told us nothing about."""
+    slug = (model or '').lower()
+    if any(family in slug for family in _LARGE_WINDOW_FAMILIES):
+        return _DEFAULT_LARGE_WINDOW
+    return _DEFAULT_WINDOW
 
 
 def _openai_convert_messages(messages: "list[_Msg]") -> "list[_Msg]":
@@ -353,80 +371,105 @@ class OpenAIClient(ProviderClient):
         )
 
     def get_context_limit(self) -> int | None:
-        """Query the host for the model's real context window, cached per-instance.
+        """Determine the model's context window, cached per-instance.
 
-        Tries the llama.cpp /models endpoint first (meta.n_ctx of the matching
-        entry), then /props (default_generation_settings.n_ctx), then — for
-        official OpenAI only — the published table, since api.openai.com serves
-        no size information. Returns None when none of those can answer, and
-        logs a warning; the caller turns that into a loud failure rather than a
-        guess.
+        A hosted (openai_compatible) provider is pinged: a tiny one-shot
+        completion both proves the host answers and yields a window — read from
+        a size field on the response if the server volunteers one, otherwise a
+        family-based default. Official OpenAI (no host) falls to the published
+        table, since api.openai.com serves no size information anywhere.
+
+        Returns None only when a hosted provider cannot be reached at all, so
+        the caller leaves the column unset and the next send re-probes. Never
+        raises: a provider must stay creatable while its host is briefly down.
         """
         if hasattr(self, '_cached_context_limit'):
             return self._cached_context_limit
 
-        import requests  # noqa: PLC0415
-
-        raw_limit: int | None = None
         host = cast("str | None", self._config.get('host'))
-        # Read the key directly, never through _resolve_api_key: that raises when
-        # the key is absent, and a key-less local host is a perfectly probeable
-        # one — /models and /props answer unauthenticated. Raising here would
-        # turn "no key needed" into "no window", which is a different fact.
-        api_key = self._config.get('api_key')
-        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-
         if host:
-            base = host.rstrip('/')
-            # 1. /models — find the entry whose id matches self.model, read meta.n_ctx.
-            try:
-                resp = requests.get(f"{base}/models", headers=headers, timeout=5)
-                if resp.ok:
-                    for entry in resp.json().get('data', []):
-                        if entry.get('id') == self.model:
-                            meta = entry.get('meta') or {}
-                            n_ctx = meta.get('n_ctx')
-                            if isinstance(n_ctx, int) and n_ctx > 0:
-                                raw_limit = n_ctx
-                                break
-            except Exception as exc:  # pragma: no cover — network error path
-                logger.debug("[OpenAIClient] /models query failed: %s", exc)
-
-            # 2. /props — default_generation_settings.n_ctx. Verified against a
-            # live llama.cpp server: /props sits at the server root, NOT under
-            # the OpenAI-compatible /v1 prefix (`/v1/props` returns 404 where
-            # `/props` returns 200), so the prefix comes off first.
-            if raw_limit is None:
-                try:
-                    root = base.removesuffix('/v1')
-                    resp = requests.get(f"{root}/props", headers=headers, timeout=5)
-                    if resp.ok:
-                        dgs = (resp.json().get('default_generation_settings') or {})
-                        n_ctx = dgs.get('n_ctx')
-                        if isinstance(n_ctx, int) and n_ctx > 0:
-                            raw_limit = n_ctx
-                except Exception as exc:  # pragma: no cover — network error path
-                    logger.debug("[OpenAIClient] /props query failed: %s", exc)
-
-        # 3. Official OpenAI publishes no window on any endpoint, so fall to the
-        #    documented table. Scoped to platform='openai' only — see the table.
-        if raw_limit is None and self._config.get('platform') == 'openai':
-            raw_limit = _published_openai_window(self.model)
-
-        if raw_limit is None:
-            if host:
-                logger.warning(
-                    "[OpenAIClient] Could not determine context window for model=%s via /models or /props",
-                    self.model,
-                )
-            else:
+            window = self._probe_via_ping()
+        else:
+            # Official OpenAI publishes no window on any endpoint.
+            window = _published_openai_window(self.model)
+            if window is None:
                 logger.warning(
                     "[OpenAIClient] No published context window for OpenAI model=%s and no host to query",
                     self.model,
                 )
 
-        self._cached_context_limit: int | None = raw_limit
+        self._cached_context_limit: int | None = window
         return self._cached_context_limit
+
+    def _probe_via_ping(self) -> int | None:
+        """Confirm a hosted provider answers and derive its context window.
+
+        Sends a 5-token one-shot completion. A reply with a readable
+        ``usage.prompt_tokens`` proves the host and model are live; the window
+        is then taken from a size field on the response if one is present, else
+        a family-based default. Returns None (never raises) when the host cannot
+        be reached, so the row is left unset for the next send to re-probe.
+        """
+        try:
+            client = self._get_client()
+            create = cast(
+                "Callable[..., _openai_mod.types.chat.ChatCompletion]",
+                client.chat.completions.create,
+            )
+            resp = create(
+                model=self.model,
+                messages=[{
+                    "role": "user",
+                    "content": "Do NOT think, answer immediately with 'pong'.",
+                }],
+                max_tokens=5,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[OpenAIClient] Context-window ping failed for model=%s: %s",
+                self.model, exc,
+            )
+            return None
+
+        usage = getattr(resp, 'usage', None)
+        prompt_tokens = getattr(usage, 'prompt_tokens', None) if usage else None
+        if not isinstance(prompt_tokens, int):
+            logger.warning(
+                "[OpenAIClient] Context-window ping for model=%s returned no usage — "
+                "treating the host as unusable, leaving the window unset",
+                self.model,
+            )
+            return None
+
+        window = self._window_from_response(resp)
+        source = 'response' if window is not None else 'family-default'
+        if window is None:
+            window = _default_window_for_model(self.model)
+        logger.info(
+            "[OpenAIClient] Context-window ping ok for model=%s (prompt_tokens=%d) — window=%d (%s)",
+            self.model, prompt_tokens, window, source,
+        )
+        return window
+
+    @staticmethod
+    def _window_from_response(resp: object) -> int | None:
+        """A window the server volunteered on the completion, or None.
+
+        Standard OpenAI responses carry no size; some self-hosted servers attach
+        one under ``model_info`` or a top-level field. Read defensively — the
+        SDK never types these, so they arrive as untyped extras or not at all.
+        """
+        model_info = getattr(resp, 'model_info', None)
+        if isinstance(model_info, dict):
+            for key in ('context_length', 'n_ctx', 'max_context_length'):
+                val = model_info.get(key)
+                if isinstance(val, int) and val > 0:
+                    return val
+        for attr in ('context_length', 'n_ctx'):
+            val = getattr(resp, attr, None)
+            if isinstance(val, int) and val > 0:
+                return val
+        return None
 
     def estimate_request_tokens(self, dto: ProviderApiRequest) -> int:
         """Estimate tokens using tiktoken if available, else heuristic."""

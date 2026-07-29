@@ -189,21 +189,42 @@ class TestOpenAICompatibleProvider:
     # ------------------------------------------------------------------
     # 4a. The window is measured at setup and stored on the row
     #
-    # Creating a provider asks the host what the model's context window actually
-    # is and writes the answer to the row, so no send has to guess. Without this
-    # the column stays NULL for every provider ever created — nothing else
-    # populates it — and every turn falls back to a per-platform default that
-    # has no relationship to the model actually loaded.
+    # Creating a provider pings the host with a one-shot completion and writes a
+    # window to the row, so no send has to guess. Without this the column stays
+    # NULL for every provider ever created — nothing else populates it — and
+    # every turn dies resolving a window it cannot determine.
     # ------------------------------------------------------------------
 
-    def _serve_models(self, model: str, n_ctx: object) -> "tuple[str, HTTPServer]":
-        """Stand up a llama.cpp-shaped /v1/models endpoint; return (host, server)."""
+    def _serve_completion(self, model: str, n_ctx: object) -> "tuple[str, HTTPServer]":
+        """Stand up a /v1/chat/completions endpoint; return (host, server).
 
-        class _Models(BaseHTTPRequestHandler):
-            def do_GET(self) -> None:
-                payload = json.dumps({
-                    "data": [{"id": model, "meta": {"n_ctx": n_ctx}}],
-                }).encode()
+        The probe is a real one-shot completion, so the stub answers POST. When
+        ``n_ctx`` is None the reply carries no size field at all — the shape every
+        spec-compliant OpenAI server returns — which is what drives the probe onto
+        its family-based default.
+        """
+
+        class _Completions(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:
+                body: dict[str, object] = {
+                    "id": "chatcmpl-probe",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": model,
+                    "choices": [{
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "pong"},
+                        "finish_reason": "stop",
+                    }],
+                    "usage": {
+                        "prompt_tokens": 14,
+                        "completion_tokens": 1,
+                        "total_tokens": 15,
+                    },
+                }
+                if n_ctx is not None:
+                    body["model_info"] = {"context_length": n_ctx}
+                payload = json.dumps(body).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(payload)))
@@ -213,13 +234,13 @@ class TestOpenAICompatibleProvider:
             def log_message(self, format: str, *args: object) -> None:  # noqa: A002
                 pass
 
-        server = HTTPServer(("127.0.0.1", 0), _Models)
+        server = HTTPServer(("127.0.0.1", 0), _Completions)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         return f"http://127.0.0.1:{server.server_port}/v1", server
 
     def _create_and_read_back(self, client: FlaskClient, name: str, model: str,
                               n_ctx: object) -> "dict[str, object]":
-        host, server = self._serve_models(model, n_ctx)
+        host, server = self._serve_completion(model, n_ctx)
         try:
             resp = client.post('/api/providers/-1', json={
                 'name': name, 'platform': 'openai_compatible',
@@ -251,6 +272,21 @@ class TestOpenAICompatibleProvider:
         # Clamped at write time, so nothing downstream can ever read a window
         # larger than the ceiling off a provider row.
         assert stored['context_window'] == MAX_CONTEXT_WINDOW
+
+    def test_a_host_that_reports_no_size_still_gets_a_usable_window(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
+        from services.llm_clients.openai import _DEFAULT_WINDOW
+
+        client, _, _store = authed_client
+        _unlock_vault()
+
+        # A spec-compliant OpenAI response carries no context-window field
+        # anywhere — the common case, and the one that used to leave the column
+        # NULL and crash every turn. The completion answering at all is the
+        # measurement: the host and model are live, so the row gets a usable
+        # window instead of a permanent failure.
+        stored = self._create_and_read_back(client, 'silent', 'local-model', None)
+
+        assert stored['context_window'] == _DEFAULT_WINDOW
 
     def test_an_unreachable_host_leaves_the_window_unset(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
         client, _, _store = authed_client
