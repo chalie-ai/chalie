@@ -35,8 +35,13 @@ DEFAULT_LARGE_WINDOW = 128_000
 DEFAULT_WINDOW = 32_000
 
 
-def default_window_for_model(model: str) -> int:
-    """A usable window for a live model that reported no size of its own."""
+def default_window_for_model(model: "str | None") -> int:
+    """A usable window for a live model that reported no size of its own.
+
+    A missing slug is a legitimate input, not a caller error — a client may hold
+    no model name at all — and it lands on the conservative default like any
+    other unrecognised one.
+    """
     slug = (model or '').lower()
     if any(family in slug for family in LARGE_WINDOW_FAMILIES):
         return DEFAULT_LARGE_WINDOW

@@ -440,10 +440,9 @@ class OpenAIClient(ProviderClient):
             )
             return None
 
-        window = self._window_from_response(resp)
-        source = 'response' if window is not None else 'family-default'
-        if window is None:
-            window = default_window_for_model(self.model)
+        reported = self._window_from_response(resp)
+        window = reported if reported is not None else default_window_for_model(self.model)
+        source = 'response' if reported is not None else 'family-default'
         logger.info(
             "[OpenAIClient] Context-window ping ok for model=%s (prompt_tokens=%d) — window=%d (%s)",
             self.model, prompt_tokens, window, source,

@@ -433,7 +433,7 @@ class GeminiClient(ProviderClient):
             return self._cached_context_limit
 
         if isinstance(reported, int) and reported > 0:
-            self._cached_context_limit = cast(int, reported)
+            self._cached_context_limit = reported
         else:
             self._cached_context_limit = default_window_for_model(self.model)
             logger.info(

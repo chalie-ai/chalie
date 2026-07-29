@@ -261,12 +261,19 @@ def test_pin_context_window_persists_so_the_row_converges(db: sqlite3.Connection
     assert stored["context_window"] == 128_000, "the probe must converge the row"
 
 
-def test_pin_context_window_raises_rather_than_guessing() -> None:
-    """A window that cannot be determined is a loud failure, never a default.
+def test_pin_context_window_raises_when_the_host_cannot_be_reached() -> None:
+    """An unreachable provider is a loud failure, never a default.
 
-    A probe only fails when the host is unreachable, the vault is locked, or the
-    model is unknown to its platform — in every one of those the call this window
-    was being computed for was going nowhere anyway. Substituting a number would
-    turn a clear failure into a wrong answer that silently mis-sizes compaction."""
+    This is now the only case that raises, and the distinction is deliberate: a
+    host that answers — even to refuse — is sized, so the fault it reported
+    surfaces at send time where the message names it. A host that answers
+    nothing leaves the window genuinely unknown, and inventing one here would
+    silently mis-size compaction for as long as the row survives.
+
+    Port 1 is closed, so this resolves without touching the network. Asserting
+    the raise through an unknown *model* instead would have leaned on
+    api.openai.com answering, and passed offline for the wrong reason."""
     with pytest.raises(ProviderError):
-        ProviderDbService().pin_context_window(_openai_config(model="not-a-real-model"))
+        ProviderDbService().pin_context_window(
+            _openai_config(model="not-a-real-model", host="http://127.0.0.1:1/v1"),
+        )
