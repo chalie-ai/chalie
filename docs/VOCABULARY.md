@@ -66,7 +66,7 @@ Domain-specific terminology used throughout the Chalie system.
 | `heartbeat` | FE POST `/health` payload persisted to telemetry. | `{device.name, location.lat, locale.timezone}` |
 | `USAGE_TYPE` | The `ProcessorConfig` class constant naming the spend bucket a channel's provider calls bill to; written verbatim to `llm_call_log.type`. Defaults to `'system'`, so spend reaches the user only by explicit declaration. Distinct from `policy_channel`, which gates tools — `DiscoveryConfig` is policy-gated as `CHAT` but bills as `'system'`. | `'chat'` (the user's own conversation), `'system'` (everything Chalie runs on its own behalf) |
 | `snapshot` | Full-instance backup (db, mcp_tools, pre-trained, vault key material). | a `.chalie-snapshot` file |
-| `lane` | Per-conversation-surface FE state key. | `'main'` (spine), `'t42'` (thread 42) |
+| `lane` | Independent conversation-surface identity — the spine, or a thread by its own `turn_id` — that busy/queue state is scoped to, so work in one never blocks a send in another. Keys the send queue as a string (`'main'` / `'t42'`) and, in the DOM busy contract, as a `(type, turn_id)` pair; the spine reserves a fixed pair since it has no `turn_id` of its own until a send resolves one. | queue: `'main'`, `'t42'` (thread 42); DOM: reserved pair (spine), `(type, 42)` (thread 42) |
 | `chip` | FE rendering of a tool-call under an assistant message. | `{tool_name, summary}` |
 | `card` | Rich-media payload rendered as a structured card. | `WeatherCard`, `SchedulerCard` |
 | `segment` | FE parse of assistant content into text / rich blocks. | `text`, `rich` |
