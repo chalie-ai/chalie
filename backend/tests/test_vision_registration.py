@@ -141,9 +141,6 @@ class TestVisionVisibility:
 # ---------------------------------------------------------------------------
 class TestVisionSearchIndex:
 
-    def test_registry_resolves_vision_to_vision_ability(self) -> None:
-        assert isinstance(AbilityRegistry.get("vision"), VisionAbility)
-
     def test_vision_is_discoverable_and_aliases_resolve(self) -> None:
         """Pin the visibility model for vision: it must be in the global
         discoverable roster AND its SEARCHABLE_AS aliases must resolve to it

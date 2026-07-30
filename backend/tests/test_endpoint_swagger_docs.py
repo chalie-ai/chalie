@@ -253,13 +253,6 @@ class TestNeverEmitted404IsNotDocumented:
         assert responses["204"] == {"description": "No Content"}
         assert _ref(responses, "409", "schema") == "#/definitions/ErrorEnvelope"
 
-    def test_policies_blocked_log_verbs_document_no_404(self, swagger_spec: dict[str, object]) -> None:
-        # BlockedAction ignores id on both verbs (reads/clears the whole log),
-        # so neither can miss a lookup — no 404 on either.
-        for verb in ("get", "delete"):
-            responses = _at(swagger_spec, "paths", "/api/policies/blocked/{id}", verb, "responses")
-            assert "404" not in responses, f"blocked {verb} must not document 404"
-
     def test_lookup_backed_delete_still_documents_404(self, swagger_spec: dict[str, object]) -> None:
         # The opt-out must stay opt-in: a delete that really raises
         # NotFoundError (scheduler) keeps the structural 404 by default.

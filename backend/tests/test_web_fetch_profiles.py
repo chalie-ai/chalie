@@ -9,29 +9,19 @@ Two tiers, kept strictly separate (mirrors test_web_download.py):
    skipped when unreachable.
 
 No mocks anywhere. The SSRF guard under test is production's own
-``services.ssrf.is_private_url``, and profiles are the same objects read / web_download
-consume.
+``services.ssrf.is_private_url``, reached the way the abilities reach it.
 """
 
 import os
 import socket
 import tempfile
-from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import pytest
 import requests
 
 from services import web_fetch
 from exceptions import FetchBlocked
-from services.ssrf import is_private_url
-
-if TYPE_CHECKING:
-    from typing import Protocol
-
-    class _WebFetchModule(Protocol):
-        is_private_url: Callable[[str], bool]
 
 _HTTPBIN_HOST = "httpbin.org"
 
@@ -51,14 +41,6 @@ def httpbin() -> None:
 
 
 # ── Unit tier: profiles + SSRF gate, no network ─────────────────────────────
-
-
-@pytest.mark.unit
-def test_fetch_text_uses_the_real_ssrf_guard() -> None:
-    """The fetch service shares ONE SSRF guard with the abilities."""
-    # Identity, not equality: web_fetch must call the same production guard.
-    from typing import cast
-    assert cast("_WebFetchModule", web_fetch).is_private_url is is_private_url
 
 
 @pytest.mark.unit

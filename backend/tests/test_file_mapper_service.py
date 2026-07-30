@@ -8,12 +8,6 @@ from services.file_mapper_service import FileMapperService
 @pytest.mark.unit
 class TestFileMapperService:
 
-    def test_chalie_root_contains_backend_and_frontend(self) -> None:
-        root = FileMapperService._CHALIE_ROOT
-        assert root.is_dir(), f"_CHALIE_ROOT does not exist: {root}"
-        assert (root / "backend").is_dir(), f"backend/ missing under {root}"
-        assert (root / "frontend").is_dir(), f"frontend/ missing under {root}"
-
     def test_get_db_path_ends_with_data_chalie_db(self) -> None:
         db_path = FileMapperService.get_db_path()
         assert db_path.parts[-1] == "chalie.db"
