@@ -31,7 +31,11 @@ const StubComponent: Component = {
   },
 };
 
-function block(turnId: number, messageIds: number[], opts: { working?: boolean } = {}): ConversationTurnBlock {
+function block(
+  turnId: number,
+  messageIds: number[],
+  opts: { working?: boolean; forked?: boolean } = {},
+): ConversationTurnBlock {
   return {
     turn_id: turnId,
     gist: null,
@@ -47,6 +51,9 @@ function block(turnId: number, messageIds: number[], opts: { working?: boolean }
       timestamp: '2026-01-01 00:00:00',
       day: '2026-01-01',
       turn_id: turnId,
+      // A thread reply row is what makes a turn forked — and so the owner of
+      // its own lane rather than the spine's.
+      ...(opts.forked ? { thread_message: true } : {}),
     })),
   };
 }
@@ -502,21 +509,98 @@ describe('isTurnWorking — set-based (live signal) and attribute-based (rendere
   });
 });
 
-describe('isSurfaceWorking — scoped to its own registered container only', () => {
-  it('is true only for the surface whose OWN container holds the working element', async () => {
-    const { registerSurface, isSurfaceWorking } = await freshTurnDom();
-    const containerA = document.body.appendChild(document.createElement('div'));
-    const containerB = document.body.appendChild(document.createElement('div'));
-    registerSurface({ id: 'a', type: 'user', container: containerA, component: StubComponent });
-    registerSurface({ id: 'b', type: 'user', container: containerB, component: StubComponent });
+describe('isLaneWorking — every lane independent, the spine included', () => {
+  it('leaves the spine lane free while a FORKED turn rendered on it works, and busy for its own', async () => {
+    const { registerSurface, upsertTurnToSurfaces, isLaneWorking, SPINE_SURFACE_ID, SPINE_LANE_TYPE, SPINE_LANE_TURN_ID } =
+      await freshTurnDom();
+    const spine = document.body.appendChild(document.createElement('div'));
+    registerSurface({ id: SPINE_SURFACE_ID, type: 'user', container: spine, component: StubComponent });
 
-    containerB.innerHTML = '<div data-working></div>';
+    // A thread reply is working: same turn_id as its spine opener, rendered on
+    // the spine — the exact shape that used to freeze the whole spine.
+    upsertTurnToSurfaces(block(42, [1, 2], { working: true, forked: true }), 'user');
+    expect(isLaneWorking('user', 42)).toBe(true);
+    expect(isLaneWorking(SPINE_LANE_TYPE, SPINE_LANE_TURN_ID)).toBe(false);
 
-    expect(isSurfaceWorking('a')).toBe(false);
-    expect(isSurfaceWorking('b')).toBe(true);
-    expect(isSurfaceWorking('never-registered')).toBe(false);
-    containerA.remove();
-    containerB.remove();
+    // The spine's OWN turn working is still the spine's business.
+    upsertTurnToSurfaces(block(43, [3], { working: true }), 'user');
+    expect(isLaneWorking(SPINE_LANE_TYPE, SPINE_LANE_TURN_ID)).toBe(true);
+
+    spine.remove();
+  });
+
+  it('re-derives the claim on a repeated refetch of a growing reply', async () => {
+    const { registerSurface, upsertTurnToSurfaces, isLaneWorking, SPINE_SURFACE_ID, SPINE_LANE_TYPE, SPINE_LANE_TURN_ID } =
+      await freshTurnDom();
+    const spine = document.body.appendChild(document.createElement('div'));
+    registerSurface({ id: SPINE_SURFACE_ID, type: 'user', container: spine, component: StubComponent });
+
+    upsertTurnToSurfaces(block(42, [1, 2], { working: true, forked: true }), 'user');
+    upsertTurnToSurfaces(block(42, [1, 2, 3], { working: true, forked: true }), 'user');
+
+    expect(isLaneWorking(SPINE_LANE_TYPE, SPINE_LANE_TURN_ID)).toBe(false);
+    expect(isLaneWorking('user', 42)).toBe(true);
+    spine.remove();
+  });
+
+  it('rebuilds the claim on an element mounted from scratch, which markThreadLane never reached', async () => {
+    const { registerSurface, upsertTurnToSurfaces, clearSurfaceContainer, isLaneWorking, SPINE_SURFACE_ID, SPINE_LANE_TYPE, SPINE_LANE_TURN_ID } =
+      await freshTurnDom();
+    const spine = document.body.appendChild(document.createElement('div'));
+    registerSurface({ id: SPINE_SURFACE_ID, type: 'user', container: spine, component: StubComponent });
+
+    upsertTurnToSurfaces(block(42, [1, 2], { working: true, forked: true }), 'user');
+    // Destroy the rendered copy outright — an eviction, or a surface tearing
+    // down and re-registering. The next upsert builds a brand-new element that
+    // no eager `markThreadLane` call ever touched, so the claim can only come
+    // back by being re-derived from the block itself.
+    clearSurfaceContainer(spine);
+    upsertTurnToSurfaces(block(42, [1, 2], { working: true, forked: true }), 'user');
+
+    expect(spine.querySelector('[data-lane-turn-id="42"]')).not.toBeNull();
+    expect(isLaneWorking(SPINE_LANE_TYPE, SPINE_LANE_TURN_ID)).toBe(false);
+    expect(isLaneWorking('user', 42)).toBe(true);
+    spine.remove();
+  });
+
+  it('reads the spine busy for working markers carrying no turn identity at all (ACT cycles)', async () => {
+    const { registerSurface, isLaneWorking, SPINE_SURFACE_ID, SPINE_LANE_TYPE, SPINE_LANE_TURN_ID } =
+      await freshTurnDom();
+    const spine = document.body.appendChild(document.createElement('div'));
+    registerSurface({ id: SPINE_SURFACE_ID, type: 'user', container: spine, component: StubComponent });
+
+    spine.innerHTML = '<div data-working></div>';
+    expect(isLaneWorking(SPINE_LANE_TYPE, SPINE_LANE_TURN_ID)).toBe(true);
+    spine.remove();
+  });
+
+  it('is false for the spine lane when no spine surface is registered', async () => {
+    const { isLaneWorking, SPINE_LANE_TYPE, SPINE_LANE_TURN_ID } = await freshTurnDom();
+    expect(isLaneWorking(SPINE_LANE_TYPE, SPINE_LANE_TURN_ID)).toBe(false);
+  });
+
+  it('markThreadLane claims a turn before any refetch re-derives the fork', async () => {
+    const { registerSurface, upsertTurnToSurfaces, markThreadLane, isLaneWorking, setTurnWorking, SPINE_SURFACE_ID, SPINE_LANE_TYPE, SPINE_LANE_TURN_ID } =
+      await freshTurnDom();
+    const spine = document.body.appendChild(document.createElement('div'));
+    registerSurface({ id: SPINE_SURFACE_ID, type: 'user', container: spine, component: StubComponent });
+
+    // A settled, not-yet-forked spine turn — the FIRST reply into it has no
+    // thread_message row anywhere yet.
+    upsertTurnToSurfaces(block(42, [1]), 'user');
+    markThreadLane(42, 'user');
+    setTurnWorking(42, 'user', true);
+
+    expect(isLaneWorking(SPINE_LANE_TYPE, SPINE_LANE_TURN_ID)).toBe(false);
+    expect(isLaneWorking('user', 42)).toBe(true);
+    spine.remove();
+  });
+
+  it('keeps two thread lanes independent of each other', async () => {
+    const { setTurnWorking, isLaneWorking } = await freshTurnDom();
+    setTurnWorking(42, 'user', true);
+    expect(isLaneWorking('user', 42)).toBe(true);
+    expect(isLaneWorking('user', 43)).toBe(false);
   });
 });
 

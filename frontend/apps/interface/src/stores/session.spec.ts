@@ -250,6 +250,57 @@ describe('sendMessage — surface-scoped busy gate', () => {
     resolveFirst({ turn_id: 42, type: ConfigType.USER });
     await p1;
   });
+
+  it('leaves the spine and every other thread free to post while one thread works', async () => {
+    const { session, turnDom, queue } = await freshSession();
+
+    const spineContainer = document.body.appendChild(document.createElement('div'));
+    turnDom.registerSurface({
+      id: turnDom.SPINE_SURFACE_ID,
+      type: ConfigType.USER,
+      container: spineContainer,
+      component: {},
+    });
+    // Both threads' openers render on the spine — a thread reply continues the
+    // SAME turn_id as its opener, so its work shows up here as well as in the
+    // panel. That shared rendering is what used to freeze the spine.
+    spineContainer.innerHTML =
+      '<div data-turn-id="42" data-type="user"></div><div data-turn-id="43" data-type="user"></div>';
+
+    // Reply into thread 42, then let its first turn_execution frame land.
+    sendMock.mockResolvedValueOnce({ turn_id: 42, type: ConfigType.USER });
+    await session.sendMessage('reply in thread 42', [], 42, ConfigType.USER);
+    turnDom.setTurnWorking(42, ConfigType.USER, true);
+    session._releasePendingSend(42, ConfigType.USER);
+
+    expect(session.isSurfaceBusy(42, ConfigType.USER)).toBe(true);
+    expect(session.isSurfaceBusy(null, ConfigType.USER)).toBe(false);
+    expect(session.isSurfaceBusy(43, ConfigType.USER)).toBe(false);
+
+    // The spine posts over the wire rather than queueing behind thread 42.
+    sendMock.mockResolvedValueOnce({ turn_id: 44, type: ConfigType.USER });
+    await session.sendMessage('a new top-level message', [], null, ConfigType.USER);
+    expect(queue.queuedFor(null)).toEqual([]);
+    expect(sendMock).toHaveBeenLastCalledWith(
+      'a new top-level message', expect.any(Function), [], null, ConfigType.USER, null,
+    );
+
+    // ...and so does a second thread, in parallel with the first.
+    sendMock.mockResolvedValueOnce({ turn_id: 43, type: ConfigType.USER });
+    await session.sendMessage('reply in thread 43', [], 43, ConfigType.USER);
+    expect(queue.queuedFor(43)).toEqual([]);
+    expect(sendMock).toHaveBeenCalledTimes(3);
+
+    // A second reply into the STILL-working thread 42 does queue — its own
+    // lane is the one thing that is genuinely busy.
+    await session.sendMessage('second reply in thread 42', [], 42, ConfigType.USER);
+    expect(sendMock).toHaveBeenCalledTimes(3);
+    expect(queue.queuedFor(42)).toEqual([
+      { text: 'second reply in thread 42', files: [], thinkingLevel: null },
+    ]);
+
+    spineContainer.remove();
+  });
 });
 
 describe('_drainLane — queued sends replay their files, not just their text', () => {

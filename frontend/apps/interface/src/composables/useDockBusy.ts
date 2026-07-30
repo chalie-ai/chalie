@@ -1,9 +1,10 @@
 /**
- * Reactive "is this dock's target currently working" read, derived from the
- * DOM contract's `data-working` attribute (D3). `turnId() === null` means
- * the main spine (no stable turn_id to key off until a brand-new send's POST
- * resolves one, so busy = anything working within the registered spine
- * surface); otherwise busy = that specific turn's own working state.
+ * Reactive "is this dock's lane currently working" read, derived from the
+ * DOM contract's `data-working` attribute (D3), and sharing its single busy
+ * authority (`isLaneWorking`) with the send/queue gate so the visual and the
+ * gate can never disagree. `turnId() === null` means the spine's lane, which
+ * has no turn_id of its own and so takes the reserved pair; otherwise the
+ * lane is that thread's own turn.
  *
  * Initializes from a live DOM query, then stays in sync via the
  * `turn-state-changed` CustomEvent turnDom's setTurnWorking dispatches (same
@@ -13,14 +14,15 @@
  */
 import { onBeforeUnmount, onMounted, ref, watchEffect } from 'vue';
 import type { Ref } from 'vue';
-import { isSurfaceWorking, isTurnWorking, SPINE_SURFACE_ID } from '../utils/turnDom';
+import { isLaneWorking, SPINE_LANE_TURN_ID, SPINE_LANE_TYPE } from '../utils/turnDom';
 
 export function useDockBusy(turnId: () => number | null, type: () => string): Ref<boolean> {
   const busy = ref(false);
 
   function refresh(): void {
     const id = turnId();
-    busy.value = id == null ? isSurfaceWorking(SPINE_SURFACE_ID) : isTurnWorking(id, type());
+    busy.value =
+      id == null ? isLaneWorking(SPINE_LANE_TYPE, SPINE_LANE_TURN_ID) : isLaneWorking(type(), id);
   }
 
   // 'turn-upserted' matters too: `stampWorking` applies data-working at
