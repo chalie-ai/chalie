@@ -34,6 +34,7 @@ from exceptions.exception import (
     SnapshotError,
     SourceIsImage,
     SystemPathBlocked,
+    UnroutedPromptChannel,
     VaultLockedError,
 )
 
@@ -63,5 +64,6 @@ __all__ = [
     "SnapshotError",
     "SourceIsImage",
     "SystemPathBlocked",
+    "UnroutedPromptChannel",
     "VaultLockedError",
 ]

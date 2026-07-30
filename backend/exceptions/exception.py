@@ -181,6 +181,27 @@ class EmptyCompletionLoop(ChalieException):
 # ── Search layer ──────────────────────────────────────────────────────────────
 
 
+class UnroutedPromptChannel(ChalieException):
+    """A turn's channel has no prompt builder in :meth:`PromptService.user_prompt`.
+
+    A missing dispatch arm is a wiring error at the config, not a turn that
+    happens to have nothing to say. Returning an empty body instead handed the
+    model a message with no content: a lenient provider answered plausible
+    nonsense, a strict one rejected the request and the crash named the vendor
+    rather than the omission (see Case V in ``docs/CASE-LAW.md``). Raising stamps
+    the turn CRASHED with the unrouted channel in the reason, which is where the
+    fault actually is. ``tests/test_code_agent_prompt.py`` enumerates every
+    ProcessorConfig so no shipped channel can reach this.
+    """
+
+    def __init__(self, channel: str) -> None:
+        super().__init__(
+            f"Channel {channel!r} has no prompt builder in PromptService.user_prompt — "
+            f"a config was added without its dispatch arm"
+        )
+        self.channel = channel
+
+
 class RateLimitException(ChalieException):
     """Raised when a downstream search engine enforces a rate limit."""
 

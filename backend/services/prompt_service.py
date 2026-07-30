@@ -45,6 +45,7 @@ from configs.channels.dmn import DmnConfig
 from configs.channels.external_agent import EAMPConfig
 from configs.channels.user import UserConfig
 from configs.enums.channels import Channel
+from exceptions import UnroutedPromptChannel
 from models.behavioral_pattern import BehavioralPattern
 from models.fact import FactRow
 from models.tool_call import ToolCall
@@ -159,7 +160,14 @@ class PromptService:
 
     def user_prompt(self) -> str:
         """The turn's user-message body, ported from each config's
-        ``get_user_prompt``."""
+        ``get_user_prompt``.
+
+        A channel with no arm below raises :class:`UnroutedPromptChannel` rather
+        than returning an empty body. The sole caller is ``_build_messages`` on
+        the drive thread, so the raise stamps the turn CRASHED naming the
+        unrouted channel — the wiring error — instead of sending a contentless
+        message and letting the provider decide whether to answer nonsense or
+        reject it (Case V)."""
         channel = self._channel()
         if channel == _CHANNEL_USER:
             return self._user_prompt()
@@ -197,8 +205,7 @@ class PromptService:
         # through.
         if channel in (_CHANNEL_SKILL_ASSOCIATION, _CHANNEL_VISION, _CHANNEL_COMPACTION):
             return self.mp.raw_input
-        logger.warning("[PromptService] user_prompt: unhandled channel=%s", channel)
-        return ""
+        raise UnroutedPromptChannel(channel)
 
     def image(self) -> dict[str, str] | None:
         """``VisionConfig.get_image``: the vision turn's attached image as a

@@ -12,12 +12,11 @@ class-of-defect guard that covers every channel behind it.
 ``CodeAgentConfig`` sets ``suppress_history=True``, so the string
 :meth:`PromptService.user_prompt` returns IS the delegate's entire input: there
 is no history, no seeded memory, nothing else in the message list to carry the
-task. A channel with no dispatch branch falls through to ``return ""``, and an
-empty user message is not a soft failure — providers that validate request
-parameters reject it outright, which crashes the turn rather than degrading it.
-Empty-content tolerance is per-provider, so the same omission shows up as either
-silent garbage or a hard rejection depending on the selected model. Both are
-wrong, and neither is detectable by asserting on the delegate's answer.
+task. This channel once had no dispatch arm at all, and the fallthrough returned
+an empty body — which is not a soft failure. Empty-content tolerance is
+per-provider: a lenient provider answers plausible nonsense, a strict one rejects
+the request and the resulting crash names the vendor instead of the omission.
+Both are wrong, and neither is detectable by asserting on the delegate's answer.
 
 These lock the wiring itself:
 
@@ -27,7 +26,9 @@ These lock the wiring itself:
      own work writes wrong dates into the files it creates.
   3. The prompt carries the act trail's re-feed seam, so the delegate sees its
      own tool output across ACT iterations instead of iterating blind.
-  4. **No ProcessorConfig channel falls through the dispatch at all** — the
+  4. An unrouted channel raises :class:`UnroutedPromptChannel` — the fallthrough
+     no longer manufactures a contentless message for the provider to judge.
+  5. **No ProcessorConfig channel reaches that fallthrough at all** — the
      generalisation of (1). This is the guard that fails on the next channel
      added without a builder, rather than on a provider error days later.
 
@@ -38,7 +39,6 @@ Driven against the real :class:`PromptService` on real
 from __future__ import annotations
 
 import importlib
-import logging
 import pkgutil
 import sqlite3
 
@@ -49,16 +49,14 @@ from configs.channels.code_agent import CodeAgentConfig
 from configs.enums.channels import Channel
 from configs.enums.policy_channel import PolicyChannel
 from controllers.message_processor import MessageProcessor
+from exceptions import UnroutedPromptChannel
 from models.telemetry import Telemetry
 from services.processor_config import ProcessorConfig
+from tests.helpers import make_stub_config
 
 pytestmark = pytest.mark.unit
 
 _TASK = "write a Deno script that reverses a string and prove it runs"
-
-# The warning the dispatch emits when a channel has no prompt builder. Matching
-# on it is what turns a silent "" into a test failure.
-_FALLTHROUGH = "unhandled channel="
 
 
 def _seed_telemetry(ctx: dict[str, object]) -> None:
@@ -82,9 +80,9 @@ def _code_agent_prompt(task: str = _TASK) -> str:
 
 
 def test_code_agent_prompt_is_not_empty(db: sqlite3.Connection) -> None:
-    """The headline guarantee. An empty body is the whole message on this
-    channel, and a provider that validates parameters rejects it — the turn
-    crashes instead of answering."""
+    """The headline guarantee. With ``suppress_history=True`` this body is the
+    whole message, so a builder that returns nothing is as bad as no builder at
+    all — and unlike the missing arm, it would not raise."""
     prompt = _code_agent_prompt()
     assert prompt.strip(), (
         "code_agent's user prompt is empty — with suppress_history=True this is "
@@ -170,7 +168,7 @@ def test_code_agent_prompt_renders_its_act_trail(db: sqlite3.Connection) -> None
 
 
 # ---------------------------------------------------------------------------
-# 4. The class guard — no channel may fall through the dispatch.
+# 4. The fallthrough is loud — and no shipped channel can reach it.
 # ---------------------------------------------------------------------------
 
 
@@ -182,27 +180,42 @@ def _all_subclasses(cls: type) -> set[type]:
     return out
 
 
-def test_code_agent_channel_is_dispatched(db: sqlite3.Connection, caplog: pytest.LogCaptureFixture) -> None:
-    """The specific omission that crashed the turn: ``delegate:code_agent``
-    reaching the fallthrough."""
-    with caplog.at_level(logging.WARNING, logger="services.prompt_service"):
-        _code_agent_prompt()
-    assert _FALLTHROUGH not in caplog.text, (
-        f"{Channel.DELEGATE_CODE_AGENT.value} hit the dispatch fallthrough. log={caplog.text!r}"
+def test_an_unrouted_channel_raises_instead_of_returning_an_empty_body(
+    db: sqlite3.Connection,
+) -> None:
+    """The fallthrough must name the wiring error. A channel with no arm is a
+    config shipped without its dispatch branch — returning ``""`` handed that
+    omission to the provider, which either answered nonsense or rejected the
+    request with a message pointing at itself."""
+    mp = MessageProcessor(make_stub_config(channel="delegate:not_wired_yet"), raw_input=_TASK)
+    with pytest.raises(UnroutedPromptChannel) as caught:
+        mp.prompt_service.user_prompt()
+    assert caught.value.channel == "delegate:not_wired_yet"
+    assert "delegate:not_wired_yet" in str(caught.value), (
+        f"the unrouted channel must be named in the crash reason. exc={caught.value!s}"
     )
 
 
-def test_no_processor_config_channel_hits_the_dispatch_fallthrough(
-    db: sqlite3.Connection, caplog: pytest.LogCaptureFixture
-) -> None:
-    """Enumerate every ProcessorConfig subclass, resolve its prompt channel, and
-    drive the real dispatch. None may reach ``return ""``.
+def test_code_agent_channel_is_dispatched(db: sqlite3.Connection) -> None:
+    """The specific omission that crashed the turn: ``delegate:code_agent``
+    reaching the fallthrough."""
+    try:
+        _code_agent_prompt()
+    except UnroutedPromptChannel as exc:  # pragma: no cover — the defect under test
+        pytest.fail(f"{Channel.DELEGATE_CODE_AGENT.value} hit the dispatch fallthrough: {exc}")
 
-    A builder that raises is still *dispatched* — the raise proves the branch was
-    taken, and per-builder state requirements are not this test's subject — so
-    those are named in the failure message instead of counted as failures.
-    Configs that cannot be built with a channel's standard argument forms are
-    likewise named rather than silently skipped."""
+
+def test_no_processor_config_channel_hits_the_dispatch_fallthrough(
+    db: sqlite3.Connection,
+) -> None:
+    """Enumerate every ProcessorConfig subclass, build it, and drive the real
+    dispatch. None may reach the fallthrough.
+
+    Only :class:`UnroutedPromptChannel` counts as a failure. Any other exception
+    proves the branch WAS taken and the builder then tripped on state this tier
+    does not set up — not this test's subject — so those are named in the failure
+    message instead. Configs that cannot be built with a channel's standard
+    argument forms are likewise named rather than silently skipped."""
     for mod in pkgutil.iter_modules(channels_pkg.__path__):
         importlib.import_module(f"configs.channels.{mod.name}")
 
@@ -223,21 +236,19 @@ def test_no_processor_config_channel_hits_the_dispatch_fallthrough(
             continue
 
         mp = MessageProcessor(instance, raw_input=_TASK)
-        # Resolve the dispatch key first: a failure HERE is a real failure, not
-        # a builder's state requirement.
+        # Resolve the dispatch key up front: it names the channel in the report
+        # even when the builder itself blows up on unseeded state.
         channel = instance.prompt_channel or instance.channel
-        caplog.clear()
-        with caplog.at_level(logging.WARNING, logger="services.prompt_service"):
-            try:
-                mp.prompt_service.user_prompt()
-            except Exception as exc:  # noqa: BLE001 — a raise proves the branch was taken
-                raised[cls.__name__] = f"{channel} ({type(exc).__name__})"
-        if _FALLTHROUGH in caplog.text:
+        try:
+            mp.prompt_service.user_prompt()
+        except UnroutedPromptChannel:
             fell_through[cls.__name__] = channel
+        except Exception as exc:  # noqa: BLE001 — a raise elsewhere proves the branch was taken
+            raised[cls.__name__] = f"{channel} ({type(exc).__name__})"
 
     assert not fell_through, (
-        "Every ProcessorConfig channel needs a prompt builder — the fallthrough "
-        "returns an empty user body, which a strict provider rejects outright.\n"
+        "Every ProcessorConfig channel needs a prompt builder — reaching the "
+        "fallthrough crashes the turn, and used to send a contentless message.\n"
         f"  fell through: {fell_through}\n"
         f"  dispatched but raised on test-env state (not a failure here): {raised}\n"
         f"  not built with a standard channel signature: {sorted(unbuilt)}"
