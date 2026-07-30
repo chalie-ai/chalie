@@ -4,11 +4,14 @@ MCP Manager Ability — manage outbound MCP client server connections.
 Actions: list | add | enable | disable
 
 Policy tier:
-  SYSTEM = True   — always-allowed, never shown in Policy Manager.
-  DISCOVERABLE    — the ability leaves ``Ability.DISCOVERABLE`` at its True
-                    default, so it is in the global find_tools roster and any
-                    discovery-capable channel can surface it when the user asks
-                    to connect/manage remote MCP servers.
+  SYSTEM = True        — always-allowed, never shown in Policy Manager.
+  DISCOVERABLE = False — pinned directly on every discovery-capable channel via
+                         ``DEFAULT_ALWAYS_AVAILABLE``, so it is always already in
+                         context. ``find_tools`` is itself pinned only through
+                         that same roster, which means discovery could never
+                         reach a channel this tool is absent from — leaving it
+                         discoverable would only ever offer the model a tool it
+                         can already call.
 
 When `add` runs, it creates the server row AND immediately calls
 ping_and_sync() so remote tools are indexed before the LLM's next turn.
@@ -54,7 +57,6 @@ from contracts.params.mcp_manager_params_bag import (
     McpManagerParamsBag,
 )
 from contracts.params.param_bag import ParamBag
-from configs.enums.ability_category import AbilityCategory
 
 logger = logging.getLogger(__name__)
 
@@ -79,15 +81,60 @@ class McpManagerAbility(Ability[McpManagerParamsBag]):
     # McpManagerParamsBag.from_params before run() is called.
     PARAMS: ClassVar[type[ParamBag] | None] = McpManagerParamsBag
 
-    SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("connect mcp", "add mcp server", "mcp connection")
     NAME: ClassVar[str] = "mcp_manager"
-    CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.EXTENSIONS
+
+    # Pinned, never discovered — see the Policy tier note in the module docstring.
+    # Neither CATEGORY nor SEARCHABLE_AS follows from that, and both are dropped:
+    # a category is the heading a tool renders under in the find_tools menu, and
+    # SEARCHABLE_AS feeds AbilityRegistry.discovery_aliases(), which only walks
+    # the discoverable roster. This tool is in neither, so both would be dead.
+    DISCOVERABLE: ClassVar[bool] = False
+
+    # The static half of the description. This is the ONLY text rendered
+    # off-spine (``self.mp is None`` — introspection / search-index build), so the
+    # indexed summary stays byte-stable regardless of what this box has connected.
+    _BASE_SUMMARY: ClassVar[str] = (
+        "Connect Chalie to a remote MCP server so its tools become available. "
+        "Use to add, list, enable, or disable outbound MCP server connections."
+    )
+
+    # Stated explicitly rather than by omission: an empty inventory is the answer
+    # to "what am I connected to?", so the model never spends a `list` call to
+    # learn there is nothing there.
+    _NONE_CONNECTED: ClassVar[str] = "No MCP servers are connected."
 
     def get_summary(self) -> str:
-        return (
-            "Connect Chalie to a remote MCP server so its tools become available. "
-            "Use to add, list, enable, or disable outbound MCP server connections."
-        )
+        inventory = self._inventory_line()
+        return f"{self._BASE_SUMMARY}\n{inventory}" if inventory else self._BASE_SUMMARY
+
+    def _inventory_line(self) -> str:
+        """Server NAMES only — the inventory answers "what am I connected to?";
+        ``mcp_tools`` answers "what can each one do?" per server. Listing tools
+        here would put the entire remote surface into every single request.
+
+        Disabled servers are excluded: ``disable`` hides a server's tools from
+        discovery, so the row is registered but not connected. Order is
+        ``list_servers``' ``created_at`` order, so this line and the ``list``
+        action can never disagree about the inventory.
+        """
+        if self.mp is None:
+            return ""  # off-spine: deterministic base text only (see Ability docstring)
+
+        from services.mcp_client_service import McpClientService  # noqa: PLC0415
+
+        try:
+            names = [str(s["name"]) for s in McpClientService().list_servers() if s["enabled"]]
+        except Exception as exc:
+            # This getter runs inside the descriptor assembler on EVERY step, so a
+            # DB hiccup must degrade to the static text rather than fail the turn
+            # (same containment as FindToolsAbility._summary_for). Returning ""
+            # rather than _NONE_CONNECTED: unknown is not the same as none.
+            logger.warning("%s inventory lookup failed: %s: %s", _LOG_PREFIX, type(exc).__name__, exc)
+            return ""
+
+        if not names:
+            return self._NONE_CONNECTED
+        return f"Connected MCP Servers: {', '.join(names)}"
 
     def get_examples(self) -> list[str]:
         return [

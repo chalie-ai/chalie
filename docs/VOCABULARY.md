@@ -29,7 +29,7 @@ Domain-specific terminology used throughout the Chalie system.
 | `subagent` | User-facing label for a backgrounded delegate. | `GET /api/subagents/all` |
 | `capability` | An external system adapter an ability wraps. | `mail_capability` (IMAP), `home_capability` (Home Assistant) |
 | `MCP` | Model Context Protocol connection to a remote MCP server. | `_mcp_notes_create_document` |
-| `always_available` | Tools pinned in every LLM call on a channel. | `["find_skills", "find_tools", "memory"]` |
+| `always_available` | Tools pinned in every LLM call on a channel. | `["find_skills", "find_tools", "mcp_manager", "memory"]` |
 | `DISCOVERABLE` | Ability trait; when False the tool only reaches the model by being pinned. | `thinking`, `browser` are non-discoverable |
 | `CATEGORY` | Ability trait; the heading the tool is listed under in the `find_tools` menu. Required on every discoverable ability — the registry refuses to load one without it. The enum's declaration order is the menu's render order. | `read` → `File Operations`, `pim` → `Delegate (subagent)` |
 | `ALLOW_EMPTY` | Ability trait; the required params that may legitimately arrive as `""`. The dispatcher's pre-gate rejects an empty required param by default — a global rule this opts individual params out of, without making them optional (an absent one is still `missing-params`). | `edit_file` → `("replace",)`, because an empty replacement is how you delete |

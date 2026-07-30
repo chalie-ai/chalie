@@ -33,7 +33,7 @@ def test_active_tools_resolve_to_always_available_surface() -> None:
     mp = _make_mp(list(DEFAULT_ALWAYS_AVAILABLE), config=UserConfig({"channel": "user"}))
     names = {cast(str, t["name"]) for t in AbilityRegistry.build_tools(mp)}
     assert names == set(DEFAULT_ALWAYS_AVAILABLE)
-    assert names == {"find_skills", "find_tools", "memory"}
+    assert names == {"find_skills", "find_tools", "mcp_manager", "memory"}
 
 
 def test_act_summary_injected_as_required_on_every_tool() -> None:
