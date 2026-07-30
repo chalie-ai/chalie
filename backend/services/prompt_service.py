@@ -86,6 +86,7 @@ _CHANNEL_VISION = Channel.DELEGATE_VISION
 _CHANNEL_WEB_BROWSE = Channel.DELEGATE_WEB_BROWSE
 _CHANNEL_WEB_SEARCH = Channel.DELEGATE_WEB_SEARCH
 _CHANNEL_PIM = Channel.DELEGATE_PIM
+_CHANNEL_CODE_AGENT = Channel.DELEGATE_CODE_AGENT
 _CHANNEL_EXTERNAL_AGENT = "external_agent"
 _CHANNEL_COMPACTION = Channel.COMPACTION
 _CHANNEL_SUPER_EPISODE = Channel.SUPER_EPISODE_ENCODER
@@ -180,6 +181,8 @@ class PromptService:
             return self._web_search_prompt()
         if channel == _CHANNEL_PIM:
             return self._pim_prompt()
+        if channel == _CHANNEL_CODE_AGENT:
+            return self._code_agent_prompt()
         if channel == _CHANNEL_EXTERNAL_AGENT:
             return self._external_agent_prompt()
         if channel == _CHANNEL_SUPER_EPISODE:
@@ -320,6 +323,16 @@ class PromptService:
             logger.warning("[PromptService] act_trail failed: %s", exc, exc_info=True)
             return ""
 
+    def _world(self) -> str:
+        """``world_state.render()``, guarded — the turn's telemetry block, whose
+        ``local_time`` line is the ONLY date anchor any channel receives. Off-spine
+        telemetry, so a render hiccup must never crash the turn."""
+        try:
+            return world_state.render()
+        except Exception as exc:  # noqa: BLE001 — off-spine telemetry render must not crash the turn
+            logger.debug("[PromptService] world_state.render failed: %s", exc)
+            return ""
+
     # ── UserConfig (channel="user") ──────────────────────────────────────────
 
     def _user_system_prompt(self) -> str:
@@ -345,11 +358,7 @@ class PromptService:
         if user_def:
             parts.append(user_def)
 
-        try:
-            rendered_ws = world_state.render()
-        except Exception as exc:  # noqa: BLE001 — off-spine telemetry render must not crash the turn
-            logger.debug("[PromptService] world_state.render failed: %s", exc)
-            rendered_ws = ""
+        rendered_ws = self._world()
         if rendered_ws:
             parts.append(rendered_ws)
 
@@ -567,6 +576,30 @@ class PromptService:
         """``PimConfig.get_user_prompt``: the personal-information instruction
         then this turn's act trail."""
         parts = [f"Instruction:\n{self.mp.raw_input}"]
+        trail = self._trail()
+        if trail:
+            parts.append(trail)
+        return "\n\n".join(parts)
+
+    # ── CodeAgentConfig (channel="delegate:code_agent") ──────────────────────
+
+    def _code_agent_prompt(self) -> str:
+        """``CodeAgentConfig.get_user_prompt``: World State, the coding task,
+        then this turn's act trail.
+
+        ``suppress_history=True`` makes this string the delegate's ENTIRE input,
+        so World State rides along deliberately: it carries the only date anchor
+        any channel receives, and a coding agent that cannot date its own work
+        writes wrong dates into the files it creates. Kept as its own builder
+        rather than remapped onto the user channel through ``prompt_channel`` —
+        a task is a hand-off, not a user utterance, and that assembly would also
+        inject the user-identity synthesis and a post-compaction banner naming a
+        tool this channel does not pin."""
+        parts: list[str] = []
+        rendered_ws = self._world()
+        if rendered_ws:
+            parts.append(rendered_ws)
+        parts.append(f"Task:\n{self.mp.raw_input}")
         trail = self._trail()
         if trail:
             parts.append(trail)
