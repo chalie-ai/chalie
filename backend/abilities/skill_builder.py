@@ -458,5 +458,12 @@ class SkillManagerAbility(SkillBuilderAbility):
     SYSTEM: ClassVar[bool] = True
     # Override the parent's discoverability: skill_manager is pinned exclusively on
     # SkillSuggestionConfig.always_available; skill_builder (the parent) stays discoverable.
+    #
+    # Do NOT "clean up" the inherited SEARCHABLE_AS/CATEGORY as dead just because this
+    # name is non-discoverable. They are not declared here — they belong to the parent,
+    # where they are live: discovery_aliases() walks the discoverable roster, so it
+    # visits skill_builder and never this class. Deleting them breaks four working
+    # skill_builder aliases. (The collision guard is also why they can't both be
+    # discoverable: two classes claiming "skills" would raise at load.)
     DISCOVERABLE: ClassVar[bool] = False
     NAME: ClassVar[str] = "skill_manager"
