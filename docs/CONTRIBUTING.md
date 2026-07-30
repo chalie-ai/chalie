@@ -49,7 +49,7 @@ Write feature tests, not mock theater: drive the real entry point on the real st
 - Schema changes ship with a migration in `backend/migrations/` in the same commit. A migration module exposes `needed(conn)` (self-contained precondition — False on databases already in target shape) and `apply(db_path)`, and registers in `migrations/runner.py`'s `_STEPS`; the runner records each outcome once in the `schema_migrations` ledger at boot.
 - No single-use variables — inline `call_func(y)`, not `x = y; call_func(x)`.
 - Match the surrounding code's style and comment density; comments explain *why*, never *what*.
-- New REST endpoints subclass `api.endpoint.Endpoint` (CRUD groups, `backend/api/endpoints/`) or `api.action.Action` (verb operations, `backend/api/actions/<slug>/<verb>.py`) — the base owns routing, auth, and response envelopes; handlers never build them. A controller declares no path of its own: mount it in `backend/api/routes.py`, the single table every URL comes from. Legacy module-level Namespaces are being migrated onto this contract.
+- New REST endpoints subclass `api.endpoint.Endpoint` (CRUD groups, `backend/api/endpoints/`) or `api.action.Action` (verb operations, `backend/api/actions/<slug>/<verb>.py`) — the base owns routing, auth, and response envelopes; handlers never build them. A controller declares no path of its own: mount it in `backend/api/routes.py`, the single table every URL comes from — a class under either directory that the table forgets makes that module refuse to import, naming it, rather than 404-ing at runtime. Legacy module-level Namespaces are being migrated onto this contract.
 - A feature that introduces a new concept adds its term to [VOCABULARY.md](VOCABULARY.md).
 
 ## Git workflow
