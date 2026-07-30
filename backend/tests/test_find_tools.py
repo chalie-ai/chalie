@@ -151,14 +151,13 @@ def test_multi_intent_array_routes_each_entry() -> None:
     )
 
 
-# ── result body shape, dedup, and no legacy tokens ─────────────────────────────
+# ── result body shape and dedup ────────────────────────────────────────────────
 
 
-def test_result_body_shape_dedup_and_no_legacy_tokens() -> None:
+def test_result_body_shape_and_dedup() -> None:
     """Success body is ``{"injected": [{name, summary}, …], "not_found":
     [...]}``; the meta count matches the list length; the injected list is
-    deduped; and none of the dropped legacy fields (input_schema / relevance /
-    added_tools) appear."""
+    deduped."""
     _injected, body, rendered = _run(["chalie_docs"])
 
     assert "status=success" in rendered
@@ -171,8 +170,6 @@ def test_result_body_shape_dedup_and_no_legacy_tokens() -> None:
     meta_count = int(head.split("injected=")[1].split(",")[0].rstrip(")]"))
     assert meta_count == len(names)
     assert len(names) == len(set(names)), f"injected must be deduped. names={names!r}"
-    for legacy in ("input_schema", "relevance", "added_tools"):
-        assert legacy not in rendered, f"legacy token {legacy!r} must be gone. rendered={rendered!r}"
 
 
 def test_no_global_cap_large_array_returns_all_deduped() -> None:

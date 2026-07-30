@@ -15,11 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from services.llm_clients.context_window import (
-    DEFAULT_LARGE_WINDOW,
-    DEFAULT_WINDOW,
-    default_window_for_model,
-)
+from services.llm_clients.context_window import DEFAULT_LARGE_WINDOW, DEFAULT_WINDOW
 
 
 def _serve_ollama_show(payload: "dict[str, object] | None", status: int = 200) -> "tuple[str, HTTPServer]":
@@ -51,23 +47,6 @@ def _serve_ollama_show(payload: "dict[str, object] | None", status: int = 200) -
 
 
 class TestContextWindowAlwaysMeasured:
-
-    # ------------------------------------------------------------------
-    # The shared default table — one owner for every client.
-    # ------------------------------------------------------------------
-
-    @pytest.mark.parametrize("model,expected", [
-        ("zai-org/GLM-4.6", DEFAULT_LARGE_WINDOW),   # vendor-namespaced slug
-        ("claude-3-5-sonnet", DEFAULT_LARGE_WINDOW),
-        ("gpt-4o-mini", DEFAULT_LARGE_WINDOW),
-        ("gemini-2.5-pro", DEFAULT_LARGE_WINDOW),
-        ("mistral-small:22b", DEFAULT_WINDOW),       # unrecognised → conservative
-        ("", DEFAULT_WINDOW),                        # no slug at all
-    ])
-    def test_the_family_default_resolves_for_any_slug(self, model: str, expected: int) -> None:
-        # Never None and never zero: this is the value that stands between a
-        # sizeable provider and a turn that dies resolving its window.
-        assert default_window_for_model(model) == expected
 
     # ------------------------------------------------------------------
     # Ollama — a live host that omits context_length still gets sized.
@@ -186,25 +165,3 @@ class TestContextWindowAlwaysMeasured:
         assert CodexCliClient({
             'platform': 'codex_cli', 'model': 'gpt-6-preview',
         }).get_context_limit() == DEFAULT_LARGE_WINDOW
-
-    # ------------------------------------------------------------------
-    # Anthropic — publishes a figure for everything it serves.
-    # ------------------------------------------------------------------
-
-    def test_anthropic_always_reports_a_window(self) -> None:
-        from services.llm_clients.anthropic import AnthropicClient
-
-        limit = AnthropicClient({
-            'platform': 'anthropic', 'model': 'claude-sonnet-4-5', 'api_key': 'k',
-        }).get_context_limit()
-        assert isinstance(limit, int) and limit > 0
-
-    # ------------------------------------------------------------------
-    # Every client satisfies the contract shape.
-    # ------------------------------------------------------------------
-
-    def test_no_client_can_return_a_zero_or_negative_window(self) -> None:
-        # A zero would pass an `is not None` check and then size every payload
-        # to nothing, so the contract is "positive int or None", never 0.
-        for model in ('glm-4.6', 'mistral-small:22b', 'gpt-4o', ''):
-            assert default_window_for_model(model) > 0

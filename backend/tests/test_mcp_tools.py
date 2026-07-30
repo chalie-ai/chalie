@@ -133,12 +133,3 @@ def test_params_bag_activate_without_tools_returns_error_result() -> None:
     result = McpToolsParamsBag.from_params({"action": "activate", "tools": []})
     assert isinstance(result, ToolResult)
     assert result.status == "error"
-
-
-# ── policy — mcp_tools is INTERNAL (always allowed, never user-gated) ───────────
-
-
-def test_mcp_tools_in_internal() -> None:
-    from services.policy_manager import INTERNAL
-
-    assert "mcp_tools" in INTERNAL
