@@ -366,7 +366,7 @@ class ObservabilityToolsResource(Resource):
 class ObservabilityTokenUsageResource(Resource):
     @require_session
     @system_ns.param("window", "hour | day | week | month | lifetime (default day)", _in="query")
-    @system_ns.param("type", "chat | system (optional filter)", _in="query")
+    @system_ns.param("type", "foreground | background (optional filter)", _in="query")
     @system_ns.response(200, "Token usage (opaque service-owned body)")
     @system_ns.response(422, "Invalid window", model=_S["Error"])
     @system_ns.response(500, "Failed to retrieve token usage data", model=_S["Error"])

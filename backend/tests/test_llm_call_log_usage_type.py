@@ -1,8 +1,8 @@
 """Feature test: ``llm_call_log.type`` — who a provider call's spend bills to.
 
 The ledger answers one question: of the tokens spent, how many were the user's
-own conversation ('chat') and how many were Chalie acting on its own behalf
-('system')? That axis is a single class constant, ``ProcessorConfig.USAGE_TYPE``,
+own conversation ('foreground') and how many were Chalie acting on its own behalf
+('background')? That axis is a single class constant, ``ProcessorConfig.USAGE_TYPE``,
 read by ``LlmLogService.record`` off the live config. It replaces the derivation
 from ``policy_channel``, which answers an unrelated question (which policy gates
 this turn's tools) and got the billing wrong wherever the two diverge.
@@ -17,10 +17,10 @@ substitution is the LLM network boundary: ``services.provider_service.build_clie
 
 Three claims, one per way the constant resolves:
 
-1. a user turn bills 'chat' — the only spend the user actually asked for;
-2. a delegate bills 'system' EVEN WHEN its ``policy_channel`` is CHAT — the
+1. a user turn bills 'foreground' — the only spend the user actually asked for;
+2. a delegate bills 'background' EVEN WHEN its ``policy_channel`` is CHAT — the
    divergence that proves the two axes are now genuinely independent;
-3. DiscoveryConfig bills 'system' despite subclassing UserConfig — the
+3. DiscoveryConfig bills 'background' despite subclassing UserConfig — the
    inheritance trap, guarded.
 """
 
@@ -78,7 +78,7 @@ def _drain_background_turns(timeout_s: float = 10.0) -> None:
     provider+DB patch and never leak into the next. Each is a whole
     MessageProcessor turn on its own daemon; left running it would call
     ``build_client`` while the NEXT test holds the patch — and, here, would append
-    its own 'system' rows to the ledger mid-assertion."""
+    its own 'background' rows to the ledger mid-assertion."""
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         pending = [
@@ -114,22 +114,22 @@ def _logged_types(db: sqlite3.Connection, model: str = "scripted-usage-type") ->
     ]
 
 
-def test_user_turn_bills_chat(db: sqlite3.Connection) -> None:
-    """A user turn is the user's own conversation: it bills 'chat'."""
+def test_user_turn_bills_foreground(db: sqlite3.Connection) -> None:
+    """A user turn is the user's own conversation: it bills 'foreground'."""
     provider = _run(UserConfig(), "hello")
 
     assert provider.sends >= 1, "turn never reached the provider — an empty ledger proves nothing"
-    assert _logged_types(db) == ["chat"]
+    assert _logged_types(db) == ["foreground"]
 
 
-def test_delegate_with_chat_policy_still_bills_system(db: sqlite3.Connection) -> None:
-    """A delegate bills 'system' even when policy-gated as CHAT.
+def test_delegate_with_chat_policy_still_bills_background(db: sqlite3.Connection) -> None:
+    """A delegate bills 'background' even when policy-gated as CHAT.
 
     ``WebSearchConfig`` takes its ``policy_channel`` from whoever invoked the tool,
     so a search fired from a user turn carries ``PolicyChannel.CHAT`` — which is
     correct for tool gating and was exactly what made the OLD derivation bill the
     user for Chalie's own delegate. Passing CHAT here reproduces that precise
-    input; 'system' is the proof the spend axis no longer rides on the policy one.
+    input; 'background' is the proof the spend axis no longer rides on the policy one.
 
     The DELEGATE lane resolves off the same selected row the ``chat_provider``
     fixture seeds (``_resolve_delegate_provider`` falls back to it when no
@@ -139,16 +139,17 @@ def test_delegate_with_chat_policy_still_bills_system(db: sqlite3.Connection) ->
     provider = _run(WebSearchConfig(PolicyChannel.CHAT), "who won the match")
 
     assert provider.sends >= 1, "delegate never reached the provider"
-    assert _logged_types(db) == ["system"]
+    assert _logged_types(db) == ["background"]
 
 
-def test_discovery_bills_system_not_chat(db: sqlite3.Connection) -> None:
+def test_discovery_bills_background_not_foreground(db: sqlite3.Connection) -> None:
     """DiscoveryConfig subclasses UserConfig — and so would INHERIT
-    ``USAGE_TYPE = "chat"`` unless it re-declares it. It is a background research
-    loop the user never asked for and never sees, so its spend is Chalie's, not
-    theirs. This is the regression guard on that inheritance trap: it fails the
-    moment the override in ``configs/channels/discovery.py`` is dropped."""
+    ``USAGE_TYPE = "foreground"`` unless it re-declares it. It is a background
+    research loop the user never asked for and never sees, so its spend is
+    Chalie's, not theirs. This is the regression guard on that inheritance trap:
+    it fails the moment the override in ``configs/channels/discovery.py`` is
+    dropped."""
     provider = _run(DiscoveryConfig(), "quietly research something")
 
     assert provider.sends >= 1, "discovery turn never reached the provider"
-    assert _logged_types(db) == ["system"]
+    assert _logged_types(db) == ["background"]

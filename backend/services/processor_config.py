@@ -47,18 +47,18 @@ class ProcessorConfig(ABC):
     regression-head gate, or a caller override). ``ProviderService`` reads it
     first in ``resolve_thinking_mode`` (config pin > override > gate result)."""
 
-    USAGE_TYPE: ClassVar[str] = "system"
+    USAGE_TYPE: ClassVar[str] = "background"
     """Which spend bucket this channel's provider calls bill to in
-    ``llm_call_log.type`` — ``"chat"`` (the user's own conversation) or
-    ``"system"`` (everything Chalie runs on its own behalf: delegates,
+    ``llm_call_log.type`` — ``"foreground"`` (the user's own conversation) or
+    ``"background"`` (everything Chalie runs on its own behalf: delegates,
     background loops, housekeeping).
 
-    Defaults to ``"system"`` so spend is only ever attributed to the user by an
+    Defaults to ``"background"`` so spend is only ever attributed to the user by an
     explicit declaration — an unclassified channel under-bills the user rather
     than silently inflating their conversation's cost. ``LlmLogService.record``
     reads this class constant directly; there is nothing to thread through a
     constructor or a delegate. Distinct from ``policy_channel``, which gates
-    tools: a channel can be policy-gated as CHAT while billing as system (see
+    tools: a channel can be policy-gated as CHAT while billing as background (see
     DiscoveryConfig)."""
 
     uses_vision_provider: ClassVar[bool] = False

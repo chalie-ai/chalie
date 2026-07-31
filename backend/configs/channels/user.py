@@ -17,7 +17,7 @@ class UserConfig(ProcessorConfig):
 
     SUPPORTS_ASYNC = True
     BROADCASTS_STATE = True
-    USAGE_TYPE = "chat"
+    USAGE_TYPE = "foreground"
 
     def __init__(self, metadata: dict[str, object] | None = None) -> None:
         _metadata = metadata or {}

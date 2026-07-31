@@ -332,7 +332,7 @@ CREATE INDEX IF NOT EXISTS idx_wrapper_tokens_hash
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS llm_call_log (
     id INTEGER PRIMARY KEY,
-    type TEXT NOT NULL DEFAULT 'system',
+    type TEXT NOT NULL DEFAULT 'background',
     provider TEXT NOT NULL,
     model TEXT NOT NULL,
     tokens_input INTEGER NOT NULL DEFAULT 0,

@@ -99,7 +99,7 @@ class LlmLogService:
 
         ``bucket_fmt`` is the ``strftime`` bucket width (by-hour or by-day),
         ``offset`` an optional ``datetime('now', ?)`` window bound (None =
-        lifetime), ``usage_type`` an optional 'chat'/'system' filter.
+        lifetime), ``usage_type`` an optional 'foreground'/'background' filter.
         """
         where_clauses: list[str] = []
         params: list[object] = []
