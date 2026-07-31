@@ -129,7 +129,7 @@ describe('_refetchAndUpsert — the fetched block\'s own type wins over the requ
     // the fetch would risk painting turn 8's scheduled content into the
     // user channel.
     threadMock.mockResolvedValue(block(8, 'scheduled', [
-      { id: '80', role: 'assistant', content: 'a scheduled reply', timestamp: '2026-01-01 00:00:00', turn_id: 8 },
+      { id: '80', role: 'assistant', content: 'a scheduled reply', timestamp: '2026-01-01 00:00:00', day: '2026-01-01', turn_id: 8 },
     ]));
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => { /* silence */ });
 

@@ -23,7 +23,7 @@ pytestmark = pytest.mark.unit
 
 def test_tool_name_sanitization_produces_valid_prefix() -> None:
     """Asserts the key format _mcp_<sanitized>_<tool> that downstream dispatch,
-    policy seeding, and find_tools gating all depend on.
+    policy seeding, and mcp_tools gating all depend on.
     """
     # Server name with capitals, hyphens, spaces, and leading/trailing noise
     result = _tool_name("My-Server-One!", "create_document")
@@ -88,7 +88,7 @@ def test_resolve_tool_routes_to_longest_prefix_server(db: sqlite3.Connection) ->
 
 def test_get_online_mcp_tool_names_excludes_disabled_and_offline(db: sqlite3.Connection, tmp_path: object, monkeypatch: pytest.MonkeyPatch) -> None:
     """get_online_mcp_tool_names returns tool names only for servers that are
-    both enabled=1 AND status='online' - the gate find_tools uses to control
+    both enabled=1 AND status='online' - the gate mcp_tools uses to control
     LLM visibility.
 
     _DATA_DIR is redirected to tmp_path so mcp_tools.sqlite lands in a fresh
@@ -203,7 +203,7 @@ def test_add_server_persists_row_with_correct_defaults(db: sqlite3.Connection) -
 
 def test_get_tool_schema_round_trips_stored_input_schema(db: sqlite3.Connection, tmp_path: object, monkeypatch: pytest.MonkeyPatch) -> None:
     """get_tool_schema returns the exact inputSchema written by _write_tools -
-    the schema the LLM sees when find_tools surfaces an _mcp_* tool.
+    the schema the LLM sees when mcp_tools activates an _mcp_* tool.
 
     Seeded via the real _write_tools writer (no hand-crafted SQL) so the full
     store-to-read path is exercised.

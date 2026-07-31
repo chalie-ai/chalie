@@ -11,5 +11,5 @@ version: 1
 4. Use `read` to extract structured details from the most authoritative sources found — role/title, founding date/history, key people, products/services, funding or financials (if public).
 5. Use `news` to find recent coverage: announcements, controversies, leadership changes, funding rounds, or product launches in the past 90 days.
 6. Use `search` to find any independent reviews, forum discussions, or third-party assessments (Glassdoor for companies, academic profiles for researchers, etc.).
-7. Use `document` to compile the dossier, explicitly confirming or refuting each of the user's working hypotheses, plus any open questions not confirmed from public sources.
+7. Use `write_file` to compile the dossier, explicitly confirming or refuting each of the user's working hypotheses, plus any open questions not confirmed from public sources.
 8. Use `memory` to store a concise summary of findings for future reference.

@@ -11,12 +11,12 @@
  * `utils/driftDispatcher.ts` (see `init()` below) — this store no longer
  * inspects WS payload shapes at all.
  *
- * D3 — no lane model: busy/working state for every independent conversation
- * surface (the main spine + each open thread reply) lives as a DOM
- * attribute (`data-working`, see `utils/turnDom.ts`) rather than a store-held
- * record. `isSurfaceBusy` derives it via a DOM query for a stable turn_id
- * (a thread), or a registered surface's own container (the main spine, which
- * has no stable id until a brand-new send's POST resolves one).
+ * D3 — busy/working state for every independent conversation lane (each
+ * thread, plus the spine) lives as a DOM attribute (`data-working`, see
+ * `utils/turnDom.ts`) rather than a store-held record. Lanes never block one
+ * another: `isSurfaceBusy` asks one lane, keyed by the same `(type, turn_id)`
+ * pair a turn is — the spine simply takes the reserved pair, since it has no
+ * stable id of its own until a brand-new send's POST resolves one.
  */
 import { defineStore } from 'pinia';
 import type { WsPushEvent } from '@chalie/shared';
@@ -30,12 +30,14 @@ import { clearLiveTurn } from '../utils/liveActTrail';
 import { blockSpeechText } from '../utils/speech';
 import { clearSendEcho, mountSendEcho } from '../utils/sendEcho';
 import {
-  isSurfaceWorking,
+  isLaneWorking,
   isTurnWorking,
   liveWorkingKeys,
+  markThreadLane,
   setTurnDone,
   setTurnWorking,
-  SPINE_SURFACE_ID,
+  SPINE_LANE_TURN_ID,
+  SPINE_LANE_TYPE,
   upsertTurnToSurfaces,
 } from '../utils/turnDom';
 import { laneKey, useQueueStore } from './queue';
@@ -160,9 +162,9 @@ export const useSessionStore = defineStore('session', {
           const type = el.getAttribute('data-type') ?? ConfigType.USER;
           if (!Number.isNaN(turnId)) this._offlineWorking.add(`${type}:${turnId}`);
         }
-        // Spine snapshot too (it has no stable id for the key set) — read
+        // Spine snapshot too (its lane has no turn_id for the key set) — read
         // BEFORE the clearing loop below strips the very markers it scans.
-        if (isSurfaceWorking(SPINE_SURFACE_ID)) this._offlineSpineWorking = true;
+        if (isLaneWorking(SPINE_LANE_TYPE, SPINE_LANE_TURN_ID)) this._offlineSpineWorking = true;
         for (const key of this._offlineWorking) {
           const idx = key.indexOf(':');
           const type = key.slice(0, idx);
@@ -237,9 +239,11 @@ export const useSessionStore = defineStore('session', {
     },
 
     /**
-     * True when a given surface is currently busy — gates sends and drains.
-     * Main spine shares its surface with ACT cycles (no stable turn id);
-     * threads have a stable id and are checked directly against the DOM.
+     * True when a given LANE is currently busy — gates sends and drains. Each
+     * thread is its own lane and the spine is one more, so work in any of them
+     * leaves every other free to send; the spine reads busy only for work
+     * no thread lane has claimed (its own turns, and ACT cycles, which carry
+     * no turn id at all).
      */
     isSurfaceBusy(threadId: number | null, type: string = ConfigType.USER): boolean {
       if (this._pendingSends.has(laneKey(threadId))) return true;
@@ -248,9 +252,9 @@ export const useSessionStore = defineStore('session', {
       // a send now should queue (drained after `_reconcileWorking`), not
       // silently drop the draft on the disconnected transport.
       if (threadId == null) {
-        return this._offlineSpineWorking || isSurfaceWorking(SPINE_SURFACE_ID);
+        return this._offlineSpineWorking || isLaneWorking(SPINE_LANE_TYPE, SPINE_LANE_TURN_ID);
       }
-      return this._offlineWorking.has(`${type}:${threadId}`) || isTurnWorking(threadId, type);
+      return this._offlineWorking.has(`${type}:${threadId}`) || isLaneWorking(type, threadId);
     },
 
     /**
@@ -282,6 +286,10 @@ export const useSessionStore = defineStore('session', {
 
       const key = laneKey(threadId);
       this._pendingSends.add(key);
+      // A reply IS the fork: claim the turn for its thread lane now rather than
+      // waiting for the refetch to re-derive it, so the spine never counts this
+      // reply's work as its own during the round-trip in between.
+      if (threadId != null) markThreadLane(threadId, type);
       let heldForFrame = false;
       try {
         mountSendEcho(body, threadId, type, files);
@@ -418,13 +426,13 @@ export const useSessionStore = defineStore('session', {
       }
     },
 
-    /** DELETE /api/thread/<turn_id>?type=<type> — best-effort interrupt, never throws. */
+    /** DELETE /api/threads/<turn_id>?type=<type> — best-effort interrupt, never throws. */
     async _postInterrupt(turnId: number | null = null, type: string = ConfigType.USER): Promise<void> {
       if (turnId == null) return;
       try {
         const host = getHost();
         const base = host ? host.replace(/\/$/, '') : '';
-        await fetch(base + '/api/thread/' + turnId + '?type=' + encodeURIComponent(type), {
+        await fetch(base + '/api/threads/' + turnId + '?type=' + encodeURIComponent(type), {
           method: 'DELETE',
           credentials: 'same-origin',
         });

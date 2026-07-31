@@ -1,6 +1,6 @@
 """TextReader — the single place a URL or filesystem path becomes plain text.
 
-Shared by the ``read`` tool and the document ingest pipeline. Returns the FULL
+Shared by the ``read`` tool and the file-ingest pipeline. Returns the FULL
 text verbatim: no truncation (the caller truncates to ``max_chars``) and no
 whitespace munging. Every failure is a raise, never an empty string.
 
@@ -104,12 +104,14 @@ class TextReader:
         from services.text_extractor import detect_mime_type, extract_text
 
         mime_type = detect_mime_type(resolved)
+        from abilities.read import ReadAbility  # noqa: PLC0415
+
         # read is a TEXT reader. An image has no text to read — it is described by
         # the vision tool. Rejected here with a route rather than left to
         # extract_text's raise, so the LLM gets a next step instead of a stack trace.
         # The raise is mapped by the caller (the read ability) to code=not-text.
         if mime_type.startswith("image/"):
-            raise SourceIsImage("That file is an image, not a text file — read cannot see images.")
+            raise SourceIsImage(f"That file is an image, not a text file — {ReadAbility.NAME} cannot see images.")
         content = extract_text(resolved, mime_type)
 
         if not content or not content.strip():

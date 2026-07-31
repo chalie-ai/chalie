@@ -105,7 +105,7 @@ const metaText = computed((): string => {
 }
 
 .scheduler-card__when-day {
-  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
+  font-family: var(--font-mono);
   font-size: 0.58rem;
   letter-spacing: 0.16em;
   text-transform: uppercase;
@@ -122,7 +122,7 @@ const metaText = computed((): string => {
 }
 
 .scheduler-card__when-mon {
-  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
+  font-family: var(--font-mono);
   font-size: 0.58rem;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -138,7 +138,7 @@ const metaText = computed((): string => {
 }
 
 .scheduler-card__meta {
-  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
+  font-family: var(--font-mono);
   font-size: 0.74rem;
   color: var(--text-tertiary);
   letter-spacing: 0.04em;

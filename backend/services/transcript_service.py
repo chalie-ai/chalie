@@ -20,7 +20,6 @@ from typing import TYPE_CHECKING, cast
 
 from configs.enums.channels import Channel
 from models.transcript import Transcript
-from models.transcript_doc import TranscriptDoc
 from models.turn_signal import TurnSignal
 
 if TYPE_CHECKING:
@@ -95,6 +94,25 @@ class TranscriptService:
             .order_by("id ASC")
             .get()
         )
+
+    def exchange_assistant_rows(self) -> list[Transcript]:
+        """The CURRENT exchange's assistant rows — the interim-step prose that
+        anchors tool calls in this exchange, feeding the act-trail interleave.
+        Filtered to this MP's channel and turn, role ``assistant``, ordered by
+        id ASC; when ``self.mp.uid`` is set (a real input row exists) only rows
+        written after it survive — the uid is the exchange floor, mirroring
+        ``ToolCall.by_exchange``'s ``transcript_id >= uid`` bound. When
+        ``self.mp.uid`` is None (channels without an input row) there is no
+        floor, so every assistant row of the turn is returned."""
+        q = (
+            Transcript.filter("channel", self.mp.channel)
+            .filter("turn_id", self.mp.turn_id)
+            .filter("role", "assistant")
+            .order_by("id ASC")
+        )
+        if self.mp.uid is not None:
+            q = q.filter("id", self.mp.uid, ">")
+        return q.get()
 
     def window(self) -> list[Transcript]:
         """The pattern channel's id-bounded window over the ``user`` channel's
@@ -206,55 +224,6 @@ class TranscriptService:
         row = Transcript.filter("id", settle_id).first()
         if row is not None:
             row.unsettle()
-
-    def link_doc(self, doc_id: str) -> None:
-        """Link an uploaded document to this turn's anchoring transcript row so
-        a page refresh can re-render the attachment from its stored id (read
-        back by ``api.threads._fetch_attachments_for_transcripts``). Idempotent:
-        the composite ``(transcript_id, doc_id)`` PK dedups a repeat link.
-
-        A no-op (logged) before the anchor row exists (``self.mp.uid`` is None —
-        e.g. a ``skip_input_row`` channel): there is no transcript id to link
-        to, so the FK would have no parent."""
-        if self.mp.uid is None:
-            logger.warning(
-                "[TranscriptService] link_doc(doc_id=%s) skipped — turn has no anchor row",
-                doc_id,
-            )
-            return
-        TranscriptDoc(transcript_id=self.mp.uid, doc_id=doc_id).link()
-
-    def gc(self, cited_ids: frozenset[int]) -> int:
-        """Delete this turn's rows already folded below the compaction
-        watermark, on the turn's own axis (§6.1) — the same ``mp._forked``
-        flag ``read()``/``CompactionService`` key on: MAIN measures the
-        watermark against ``turn_id`` (the whole turn folds at once, only
-        once absorbed); FORK measures it against transcript ``id`` (rows
-        fold one at a time as the thread scrolls past it). ``cited_ids``
-        (episode citations — not ``mp``-reachable, §3.11) and settle0 itself
-        are never collected. Deletes run in one atomic block; returns the
-        count deleted. A no-op on a turn that hasn't settled yet (its
-        boundary is undefined). Tool-call rows anchored to a deleted row are
-        NOT cascaded here — ``ToolCallService`` exposes no bulk-delete entry
-        yet; orphaned ``tool_calls`` rows are swept by the separate retention
-        pass."""
-        settle_id = self.settle()
-        if settle_id is None:
-            return 0
-        watermark = self.mp.compaction_service.watermark()
-        ids = [cast("int", r.id) for r in self.turn_rows()]
-        if self.mp._forked:
-            dead = [rid for rid in ids if rid not in cited_ids and rid != settle_id and rid <= watermark]
-        elif self.mp.turn_id > watermark:
-            return 0
-        else:
-            dead = [rid for rid in ids if rid not in cited_ids and rid != settle_id and rid > settle_id]
-        if not dead:
-            return 0
-        with self.mp.db.transaction():
-            for rid in dead:
-                Transcript(id=rid).delete()
-        return len(dead)
 
     # ── private helpers ──────────────────────────────────────────────────────
 

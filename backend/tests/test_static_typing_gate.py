@@ -20,8 +20,9 @@ including the test suite itself — passes ``mypy --strict`` with zero errors.
 
 There is no relax/override block in ``pyproject.toml``: the whole backend is
 held to strict from the start, so any new untyped or unsound code fails this
-gate immediately. See ``docs/typing-ratchet.md`` for how the codebase was
-migrated to this state and for the supported narrowing patterns.
+gate immediately. A strict error is resolved with a real narrowing (an
+``isinstance`` guard, a ``cast`` at the read site, a more precise signature) —
+never by weakening a type or suppressing the error.
 
 The per-ability ToolResult return-type assertion lives in
 :mod:`tests.test_ability_returns_tool_result` as a special case of this
@@ -71,8 +72,8 @@ _PY_FREE_DIRS = frozenset({"pre-trained", "vision", "stubs"})
 # whitespace, follows the hash), so this file does not trip its own gate.
 _TYPE_IGNORE_RE = re.compile(r"#\s*type:\s*ignore")
 
-# First-party packages and top-level modules to check.
-# This list must mirror the gate verification step in docs/typing-ratchet.md.
+# First-party packages and top-level modules to check. Kept exhaustive by
+# test_typing_gate_covers_every_first_party_package_and_module below.
 _PACKAGES = [
     "abilities",
     "api",
@@ -107,10 +108,9 @@ def test_first_party_source_is_strict_clean() -> None:
     The migration to full strict is complete: there is no relax override in
     pyproject.toml, so this gate requires a clean ``mypy --strict`` run over
     every package and top-level module. Any error — strict or default
-    correctness — fails the build.
-
-    See docs/typing-ratchet.md for the supported narrowing patterns when a
-    strict error needs to be resolved without weakening a type.
+    correctness — fails the build. Resolve a strict error with a real narrowing
+    (isinstance guard, cast at the read site, more precise signature), never by
+    weakening a type.
     """
     assert importlib.util.find_spec("mypy") is not None, (
         "mypy must be installed (it is a pyproject dependency) for the "
@@ -130,7 +130,8 @@ def test_first_party_source_is_strict_clean() -> None:
         "mypy --strict reported errors over the first-party source tree.\n"
         "Fix every error before committing — the whole backend must stay "
         "strict-clean (there is no relax override).\n"
-        "See docs/typing-ratchet.md for the supported narrowing patterns.\n\n"
+        "Resolve with a real narrowing (isinstance guard / cast at the read "
+        "site), never by weakening a type.\n\n"
         f"mypy output:\n{proc.stdout}{proc.stderr}"
     )
 
@@ -177,8 +178,8 @@ def test_no_type_ignore_comments_in_first_party_source() -> None:
 
     ``mypy --strict`` only flags *unused* suppressions; a *used* one silently
     punches a hole in the type wall. The standing typing bar bans them outright
-    — a real type error must be fixed with a narrowing pattern (see
-    docs/typing-ratchet.md), never silenced. This gate keeps the count at zero.
+    — a real type error must be fixed with a narrowing pattern, never silenced.
+    This gate keeps the count at zero.
     """
     offenders: list[str] = []
     for path in _iter_first_party_py_files():
@@ -191,7 +192,7 @@ def test_no_type_ignore_comments_in_first_party_source() -> None:
     assert not offenders, (
         "Type-suppression comments are banned in first-party source — resolve "
         "the underlying type error with a sanctioned narrowing pattern instead "
-        "(see docs/typing-ratchet.md).\n\nOffending lines:\n"
+        "(isinstance guard / cast at the read site).\n\nOffending lines:\n"
         + "\n".join(offenders)
     )
 
@@ -221,8 +222,8 @@ def test_no_explicit_any_in_annotations() -> None:
     assert not offenders, (
         "Explicit `Any` is banned in first-party annotations — use the "
         "most-primitive concrete type (object / dict[str, object] / …) and "
-        "narrow with an inline cast at the read site (see "
-        "docs/typing-ratchet.md).\n\nOffending annotations:\n"
+        "narrow with an inline cast at the read site.\n\n"
+        "Offending annotations:\n"
         + "\n".join(offenders)
     )
 
@@ -278,8 +279,8 @@ def test_typing_gate_covers_every_first_party_package_and_module() -> None:
 
     assert py_bearing_dirs == set(_PACKAGES), (
         "The set of first-party source packages on disk no longer matches the "
-        "strict gate's _PACKAGES roster. Update _PACKAGES (and "
-        "docs/typing-ratchet.md) so every package is type-checked.\n"
+        "strict gate's _PACKAGES roster. Update _PACKAGES so every package is "
+        "type-checked.\n"
         f"  on disk : {sorted(py_bearing_dirs)}\n"
         f"  _PACKAGES: {sorted(_PACKAGES)}"
     )
@@ -292,8 +293,8 @@ def test_typing_gate_covers_every_first_party_package_and_module() -> None:
     )
     assert top_level_modules == set(_TOP_LEVEL_MODULES), (
         "The set of top-level .py modules on disk no longer matches the strict "
-        "gate's _TOP_LEVEL_MODULES roster. Update it (and "
-        "docs/typing-ratchet.md) so every module is type-checked.\n"
+        "gate's _TOP_LEVEL_MODULES roster. Update it so every module is "
+        "type-checked.\n"
         f"  on disk           : {sorted(top_level_modules)}\n"
         f"  _TOP_LEVEL_MODULES: {sorted(_TOP_LEVEL_MODULES)}"
     )

@@ -140,6 +140,7 @@ CREATE TABLE IF NOT EXISTS providers (
     dimensions INTEGER,
     timeout INTEGER DEFAULT 120,
     supports_vision INTEGER DEFAULT 0,       -- BOOLEAN
+    context_window INTEGER,                  -- NULL = ask the client (Gemini/Ollama query their API; OpenAI falls back to 128_000)
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
 );
@@ -251,78 +252,8 @@ CREATE INDEX IF NOT EXISTS idx_list_items_active ON list_items(list_id) WHERE re
 -- needed here.  Past examples: cortex_iterations, persistent_tasks,
 -- cognitive_reflexes, triage_calibration_events, document_chunks,
 -- knowledge, knowledge_vec, knowledge_fts, scheduled_items_vec, lists_vec,
--- goals_vec, place_fingerprints, ambient_inferences, situation_states.
-
--- WATCHED FOLDERS — monitored filesystem directories
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS watched_folders (
-    id TEXT PRIMARY KEY,
-    folder_path TEXT NOT NULL UNIQUE,
-    label TEXT,
-    source_type TEXT DEFAULT 'filesystem',
-    enabled INTEGER DEFAULT 1,
-    file_patterns TEXT DEFAULT '["*"]',
-    ignore_patterns TEXT DEFAULT '[".git","node_modules","__pycache__","build","dist",".DS_Store","Thumbs.db"]',
-    recursive INTEGER DEFAULT 1,
-    scan_interval INTEGER DEFAULT 300,
-    last_scan_at TEXT,
-    last_scan_files INTEGER DEFAULT 0,
-    last_scan_error TEXT,
-    source_config TEXT DEFAULT '{}',
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_watched_folders_enabled
-    ON watched_folders(enabled) WHERE enabled = 1;
-
-
--- ────────────────────────────────────────────────────────────────
--- DOCUMENTS — document metadata + chunks
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS documents (
-    id TEXT PRIMARY KEY,
-    original_name TEXT NOT NULL,
-    mime_type TEXT NOT NULL,
-    file_size_bytes INTEGER,
-    file_path TEXT NOT NULL,
-    file_hash TEXT,
-    page_count INTEGER,
-    status TEXT DEFAULT 'pending',            -- 'pending' is the initial lifecycle state
-    error_message TEXT,
-    chunk_count INTEGER DEFAULT 0,
-    source_type TEXT DEFAULT 'upload',
-    watched_folder_id TEXT REFERENCES watched_folders(id),
-    tags TEXT DEFAULT '[]',                  -- JSON array (was TEXT[])
-    summary TEXT,
-    extracted_metadata TEXT DEFAULT '{}',    -- JSONB
-    supersedes_id TEXT REFERENCES documents(id),
-    clean_text TEXT,
-    language TEXT,
-    fingerprint TEXT,
-    doc_category TEXT,
-    doc_project TEXT,
-    doc_date TEXT,
-    meta_locked INTEGER DEFAULT 0,
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now')),
-    deleted_at TEXT,
-    purge_after TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status);
-CREATE INDEX IF NOT EXISTS idx_documents_deleted ON documents(deleted_at) WHERE deleted_at IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_documents_file_hash ON documents(file_hash);
-CREATE INDEX IF NOT EXISTS idx_documents_purge ON documents(purge_after) WHERE purge_after IS NOT NULL;
--- idx_documents_watched_folder created by migration 001_watched_folders.sql
-CREATE INDEX IF NOT EXISTS idx_documents_folder_pending ON documents(watched_folder_id, status) WHERE deleted_at IS NULL AND watched_folder_id IS NOT NULL;
-
--- FTS5 for document search. content='documents' and content_rowid='rowid'
--- follow the same per-table pattern as episodes_fts and data_graph_fts.
-CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
-    original_name, summary, clean_text, content='documents', content_rowid='rowid'
-);
-
+-- goals_vec, place_fingerprints, ambient_inferences, situation_states,
+-- documents, watched_folders, transcript_docs, documents_fts, documents_vec.
 
 -- ────────────────────────────────────────────────────────────────
 -- SCHEMA VERSION
@@ -361,7 +292,6 @@ CREATE INDEX IF NOT EXISTS idx_lut_misses_kind ON concept_lut_misses(kind, count
 -- ────────────────────────────────────────────────────────────────
 CREATE VIRTUAL TABLE IF NOT EXISTS episodes_vec USING vec0(embedding float[768]);
 -- tool_capability_profiles_vec removed — replaced by abilities.sqlite.
-CREATE VIRTUAL TABLE IF NOT EXISTS documents_vec USING vec0(embedding float[768]);
 CREATE VIRTUAL TABLE IF NOT EXISTS scheduled_items_vec USING vec0(embedding float[768]);
 CREATE VIRTUAL TABLE IF NOT EXISTS lists_vec USING vec0(embedding float[768]);
 
@@ -402,7 +332,7 @@ CREATE INDEX IF NOT EXISTS idx_wrapper_tokens_hash
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS llm_call_log (
     id INTEGER PRIMARY KEY,
-    type TEXT NOT NULL DEFAULT 'system',
+    type TEXT NOT NULL DEFAULT 'background',
     provider TEXT NOT NULL,
     model TEXT NOT NULL,
     tokens_input INTEGER NOT NULL DEFAULT 0,
@@ -411,6 +341,8 @@ CREATE TABLE IF NOT EXISTS llm_call_log (
     tokens_cache_create INTEGER NOT NULL DEFAULT 0,
     tokens_thinking INTEGER NOT NULL DEFAULT 0,
     latency_ms INTEGER NOT NULL DEFAULT 0,
+    prefill_ms REAL,                         -- NULL = provider reported no timing split; never 0-coerced
+    decode_ms REAL,                          -- NULL = provider reported no timing split; never 0-coerced
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -568,24 +500,25 @@ CREATE TABLE IF NOT EXISTS compactions (
 );
 CREATE INDEX IF NOT EXISTS ix_compactions_scope ON compactions(channel, for_turn_id, id);
 
+
 -- ────────────────────────────────────────────────────────────────
--- TRANSCRIPT DOCS — many-to-many link of a transcript turn to the
--- document(s) attached to it.  Lets the chat re-render uploaded
--- images/files on page refresh (the live preview is a browser-only
--- blob: URL that dies on reload).  Written at the upload-seed point
--- (message_processor._seed_upload_attachment), read by the thread
--- serializer (api.conversation.serialize_turn).  Composite PK dedups links and
--- serves the WHERE transcript_id IN (...) lookup (no separate index).
+-- TRANSCRIPT FILES — filepath-keyed attachment link.
+-- One row per attachment: the transcript turn that owns it plus the
+-- file's stored path RELATIVE to FileMapperService.get_documents_path().
+-- Composite PK dedups; transcript delete cascades the link.
 -- ────────────────────────────────────────────────────────────────
--- foreign_keys=ON is enforced (database_service.py), so both sides CASCADE:
--- deleting a transcript turn (cancel/compaction/migration) or hard-purging a
--- document must not be blocked by a dangling link — the link is meaningless once
--- either end is gone.  The document row itself is untouched by a transcript
--- delete (only the link drops).
-CREATE TABLE IF NOT EXISTS transcript_docs (
+CREATE TABLE IF NOT EXISTS transcript_files (
     transcript_id INTEGER NOT NULL REFERENCES transcript(id) ON DELETE CASCADE,
-    doc_id        TEXT    NOT NULL REFERENCES documents(id)  ON DELETE CASCADE,
-    PRIMARY KEY (transcript_id, doc_id)
+    path          TEXT    NOT NULL,
+    PRIMARY KEY (transcript_id, path)
+);
+
+-- Pre-synthesized speech for settled assistant rows. file_path NULL means
+-- synthesis failed after all attempts — the row persists the failed state.
+CREATE TABLE IF NOT EXISTS voice_transcript (
+    transcript_id INTEGER NOT NULL REFERENCES transcript(id) ON DELETE CASCADE,
+    file_path     TEXT,
+    PRIMARY KEY (transcript_id)
 );
 
 -- ────────────────────────────────────────────────────────────────
@@ -653,7 +586,7 @@ CREATE INDEX IF NOT EXISTS idx_data_graph_live         ON data_graph(kind) WHERE
 
 -- FTS5 for data_graph search. tokenize='porter unicode61' enables stemming for
 -- better recall on natural-language queries. content_rowid='rowid' is
--- intentionally the same literal as in episodes_fts and documents_fts.
+-- intentionally the same literal as in episodes_fts.
 CREATE VIRTUAL TABLE IF NOT EXISTS data_graph_fts USING fts5(
     key, value, kind, search_queries,
     content='data_graph', content_rowid='rowid',

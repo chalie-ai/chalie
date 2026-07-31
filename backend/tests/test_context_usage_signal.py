@@ -42,7 +42,7 @@ from models.provider_response import ProviderResponse
 from services.processor_config import ProcessorConfig
 from services.websocket import Websocket
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 
 # ProviderService builds its thin transport client via this factory call — the
 # real network boundary (see test_message_processor_runaway_loop.py).
@@ -73,10 +73,12 @@ class _RecordingClient:
 class _TokenReportingProvider:
     """A real functional double at the network boundary: implements the thin
     client protocol (``get_context_limit``/``estimate_request_tokens``/``send``)
-    and answers with one benign terminal response (empty text, no tool calls) so
-    the turn completes in a single step — one CHAT call, hence one expected move
-    of the meter. ``tokens_input=None`` models a provider whose native payload
-    exposes no usage counter."""
+    and answers with one benign terminal response (non-empty text, no tool
+    calls) so the turn settles in a single step — one CHAT call, hence one
+    expected move of the meter. The text must be non-empty: an empty completion
+    trips the processor's empty-completion steer, which re-sends and would move
+    the meter again. ``tokens_input=None`` models a provider whose native
+    payload exposes no usage counter."""
 
     def __init__(self, tokens_input: int | None = _TOKENS_IN) -> None:
         self._tokens_input = tokens_input
@@ -91,7 +93,7 @@ class _TokenReportingProvider:
     def send(self, _dto: object) -> ProviderResponse:
         self.sends += 1
         return ProviderResponse(
-            text="",
+            text="ok.",
             model="scripted-context-usage",
             tool_calls=None,
             tokens_input=self._tokens_input,

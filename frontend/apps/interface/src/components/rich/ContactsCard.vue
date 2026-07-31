@@ -230,7 +230,7 @@ const listContacts = computed<Contact[]>(() => {
   border-radius: 999px;
   border: 1px solid var(--border);
   background: var(--bg-input);
-  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
+  font-family: var(--font-mono);
   font-size: 0.74rem;
   color: var(--text-secondary);
   text-decoration: none;

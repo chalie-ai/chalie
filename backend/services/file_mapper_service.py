@@ -35,7 +35,9 @@ class FileMapperService:
     _DOCUMENTS_DIR: Path = _DATA_DIR / "documents"
     _USER_SKILLS_DIR: Path = _DATA_DIR / "skills" / "user"
     _VOICE_MODELS_DIR: Path = _RESOURCES_DIR / "voice-models"
+    _VOICE_DIR: Path = _DATA_DIR / "generated" / "voice"
     _ABILITIES_SKILLS_DIR: Path = _ABILITIES_DIR / "skills"
+    _CODE_AGENT_WORKSPACE_DIR: Path = _DATA_DIR / "code_agent_workspace"
 
     # ── Well-known file paths ────────────────────────────────────────────────
 
@@ -82,9 +84,14 @@ class FileMapperService:
         return cls._CHALIE_ROOT / "VERSION"
 
     @classmethod
-    def get_abilities_db_path(cls) -> Path:
-        """Return path to the abilities vector+FTS5 search index."""
-        return cls._ABILITIES_DIR / "assets" / "abilities.sqlite"
+    def get_dev_credentials_path(cls) -> Path:
+        """Return path to the optional dev-only auto-login credentials file.
+
+        Local convenience only: if present at the install root, its username/
+        password are tried first to unlock the vault, bypassing the login
+        page. Gitignored — never bundled into a release or committed.
+        """
+        return cls._CHALIE_ROOT / "credentials.json"
 
     @classmethod
     def get_skills_db_path(cls) -> Path:
@@ -100,11 +107,19 @@ class FileMapperService:
     def get_mcp_tools_db_path(cls) -> Path:
         """Return path to the runtime MCP-tools index (gitignored, data/).
 
-        Separate from abilities.sqlite so build_ability_db rebuilds never
-        destroy the dynamically-synced _mcp_* tool rows.  Managed exclusively
-        by McpClientService — never by build_ability_db.
+        Managed exclusively by McpClientService — never rebuilt by the
+        abilities pipeline.
         """
         return cls._DATA_DIR / "mcp_tools.sqlite"
+
+    @classmethod
+    def get_file_index_db_path(cls) -> Path:
+        """Return path to the file-index FTS5 search database (gitignored, data/).
+
+        Managed exclusively by FileIndexService — never touched by any
+        other service.
+        """
+        return cls._DATA_DIR / "file_index.sqlite"
 
     @classmethod
     def get_search_providers_db_path(cls) -> Path:
@@ -204,6 +219,11 @@ class FileMapperService:
         return cls._VOICE_MODELS_DIR.joinpath(*parts) if parts else cls._VOICE_MODELS_DIR
 
     @classmethod
+    def get_voice_path(cls, *parts: str) -> Path:
+        """Return data/generated/voice/ joined with any additional path parts."""
+        return cls._VOICE_DIR.joinpath(*parts) if parts else cls._VOICE_DIR
+
+    @classmethod
     def get_abilities_skills_path(cls, *parts: str) -> Path:
         """Return backend/abilities/skills/ joined with any additional path parts."""
         return cls._ABILITIES_SKILLS_DIR.joinpath(*parts) if parts else cls._ABILITIES_SKILLS_DIR
@@ -212,6 +232,15 @@ class FileMapperService:
     def get_capabilities_path(cls, *parts: str) -> Path:
         """Return backend/capabilities/ joined with any additional path parts."""
         return cls._CAPABILITIES_DIR.joinpath(*parts) if parts else cls._CAPABILITIES_DIR
+
+    @classmethod
+    def get_code_agent_workspace_path(cls, *parts: str) -> Path:
+        """Return data/code_agent_workspace/ joined with any additional path parts.
+
+        The default scratch location for code_agent work — a convention, not
+        an enforced boundary; created lazily on first use, not at import time.
+        """
+        return cls._CODE_AGENT_WORKSPACE_DIR.joinpath(*parts) if parts else cls._CODE_AGENT_WORKSPACE_DIR
 
     @classmethod
     def validate_document_path(cls, full_path: str) -> bool:

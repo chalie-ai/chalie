@@ -177,6 +177,18 @@ def test_first_fire_opens_main_turn_second_fire_forks_the_same_turn(
     _seed_timezone(db, "UTC")
     item_id = insert_scheduled_item(db, message="Water the plants")
 
+    # Pre-seed the turn's gist so BOTH fires' best-effort ingest
+    # (`MessageProcessor._maybe_fire_gist`) short-circuits instead of spawning
+    # its own nested, unpatched background MessageProcessor for gisting. The
+    # schedule channel generates on the first fire, so this has to land before
+    # it — otherwise that daemon outlives the patch below and runs unprovidered.
+    # This test is about turn threading; the gist is isolated scaffolding.
+    ThreadGist(
+        channel=Channel.SCHEDULE.value, turn_id=item_id, gist="Watering reminder",
+        created_at=utc_now().isoformat(),
+    ).upsert()
+    db.commit()
+
     with patch(_BUILD_CLIENT, return_value=_RecordingProvider("first response")):
         _DISPATCHER._fire_item(item_id, "Water the plants")
         assert _join_named_thread(f"scheduled-work-{item_id}")
@@ -184,15 +196,6 @@ def test_first_fire_opens_main_turn_second_fire_forks_the_same_turn(
 
     first_rows = _schedule_turn_rows(item_id)
     assert first_rows, "the first fire must open a MAIN turn on (channel='schedule', turn_id=item_id)"
-
-    # Pre-seed the turn's gist so the FORK path's best-effort ingest
-    # (`MessageProcessor._maybe_fire_gist`) short-circuits instead of spawning
-    # its own nested, unpatched background MessageProcessor for gisting.
-    ThreadGist(
-        channel=Channel.SCHEDULE.value, turn_id=item_id, gist="Watering reminder",
-        created_at=utc_now().isoformat(),
-    ).upsert()
-    db.commit()
 
     with patch(_BUILD_CLIENT, return_value=_RecordingProvider("second response")):
         _DISPATCHER._fire_item(item_id, "Water the plants")

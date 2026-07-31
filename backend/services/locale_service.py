@@ -120,6 +120,7 @@ def get_location() -> dict[str, object]:
 # ── Format constants ──────────────────────────────────────────────────────
 
 CHAT_TIMESTAMP_FMT = "%d %b %H:%M"
+CHAT_DAY_FMT = "%Y-%m-%d"  # machine-readable user-local calendar day for grouping (never displayed)
 
 # ── Formatting helpers ────────────────────────────────────────────────────
 

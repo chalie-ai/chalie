@@ -47,18 +47,43 @@ if __name__ == "__main__":
     _boot_screen = BootScreen(_cli.host, _cli.port)
     _boot_screen.start()
 
+    # Dependency preflight — the FIRST thing after the port is owned, before the
+    # heavy imports below. A declared dependency that is not installed stops the
+    # boot dead: no degraded mode, no silent fallback. `tiktoken` was imported by
+    # the provider token counter but never declared, so every deployment quietly
+    # fell through to a word-count heuristic that under-measured requests by ~34%
+    # — the compaction gate never fired and context ran past the model window for
+    # months. An absent dependency must be impossible to miss, so it is stated on
+    # stderr (container logs) AND on the page the browser is already polling.
+    from services.dependency_preflight import DependencyPreflight
+    _missing = DependencyPreflight.missing()
+    if _missing:
+        _detail = f"missing module/dependency: {', '.join(_missing)}"
+        print(f"[BOOT] CRITICAL: Chalie failed to load, {_detail}", file=sys.stderr, flush=True)
+        _boot_screen.fail(_detail)
+        _boot_screen.serve_forever()
+        sys.exit(1)
+
 # Force numpy/transformers to fully initialize before any background thread
 # imports them. Python's import system isn't fully thread-safe for nested
 # imports — concurrent first-imports from multiple threads cause a circular
 # import in numpy._typing (NDArray not yet available from the
 # partially-initialized module), which poisons sys.modules and makes every
 # subsequent embedding call fail with "maximum recursion depth exceeded".
+# A failure here is not survivable: it means numpy/transformers is present but
+# broken, and every embedding call downstream would fail with a recursion error
+# that reads nothing like its cause. Context is added and the error re-raised —
+# never swallowed into a warning that boots a broken process anyway.
 try:
     import numpy  # noqa: F401 — thread-safety warm-up
     import transformers  # noqa: F401 — thread-safety warm-up
 except Exception as _e:
-    import sys as _sys
-    print(f"[BOOT] CRITICAL: import failed: {_e}", file=_sys.stderr, flush=True)
+    print(f"[BOOT] CRITICAL: Chalie failed to load, core import failed: {_e}",
+          file=sys.stderr, flush=True)
+    if _boot_screen is not None:
+        _boot_screen.fail(f"core import failed: {_e}")
+        _boot_screen.serve_forever()
+    raise
 
 # Ensure backend/ is on the Python path
 _backend_dir = os.path.dirname(os.path.abspath(__file__))
@@ -81,9 +106,7 @@ def _start_model_preload() -> None:
             cast("EmbeddingService", svc).generate_embedding("warmup")
             logger.info("[System] Embedding model ready (inference warm)")
         except Exception as e:
-            import traceback
-            logger.warning(f"[System] Embedding model preload failed: {e}")
-            logger.warning(f"[System] Preload traceback:\n{traceback.format_exc()}")
+            logger.exception(f"[System] Embedding model preload failed: {e}")
 
         svc = None
         try:
@@ -96,7 +119,7 @@ def _start_model_preload() -> None:
                 try:
                     svc._get_head(_task)
                 except RuntimeError as _reg_err:
-                    logger.error(
+                    logger.exception(
                         f"[System] CLASSIFIER REGISTRATION FAILED — task={_task} "
                         f"reason={_reg_err}"
                     )
@@ -117,37 +140,28 @@ def _start_model_preload() -> None:
                 svc._ready = True
             logger.exception("[System] ONNX preload failed")
 
+        try:
+            logger.info("[System] Preloading Moonshine STT model (background)...")
+            from services.speech_to_text_service import get_service as _get_stt_service
+            if _get_stt_service().ensure_loaded():
+                logger.info("[System] Moonshine STT ready")
+            else:
+                logger.error("[System] Moonshine STT preload failed — loader returned False (see [Voice] logs)")
+        except Exception as e:
+            logger.exception(f"[System] Moonshine STT preload failed: {e}")
+
+        try:
+            logger.info("[System] Preloading Kokoro TTS model (background)...")
+            from services.voice_transcript_service import VoiceTranscriptService
+            if VoiceTranscriptService.instance().ensure_loaded():
+                logger.info("[System] Kokoro TTS ready")
+            else:
+                logger.error("[System] Kokoro TTS preload failed — loader returned False (see [VoiceTranscript] logs)")
+        except Exception as e:
+            logger.exception(f"[System] Kokoro TTS preload failed: {e}")
     import threading as _threading
     _threading.stack_size(2 * 1024 * 1024)
     _threading.Thread(target=_preload_models, name="model-preload", daemon=True).start()
-
-
-def _migrate_legacy_policy_rules() -> None:
-    """Upgrade-path only — on a fresh install this is a no-op. Critically does
-    NOT create the ``policy`` table early: making the DB look non-empty to
-    convergence's freshness check would skip the schema.sql seed pass (incl.
-    the row that marks ``api_key`` sensitive, persisting the REST API key in
-    cleartext on fresh installs)."""
-    with Database.transaction() as conn:
-        has_legacy = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='policy_rules'"
-        ).fetchone() is not None
-        if not has_legacy:
-            return
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS policy (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                channel TEXT NOT NULL, permission TEXT NOT NULL,
-                setting TEXT NOT NULL CHECK (setting IN ('internal','allow','ask','deny')),
-                UNIQUE (channel, permission)
-            )
-        """)
-        conn.execute(
-            "INSERT OR IGNORE INTO policy (channel, permission, setting) "
-            "SELECT context, action_id, state FROM policy_rules"
-        )
-        conn.commit()
-    logger.info("[Startup] Legacy policy_rules copied into flat policy table")
 
 
 def _init_database() -> None:
@@ -168,14 +182,6 @@ def _init_database() -> None:
                     logger.info("[Startup] Purged %d soft-deleted provider row(s)", _purged)
     except Exception as _prov_err:
         logger.warning(f"[Startup] soft-deleted provider purge skipped: {_prov_err}")
-
-    # Policy (upgrade path): copy legacy policy_rules → policy BEFORE convergence
-    # drops policy_rules.  No-op on a fresh DB so it stays "fresh" and convergence
-    # runs schema.sql's seed pass (incl. the api_key is_sensitive row).
-    try:
-        _migrate_legacy_policy_rules()
-    except Exception as _pol_err:
-        logger.warning(f"[Startup] legacy policy_rules copy skipped: {_pol_err}")
 
     convergence = SchemaConvergenceService()
     convergence.converge()
@@ -276,22 +282,16 @@ def _register_workers(manager: "_WorkerManager", host: str, port: int) -> None:
     schedule (``ScheduledItemsDispatcherJob`` folds in the schedule poller; the
     nine idle-gated cognition jobs fold in the subconscious tick).
     """
-    from workers.document_worker import document_purge_worker
-
-    manager.register_service("document-purge-service", document_purge_worker)
-
-    from workers.folder_watcher_worker import folder_watcher_worker
-    manager.register_service("folder-watcher-service", folder_watcher_worker)
-
     from workers.tmp_cleanup_worker import tmp_cleanup_worker
     manager.register_service("tmp-cleanup-service", tmp_cleanup_worker)
 
     from cron.runner import cron_runner
     manager.register_service("cron-runner", cron_runner)
-
     _bootstrap_capability_sync()
     _try_register(manager, "search-expander-service",
                   "services.search_expander_service", "search_expander_worker")
+    _try_register(manager, "file-index-service",
+                  "workers.file_index_worker", "file_index_worker")
     _try_register(manager, "mcp-server", "mcp_server.server", "run_mcp_server")
     _try_register(manager, "mcp-client-heartbeat",
                   "workers.mcp_client_worker", "mcp_client_worker")
@@ -388,8 +388,13 @@ def _warmup_models() -> None:
     """Warm up voice and embedding models in background daemon threads."""
     import threading as _t
     try:
-        from api.voice import _ensure_models as _voice_warm
-        _t.Thread(target=_voice_warm, name="voice-warmup", daemon=True).start()
+        from services.speech_to_text_service import get_service as stt_service
+        from services.voice_transcript_service import VoiceTranscriptService
+        _t.Thread(
+            target=VoiceTranscriptService.instance().ensure_loaded,
+            name="voice-tts-warmup", daemon=True,
+        ).start()
+        _t.Thread(target=stt_service().ensure_loaded, name="voice-stt-warmup", daemon=True).start()
     except Exception as e:
         logger.warning(f"[Startup] Voice warm-up skipped: {e}")
     try:
@@ -412,16 +417,9 @@ def main() -> None:
     # artifact swap must complete here or convergence would run against the old
     # DB. SnapshotService.apply_pending owns its own try/except (boot safety):
     # a failed restore is rolled back + logged and never aborts startup.
-    # Paired with services/snapshot_service.py (Phase B) and api/snapshot.py.
+    # Paired with services/snapshot_service.py (Phase B) and api/actions/snapshot/.
     from services.snapshot_service import SnapshotService
     SnapshotService.apply_pending()
-
-    # Guarantee a usable onnxruntime BEFORE any warmup thread imports it. On a
-    # host whose GPU/ROCm wheel can't load its native libs (e.g. libcudart
-    # missing), this swaps to the CPU wheel and logs an actionable ERROR hint
-    # (visible in the Cognition → Errors panel); a no-op when import already works.
-    from services.runtime_deps_service import RuntimeDepsService
-    RuntimeDepsService.ensure_onnxruntime()
 
     _start_model_preload()
 
@@ -451,10 +449,6 @@ def main() -> None:
 
     _check_asset_caches()
     _warmup_models()
-
-    # Background-install optional runtime deps (playwright, voice if enabled)
-    RuntimeDepsService.ensure_playwright()
-    RuntimeDepsService.init_voice_from_settings()
 
     from consumer import WorkerManager
     manager = WorkerManager()

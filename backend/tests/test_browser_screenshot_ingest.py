@@ -1,26 +1,32 @@
-"""Feature test: browser screenshots land in the document pipeline.
+"""Feature test: browser screenshots land in the documents store.
 
-Drives the REAL shared ingest (``ingest_file`` — the exact call
-``BrowserAbility._screenshot`` makes) and then the REAL ``vision`` tool through
-the REAL ``ToolDispatcher`` on a REAL web_browse delegate mp. Zero mocks; the
-no-vision-provider fork exercises RapidOCR exactly as production does (the
-'INVOICE' fixture's OCR readability was empirically proven).
-Locks the contract end to end: png → screenshots/ subdir →
-source_type='screenshot' → ready doc → vision reads it on the delegate channel.
+Drives the REAL shared ingest (``FileParserService.ingest`` — the exact call
+``BrowserAbility._screenshot`` makes) and then the REAL ``vision`` tool
+through the REAL dispatch chokepoint (``mp.dispatch_service.dispatch``) on a
+REAL web_browse delegate mp. Zero mocks; the no-vision-provider fork
+exercises RapidOCR exactly as production does (the 'INVOICE' fixture's OCR
+readability was empirically proven).
+
+Locks the contract end to end: png -> flat screenshots/ subdir (no per-file
+folder — collisions get ``_1``, ``_2``… before the extension) -> real OCR
+extraction -> FileIndexService upsert -> vision reads the image by its
+absolute filepath on the delegate channel.
 """
+
+from __future__ import annotations
 
 import io
 import sqlite3
-from typing import cast
+from pathlib import Path
 
 import pytest
 
-from abilities.document import ingest_file
 from configs.channels.web_browse import WebBrowseConfig
 from configs.enums.policy_channel import PolicyChannel
 from controllers.message_processor import MessageProcessor
-from services.document_service import DocumentService
+from services.file_index_service import FileIndexService
 from services.file_mapper_service import FileMapperService
+from services.file_parser_service import FileParserService
 from services.provider_db_service import ProviderDbService
 from services.tmp_storage import new_tmp_path
 
@@ -50,38 +56,43 @@ def _invoice_png_path() -> str:
     return path
 
 
-def test_screenshot_ingest_lands_in_screenshots_subdir_and_vision_reads_it(db: sqlite3.Connection) -> None:
+def test_screenshot_ingest_lands_flat_in_screenshots_subdir_and_vision_reads_it(
+    db: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     ProviderDbService().set_vision_provider(None)
-    service = DocumentService()
 
-    ingested = ingest_file(
-        service,
-        _invoice_png_path(),
-        name="screenshot-example.com.png",
-        subdir="screenshots",
-        source_type="screenshot",
+    # Hermetic isolation (same style as test_snapshot_docs_roundtrip.py's
+    # _redirect_snapshot_paths): both patched BEFORE FileParserService runs —
+    # FileIndexService()'s db_path is resolved at call time inside ingest(),
+    # so the classmethod patch must already be in place to reach it.
+    documents_dir = tmp_path / "documents"
+    monkeypatch.setattr(FileMapperService, "_DOCUMENTS_DIR", documents_dir)
+    monkeypatch.setattr(
+        FileMapperService, "get_file_index_db_path", lambda *_: tmp_path / "file_index.sqlite"
     )
 
-    assert not ingested.get("error"), ingested
-    assert ingested["status"] == "ready", ingested
-    doc = cast(dict[str, object], service.get_document(cast(str, ingested["id"])))
-    assert doc["source_type"] == "screenshot"
-    # The exact field BrowserAbility._screenshot hands back inline as data["vision"]:
-    # ingest ran the png through the image extractor (OCR here, vision in prod) and
-    # stored the readable content as clean_text — proving the screenshot self-describes.
-    assert "INVOICE" in cast(str, doc.get("clean_text") or ""), doc.get("clean_text")
-    assert cast(str, doc["file_path"]).startswith("screenshots/"), doc["file_path"]
-    stored = FileMapperService.get_documents_path(cast(str, doc["file_path"]))
-    assert stored.is_file(), f"file missing on disk: {stored}"
-    assert FileMapperService.validate_document_path(str(stored))
+    saved_path, text = FileParserService().ingest(
+        _invoice_png_path(), name="screenshot-example.com.png", subdir="screenshots",
+    )
 
-    # The delegate reads its own screenshot via the REAL dispatch chokepoint.
+    assert "INVOICE" in text, text
+    expected_path = documents_dir / "screenshots" / "screenshot-example.com.png"
+    assert saved_path == str(expected_path), saved_path
+    assert Path(saved_path).is_file(), f"file missing on disk: {saved_path}"
+    assert FileMapperService.validate_document_path(saved_path)
+
+    # The index upsert: FileIndexService().search finds the image by its OCR'd
+    # description content, not just its filename.
+    assert saved_path in FileIndexService().search("INVOICE")
+
+    # The delegate reads its own screenshot via the REAL dispatch chokepoint,
+    # by absolute filepath — the new vision contract.
     mp = object.__new__(MessageProcessor)
     MessageProcessor.__init__(
         mp, WebBrowseConfig(PolicyChannel.CHAT), raw_input="look at the screenshot",
     )
     mp._setup()
     out = mp.dispatch_service.dispatch(
-        "vision", {"image": ingested["id"], "query": "what text is in this image"}
+        "vision", {"image": saved_path, "query": "what text is in this image"}
     )
     assert "INVOICE" in str(out), out

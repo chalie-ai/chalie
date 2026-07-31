@@ -4,11 +4,14 @@ MCP Manager Ability — manage outbound MCP client server connections.
 Actions: list | add | enable | disable
 
 Policy tier:
-  SYSTEM = True   — always-allowed, never shown in Policy Manager.
-  DISCOVERABLE    — the ability leaves ``Ability.DISCOVERABLE`` at its True
-                    default, so it is in the global find_tools roster and any
-                    discovery-capable channel can surface it when the user asks
-                    to connect/manage remote MCP servers.
+  SYSTEM = True        — always-allowed, never shown in Policy Manager.
+  DISCOVERABLE = False — pinned directly on every discovery-capable channel via
+                         ``DEFAULT_ALWAYS_AVAILABLE``, so it is always already in
+                         context. ``find_tools`` is itself pinned only through
+                         that same roster, which means discovery could never
+                         reach a channel this tool is absent from — leaving it
+                         discoverable would only ever offer the model a tool it
+                         can already call.
 
 When `add` runs, it creates the server row AND immediately calls
 ping_and_sync() so remote tools are indexed before the LLM's next turn.
@@ -41,11 +44,19 @@ import logging
 from typing import TYPE_CHECKING, ClassVar, cast
 
 from abilities._ability import Ability
+from abilities._result import ToolResult
+from configs.enums.param_key import Keys
 
 if TYPE_CHECKING:
     from services.mcp_client_service import McpClientService as _McpClientService
-from configs.enums.param_key import Keys
-from abilities._result import ToolResult
+from contracts.params.mcp_manager_params_bag import (
+    McpManagerAddParams,
+    McpManagerDisableParams,
+    McpManagerEnableParams,
+    McpManagerListParams,
+    McpManagerParamsBag,
+)
+from contracts.params.param_bag import ParamBag
 
 logger = logging.getLogger(__name__)
 
@@ -65,16 +76,65 @@ def _classify_sync_error(error: str) -> str:
     return "mcp-unreachable"
 
 
-class McpManagerAbility(Ability):
+class McpManagerAbility(Ability[McpManagerParamsBag]):
+    # The typed input contract: the dispatch seam builds the bag via
+    # McpManagerParamsBag.from_params before run() is called.
+    PARAMS: ClassVar[type[ParamBag] | None] = McpManagerParamsBag
 
-    def get_name(self) -> str:
-        return "mcp_manager"
+    NAME: ClassVar[str] = "mcp_manager"
+
+    # Pinned, never discovered — see the Policy tier note in the module docstring.
+    # Neither CATEGORY nor SEARCHABLE_AS follows from that, and both are dropped:
+    # a category is the heading a tool renders under in the find_tools menu, and
+    # SEARCHABLE_AS feeds AbilityRegistry.discovery_aliases(), which only walks
+    # the discoverable roster. This tool is in neither, so both would be dead.
+    DISCOVERABLE: ClassVar[bool] = False
+
+    # The static half of the description. This is the ONLY text rendered
+    # off-spine (``self.mp is None`` — introspection / search-index build), so the
+    # indexed summary stays byte-stable regardless of what this box has connected.
+    _BASE_SUMMARY: ClassVar[str] = (
+        "Connect Chalie to a remote MCP server so its tools become available. "
+        "Use to add, list, enable, or disable outbound MCP server connections."
+    )
+
+    # Stated explicitly rather than by omission: an empty inventory is the answer
+    # to "what am I connected to?", so the model never spends a `list` call to
+    # learn there is nothing there.
+    _NONE_CONNECTED: ClassVar[str] = "No MCP servers are connected."
 
     def get_summary(self) -> str:
-        return (
-            "Connect Chalie to a remote MCP server so its tools become available. "
-            "Use to add, list, enable, or disable outbound MCP server connections."
-        )
+        inventory = self._inventory_line()
+        return f"{self._BASE_SUMMARY}\n{inventory}" if inventory else self._BASE_SUMMARY
+
+    def _inventory_line(self) -> str:
+        """Server NAMES only — the inventory answers "what am I connected to?";
+        ``mcp_tools`` answers "what can each one do?" per server. Listing tools
+        here would put the entire remote surface into every single request.
+
+        Disabled servers are excluded: ``disable`` hides a server's tools from
+        discovery, so the row is registered but not connected. Order is
+        ``list_servers``' ``created_at`` order, so this line and the ``list``
+        action can never disagree about the inventory.
+        """
+        if self.mp is None:
+            return ""  # off-spine: deterministic base text only (see Ability docstring)
+
+        from services.mcp_client_service import McpClientService  # noqa: PLC0415
+
+        try:
+            names = [str(s["name"]) for s in McpClientService().list_servers() if s["enabled"]]
+        except Exception as exc:
+            # This getter runs inside the descriptor assembler on EVERY step, so a
+            # DB hiccup must degrade to the static text rather than fail the turn
+            # (same containment as FindToolsAbility._summary_for). Returning ""
+            # rather than _NONE_CONNECTED: unknown is not the same as none.
+            logger.warning("%s inventory lookup failed: %s: %s", _LOG_PREFIX, type(exc).__name__, exc)
+            return ""
+
+        if not names:
+            return self._NONE_CONNECTED
+        return f"Connected MCP Servers: {', '.join(names)}"
 
     def get_examples(self) -> list[str]:
         return [
@@ -92,14 +152,16 @@ class McpManagerAbility(Ability):
         return "connect to a remote MCP server"
 
     def get_follow_up(self, tr: ToolResult) -> str:
-        """Steer a just-connected server's remote tools into context via find_tools."""
+        """Steer a just-connected server's remote tools into context via mcp_tools."""
+        from abilities.mcp_tools import McpToolsAbility  # noqa: PLC0415
+
         body = tr.body if isinstance(tr.body, dict) else {}
         if body.get("status") != "online":
             return ""
         name = body.get("name")
         return (
-            f"`{name}` is now available. Call `find_tools` with `{name}` and the "
-            "action you want to perform to get its tools in context."
+            f"`{name}` is now available. Call `{McpToolsAbility.NAME}` with action `list` to "
+            "see its tools, then `activate` the ones you need."
         )
 
     _PARAMETERS: ClassVar[dict[str, object]] = {
@@ -164,8 +226,9 @@ class McpManagerAbility(Ability):
     # ALL four actions are keyed — a non-empty map must cover every action or a
     # known action falls through the unknown-action branch (all actions must be mapped).
     # The pre-gate is truthiness-based, which is correct for add: name/host are blank-
-    # invalid strings.  run() still guards whitespace-only residue ("  " is truthy)
-    # under the same missing-params code.
+    # invalid strings.  The bag's require_str strips and rejects whitespace-only
+    # residue ("  " is truthy here but blank after the strip) under the same
+    # missing-params code.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
         "list": (),
         "add": (Keys.name_, Keys.host),
@@ -173,47 +236,44 @@ class McpManagerAbility(Ability):
         "disable": (),
     }
 
-    def run(self, params: dict[str, object]) -> ToolResult:
-        action = (cast("str", params.get(Keys.action) or "")).strip()
-        dispatch = {
-            "list": self._do_list,
-            "add": self._do_add,
-            "enable": self._do_enable,
-            "disable": self._do_disable,
-        }
-        handler = dispatch.get(action)
-        if handler is None:
-            # The dispatcher pre-gate normally catches an unknown action; this is
-            # the defence-in-depth path (e.g. run() invoked outside dispatch).
-            return ToolResult.err(
-                f"Unknown action {action!r}.",
-                code="unknown-action",
-                valid=("list", "add", "enable", "disable"),
-            )
-        return handler(params)
+    def run(self, params: McpManagerParamsBag) -> ToolResult:
+        # The router factory only ever yields the four leaves; the isinstance
+        # chain is the narrowing that hands each handler its exact leaf type.
+        # The trailing branch catches only a hand-built foreign subclass (or
+        # the bare router) — loudly.
+        if isinstance(params, McpManagerListParams):
+            return self._do_list(params)
+        if isinstance(params, McpManagerAddParams):
+            return self._do_add(params)
+        if isinstance(params, McpManagerEnableParams):
+            return self._do_enable(params)
+        if isinstance(params, McpManagerDisableParams):
+            return self._do_disable(params)
+        return ToolResult.err(
+            f"Unknown mcp_manager params bag: {type(params).__name__}.",
+            code="unknown-action",
+            valid=("list", "add", "enable", "disable"),
+        )
 
     # ── Sub-action handlers ───────────────────────────────────────────────────
 
-    def _do_list(self, params: dict[str, object]) -> ToolResult:
-        """Empty inventory is SUCCESS (``[]``, ``count=0``) — never an error."""
+    def _do_list(self, params: McpManagerListParams) -> ToolResult:
+        """Empty inventory is a loud ``code=no-results`` — never a quiet success
+        with zero rows."""
         from services.mcp_client_service import McpClientService  # noqa: PLC0415
         svc = McpClientService()
         rows = [self._server_row(svc, s) for s in svc.list_servers()]
+        if not rows:
+            return ToolResult.no_results()
         return ToolResult.ok(rows, count=len(rows))
 
-    def _do_add(self, params: dict[str, object]) -> ToolResult:
+    def _do_add(self, params: McpManagerAddParams) -> ToolResult:
         """The row is registered BEFORE the connect test — an unreachable host still
         persists the connection, but a failed ping is surfaced as an ERROR."""
         from services.mcp_client_service import McpClientService  # noqa: PLC0415
-        name = (cast("str", params.get(Keys.name_) or "")).strip()
-        host = (cast("str", params.get(Keys.host) or "")).strip()
-        if not name or not host:
-            return ToolResult.err(
-                "Both 'name' and 'host' are required to add a server.",
-                code="missing-params",
-                valid=("name", "host"),
-            )
-        headers = cast("dict[str, str]", params.get(Keys.headers) or {})
+        name = params.name
+        host = params.host
+        headers = params.headers
 
         svc = McpClientService()
         server = svc.add_server(name=name, host=host, headers=headers, enabled=True)
@@ -222,10 +282,6 @@ class McpManagerAbility(Ability):
         # Trigger an immediate sync so tools are discoverable in this turn.
         sync = svc.ping_and_sync(server_id)
         if sync["reachable"]:
-            # Build vector embeddings for the newly-synced tools so semantic
-            # queries can reach them immediately.  Add-only — never called on
-            # heartbeat or enable so the 15-min sync path stays zero-cost.
-            svc.embed_server_tools(server_id)
             logger.info(
                 "%s Added server %r — online, %d tools",
                 _LOG_PREFIX, name, sync["tool_count"],
@@ -248,13 +304,13 @@ class McpManagerAbility(Ability):
         )
         return self._unreachable_error(code, name)
 
-    def _do_enable(self, params: dict[str, object]) -> ToolResult:
+    def _do_enable(self, params: McpManagerEnableParams) -> ToolResult:
         """Enabling a dead server is reported as an error (mcp-unreachable /
         auth-failed): the row IS enabled, but the model must know the tools are
         not yet available so it never assumes a live connection."""
         from services.mcp_client_service import McpClientService  # noqa: PLC0415
         svc = McpClientService()
-        resolved = self._resolve(svc, params)
+        resolved = self._resolve(svc, params.server_id, params.name)
         if isinstance(resolved, ToolResult):
             return resolved
         server_id, name = resolved
@@ -276,10 +332,10 @@ class McpManagerAbility(Ability):
                     _LOG_PREFIX, name, code, sync.get("error"))
         return self._unreachable_error(code, name, enabled=True)
 
-    def _do_disable(self, params: dict[str, object]) -> ToolResult:
+    def _do_disable(self, params: McpManagerDisableParams) -> ToolResult:
         from services.mcp_client_service import McpClientService  # noqa: PLC0415
         svc = McpClientService()
-        resolved = self._resolve(svc, params)
+        resolved = self._resolve(svc, params.server_id, params.name)
         if isinstance(resolved, ToolResult):
             return resolved
         server_id, name = resolved
@@ -303,12 +359,11 @@ class McpManagerAbility(Ability):
         }
 
     @staticmethod
-    def _resolve(svc: "_McpClientService", params: dict[str, object]) -> "tuple[str, str] | ToolResult":
+    def _resolve(svc: "_McpClientService", server_id: str, name: str) -> "tuple[str, str] | ToolResult":
         """Returns an error ToolResult when no target was given
         (``missing-params``) or the target does not exist (``not-found``), so the
-        caller only proceeds on a real server."""
-        server_id = (cast("str", params.get(Keys.server_id) or "")).strip()
-        name = (cast("str", params.get(Keys.name_) or "")).strip()
+        caller only proceeds on a real server. ``server_id`` and ``name`` are
+        already stripped by the bag; empty strings mean "not provided"."""
         if not server_id and not name:
             return ToolResult.err(
                 "Provide a server to act on.",

@@ -1,5 +1,6 @@
 import importlib
 import logging
+import re
 import threading
 from typing import TYPE_CHECKING, cast
 
@@ -17,8 +18,8 @@ _registry: dict[str, Ability] | None = None
 
 
 def _load() -> dict[str, Ability]:
-    """Concrete Ability subclasses self-register via __init_subclass__; we collect
-    them after the walk by inspecting all subclasses of Ability.
+    """Importing every ability module makes its class object exist; we collect the
+    concrete ones afterwards by walking ``Ability.__subclasses__()``.
     """
     abilities_dir = FileMapperService.get_abilities_path()
     for path in sorted(abilities_dir.glob("*.py")):
@@ -26,11 +27,31 @@ def _load() -> dict[str, Ability]:
             continue
         module_name = f"abilities.{path.stem}"
         importlib.import_module(module_name)
-
     result: dict[str, Ability] = {}
     for subclass in _all_concrete_subclasses(Ability):
         instance = subclass()
-        result[instance.get_name()] = instance
+        name = getattr(instance, "NAME", None)
+        if not isinstance(name, str) or not name:
+            raise ValueError(
+                f"Ability {subclass.__name__} has no valid NAME; "
+                "must be a non-empty string"
+            )
+        if name in result:
+            raise ValueError(
+                f"Duplicate ability NAME '{name}' in {subclass.__name__} "
+                f"and {result[name].__class__.__name__}"
+            )
+        # A discoverable tool with no CATEGORY has no heading to render under in
+        # the find_tools menu, so it would be listed nowhere while still being
+        # activatable by name — invisible in the one surface that advertises it.
+        # Fail at load rather than ship a tool the model cannot find.
+        if instance.DISCOVERABLE and instance.CATEGORY is None:
+            raise ValueError(
+                f"Ability '{name}' ({subclass.__name__}) is DISCOVERABLE but "
+                "declares no CATEGORY; every discoverable ability must set one "
+                "so it renders under a heading in the find_tools menu"
+            )
+        result[name] = instance
     return result
 
 
@@ -87,13 +108,39 @@ class AbilityRegistry:
         """The global set of ability names ``find_tools`` may surface.
 
         This is the single source of truth for discovery scope: every ability
-        whose ``DISCOVERABLE`` flag is True. ``find_tools`` searches over exactly
-        this set for both the ``query`` (semantic) and ``select`` (by-name)
-        paths; the abilities.sqlite index is built from the same predicate, so
-        the two never drift. MCP proxies (``_mcp_*``) are not in the registry and
-        are handled by find_tools' MCP path separately.
+        whose ``DISCOVERABLE`` flag is True. ``find_tools`` lists exactly this
+        set in its menu and resolves names against it via ``discovery_aliases``.
+        MCP proxies (``_mcp_*``) are not in the registry — they are surfaced by
+        ``mcp_tools``.
         """
         return {name for name, a in _get_registry().items() if a.DISCOVERABLE}
+
+    @classmethod
+    def discovery_aliases(cls) -> dict[str, str]:
+        """Map every normalized alias → canonical name for discoverable abilities.
+
+        For each DISCOVERABLE ability the canonical normalized name AND each
+        SEARCHABLE_AS entry is mapped to the canonical name. If two abilities
+        claim the same alias, a RuntimeError is raised naming both abilities
+        and the alias so misconfiguration fails loud at build time.
+        """
+        out: dict[str, str] = {}
+        for ability in _get_registry().values():
+            if not ability.DISCOVERABLE:
+                continue
+            for alias in (ability.NAME, *ability.SEARCHABLE_AS):
+                norm = re.sub(r"[^a-z0-9]+", " ", alias.lower()).strip()
+                if not norm:
+                    continue
+                existing = out.get(norm)
+                if existing is not None and existing != ability.NAME:
+                    raise RuntimeError(
+                        f"Ability alias collision: abilities '{existing}' and "
+                        f"'{ability.NAME}' both normalize to alias "
+                        f"'{norm}'"
+                    )
+                out[norm] = ability.NAME
+        return out
 
     @staticmethod
     def build_tools(mp: "MessageProcessor | None") -> list[dict[str, object]]:

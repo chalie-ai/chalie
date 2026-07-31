@@ -7,8 +7,8 @@ version: 1
 
 1. Ask the user for the technology category, specific use case, and evaluation criteria — cost, scalability, ecosystem maturity, learning curve, licensing, community support.
 2. Use the `search` tool to identify the leading options in the category and any recent shifts in the landscape.
-3. Use the `subagent(type=web_surfer)` tool to research each option in depth — official documentation quality, GitHub activity, Stack Overflow presence, and known limitations. Fire one subagent per technology with `wait=false`.
-4. Use the `subagent(type=summariser)` tool to compress each technology's research into a comparable profile: maturity, adoption, strengths, risks.
+3. Use the `web_browse` tool to research each option in depth — official documentation quality, GitHub activity, Stack Overflow presence, and known limitations. Fire one `web_browse` per technology with `async: true`.
+4. Compress each technology's research into a comparable profile inline in the reply: maturity, adoption, strengths, risks.
 5. Build a decision matrix scoring each option against the user's stated criteria on a 1-5 scale with justification per cell.
-6. Use the `document` tool to save the evaluation as a persistent document titled with the category and date.
+6. Use the `write_file` tool to save the evaluation as a persistent document titled with the category and date.
 7. Present the recommendation with a clear winner, runner-up, and trade-off analysis. Flag any criteria where the winner is weak and the runner-up is strong.

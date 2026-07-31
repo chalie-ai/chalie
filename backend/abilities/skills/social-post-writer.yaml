@@ -6,10 +6,10 @@ version: 1
 ---
 
 1. Use `memory` to recall any existing brand guidelines, past post styles, or audience preferences before gathering requirements.
-2. Ask which platform(s) the post is for, what it should announce or promote, who the target audience is, and what tone to use — then log requirements in `document`.
+2. Ask which platform(s) the post is for, what it should announce or promote, who the target audience is, and what tone to use — then log requirements via `write_file`.
 3. Use `search` to find 2–3 recent high-performing posts on the same topic or from similar accounts to calibrate format and hooks.
-4. Use `document` to draft 3 variations of the post for the primary platform — each with a different hook style (question, bold claim, story opener) and a clear call to action.
-5. For Twitter/X, update `document` to ensure each draft fits character limits and include a thread continuation if the message needs more space.
-6. For LinkedIn, use `document` to structure the best draft with a hook line, body with line breaks, and a closing question or CTA to drive comments.
-7. Present all drafts from `document` with a brief note on which hook approach each uses, then ask the user to pick one or combine elements.
-8. Save the finalized post and any platform-specific variants to `document` for future reference or scheduling.
+4. Use `write_file` to draft 3 variations of the post for the primary platform — each with a different hook style (question, bold claim, story opener) and a clear call to action.
+5. For Twitter/X, use `write_file` to update each draft to fit character limits and include a thread continuation if the message needs more space.
+6. For LinkedIn, use `write_file` to structure the best draft with a hook line, body with line breaks, and a closing question or CTA to drive comments.
+7. Present all drafts with a brief note on which hook approach each uses, then ask the user to pick one or combine elements.
+8. Save the finalized post and any platform-specific variants via `write_file` for future reference or scheduling.

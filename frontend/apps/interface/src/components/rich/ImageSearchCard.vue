@@ -255,7 +255,7 @@ onBeforeUnmount(() => {
             <img
               v-if="!failed.has(idx)"
               :src="img.thumbSrc"
-              :alt="img.title || 'Image'"
+              :alt="img.title || payload.query"
               class="image-card__img"
               loading="lazy"
               draggable="false"
@@ -467,7 +467,7 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
+  font-family: var(--font-mono);
   font-size: 0.66rem;
   letter-spacing: 0.06em;
 }

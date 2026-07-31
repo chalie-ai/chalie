@@ -38,6 +38,17 @@ function makeDaymark(key: string, label: string): HTMLElement {
  * Hosts with no `data-day` stamp join the group above them (no divider forced).
  */
 export function syncDaymarks(container: HTMLElement): void {
+  // The one date this module still computes locally, and deliberately the only
+  // one: `data-day` is the backend's (it alone resolves the user's configured
+  // timezone), while "which day is today" is asked of the browser here.
+  // Normally identical — the heartbeat reports this same browser's
+  // `Intl...timeZone` (composables/useHeartbeat.ts) and the backend formats
+  // `day` through it. They can disagree only while the two are out of step:
+  // before the first heartbeat lands, across a device timezone change, or on a
+  // telemetry row left by another device. Accepted and bounded: the dividers
+  // stay correct either way — only the `Today ·` label degrades to that day's
+  // weekday, and the next heartbeat restores it. Closing it entirely would
+  // mean the backend sending "today" as well.
   const todayKey = localDayKey(new Date());
 
   for (const mark of Array.from(container.querySelectorAll(`.${DAYMARK_CLASS}`))) {

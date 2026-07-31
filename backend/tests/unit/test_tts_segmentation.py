@@ -1,10 +1,10 @@
 import pytest
 
-from api.voice import _segment_for_tts, _MAX_TTS_CHUNK_CHARS
+from services.voice_transcript_service import VoiceTranscriptService
 
 # ── helpers ────────────────────────────────────────────────────────────────────
 
-_LIMIT = _MAX_TTS_CHUNK_CHARS
+_LIMIT = VoiceTranscriptService.MAX_TTS_CHUNK_CHARS
 
 
 def _word(length: int, char: str = "a") -> str:
@@ -28,26 +28,26 @@ class TestSegmentForTts:
     # ── trivial / edge inputs ──────────────────────────────────────────────
 
     def test_empty_string_returns_empty_list(self) -> None:
-        assert _segment_for_tts("") == []
+        assert VoiceTranscriptService.segment_for_tts("") == []
 
     def test_whitespace_only_returns_original_via_fallback(self) -> None:
         # Pure whitespace: all sentences strip to "" and are skipped, so chunks
         # stays empty.  The final guard "return chunks if chunks else [text]"
         # returns [text] to honour the "always non-empty list" contract.
         text = "   \t\n  "
-        result = _segment_for_tts(text)
+        result = VoiceTranscriptService.segment_for_tts(text)
         assert result == [text]
 
     def test_short_text_returns_single_element_list(self) -> None:
         text = "Hello, world."
-        result = _segment_for_tts(text)
+        result = VoiceTranscriptService.segment_for_tts(text)
         assert result == [text]
 
     def test_text_exactly_at_limit_stays_as_one_chunk(self) -> None:
-        # A single sentence whose length is exactly _MAX_TTS_CHUNK_CHARS must
+        # A single sentence whose length is exactly VoiceTranscriptService.MAX_TTS_CHUNK_CHARS must
         # not be split — the boundary is inclusive.
         text = _word(_LIMIT)   # one "word" (no spaces) of exactly the limit
-        result = _segment_for_tts(text)
+        result = VoiceTranscriptService.segment_for_tts(text)
         assert len(result) == 1
         assert result[0] == text
 
@@ -56,7 +56,7 @@ class TestSegmentForTts:
     def test_multiple_short_sentences_fit_in_one_chunk(self) -> None:
         # Three short sentences whose combined length is well under the limit.
         text = "Hello. How are you? I am fine."
-        result = _segment_for_tts(text)
+        result = VoiceTranscriptService.segment_for_tts(text)
         assert len(result) == 1
         # The whole text (stripped) comes back as one chunk.
         assert result[0] == text
@@ -71,7 +71,7 @@ class TestSegmentForTts:
         # s3 is long enough that "s1 s2 s3" would overflow but "s3" alone fits.
         s3 = _word(50) + "."
         text = f"{s1} {s2} {s3}"
-        result = _segment_for_tts(text)
+        result = VoiceTranscriptService.segment_for_tts(text)
         assert len(result) == 2
         # First chunk contains the two sentences that fit together.
         assert s1 in result[0]
@@ -83,7 +83,7 @@ class TestSegmentForTts:
         s1 = _word(200) + "."
         s2 = _word(200) + "."   # s1 + " " + s2 = 401 > 320
         text = f"{s1} {s2}"
-        result = _segment_for_tts(text)
+        result = VoiceTranscriptService.segment_for_tts(text)
         assert len(result) == 2
         assert result[0] == s1
         assert result[1] == s2
@@ -96,7 +96,7 @@ class TestSegmentForTts:
         long_s1 = _word(280) + "."   # just under limit on its own
         long_s2 = _word(280) + "."
         text = f"{long_s1} {long_s2}"
-        result = _segment_for_tts(text)
+        result = VoiceTranscriptService.segment_for_tts(text)
         assert all(r.endswith(".") for r in result), (
             f"Sentence terminator was lost: {result}"
         )
@@ -108,7 +108,7 @@ class TestSegmentForTts:
         part_a = _word(200)
         part_b = _word(200)
         sentence = f"{part_a}, {part_b}."
-        result = _segment_for_tts(sentence)
+        result = VoiceTranscriptService.segment_for_tts(sentence)
         assert len(result) >= 2
         # Reassembling should recover both word-blocks.
         joined = " ".join(result)
@@ -122,7 +122,7 @@ class TestSegmentForTts:
         # punctuation at all — must fall through to word-level splitting.
         words = [_word(30) for _ in range(20)]   # 20 × 30 chars = 600 chars
         text = " ".join(words)
-        result = _segment_for_tts(text)
+        result = VoiceTranscriptService.segment_for_tts(text)
         assert len(result) >= 2
         # Every chunk must be ≤ the limit.
         for chunk in result:

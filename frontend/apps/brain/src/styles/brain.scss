@@ -58,8 +58,8 @@ body::before {
   inset: 0;
   pointer-events: none;
   z-index: 1;
-  opacity: var(--grain-opacity, 0.04);
-  mix-blend-mode: var(--grain-blend, overlay);
+  opacity: var(--grain-opacity);
+  mix-blend-mode: var(--grain-blend);
   // stylelint-disable-next-line
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)' opacity='0.5'/></svg>");
 }
@@ -141,13 +141,25 @@ body::before {
   gap: 8px;
   width: 100%;
   padding: 6px 12px;
+  margin: 0;
   background: var(--bg-input);
   border: 1px solid var(--border);
   border-radius: 20px;
   color: var(--text-secondary);
+  font: inherit;
   font-size: 13px;
+  text-align: inherit;
+  appearance: none;
+  -webkit-appearance: none;
   cursor: pointer;
   transition: border-color 150ms var(--ease-out), box-shadow 150ms;
+
+  // Native <button> is now the element — kill Firefox's inner focus box and
+  // any UA button chrome so the div-era look is byte-for-byte unchanged.
+  &::-moz-focus-inner {
+    border: 0;
+    padding: 0;
+  }
 
   &:hover {
     border-color: rgba(138, 92, 255, 0.3);
@@ -900,8 +912,8 @@ input[type='checkbox'] {
 
 .chart-wrap { margin: 12px 0; overflow-x: auto; }
 .usage-chart { width: 100%; height: auto; }
-.bar-local { fill: var(--violet); opacity: 0.7; }
-.bar-cloud { fill: var(--magenta); opacity: 0.5; }
+.bar-input { fill: var(--violet); opacity: 0.7; }
+.bar-output { fill: var(--magenta); opacity: 0.5; }
 .bar-label { fill: var(--text-tertiary); font-size: 10px; text-anchor: middle; }
 
 .chart-legend {
@@ -912,27 +924,18 @@ input[type='checkbox'] {
   margin-top: 8px;
 }
 
-.legend-local::before {
+.chart-legend span::before {
   content: '';
   display: inline-block;
   width: 10px;
   height: 10px;
   border-radius: 2px;
-  background: var(--violet);
   margin-right: 4px;
   vertical-align: middle;
 }
 
-.legend-cloud::before {
-  content: '';
-  display: inline-block;
-  width: 10px;
-  height: 10px;
-  border-radius: 2px;
-  background: var(--magenta);
-  margin-right: 4px;
-  vertical-align: middle;
-}
+.legend-input::before { background: var(--violet); }
+.legend-output::before { background: var(--magenta); }
 
 .usage-table {
   width: 100%;
@@ -955,7 +958,7 @@ input[type='checkbox'] {
 
   td {
     padding: 6px 12px;
-    border-bottom: 1px solid var(--border-subtle, var(--border));
+    border-bottom: 1px solid var(--border-subtle);
     color: var(--text-primary);
 
     &.num { text-align: right; font-variant-numeric: tabular-nums; }
@@ -1205,6 +1208,18 @@ input[type='checkbox'] {
 .form-group { margin-bottom: 14px; }
 
 .form-group label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+// Same visual treatment as `.form-group label`, for group captions that don't
+// describe a single control (e.g. a fieldset-like group of buttons/inputs) —
+// a bare <label> there isn't associated with any one control, so this text is
+// a plain element instead, paired with role="group"/aria-labelledby.
+.form-group-label {
   display: block;
   font-size: 12px;
   font-weight: 600;
@@ -1727,27 +1742,6 @@ input[type='checkbox'] {
 .error-time { font-size: 11px; color: var(--text-tertiary); white-space: nowrap; flex-shrink: 0; font-family: 'Inter', monospace; }
 .error-msg { font-size: 13px; color: var(--text-secondary); }
 
-.watched-folders-section { margin-bottom: 20px; }
-.watched-folders-list { display: flex; flex-direction: column; gap: 4px; }
-
-.watched-folder-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 12px;
-  border-radius: 8px;
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-
-.wf-icon { color: var(--text-tertiary); flex-shrink: 0; }
-.wf-label { font-weight: 500; color: var(--text-primary); }
-.wf-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.wf-meta { color: var(--text-tertiary); white-space: nowrap; }
-.wf-status { flex-shrink: 0; }
-
 .doc-content {
   white-space: pre-wrap;
   font-size: 13px;
@@ -1758,34 +1752,6 @@ input[type='checkbox'] {
   background: var(--bg-surface);
   border: 1px solid var(--border);
 }
-
-.doc-meta-row { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
-.doc-meta-item { font-size: 12px; color: var(--text-secondary); }
-
-.group-cards-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
-
-.group-card {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 16px;
-  border-radius: 10px;
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  cursor: pointer;
-  transition: border-color 200ms, box-shadow 200ms;
-  text-align: left;
-  font-family: inherit;
-  color: var(--text-primary);
-
-  &:hover {
-    border-color: rgba(138, 92, 255, 0.3);
-    box-shadow: 0 0 12px rgba(138, 92, 255, 0.08);
-  }
-}
-
-.group-card-name { font-size: 14px; font-weight: 500; }
-.group-card-count { font-size: 12px; color: var(--text-secondary); }
 
 .loading { color: var(--text-secondary); font-size: 13px; padding: 40px 0; text-align: center; }
 
@@ -1881,7 +1847,6 @@ input[type='checkbox'] {
     .key-cell { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   }
 
-  .group-cards-grid { grid-template-columns: 1fr; }
   .caps-grid { grid-template-columns: 1fr !important; } // stylelint-disable-line declaration-no-important
   .policies-grid { grid-template-columns: 1fr !important; } // stylelint-disable-line declaration-no-important
   .policy-rule { flex-wrap: wrap; gap: 6px; }

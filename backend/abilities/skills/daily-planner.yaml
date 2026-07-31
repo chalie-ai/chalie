@@ -10,6 +10,6 @@ version: 1
 3. Use `list` to check active to-do items for anything due today, then ask the user if there is anything new to add or any tasks they must complete today.
 4. Use `calendar` to identify conflicts or tight windows and flag them.
 5. Use `list` to pull any active to-do items and sort them by: urgency (deadline today), importance (impact), and effort (quick wins first).
-6. Use `document` to build a time-blocked day plan: slot calendar events first, then assign tasks to remaining blocks — keep at least one buffer block for reactive work.
-7. Present the day plan from `document` with time blocks, assigned tasks, and the single top-priority item highlighted — ask the user to confirm or adjust.
+6. Use `write_file` to build a time-blocked day plan: slot calendar events first, then assign tasks to remaining blocks — keep at least one buffer block for reactive work.
+7. Present the day plan with time blocks, assigned tasks, and the single top-priority item highlighted — ask the user to confirm or adjust.
 8. Use `schedule` to create reminders for any time-sensitive tasks or deadlines, and use `timer` if the user wants a focus session started immediately.

@@ -85,7 +85,7 @@ class TurnExecutionService:
 
     def cancel(self) -> TurnExecution | None:
         """The single cancel-request chokepoint (§2.7): both DELETE
-        /api/thread/<turn_id> (an inert MP built for the target turn) and a
+        /api/threads/<turn_id> (an inert MP built for the target turn) and a
         turn's own self-cancelling ability route through here — and, per
         Dylan's ruling, the single AUTHORITY for the turn's terminal state.
         Every provider client is one blocking, non-streaming call with no

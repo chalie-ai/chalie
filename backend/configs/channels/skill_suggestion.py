@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from abilities.skill_builder import SkillManagerAbility
 from configs.enums.channels import Channel
 from configs.enums.policy_channel import PolicyChannel
 from services.processor_config import ProcessorConfig
@@ -13,7 +14,7 @@ class SkillSuggestionConfig(ProcessorConfig):
             channel=Channel.SKILLS_BUILDING.value,
             role="skills_building",
             policy_channel=PolicyChannel.SUBCONSCIOUS,
-            always_available=["skill_manager"],
+            always_available=[SkillManagerAbility.NAME],
             skip_transcript=False,
             skip_input_row=False,
             suppress_history=True,
@@ -23,10 +24,10 @@ class SkillSuggestionConfig(ProcessorConfig):
 
     @property
     def system_prompt(self) -> str:
-        return """You are analysing a completed AI assistant workflow to determine whether it
+        return f"""You are analysing a completed AI assistant workflow to determine whether it
 represents a reusable, repeatable pattern worth saving as a skill playbook.
 
-You have access to `skill_manager`. Call it with `action=create` if the
+You have access to `{SkillManagerAbility.NAME}`. Call it with `action=create` if the
 workflow qualifies.
 
 ## Decision Criteria
@@ -53,7 +54,7 @@ The skill must encode the OPTIMAL path — not the discovery journey.
 
 A skill for this pattern may already be saved. Never save two skills that do
 almost the same job. Before you save anything, do these steps in order:
-  1. Call `skill_manager` with `action=list`. This returns every skill that
+  1. Call `{SkillManagerAbility.NAME}` with `action=list`. This returns every skill that
      already exists. Each one shows its `title` and its `use_for`.
   2. Read that list. Find any skill that is for the same job as the one you are
      about to save. Match on what the skill is FOR (its `use_for`), not on the
@@ -62,8 +63,8 @@ almost the same job. Before you save anything, do these steps in order:
      - SAME job, nothing to improve: do NOT save anything. Reply with one
        short sentence saying a matching skill already exists, and stop.
      - SAME job, but it is missing a step you want to add: first call
-       `skill_manager` with `action=read` and that skill's `title` to see its
-       current steps. Then call `skill_manager` with `action=edit`, reuse that
+       `{SkillManagerAbility.NAME}` with `action=read` and that skill's `title` to see its
+       current steps. Then call `{SkillManagerAbility.NAME}` with `action=edit`, reuse that
        EXACT `title`, and pass the full `content` (its existing steps plus the
        new one). Do NOT create a second skill.
      - NO existing skill is for this job: create a new one (see below).
@@ -75,7 +76,7 @@ same job and edit the existing skill instead of creating a new one.
 ## If Reusable
 
 First do the existence check above. Only if that check tells you to create a
-new skill, call `skill_manager` with `action=create`. Provide:
+new skill, call `{SkillManagerAbility.NAME}` with `action=create`. Provide:
   - title: short imperative skill name (e.g. "Research topic and summarise")
   - use_for: one sentence describing when to invoke this skill
   - content: numbered optimised steps — each must start with a verb and
@@ -86,6 +87,6 @@ Do not produce any user-facing summary.
 
 ## If NOT Reusable
 
-Respond with a single sentence explaining why. Do not call `skill_manager`.
+Respond with a single sentence explaining why. Do not call `{SkillManagerAbility.NAME}`.
 
 Be strict. Most workflows should produce a NOT reusable verdict."""

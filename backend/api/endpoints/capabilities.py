@@ -13,8 +13,8 @@ echoed on any response.
 - GET /api/capabilities/all   → get_all (paginated listing)
 - GET /api/capabilities/<id>  → get
 
-No POST/DELETE surface — the base 405 default stands, matching
-:mod:`api.endpoints.voice_settings` (a partial Endpoint with no create/delete).
+No POST/DELETE surface — the base 405 default stands (a partial Endpoint
+with no create/delete).
 """
 
 from __future__ import annotations
@@ -100,9 +100,6 @@ class CapabilitiesEndpoint(Endpoint):
         "get_all": DocumentedResponse(CapabilitySummaryResponse, listing=True),
         "get": DocumentedResponse(CapabilityDetailResponse),
     }
-
-    def slug(self) -> str:
-        return "capabilities"
 
     def get_all(self, page: int = 1, limit: int = 20) -> ResponseReturnValue:
         """List every registered capability with manifest metadata and connection state."""

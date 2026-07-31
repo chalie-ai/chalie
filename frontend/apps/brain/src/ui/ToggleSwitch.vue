@@ -2,6 +2,7 @@
 const props = defineProps<{
   modelValue: boolean;
   label?: string;
+  id?: string;
 }>();
 
 const emit = defineEmits<{
@@ -12,6 +13,7 @@ const emit = defineEmits<{
 <template>
   <label class="switch">
     <input
+      :id="props.id"
       type="checkbox"
       :checked="props.modelValue"
       @change="emit('update:modelValue', ($event.target as HTMLInputElement).checked)"

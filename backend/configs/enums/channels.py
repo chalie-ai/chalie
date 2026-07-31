@@ -51,6 +51,7 @@ class Channel(str, Enum):
     DELEGATE_WEB_BROWSE  = "delegate:web_browse"
     DELEGATE_WEB_SEARCH  = "delegate:web_search"
     DELEGATE_VISION      = "delegate:vision"
+    DELEGATE_CODE_AGENT  = "delegate:code_agent"
 
     # ── External agents (dynamic: external-agent:{name}) ─────────────────────
     EXTERNAL_AGENT = "external-agent"

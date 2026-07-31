@@ -11,5 +11,5 @@ version: 1
 4. Design a weekly routine with specific exercises, sets, reps, rest periods, and progression plan. Alternate muscle groups to allow recovery.
 5. Use the `schedule` tool to set workout reminders on the chosen training days at the user's preferred time.
 6. Use the `list` tool to create an equipment checklist if home or gym equipment is needed.
-7. Use the `document` tool to save the routine as a persistent reference with progression milestones.
+7. Use the `write_file` tool to save the routine as a persistent reference with progression milestones.
 8. Present the plan to the user with warm-up and cool-down recommendations for each session.

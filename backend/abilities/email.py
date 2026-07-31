@@ -34,6 +34,7 @@ from typing import ClassVar, cast
 from abilities._capability import CapabilityAbility
 from configs.enums.param_key import Keys
 from abilities._result import ToolResult, truncate
+from contracts.params.capability_params_bag import CapabilityParamsBag
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[EMAIL ABILITY]"
@@ -42,7 +43,7 @@ LOG_PREFIX = "[EMAIL ABILITY]"
 # non-empty local part and a dotted domain. Not RFC-5322-complete (the SMTP
 # server is the real authority) — just enough to reject obvious garbage before a
 # send is attempted, with a hint the model can self-correct from.
-_RECIPIENT_RE = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
+_RECIPIENT_RE = r"^[^@\s]+@(?=[^@\s]+\.[^@\s])[^@\s]++$"
 
 # Outward-facing actions whose ``to`` recipient is validated for shape pre-send.
 _RECIPIENT_ACTIONS = ("send", "draft", "forward")
@@ -50,6 +51,7 @@ _RECIPIENT_ACTIONS = ("send", "draft", "forward")
 
 class EmailAbility(CapabilityAbility):
     DISCOVERABLE: ClassVar[bool] = False  # pim-delegate-exclusive; pinned on PimConfig only
+    NAME: ClassVar[str] = "email"
     CAPABILITY_KEY: ClassVar[str] = "mail"
     DEFAULT_ACTION: ClassVar[str] = "search"
     NOT_CONNECTED_HINT: ClassVar[str] = (
@@ -83,8 +85,6 @@ class EmailAbility(CapabilityAbility):
         "forward": (Keys.uid, Keys.to),
     }
 
-    def get_name(self) -> str:
-        return "email"
 
     def get_summary(self) -> str:
         return (
@@ -188,15 +188,15 @@ class EmailAbility(CapabilityAbility):
 
     # ── Entry point — guardrail BEFORE the base's connected gate ────────────────
 
-    def run(self, params: dict[str, object]) -> ToolResult:
-        action = str(params.get(Keys.action, self.DEFAULT_ACTION)).lower()
+    def run(self, params: CapabilityParamsBag) -> ToolResult:
+        action = self._resolve_action(params)
 
         if action in _RECIPIENT_ACTIONS:
-            err = _validate_recipient(params)
+            err = _validate_recipient(params.extra)
             if err is not None:
                 return err
 
-        result = super().run(params)
+        result = self._dispatch(action, dict(params.extra))
         if result.status != "success" or not isinstance(result.body, dict):
             # not-connected / unknown-action / handler-unavailable already carry a
             # canonical code from the base — surface them untouched.
@@ -233,6 +233,8 @@ def _shape_result(action: str, body: dict[str, object]) -> ToolResult:
             }
             for e in cast(list[dict[str, object]], body.get("emails", []))
         ]
+        if not rows:
+            return ToolResult.no_results(action=action)
         return ToolResult.ok({"emails": rows}, action=action, count=len(rows))
 
     if action == "read":

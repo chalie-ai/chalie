@@ -22,10 +22,19 @@ import logging
 from typing import ClassVar, cast
 
 from abilities._ability import Ability
-from configs.enums.param_key import Keys
 from abilities._result import ToolResult
+from configs.enums.param_key import Keys
+from contracts.params.param_bag import ParamBag
+from contracts.params.place_params_bag import (
+    PlaceDeleteParams,
+    PlaceGetParams,
+    PlaceListParams,
+    PlaceParamsBag,
+    PlaceSaveParams,
+)
 from models.place import PlaceRow
 from services.place_service import PlaceService
+from configs.enums.ability_category import AbilityCategory
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +56,7 @@ _HINT_NO_LOCATION = "ask the user to grant location permission, then retry save.
 _HINT_NOT_FOUND = "call place with action=list to see the names that exist."
 
 
-class PlaceAbility(Ability):
+class PlaceAbility(Ability[PlaceParamsBag]):
     # Pre-gated by the dispatcher BEFORE run(): save/get/delete each require a
     # 'name'; list requires nothing. An unknown action → one unknown-action error
     # whose valid= names these keys; a known action missing 'name' → one
@@ -59,8 +68,13 @@ class PlaceAbility(Ability):
         _ACTION_DELETE: (Keys.name_,),
     }
 
-    def get_name(self) -> str:
-        return "place"
+    # The typed input contract: the dispatch seam builds the bag via
+    # PlaceParamsBag.from_params before run() is called.
+    PARAMS: ClassVar[type[ParamBag] | None] = PlaceParamsBag
+
+    SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("location", "places", "nearby", "point of interest")
+    NAME: ClassVar[str] = "place"
+    CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.INFORMATION
 
     def get_summary(self) -> str:
         return (
@@ -110,27 +124,27 @@ class PlaceAbility(Ability):
     def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    def run(self, params: dict[str, object]) -> ToolResult:
-        action = cast(str, params.get(Keys.action) or "").lower()
-        name = cast(str, params.get(Keys.name_) or "").strip().lower()
+    def run(self, params: PlaceParamsBag) -> ToolResult:
+        # The router factory only ever yields the four leaves; a hand-built
+        # foreign subclass (or the bare router) is rejected loudly BEFORE the
+        # shared name validation reads a field it may not carry.
+        if not isinstance(
+            params,
+            (PlaceSaveParams, PlaceListParams, PlaceGetParams, PlaceDeleteParams),
+        ):
+            return ToolResult.err(
+                f"Unknown place params bag: {type(params).__name__}.",
+                code="unknown-action",
+                valid=_ACTIONS,
+            )
 
-        if action == _ACTION_SAVE:
-            return self._handle_save(name, self.telemetry)
-        if action == _ACTION_LIST:
+        if isinstance(params, PlaceSaveParams):
+            return self._handle_save(params.name, self.telemetry)
+        if isinstance(params, PlaceListParams):
             return self._handle_list()
-        if action == _ACTION_GET:
-            return self._handle_get(name)
-        if action == _ACTION_DELETE:
-            return self._handle_delete(name)
-
-        # ACTION_REQUIRED pre-gates unknown actions, so this is unreachable in
-        # practice; kept as a self-correcting belt-and-braces error.
-        return ToolResult.err(
-            f"Unknown place action: {action}",
-            code="unknown-action",
-            hint="choose one of the valid actions below.",
-            valid=_ACTIONS,
-        )
+        if isinstance(params, PlaceGetParams):
+            return self._handle_get(params.name)
+        return self._handle_delete(params.name)
 
     # ── Action handlers ───────────────────────────────────────────────────────
 
@@ -165,6 +179,8 @@ class PlaceAbility(Ability):
     def _handle_list(self) -> ToolResult:
         rows = [r.to_dict() for r in PlaceRow.live().get()]
         places = [_row_to_place(r) for r in rows if r]
+        if not places:
+            return ToolResult.no_results()
         return ToolResult.ok(places, count=len(places))
 
     def _handle_get(self, name: str) -> ToolResult:

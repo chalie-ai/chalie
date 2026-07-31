@@ -46,6 +46,7 @@ const formName = ref('');
 const formHost = ref('');
 const formKey = ref('');
 const formModel = ref('');
+const formContextWindow = ref<number | null>(null);
 
 const models = ref<string[]>([]);
 const modelsFetchInFlight = ref(false);
@@ -234,6 +235,7 @@ async function openWizard(id: number | null): Promise<void> {
     formHost.value = p.host || '';
     formKey.value = '';
     formModel.value = editModel.value;
+    formContextWindow.value = p.context_window;
     mode.value = 'form';
     if (canFetch.value) {
       void fetchModels();
@@ -244,6 +246,7 @@ async function openWizard(id: number | null): Promise<void> {
     formHost.value = '';
     formKey.value = '';
     formModel.value = '';
+    formContextWindow.value = null;
     mode.value = 'picker';
   }
 }
@@ -406,10 +409,14 @@ async function saveProvider(): Promise<void> {
     model: string;
     host?: string;
     api_key?: string;
+    context_window: number | null;
   } = {
     platform: preset.value.platform,
     name: formName.value.trim(),
     model: formModel.value,
+    // An emptied number input reads back as '' — normalise it to null, the
+    // "ask the client" state. The backend owns the upper clamp.
+    context_window: formContextWindow.value || null,
   };
   if (needsHost.value) body.host = formHost.value.trim();
   if (needsKey.value) {
@@ -471,7 +478,7 @@ async function saveProvider(): Promise<void> {
           :key="p.id"
           :class="['provider-card', { selected: p.id === selectedId }]"
         >
-          <label class="provider-radio">
+          <label class="provider-radio" :aria-label="p.name">
             <input
               type="radio"
               name="sel_prov"
@@ -532,13 +539,14 @@ async function saveProvider(): Promise<void> {
       <div class="form-group">
         <select
           v-if="visionCapable.length > 0"
+          aria-label="Vision"
           :value="visionSelectValue"
           @change="setVision(($event.target as HTMLSelectElement).value)"
         >
           <option v-if="mainSupportsVision" value="">Use main provider</option>
           <option v-for="p in visionCapable" :key="p.id" :value="p.id">{{ p.name }}</option>
         </select>
-        <select v-else disabled>
+        <select v-else aria-label="Vision" disabled>
           <option value="">Disabled — no vision-capable providers</option>
         </select>
       </div>
@@ -550,6 +558,7 @@ async function saveProvider(): Promise<void> {
       </p>
       <div class="form-group">
         <select
+          aria-label="Delegate"
           :value="delegateSelectValue"
           @change="setDelegate(($event.target as HTMLSelectElement).value)"
         >
@@ -627,6 +636,17 @@ async function saveProvider(): Promise<void> {
             <option v-for="m in models" :key="m" :value="m">{{ m }}</option>
           </select>
           <span :class="modelStatusClass">{{ modelStatus }}</span>
+        </div>
+
+        <div id="contextWindowGroup" class="form-group wizard-step" :hidden="!showModelGroup">
+          <label for="pContextWindow">Context window (tokens)</label>
+          <input
+            id="pContextWindow"
+            v-model.number="formContextWindow"
+            type="number"
+            min="1"
+            placeholder="Leave blank to detect automatically"
+          />
         </div>
 
         <div class="form-actions">

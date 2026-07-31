@@ -10,7 +10,9 @@ only re-exports so callers never depend on the internal file layout.
 
 from exceptions.chalie_exception import ChalieException
 from exceptions.exception import (
+    ConflictError,
     DownloadTooLarge,
+    EmptyCompletionLoop,
     EndpointError,
     FetchBlocked,
     ForbiddenError,
@@ -27,19 +29,20 @@ from exceptions.exception import (
     ProviderTimeoutError,
     RateLimitError,
     RateLimitException,
-    RequestOverCapError,
-    ResponseOverLimitError,
+    ContextLimit,
     RunAwayLoop,
     SnapshotError,
     SourceIsImage,
     SystemPathBlocked,
-    ToolParamError,
+    UnroutedPromptChannel,
     VaultLockedError,
 )
 
 __all__ = [
     "ChalieException",
+    "ConflictError",
     "DownloadTooLarge",
+    "EmptyCompletionLoop",
     "EndpointError",
     "FetchBlocked",
     "ForbiddenError",
@@ -56,12 +59,11 @@ __all__ = [
     "ProviderTimeoutError",
     "RateLimitError",
     "RateLimitException",
-    "RequestOverCapError",
-    "ResponseOverLimitError",
+    "ContextLimit",
     "RunAwayLoop",
     "SnapshotError",
     "SourceIsImage",
     "SystemPathBlocked",
-    "ToolParamError",
+    "UnroutedPromptChannel",
     "VaultLockedError",
 ]

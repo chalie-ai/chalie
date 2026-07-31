@@ -7,9 +7,9 @@ version: 1
 
 1. Use `read` to load the RFP document and extract every requirement, tagging each as MANDATORY, WEIGHTED, or NICE-TO-HAVE based on cue words (must/shall = MANDATORY; should/weighted = WEIGHTED; may/preferred = NICE-TO-HAVE).
 2. Use `memory` to recall the company's existing proof points, case studies, certifications, and prior RFP responses.
-3. Use `document` to build a proof-point matrix mapping each requirement to a STRONG, PARTIAL, or GAP verdict backed by a verifiable source — never invent claims.
+3. Use `write_file` to build a proof-point matrix mapping each requirement to a STRONG, PARTIAL, or GAP verdict backed by a verifiable source — never invent claims.
 4. Use `search` to find any missing proof points (e.g., certifications, benchmarks, customer logos) that could close PARTIAL or GAP items.
-5. Use `document` to identify 3 to 5 win themes that span multiple requirements and directly answer why this company over the incumbent — a theme appearing in fewer than 2 requirements is decorative and should be removed.
-6. Use `code_eval` to estimate win probability based on: fit percentage, relationship strength, decision-criteria alignment, late-entry penalty, and competitor count — produce a BID, PARTNER-BID, or NO-BID recommendation.
-7. Use `document` to produce a response strategy listing requirements, fit verdicts, win themes, GAP audit, and the bid recommendation with named factors.
-8. Use `document` to save the complete RFP response strategy and proof-point matrix.
+5. Use `write_file` to identify 3 to 5 win themes that span multiple requirements and directly answer why this company over the incumbent — a theme appearing in fewer than 2 requirements is decorative and should be removed.
+6. Use `code_agent` to estimate win probability based on: fit percentage, relationship strength, decision-criteria alignment, late-entry penalty, and competitor count — produce a BID, PARTNER-BID, or NO-BID recommendation.
+7. Use `write_file` to produce a response strategy listing requirements, fit verdicts, win themes, GAP audit, and the bid recommendation with named factors.
+8. Use `write_file` to save the complete RFP response strategy and proof-point matrix.

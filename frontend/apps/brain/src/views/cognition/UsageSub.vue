@@ -5,21 +5,30 @@ import { cognition } from '../../api/cognition';
 import { capitalize } from '../../utils/format';
 import { useAsyncResource } from '@chalie/shared';
 import EmptyState from '../../ui/EmptyState.vue';
-import { type UsageWindow, type BucketValue, type SlotRow, fmtTokens, buildTableSlots, tableHeaderFor } from './usageSlots';
+import { type UsageWindow, type UsageType, type BucketValue, type SlotRow, USAGE_TYPES, fmtTokens, buildTableSlots, tableHeaderFor } from './usageSlots';
 
 const usageWindow = ref<UsageWindow>('day');
+const usageType = ref<UsageType>('all');
 const {
   data,
   loading,
   error: loadFailed,
   reload,
-} = useAsyncResource<UsageResponse | null>(() => cognition.tokenUsage(usageWindow.value), {
-  initial: null,
-  guarded: true,
-});
+} = useAsyncResource<UsageResponse | null>(
+  () => cognition.tokenUsage(usageWindow.value, usageType.value === 'all' ? undefined : usageType.value),
+  {
+    initial: null,
+    guarded: true,
+  },
+);
 
 function selectWindow(w: UsageWindow): void {
   usageWindow.value = w;
+  reload();
+}
+
+function selectType(t: UsageType): void {
+  usageType.value = t;
   reload();
 }
 
@@ -132,16 +141,29 @@ const chartGeom = computed(() => {
   <template v-if="loading"><div class="loading">Loading…</div></template>
   <template v-else-if="loadFailed"><EmptyState message="Failed to load data." /></template>
   <template v-else>
-    <div id="usageWindowTabs" class="filter-tabs">
-      <button
-        v-for="w in ['hour', 'day', 'week', 'month', 'lifetime'] as const"
-        :key="w"
-        class="filter-tab"
-        :class="{ active: w === usageWindow }"
-        @click="selectWindow(w)"
-      >
-        {{ capitalize(w) }}
-      </button>
+    <div class="records-controls">
+      <div id="usageWindowTabs" class="filter-tabs">
+        <button
+          v-for="w in ['hour', 'day', 'week', 'month', 'lifetime'] as const"
+          :key="w"
+          class="filter-tab"
+          :class="{ active: w === usageWindow }"
+          @click="selectWindow(w)"
+        >
+          {{ capitalize(w) }}
+        </button>
+      </div>
+      <div id="usageTypeTabs" class="filter-tabs">
+        <button
+          v-for="t in USAGE_TYPES"
+          :key="t.value"
+          class="filter-tab"
+          :class="{ active: t.value === usageType }"
+          @click="selectType(t.value)"
+        >
+          {{ t.label }}
+        </button>
+      </div>
     </div>
 
     <div class="stat-grid">
@@ -165,14 +187,14 @@ const chartGeom = computed(() => {
               :y="bar.outputY"
               :width="bar.barW"
               :height="bar.outputH"
-              class="bar-cloud"
+              class="bar-output"
             />
             <rect
               :x="bar.x"
               :y="bar.inputY"
               :width="bar.barW"
               :height="bar.inputH"
-              class="bar-local"
+              class="bar-input"
             />
             <text
               v-if="bar.showLabel"
@@ -187,8 +209,8 @@ const chartGeom = computed(() => {
         </svg>
       </div>
       <div class="chart-legend">
-        <span class="legend-local">Chat</span>
-        <span class="legend-cloud">Subconscious</span>
+        <span class="legend-input">Input</span>
+        <span class="legend-output">Output</span>
       </div>
     </template>
 

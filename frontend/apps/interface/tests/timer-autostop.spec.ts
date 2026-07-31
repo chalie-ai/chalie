@@ -4,8 +4,8 @@ import { expect, test } from '@playwright/test';
 // change). Drives the REAL hot path end-to-end against a real Chalie instance,
 // exactly like turn.spec.ts: one entry point (send a message asking for a short
 // timer), the configured LLM calls the real `timer` tool, the real backend
-// grafts started_at from the tool_call row and broadcasts the rich-media turn,
-// and the real frontend renders it as a TimerCard. No mocks, no route
+// anchors the rich segment on the tool_call row's timestamp and broadcasts the
+// rich-media turn, and the real frontend renders it as a TimerCard. No mocks, no route
 // interception — every assertion is a downstream effect of the real boot +
 // turn + render + the component's own timers.
 //
@@ -34,8 +34,8 @@ test('an expired timer auto-silences its alarm ~30s later (card stays on Done)',
   await expect(page.locator('#loadingOverlay')).toBeHidden({ timeout: 15_000 });
 
   // One entry point: ask the real assistant to start a short timer. The LLM
-  // calls the real `timer` tool (title + duration_seconds); the backend grafts
-  // started_at and broadcasts the rich card on this user-facing turn.
+  // calls the real `timer` tool (title + duration_seconds); the backend anchors
+  // the segment and broadcasts the rich card on this user-facing turn.
   await page.locator('#chatInput').fill('Start a 30-second timer labelled Pasta.');
   await page.locator('button.btn-action--send').click();
 

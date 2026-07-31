@@ -6,7 +6,6 @@ import ProvidersView from './views/ProvidersView.vue';
 import CognitionView from './views/CognitionView.vue';
 import SchedulerView from './views/SchedulerView.vue';
 import ListsView from './views/ListsView.vue';
-import DocumentsView from './views/DocumentsView.vue';
 import CapabilitiesView from './views/CapabilitiesView.vue';
 import PoliciesView from './views/PoliciesView.vue';
 import SkillsView from './views/SkillsView.vue';
@@ -22,12 +21,6 @@ import PersonalitySub from './views/cognition/PersonalitySub.vue';
 import ErrorsSub from './views/cognition/ErrorsSub.vue';
 import UsageSub from './views/cognition/UsageSub.vue';
 import CompactionSub from './views/cognition/CompactionSub.vue';
-
-import DocumentsActiveSub from './views/documents/ActiveSub.vue';
-import DocumentsProcessingSub from './views/documents/ProcessingSub.vue';
-import DocumentsUploadsSub from './views/documents/UploadsSub.vue';
-import DocumentsDeletedSub from './views/documents/DeletedSub.vue';
-
 import PoliciesChatSub from './views/policies/ChatSub.vue';
 import PoliciesBackgroundSub from './views/policies/BackgroundSub.vue';
 import PoliciesExternalSub from './views/policies/ExternalSub.vue';
@@ -59,19 +52,6 @@ export const router = createRouter({
     { path: '/scheduler', name: 'scheduler', component: SchedulerView },
 
     { path: '/lists', name: 'lists', component: ListsView },
-
-    {
-      path: '/documents',
-      name: 'documents',
-      component: DocumentsView,
-      redirect: '/documents/active',
-      children: [
-        { path: 'active', name: 'documents-active', component: DocumentsActiveSub },
-        { path: 'processing', name: 'documents-processing', component: DocumentsProcessingSub },
-        { path: 'uploads', name: 'documents-uploads', component: DocumentsUploadsSub },
-        { path: 'deleted', name: 'documents-deleted', component: DocumentsDeletedSub },
-      ],
-    },
 
     { path: '/capabilities', name: 'capabilities', component: CapabilitiesView },
 

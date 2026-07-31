@@ -62,10 +62,11 @@ async function save() {
     </p>
     <div class="personality-grid">
       <div v-for="s in sliders" :key="s.key" class="personality-field">
-        <label class="personality-label">{{ s.label }}</label>
+        <label class="personality-label" :for="'personality-' + s.key">{{ s.label }}</label>
         <div class="personality-row">
           <span class="pole pole-left">{{ s.left }}</span>
           <input
+            :id="'personality-' + s.key"
             v-model.number="personality[s.key]"
             type="range"
             min="-2"

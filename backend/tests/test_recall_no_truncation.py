@@ -4,9 +4,9 @@
 Two production hot-paths hard-clipped a recalled episode gist that the model
 actually reads, violating the NO-TRUNCATION contract:
 
-1. **Semantic recall** — ``services.memory_retrieval.recall_episodes`` projected
+1. **Semantic recall** — ``MemoryService.recall_episodes`` projected
    ``gist[:200]`` into the structured recall body.
-2. **Location recall** — ``services.memory_retrieval._search_episodes_by_location``
+2. **Location recall** — ``MemoryService._search_episodes_by_location``
    projected ``(gist or "")[:200]``.
 
 Each test drives the REAL entry point production uses — ``MemoryAbility.run`` (the
@@ -29,8 +29,10 @@ import pytest
 
 from abilities.memory import MemoryAbility
 from configs.channels.user import UserConfig
+from contracts.params.memory_params_bag import MemoryParamsBag
 from controllers.message_processor import MessageProcessor
 from services.dispatch_service import DispatchService
+from tests._tool_result_harness import built
 
 pytestmark = pytest.mark.unit
 
@@ -61,7 +63,7 @@ def _render_recall(params: dict[str, object]) -> str:
     dispatcher envelope — the exact string the model reads. The ability is
     bound to a real inert ``MessageProcessor`` under ``UserConfig``, exactly
     as the dispatcher binds it on a user turn (``run()`` raises unbound)."""
-    result = MemoryAbility(MessageProcessor(UserConfig())).run(params)
+    result = MemoryAbility(MessageProcessor(UserConfig())).run(built(MemoryParamsBag.from_params(params)))
     assert result is not None, "MemoryAbility.run() returned None"
     return DispatchService(mp=cast("MessageProcessor", None))._render("memory", result, None)
 

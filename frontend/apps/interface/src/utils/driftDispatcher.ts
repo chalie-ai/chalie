@@ -27,6 +27,7 @@ import { findTurnType, setTurnDone, setTurnWorking, upsertTurnToSurfaces } from 
 import { useTasksStore } from '../stores/tasks';
 import { usePermissionsStore } from '../stores/permissions';
 import { useContextUsageStore } from '../stores/contextUsage';
+import { useVoiceTranscriptsStore } from '../stores/voiceTranscripts';
 
 /** The session-owned side effects a turn_execution frame still needs — see
  *  module docblock for why this is dependency-injected rather than a static
@@ -178,9 +179,9 @@ function _dispatchToolCall(data: WsPushEvent): boolean {
  * Mid-turn progress signals — stateless and turn-addressed, discriminated on
  * `status`. `updated` re-fetches the turn ONCE and fans it out to every
  * registered surface of its type; `provider_retry` is a transient toast (the
- * turn stays in flight, no error bubble); `context_usage` writes the token
- * reading straight to its store — no refetch, no DOM effect. Returns true when
- * handled.
+ * turn stays in flight, no error bubble); `context_usage` and
+ * `voice_transcript` write straight to their stores — no refetch, no DOM
+ * effect. Returns true when handled.
  *
  * The types of `updated` and `context_usage` are resolved (never coerced to
  * `user`) since turn_id alone doesn't identify a turn across channels — see
@@ -207,8 +208,14 @@ function _dispatchTurnSignal(data: WsPushEvent): boolean {
       // and `_reconcileWorking` never touches the hold, so without this the
       // hold — and thus the spine's `isSurfaceBusy` gate — strands forever,
       // silently queueing every later send. No-op when no hold is registered.
-      hooks().releasePendingSend(turnId, type);
-      void _refetchAndUpsert(turnId, type);
+      //
+      // The release must wait for the refetch to SETTLE, not fire alongside
+      // it — releasing synchronously reopens the spine's busy gate while this
+      // refetch is still in flight, letting a second queued send slip through
+      // against stale (pre-refetch) state (TKT-1516). `.finally` (not `.then`)
+      // so a REJECTED refetch still releases the hold rather than stranding
+      // the gate closed forever.
+      void _refetchAndUpsert(turnId, type).finally(() => hooks().releasePendingSend(turnId, type));
       return true;
     }
     case 'provider_retry':
@@ -226,6 +233,19 @@ function _dispatchTurnSignal(data: WsPushEvent): boolean {
       useContextUsageStore().record(type, turnId, usage.tokens_input, usage.context_window);
       return true;
     }
+    case 'voice_transcript': {
+      // Addressed by transcript row, not by turn — the pre-synthesis pipeline
+      // speaks one settled reply, and the button that paints this state is
+      // already rendered on that row. No refetch, no type to resolve.
+      const signal = data as { transcript_id?: number; state?: string };
+      if (signal.transcript_id == null) return true;
+      if (signal.state !== 'pending' && signal.state !== 'ready' && signal.state !== 'failed') {
+        console.warn('[driftDispatcher] voice_transcript frame has unknown state', signal.state, '— dropped');
+        return true;
+      }
+      useVoiceTranscriptsStore().record(signal.transcript_id, signal.state);
+      return true;
+    }
     default:
       return false;
   }
@@ -235,10 +255,13 @@ function _dispatchTurnSignal(data: WsPushEvent): boolean {
  * Turn lifecycle — the DB-backed turn_executions row, pushed whole on every
  * state flip (see services/execution_tracker.py). `working` flips the
  * data-working attribute and re-fetches (renders the user bubble — no
- * optimistic echo). `completed` clears working, drops the live trail, marks
- * data-done UNLESS the settled turn is the one open in the panel (D16), then
- * hands settle bookkeeping to the `finishTurn` session hook. `crashed` does
- * the same but additionally raises the 'turn failed' toast. `cancelled` is
+ * optimistic echo). `completed` clears working, drops the live trail,
+ * re-fetches the settled block (see the terminal-branch comment — clearing
+ * the DOM attributes alone leaves the RENDERED block still holding the
+ * `working: true` snapshot it was mounted with), and marks data-done UNLESS
+ * the settled turn is the one open in the panel (D16), then hands settle
+ * bookkeeping to the `finishTurn` session hook. `crashed` does the same but
+ * additionally raises the 'turn failed' toast. `cancelled` is
  * its own branch (see `_dispatchCancelled`) — a normal settle would leave a
  * fully-rendered, discarded response looking exactly like a completed one,
  * when the whole point of cancel is that it never counted.
@@ -259,16 +282,25 @@ function _dispatchTurnExecution(data: WsPushEvent): boolean {
   }
   const h = hooks();
 
-  // ANY execution frame proves the send's turn is now tracked by its own
-  // working/settle signals — release the POST-scoped busy hold (see
-  // session.sendMessage's `_pendingByTurn` comment).
-  h.releasePendingSend(exec.turn_id, type);
-
   if (exec.state === 'working') {
     setTurnWorking(exec.turn_id, type, true);
-    void _refetchAndUpsert(exec.turn_id, type);
+    // ANY execution frame proves the send's turn is now tracked by its own
+    // working/settle signals — release the POST-scoped busy hold (see
+    // session.sendMessage's `_pendingByTurn` comment). For 'working' the
+    // release must wait for the refetch to SETTLE rather than fire alongside
+    // it — releasing synchronously reopens the spine's busy gate while this
+    // refetch is still in flight, letting a second queued send slip through
+    // against stale (pre-refetch) state (TKT-1516). `.finally` (not `.then`)
+    // so a REJECTED refetch still releases the hold rather than stranding the
+    // gate closed forever.
+    void _refetchAndUpsert(exec.turn_id, type).finally(() => h.releasePendingSend(exec.turn_id, type));
     return true;
   }
+
+  // Every other state is already terminal/settled by the time this frame
+  // arrives — no in-flight refetch for a second send to race against — so the
+  // release stays synchronous here, same as before.
+  h.releasePendingSend(exec.turn_id, type);
 
   if (exec.state === 'cancelled') {
     _dispatchCancelled(exec.turn_id, type);
@@ -277,6 +309,26 @@ function _dispatchTurnExecution(data: WsPushEvent): boolean {
 
   setTurnWorking(exec.turn_id, type, false);
   clearLiveTurn(type, exec.turn_id);
+  // The settled block has to be REFETCHED, not just marked done. Everything
+  // above is a DOM-attribute effect; the rendered block is still the snapshot
+  // taken while the turn was alive (`working: true`), so TurnView keeps
+  // appending its live-act row and renders "thinking…" forever — and, having
+  // just had its pills cleared, as the bare placeholder. `crashed` is the
+  // deterministic case: it carries no `updated` signal of its own (only
+  // TranscriptService.append_assistant and the gist daemon emit those), and a
+  // crashed turn frequently has no assistant row at all, so nothing else ever
+  // arrives to settle it. `completed` shares the hole and is merely masked by
+  // append_assistant's final 'updated' winning the race — so both settle here,
+  // through one common path. `force` is belt-and-braces, NOT the cancelled
+  // branch's reason (whose block genuinely shrinks): a settled turn is
+  // immutable — nothing appends after finish() — so this snapshot can never
+  // be STRICTLY older than what's rendered, and the guard would re-apply it
+  // on an equal version anyway. It is set because the failure mode here is a
+  // UI stuck thinking forever, so the settle must not be defeatable by any
+  // version-guard edge.
+  void _refetchAndUpsert(exec.turn_id, type, { force: true }).catch((err: unknown) => {
+    console.warn('[driftDispatcher] settle refetch failed for turn', exec.turn_id, type, err);
+  });
   if (exec.state === 'crashed') {
     h.setErrorMessage('Turn failed unexpectedly');
   }

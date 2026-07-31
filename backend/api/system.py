@@ -164,9 +164,9 @@ class ReadinessResource(Resource):
         """Readiness probe — 200 only when SQLite, MemoryStore, embeddings, and ONNX are ready.
 
         Delegates to the read-only :func:`services.preflight_service.run_preflight`.
-        The onnxruntime CPU self-heal and its actionable ERROR hint run once at boot
-        (``RuntimeDepsService.ensure_onnxruntime``); this probe only reports state, so
-        a broken runtime surfaces as ``embeddings: {status: error, message: <hint>}``
+        onnxruntime is a base install-time dependency (no boot-time self-heal); a
+        broken runtime surfaces as ``embeddings: {status: error}`` with a generic
+        reinstall hint (never raw exception text — this probe is unauthenticated)
         rather than the eternal ``loading`` it reported before.
         """
         from services.preflight_service import run_preflight
@@ -194,7 +194,7 @@ class MetricsResource(Resource):
             from services.metrics_service import MetricsService
             return MetricsService().get_dashboard_data()
         except Exception as e:
-            logger.error(f"[REST API] Metrics error: {e}")
+            logger.exception(f"[REST API] Metrics error: {e}")
             return error("Failed to retrieve metrics", 500)
 
 
@@ -259,7 +259,7 @@ class SystemStatusResource(Resource):
                 database_error=database_error,
             )
         except Exception as e:
-            logger.error(f"[REST API] System status error: {e}")
+            logger.exception(f"[REST API] System status error: {e}")
             return error("System status check failed", 500)
 
 
@@ -332,7 +332,7 @@ class ObservabilityRecordsResource(Resource):
                 has_more=len(rows) == _RECORDS_LIMIT,
             )
         except Exception as e:
-            logger.error(f"[REST API] observability/records error: {e}")
+            logger.exception(f"[REST API] observability/records error: {e}")
             return error("Failed to retrieve records", 500)
 
 
@@ -358,7 +358,7 @@ class ObservabilityToolsResource(Resource):
                 ],
             )
         except Exception as e:
-            logger.error(f"[REST API] observability/tools error: {e}")
+            logger.exception(f"[REST API] observability/tools error: {e}")
             return error("Failed to retrieve tool data", 500)
 
 
@@ -366,7 +366,7 @@ class ObservabilityToolsResource(Resource):
 class ObservabilityTokenUsageResource(Resource):
     @require_session
     @system_ns.param("window", "hour | day | week | month | lifetime (default day)", _in="query")
-    @system_ns.param("type", "chat | system (optional filter)", _in="query")
+    @system_ns.param("type", "foreground | background (optional filter)", _in="query")
     @system_ns.response(200, "Token usage (opaque service-owned body)")
     @system_ns.response(422, "Invalid window", model=_S["Error"])
     @system_ns.response(500, "Failed to retrieve token usage data", model=_S["Error"])
@@ -380,7 +380,7 @@ class ObservabilityTokenUsageResource(Resource):
         try:
             return LlmLogService.token_usage(window=window, usage_type=usage_type)
         except Exception as e:
-            logger.error(f"[REST API] observability/token-usage error: {e}")
+            logger.exception(f"[REST API] observability/token-usage error: {e}")
             return error("Failed to retrieve token usage data", 500)
 
 
@@ -450,7 +450,7 @@ class ObservabilityWriteQueueResource(Resource):
                 errors=stats["errors"],
             )
         except Exception as e:
-            logger.error(f"[REST API] observability/write-queue error: {e}")
+            logger.exception(f"[REST API] observability/write-queue error: {e}")
             return error("Failed to retrieve write queue stats", 500)
 
 
@@ -467,7 +467,7 @@ class ObservabilityTelemetryResource(Resource):
             summary = get_telemetry_collector().get_summary()
             return {"generated_at": utc_now().isoformat(), **summary}
         except Exception as e:
-            logger.error(f"[REST API] observability/telemetry error: {e}")
+            logger.exception(f"[REST API] observability/telemetry error: {e}")
             return error("Failed to retrieve telemetry summary", 500)
 
 
@@ -525,7 +525,7 @@ class ObservabilityErrorsResource(Resource):
                 ],
             )
         except Exception as e:
-            logger.error(f"[REST API] observability/errors error: {e}")
+            logger.exception(f"[REST API] observability/errors error: {e}")
             return error("Failed to retrieve error log", 500)
 
 
@@ -546,7 +546,7 @@ class SettingsResource(Resource):
         try:
             return Setting(key=key, value=SettingModel.get_value(key))
         except Exception as e:
-            logger.error(f"[REST API] get setting error: {e}")
+            logger.exception(f"[REST API] get setting error: {e}")
             return error("Failed to get setting", 500)
 
     @require_session
@@ -566,7 +566,7 @@ class SettingsResource(Resource):
                 SettingModel.set(key, str(value))
             return Setting(key=key, value=value or None)
         except Exception as e:
-            logger.error(f"[REST API] set setting error: {e}")
+            logger.exception(f"[REST API] set setting error: {e}")
             return error("Failed to save setting", 500)
 
 

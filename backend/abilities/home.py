@@ -34,6 +34,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, ClassVar, cast
 
+from abilities._capability import CapabilityAbility
+from configs.enums.param_key import Keys
+from abilities._result import ToolResult
+from contracts.params.capability_params_bag import CapabilityParamsBag
+from configs.enums.ability_category import AbilityCategory
+
 if TYPE_CHECKING:
     from collections.abc import Callable
     from typing import Protocol
@@ -41,10 +47,6 @@ if TYPE_CHECKING:
     class _Capability(Protocol):
         def is_connected(self) -> bool: ...
         def get_tools(self) -> list[dict[str, object]]: ...
-
-from abilities._capability import CapabilityAbility
-from configs.enums.param_key import Keys
-from abilities._result import ToolResult
 
 # Actions whose ``entity_id`` must name a real entity. ``control`` is the silent-
 # false-success case the guardrail kills; ``get_state`` would otherwise raise an
@@ -55,10 +57,18 @@ _ENTITY_ACTIONS = ("get_state", "control", "subscribe_events")
 # automation error so a weak model can re-issue with the right id.
 _MAX_CANDIDATES = 5
 
+# List actions and the row key their handler body carries, so run() can detect
+# a genuinely empty result (never inside the shared _capability.py dispatcher,
+# which also serves non-read actions).
+_LIST_ROW_KEYS = {"list_devices": "devices", "list_automations": "automations"}
+
 
 class HomeAbility(CapabilityAbility):
     CAPABILITY_KEY: ClassVar[str] = "home"
+    NAME: ClassVar[str] = "home"
+    CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.SMART_HOME
     DEFAULT_ACTION: ClassVar[str] = "list_devices"
+    SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("smart home", "home assistant", "lights")
     NOT_CONNECTED_HINT: ClassVar[str] = (
         "Configure the Home Assistant integration in the Brain dashboard."
     )
@@ -86,9 +96,6 @@ class HomeAbility(CapabilityAbility):
         "trigger_automation": (Keys.automation_id,),
         "subscribe_events": (Keys.entity_id,),
     }
-
-    def get_name(self) -> str:
-        return "home"
 
     def get_summary(self) -> str:
         return (
@@ -174,19 +181,18 @@ class HomeAbility(CapabilityAbility):
 
     # ── Entry point — entity guardrail, then delegate to the base ──────────────
 
-    def run(self, params: dict[str, object]) -> ToolResult:
-        action = str(params.get(Keys.action, self.DEFAULT_ACTION)).lower()
-        params[Keys.action] = action
+    def run(self, params: CapabilityParamsBag) -> ToolResult:
+        action = self._resolve_action(params)
 
         cap = self._connected_capability()
         if cap is not None:
             if action in _ENTITY_ACTIONS:
-                guard = self._guard_entity(cap, action, str(params.get(Keys.entity_id, "")))
+                guard = self._guard_entity(cap, action, str(params.extra.get(Keys.entity_id, "")))
                 if guard is not None:
                     return guard
             elif action == "trigger_automation":
                 guard = self._guard_automation(
-                    cap, action, str(params.get(Keys.automation_id, ""))
+                    cap, action, str(params.extra.get(Keys.automation_id, ""))
                 )
                 if guard is not None:
                     return guard
@@ -194,7 +200,16 @@ class HomeAbility(CapabilityAbility):
         # Connected + entity verified (or a non-addressed action, or not connected
         # — the base emits the canonical not-connected error in that case): the
         # base owns dispatch and result wrapping.
-        return super().run(params)
+        result = self._dispatch(action, dict(params.extra))
+        row_key = _LIST_ROW_KEYS.get(action)
+        if (
+            row_key is not None
+            and result.status == "success"
+            and isinstance(result.body, dict)
+            and not result.body.get(row_key)
+        ):
+            return ToolResult.no_results(action=action)
+        return result
 
     # ── Guardrails ─────────────────────────────────────────────────────────────
 
@@ -262,4 +277,4 @@ class HomeAbility(CapabilityAbility):
         closest = cls._closest(needle, candidates)
         if closest:
             return f"closest matches: {', '.join(closest)} — re-issue with an exact id."
-        return f"call home with action={list_action} to see the real ids."
+        return f"call {cls.NAME} with action={list_action} to see the real ids."

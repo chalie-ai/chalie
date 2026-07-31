@@ -2,9 +2,11 @@ import type { ConversationMessage, ConversationTurnBlock } from '../api/conversa
 import { extractText } from '../composables/useMarkup';
 
 /**
- * Plain-text (TTS) for one ConversationMessage — segments concatenated, else
- * the single content path, both markup-stripped. Shared by the speak button and
- * turn-level speech aggregation so the two never diverge.
+ * Plain-text for one ConversationMessage — segments concatenated, else the
+ * single content path, both markup-stripped. Shared by the copy button and
+ * turn-level speech aggregation so the two never diverge. Speech synthesis
+ * does NOT read this: the backend reads the settled row itself, so the browser
+ * never assembles text for the voice pipeline.
  */
 export function messagePlaintext(msg: ConversationMessage): string {
   if (msg.segments?.length) {

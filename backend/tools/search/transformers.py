@@ -153,9 +153,9 @@ def _transform_json(provider_name: str, data: dict[str, object], limit: int) -> 
 
         fm: dict[str, object] = cast("dict[str, object]", field_map)
         title = _extract_field(item, field_map.get('title', ''))
-        snippet = _extract_snippet(item, fm)
+        snippet = _extract_snippet(item, field_map.get('snippet', ''))
         url = _extract_url(item, fm)
-        date = _extract_date(item, fm)
+        date = _extract_date(item, field_map.get('date', ''))
 
         if not title and not snippet:
             continue
@@ -290,9 +290,8 @@ def _extract_field(item: dict[str, object], field_spec: str) -> str:
     return ''
 
 
-def _extract_snippet(item: dict[str, object], field_map: dict[str, object]) -> str:
+def _extract_snippet(item: dict[str, object], snippet_spec: str) -> str:
     """Extract snippet with provider-specific special handling."""
-    snippet_spec = field_map.get('snippet', '')
 
     # Special: MusicBrainz artist credit
     if snippet_spec == '_artist_credit':
@@ -302,7 +301,7 @@ def _extract_snippet(item: dict[str, object], field_map: dict[str, object]) -> s
             return ', '.join(str(a) for a in artists if a)
         return ''
 
-    return _extract_field(item, cast("str", snippet_spec))
+    return _extract_field(item, snippet_spec)
 
 
 def _extract_url(item: dict[str, object], field_map: dict[str, object]) -> str:
@@ -340,13 +339,12 @@ def _extract_url(item: dict[str, object], field_map: dict[str, object]) -> str:
 
 
 
-def _extract_date(item: dict[str, object], field_map: dict[str, object]) -> str | None:
+def _extract_date(item: dict[str, object], date_spec: str) -> str | None:
     """Extract and normalize date from item."""
-    date_spec = field_map.get('date', '')
     if not date_spec:
         return None
 
-    raw = _extract_field(item, cast("str", date_spec))
+    raw = _extract_field(item, date_spec)
     if not raw:
         return None
 

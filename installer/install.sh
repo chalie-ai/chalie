@@ -67,7 +67,7 @@ _detect_os() {
     linux*)   echo "linux" ;;
     *)
       _error "Unsupported OS: $OSTYPE"
-      _error "Chalie supports macOS (Intel/Apple Silicon) and Linux (amd64/arm64)."
+      _error "Chalie supports macOS (Apple Silicon) and Linux (amd64/arm64)."
       exit 1
       ;;
   esac
@@ -323,7 +323,72 @@ _setup_venv() {
   _info "Note: The embedding model (~400 MB) downloads on first 'chalie start', not now"
 }
 
-# ─── Deno (code_eval sandbox runtime) ───────────────────────────────────────
+# ─── Playwright Browser ─────────────────────────────────────────────────────
+# Chromium needs a set of system libraries to launch (nss, cups, gbm, X libs,
+# …). Playwright's `--with-deps` installs them, but it only knows apt package
+# names: on any non-apt distro it falls back to apt-get, which is absent, and
+# aborts the whole install. So install those libraries with the distro's own
+# package manager, then fetch the browser without `--with-deps`.
+_install_playwright() {
+  _section "Playwright Browser"
+  local pw="$CHALIE_HOME/venv/bin/playwright"
+  if [[ "$(_detect_os)" == "linux" ]]; then
+    local distro
+    distro="$(_detect_linux_distro)"
+    case "$distro" in
+      *debian*|*ubuntu*)
+        # apt path works — and `--with-deps` tracks apt package renames (e.g.
+        # Ubuntu 24.04's t64 transition) that a hand-listed set would miss.
+        _run_privileged "$pw" install --with-deps chromium
+        ;;
+      *fedora*|*rhel*|*centos*)
+        _run_privileged dnf install -y \
+          nss nspr atk at-spi2-atk at-spi2-core cups-libs libdrm libxkbcommon \
+          libXcomposite libXdamage libXrandr libXext libXfixes libX11 libxcb \
+          mesa-libgbm pango cairo alsa-lib
+        "$pw" install chromium
+        ;;
+      *)
+        # Unhandled distro: fetch the browser; its system libraries are the
+        # user's responsibility (same class as the build-deps unknown-distro case).
+        _warn "Unknown distro '$distro' — installing Chromium without system libraries"
+        "$pw" install chromium
+        ;;
+    esac
+  else
+    "$pw" install chromium
+  fi
+  _ok "Playwright Chromium ready"
+}
+
+# ─── Voice Models (Kokoro TTS, Moonshine STT, Silero VAD) ──────────────────
+_download_voice_models() {
+  _section "Voice Models"
+  local k="https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0"
+  local m="https://huggingface.co/UsefulSensors/moonshine/resolve/main/onnx/merged/base/float"
+  local s="https://raw.githubusercontent.com/snakers4/silero-vad/v6.2.1/src/silero_vad/data"
+  local d="$CHALIE_HOME/app/resources/voice-models"
+  mkdir -p "$d/kokoro" "$d/moonshine/base"
+  # "|" (not ":") separates url/dest — every url here contains "://", which
+  # would collide with a ":" separator.
+  local pairs=(
+    "$k/kokoro-v1.0.onnx|$d/kokoro/kokoro-v1.0.onnx"
+    "$k/voices-v1.0.bin|$d/kokoro/voices-v1.0.bin"
+    "$m/encoder_model.onnx|$d/moonshine/base/encoder_model.onnx"
+    "$m/decoder_model_merged.onnx|$d/moonshine/base/decoder_model_merged.onnx"
+    "$s/silero_vad.onnx|$d/silero_vad.onnx"
+  )
+  for p in "${pairs[@]}"; do
+    local dest="${p#*|}"
+    if [[ ! -f "$dest" ]]; then
+      curl -fL -o "$dest.tmp" "${p%%|*}"
+      mv "$dest.tmp" "$dest"
+    fi
+  done
+  _ok "Voice models ready"
+}
+
+# ─── Deno (code_agent sandbox runtime) ──────────────────────────────────────
 _install_deno() {
   _section "Deno Sandbox Runtime"
   local deno_bin="$CHALIE_BIN/deno"
@@ -342,7 +407,7 @@ _install_deno() {
     linux/amd64)   archive="deno-x86_64-unknown-linux-gnu.zip" ;;
     linux/arm64)   archive="deno-aarch64-unknown-linux-gnu.zip" ;;
     *)
-      _warn "No Deno build for $os/$arch — the code_eval sandbox will be unavailable"
+      _warn "No Deno build for $os/$arch — the code_agent sandbox will be unavailable"
       return 0
       ;;
   esac
@@ -352,14 +417,14 @@ _install_deno() {
   tmpdir="$(mktemp -d)"
   _info "Downloading Deno ($os/$arch)…"
   if ! curl -fsSL "$url" -o "$tmpdir/deno.zip"; then
-    _warn "Deno download failed — the code_eval sandbox will be unavailable"
+    _warn "Deno download failed — the code_agent sandbox will be unavailable"
     rm -rf "$tmpdir"
     return 0
   fi
   if command -v unzip >/dev/null 2>&1; then
     unzip -o -q "$tmpdir/deno.zip" -d "$tmpdir"
   else
-    _warn "unzip not found — cannot extract Deno; the code_eval sandbox will be unavailable"
+    _warn "unzip not found — cannot extract Deno; the code_agent sandbox will be unavailable"
     rm -rf "$tmpdir"
     return 0
   fi
@@ -523,6 +588,13 @@ main() {
   os="$(_detect_os)"
   arch="$(_detect_arch)"
 
+  if [[ "$os/$arch" == "darwin/amd64" ]]; then
+    _error "Intel Macs are no longer supported."
+    _error "onnxruntime no longer publishes wheels for Intel Macs."
+    _error "An Apple Silicon Mac or Linux is required."
+    exit 1
+  fi
+
   _banner
   printf "  Platform: %s / %s\n\n" "$os" "$arch"
 
@@ -531,6 +603,8 @@ main() {
   _ensure_uv
   _download_release
   _setup_venv
+  _install_playwright
+  _download_voice_models
   _install_deno
   _install_cli
   _print_success

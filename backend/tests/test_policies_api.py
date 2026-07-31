@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from api.actions.policies.blocked import BlockedAction
 from api.endpoints.policies import PoliciesEndpoint
 from tests.restx_test_app import mount_namespace
 
@@ -30,7 +31,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> "Generator[FlaskClient, None, Non
         "action_id TEXT, context TEXT, reason TEXT, params_json TEXT, created_at TEXT);"
     )
     conn.execute("INSERT INTO policy (channel, permission, setting) VALUES "
-                 "('chat','email.search','allow'),('chat','memory.recall','internal')")
+                 "('chat','bash.read','allow'),('chat','memory.recall','internal')")
 
     # PolicyManager + McpClientService (both consulted by the GET handler) reach the
     # DB through the Database gateway → FileMapperService.get_db_path(). An in-memory
@@ -51,7 +52,10 @@ def client(monkeypatch: pytest.MonkeyPatch) -> "Generator[FlaskClient, None, Non
     # test's in-memory handle.
     _db_gateway.Database().bind()
     try:
-        app = mount_namespace(PoliciesEndpoint().namespace())
+        app = mount_namespace(
+            PoliciesEndpoint("policies").namespace(),
+            BlockedAction("policies", "blocked").namespace(),
+        )
         yield app.test_client()
     finally:
         _db_gateway._local.conns = {}
@@ -65,21 +69,47 @@ def test_get_returns_flat_rows_excluding_internal(client: "FlaskClient") -> None
     body = r.get_json()
     assert body["success"] is True and "pagination" in body
     rows = body["result"]
-    row = next(x for x in rows if x["permission"] == "email.search")
+    row = next(x for x in rows if x["permission"] == "bash.read")
     # Native rows keep the flat triple and gain an action-only display label:
-    # `email.search` -> `Search` (the `tool.` prefix is dropped + humanized).
+    # `bash.read` -> `Read` (the `tool.` prefix is dropped + humanized).
     assert row["channel"] == "chat" and row["setting"] == "allow"
-    assert row["label"] == "Search"
+    assert row["label"] == "Read"
     # group is MCP-only — native rows carry it as null (the DTO field is nullable).
     assert row["group"] is None
     assert all(x["setting"] != "internal" for x in rows)
 
 
 def test_put_single_upsert(client: "FlaskClient") -> None:
-    r = client.post("/api/policies/-1", json={"channel": "chat", "permission": "email.send", "setting": "deny"})
+    r = client.post("/api/policies/-1", json={"channel": "chat", "permission": "bash.execute", "setting": "deny"})
     # Single-cell upsert is a non-CRUD action → 204 no-body (rowcount no longer surfaced).
     assert r.status_code == 204
     assert r.data == b""
+    rows = client.get("/api/policies/all?limit=100").get_json()["result"]
+    assert any(x["permission"] == "bash.execute" and x["setting"] == "deny" for x in rows)
+
+
+def test_put_internal_tool_is_ignored(client: "FlaskClient") -> None:
+    # email is the pim delegate's INTERNAL inner surface — the manager rejects the
+    # upsert (rowcount 0), so the endpoint still 204s but no row lands in the table.
+    r = client.post("/api/policies/-1", json={"channel": "chat", "permission": "email.send", "setting": "deny"})
+    assert r.status_code == 204
+    rows = client.get("/api/policies/all?limit=100").get_json()["result"]
+    assert not any(x["permission"] == "email.send" for x in rows)
+
+
+def test_blocked_log_returns_the_permission_name_verbatim(client: "FlaskClient") -> None:
+    from services.policy_manager import PolicyManager
+
+    # `action_id` carries a permission name, not a row id — the DDL column is TEXT.
+    # Typing the response DTO `int` made pydantic reject every real row, which the
+    # endpoint guard then reported as a 422 "invalid request body".
+    PolicyManager()._log_blocked("chat", "bash.modify_file", "user_unavailable")
+
+    r = client.get("/api/policies/blocked")
+    assert r.status_code == 200, r.get_json()
+    entry = r.get_json()["result"][0]
+    assert entry["action_id"] == "bash.modify_file"
+    assert entry["context"] == "chat" and entry["reason"] == "user_unavailable"
 
 
 @pytest.fixture()
@@ -117,7 +147,7 @@ def mcp_client(monkeypatch: pytest.MonkeyPatch) -> "Generator[FlaskClient, None,
     # test's in-memory handle.
     _db_gateway.Database().bind()
     try:
-        app = mount_namespace(PoliciesEndpoint().namespace())
+        app = mount_namespace(PoliciesEndpoint("policies").namespace())
         yield app.test_client()
     finally:
         _db_gateway._local.conns = {}

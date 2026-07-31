@@ -38,17 +38,21 @@ happens at the outer ``web_search`` tool.
 
 from __future__ import annotations
 
-from typing import ClassVar, cast
+from typing import ClassVar
 
 from abilities._delegate import DelegateAbility, delegate_result
 from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 from configs.channels.web_search import WebSearchConfig
+from contracts.params.param_bag import ParamBag
+from contracts.params.delegate_params_bag import DelegateParamsBag
+from configs.enums.ability_category import AbilityCategory
 
 
-class WebSearchAbility(DelegateAbility):
-    def get_name(self) -> str:
-        return "web_search"
+class WebSearchAbility(DelegateAbility[DelegateParamsBag]):
+    SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("search web", "search the web", "internet search", "google")
+    NAME: ClassVar[str] = "web_search"
+    CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.DELEGATE
 
     def get_summary(self) -> str:
         return (
@@ -76,24 +80,28 @@ class WebSearchAbility(DelegateAbility):
     _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
-            Keys.query: {
+            Keys.instructions: {
                 "type": "string",
                 "description": "What to research on the web.",
             },
         },
-        "required": [Keys.query],
+        "required": [Keys.instructions],
     }
 
     # An action-less delegate: the dispatcher's ACTION_REQUIRED pre-gate (the
-    # ``""`` key covers action-less tools) rejects a missing/empty ``query`` with
-    # ``code=missing-params`` BEFORE the policy gate and BEFORE run() — so an empty
-    # query never spawns an expensive delegate on an empty goal.
-    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.query,)}
+    # ``""`` key covers action-less tools) rejects missing/empty ``instructions``
+    # with ``code=missing-params`` BEFORE the policy gate and BEFORE run() — so an
+    # empty instruction never spawns an expensive delegate on nothing.
+    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.instructions,)}
+
+    # The typed input contract: the dispatch seam builds the shared delegate
+    # bag via DelegateParamsBag.from_params before run() is called.
+    PARAMS: ClassVar[type[ParamBag] | None] = DelegateParamsBag
 
     def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    def run(self, params: dict[str, object]) -> ToolResult:
+    def run(self, params: DelegateParamsBag) -> ToolResult:
         from controllers.message_processor import MessageProcessor  # noqa: PLC0415
 
         mp = self.mp
@@ -102,7 +110,7 @@ class WebSearchAbility(DelegateAbility):
 
         result = MessageProcessor.process(
             WebSearchConfig(mp.config.policy_channel),
-            raw_input=cast(str, self.param(params, Keys.query, required=True)),
+            raw_input=params.instructions,
         ).result()
         return delegate_result(
             result, hint="Narrow the query or split it into smaller searches, then retry."

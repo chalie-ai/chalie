@@ -118,7 +118,7 @@ onBeforeUnmount(() => {
   margin: 0 auto var(--space-sm);
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-xs, 6px);
+  gap: var(--space-xs);
   padding: var(--space-sm);
   background: var(--bg-surface-2);
   border: 1px solid var(--border-strong);
@@ -127,7 +127,7 @@ onBeforeUnmount(() => {
   -webkit-backdrop-filter: blur(20px) saturate(120%);
 
   &--drag {
-    outline: 2px dashed var(--accent, currentColor);
+    outline: 2px dashed var(--accent);
     outline-offset: -2px;
   }
 
@@ -138,10 +138,10 @@ onBeforeUnmount(() => {
     justify-content: center;
     width: 56px;
     height: 56px;
-    border-radius: var(--radius-sm, 6px);
+    border-radius: var(--radius-sm);
     overflow: hidden;
     background: var(--surface-raised, var(--surface, #222));
-    border: 1px solid var(--border, rgba(255 255 255 / 0.12));
+    border: 1px solid var(--border);
     flex-shrink: 0;
 
     img {
@@ -171,7 +171,7 @@ onBeforeUnmount(() => {
 
   &__doc-name {
     font-size: 10px;
-    color: var(--text-secondary, var(--text, currentColor));
+    color: var(--text-secondary);
     text-align: center;
     word-break: break-all;
     white-space: nowrap;
@@ -196,7 +196,7 @@ onBeforeUnmount(() => {
     line-height: 1;
     cursor: pointer;
     background: var(--surface-overlay, rgba(0 0 0 / 0.6));
-    color: var(--text, currentColor);
+    color: var(--text);
     opacity: 0;
     transition: opacity 0.15s;
 

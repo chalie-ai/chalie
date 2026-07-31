@@ -6,7 +6,7 @@ All MCP client calls bridge to asyncio.run() per dispatch (safe because Chalie's
 worker threads carry no running loop). Tool names use scheme: _mcp_<sanitized_server>_<remote>.
 
 Each server's tool index is synced via ping_and_sync and stored in mcp_tools.sqlite;
-vector embeddings are optional — queries degrade gracefully without sqlite_vec.
+the DB is a plain tool/schema store with no search index.
 """
 
 import asyncio
@@ -123,67 +123,13 @@ CREATE INDEX IF NOT EXISTS idx_mcp_tools_server
     ON mcp_tools(server_id);
 """
 
-_TOOLS_FTS_SCHEMA = """
-CREATE VIRTUAL TABLE IF NOT EXISTS mcp_tools_fts USING fts5(
-    tool_name,
-    summary,
-    content='mcp_tools',
-    content_rowid='id',
-    tokenize='trigram'
-);
-"""
-
-# Vector embedding tables — keyed by tool_name (stable across _write_tools churn).
-# mcp_tools_vec.rowid == mcp_tool_vectors.rowid for the JOIN.
-# Created in the same _open_tools_db() call so callers get a unified DB handle.
-_TOOLS_VECTOR_SCHEMA = """
-CREATE TABLE IF NOT EXISTS mcp_tool_vectors (
-    rowid     INTEGER PRIMARY KEY,
-    tool_name TEXT UNIQUE NOT NULL
-);
-CREATE VIRTUAL TABLE IF NOT EXISTS mcp_tools_vec USING vec0(embedding float[768]);
-"""
-
 
 def _open_tools_db() -> sqlite3.Connection:
-    """Open (and initialize if necessary) the mcp_tools.sqlite runtime DB.
-
-    Creates the FTS table and, when sqlite_vec is available, the vector
-    embedding tables.  If sqlite_vec cannot be loaded the vec tables are
-    skipped and the DB remains FTS-only — queries degrade gracefully.
-    """
+    """Open (and initialize if necessary) the mcp_tools.sqlite runtime DB."""
     db_path: Path = FileMapperService.get_mcp_tools_db_path()
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = Database.conn(str(db_path))
     conn.executescript(_TOOLS_SCHEMA)
-    try:
-        # A pre-trigram FTS table (CREATE IF NOT EXISTS would silently keep it)
-        # cannot do substring matching — drop and rebuild it once from mcp_tools.
-        row = conn.execute(
-            "SELECT sql FROM sqlite_master WHERE type='table' AND name='mcp_tools_fts'"
-        ).fetchone()
-        if row and "trigram" not in (row["sql"] or "").lower():
-            conn.execute("DROP TABLE mcp_tools_fts")
-            row = None
-        conn.executescript(_TOOLS_FTS_SCHEMA)
-        if row is None:
-            conn.execute("INSERT INTO mcp_tools_fts(mcp_tools_fts) VALUES('rebuild')")
-    except sqlite3.OperationalError:
-        pass  # FTS5 may not be available in all environments
-    try:
-        conn.enable_load_extension(True)
-        try:
-            import sqlite_vec  # noqa: PLC0415
-            sqlite_vec.load(conn)
-        except Exception as exc:
-            logger.debug("%s sqlite_vec module load failed, trying vec0: %s", _LOG_PREFIX, exc)
-            conn.load_extension("vec0")
-        conn.executescript(_TOOLS_VECTOR_SCHEMA)
-    except Exception as exc:
-        logger.warning(
-            "%s sqlite_vec unavailable — vec tables skipped, FTS-only mode: %s",
-            _LOG_PREFIX, exc,
-        )
     return conn
 
 
@@ -195,23 +141,28 @@ async def _async_list_tools(host: str, headers: dict[str, str]) -> list[dict[str
     Each returned dict has 'name', 'description', and 'inputSchema' keys
     matching the MCP protocol ToolDescription shape.
     """
-    from mcp.client.streamable_http import streamablehttp_client
+    from mcp.client.streamable_http import streamable_http_client
     from mcp.client.session import ClientSession
+    # create_mcp_http_client builds an httpx client with headers AND the SDK's
+    # recommended MCP timeouts. It is imported from its definition module because
+    # the transport package does not re-export it (mypy --strict no_implicit_reexport).
+    from mcp.shared._httpx_utils import create_mcp_http_client
 
-    async with streamablehttp_client(host, headers=headers) as (read, write, _):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            result = await session.list_tools()
-            return [
-                {
-                    "name": t.name,
-                    "description": t.description or "",
-                    "inputSchema": (
-                        t.inputSchema if isinstance(t.inputSchema, dict) else {}
-                    ),
-                }
-                for t in result.tools
-            ]
+    async with create_mcp_http_client(headers=headers) as client:
+        async with streamable_http_client(host, http_client=client) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                result = await session.list_tools()
+                return [
+                    {
+                        "name": t.name,
+                        "description": t.description or "",
+                        "inputSchema": (
+                            t.input_schema if isinstance(t.input_schema, dict) else {}
+                        ),
+                    }
+                    for t in result.tools
+                ]
 
 
 async def _async_call_tool(
@@ -219,18 +170,20 @@ async def _async_call_tool(
 ) -> object:
     """Connect to a remote MCP server and call a single tool.
 
-    Returns the full ``CallToolResult`` so the caller can read ``isError`` and
-    ``structuredContent`` alongside the content blocks — an MCP tool signalling
-    failure via ``isError=true`` must NOT be mistaken for success, and structured
+    Returns the full ``CallToolResult`` so the caller can read ``is_error`` and
+    ``structured_content`` alongside the content blocks — an MCP tool signalling
+    failure via ``is_error=True`` must NOT be mistaken for success, and structured
     JSON must be preserved as structure rather than collapsed into a blob.
     """
-    from mcp.client.streamable_http import streamablehttp_client
+    from mcp.client.streamable_http import streamable_http_client
     from mcp.client.session import ClientSession
+    from mcp.shared._httpx_utils import create_mcp_http_client
 
-    async with streamablehttp_client(host, headers=headers) as (read, write, _):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            return await session.call_tool(remote_tool, params)
+    async with create_mcp_http_client(headers=headers) as client:
+        async with streamable_http_client(host, http_client=client) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                return await session.call_tool(remote_tool, params)
 
 
 # ── McpClientService ──────────────────────────────────────────────────────────
@@ -262,7 +215,7 @@ class McpClientService:
         """
         existing = self._find_by_normalized_host(host)
         if existing is not None:
-            return self._upsert_existing(existing, name, host, headers)
+            return self._upsert_existing(cast(str, existing["id"]), cast(str, existing["name"]), name, host, headers)
 
         server = McpClientServer(
             name=name,
@@ -292,28 +245,28 @@ class McpClientService:
                 return server
         return None
 
-    def _upsert_existing(self, existing: dict[str, object], name: str, host: str,
+    def _upsert_existing(self, existing_id: str, existing_name: str, name: str, host: str,
                          headers: dict[str, str]) -> dict[str, object]:
         """Re-add of a known endpoint: update fields and re-enable.
 
-        Always purge the existing toolset (rows + vector embeddings) before the
-        caller's re-sync repopulates it.  This reads the *current* tool_names off
-        ``mcp_tools`` while they are still present, so a tool the server has since
-        removed can never leave an orphaned vector row — the post-add
-        ``ping_and_sync`` then writes back only the live toolset.  The tool prefix
-        is derived from the server name, so a name change additionally invalidates
-        the old ``_mcp_<oldname>_*`` policy rows.
+        Always purge the existing toolset before the caller's re-sync
+        repopulates it.  This reads the *current* tool_names off ``mcp_tools``
+        while they are still present, so a tool the server has since removed
+        can never leave an orphaned row — the post-add ``ping_and_sync`` then
+        writes back only the live toolset.  The tool prefix is derived from the
+        server name, so a name change additionally invalidates the old
+        ``_mcp_<oldname>_*`` policy rows.
         """
-        old_prefix = f"_mcp_{_sanitize_name(cast(str, existing['name']))}_"
+        old_prefix = f"_mcp_{_sanitize_name(existing_name)}_"
         new_prefix = f"_mcp_{_sanitize_name(name)}_"
         if old_prefix != new_prefix:
-            self._delete_policy_rows(cast(str, existing["id"]))
-        self._delete_tools_for_server(cast(str, existing["id"]))
+            self._delete_policy_rows(existing_id)
+        self._delete_tools_for_server(existing_id)
         logger.info(
             "%s Re-add of existing endpoint %r → upsert id=%s",
-            _LOG_PREFIX, host, existing["id"],
+            _LOG_PREFIX, host, existing_id,
         )
-        return self.update_server(cast(str, existing["id"]), {
+        return self.update_server(existing_id, {
             "name": name,
             "host": host,
             "headers": headers or {},
@@ -429,7 +382,7 @@ class McpClientService:
 
         Reads mcp_tools.sqlite by exact tool_name match and returns the
         {name, description, input_schema} shape AbilityRegistry.build_tools
-        expects, so an _mcp_* name appended to mp.active_tools (by find_tools)
+        expects, so an _mcp_* name appended to mp.active_tools (by mcp_tools)
         resolves to a full schema for the next ACT iteration's provider call.
         """
         row = McpTool.filter("tool_name", tool_name).first()
@@ -448,7 +401,7 @@ class McpClientService:
     def get_online_mcp_tool_names(self) -> list[str]:
         """Return _mcp_* tool names for servers that are enabled AND online.
 
-        Used by find_tools to gate discoverability and by the /discoverable
+        Used by mcp_tools to validate activation and by the /discoverable
         API endpoint.  Disabled or offline servers' tools never appear.
         """
         online_ids = cast(
@@ -462,31 +415,6 @@ class McpClientService:
         if not online_ids:
             return []
         return cast("list[str]", McpTool.filter_in("server_id", online_ids).pluck("tool_name"))
-
-    def get_online_mcp_tools_index(self) -> list[tuple[str, str]]:
-        """Return (call_name, display_name) pairs for enabled+online tools.
-
-        ``call_name`` is the prefixed ``_mcp_<server>_<tool>`` identifier the
-        model must invoke; ``display_name`` is the bare server-reported
-        ``tool.name`` (e.g. ``list_tickets``).  Used by find_tools to list MCP
-        tools in the discoverability hint by their native names without losing
-        the prefixed call target.
-        """
-        server_rows = McpClientServer.filter("enabled", 1).filter("status", _STATUS_ONLINE).get()
-        if not server_rows:
-            return []
-        server_name_by_id = {s.id: s.name for s in server_rows}
-        all_rows = McpTool.all().get()
-        index: list[tuple[str, str]] = []
-        for t in all_rows:
-            server_id = t.server_id
-            if server_id not in server_name_by_id:
-                continue
-            call_name = t.tool_name
-            prefix = f"_mcp_{_sanitize_name(server_name_by_id[server_id])}_"
-            display = call_name[len(prefix):] if call_name.startswith(prefix) else call_name
-            index.append((call_name, display))
-        return index
 
     def label_mcp_permissions(self, permissions: list[str]) -> dict[str, dict[str, str]]:
         """Map ``_mcp_*`` policy permissions to display ``{group, label}``.
@@ -563,7 +491,7 @@ class McpClientService:
         )
         return {
             "server": server["name"],
-            "is_error": bool(getattr(result, "isError", False)),
+            "is_error": bool(getattr(result, "is_error", False)),
             "body": self._shape_tool_result(result),
         }
 
@@ -586,104 +514,11 @@ class McpClientService:
             try:
                 self.ping_and_sync(server_id)
             except Exception as exc:
-                logger.error(
+                logger.exception(
                     "%s Heartbeat error for %r (id=%s): %s",
                     _LOG_PREFIX, name, server_id, exc,
                 )
 
-    def embed_server_tools(self, server_id: str) -> None:
-        """Generate and store vector embeddings for one server's tools.
-
-        Called only on add (never on heartbeat/enable) so the 15-min sync path
-        has zero embedding overhead.  Embeddings are keyed by the stable
-        tool_name (not by mcp_tools.id, which is reassigned on every _write_tools
-        call).  Vectors for the server's *current* toolset are replaced in place,
-        so re-embedding is idempotent.  Orphan-free re-adds (where the server has
-        dropped a tool) are guaranteed upstream: ``_upsert_existing`` purges the
-        prior toolset via ``_delete_tools_for_server`` before ``ping_and_sync``
-        repopulates only the live tools.
-
-        Lazy-imports EmbeddingService (avoids import-time cost and circular refs).
-        Wraps the entire body so a failure leaves the server FTS-searchable
-        without surfacing an error to the caller.
-
-        Depends on: services.embedding_service.EmbeddingService (offline ONNX,
-        no provider/mp required) and services.embedding_utils.pack_embedding.
-        McpClientService is the only add-time embedding trigger — do not call
-        this from _write_tools or run_heartbeat.
-        """
-        try:
-            # Lazy imports — avoid circular import chain and expensive ONNX load
-            # at module initialisation time.  EmbeddingService depends on
-            # McpClientService indirectly (via find_tools); importing at call
-            # site breaks the cycle cleanly.
-            from services.embedding_service import EmbeddingService  # noqa: PLC0415
-            from services.embedding_utils import pack_embedding  # noqa: PLC0415
-
-            server = self.get_server(server_id)
-            if server is None:
-                logger.warning("%s embed_server_tools: server %r not found", _LOG_PREFIX, server_id)
-                return
-
-            rows = McpTool.filter("server_id", server_id).select("tool_name", "summary")
-
-            if not rows:
-                logger.debug("%s embed_server_tools: no tools for server %r", _LOG_PREFIX, server_id)
-                return
-
-            server_name = cast(str, server["name"])
-            prefix = f"_mcp_{_sanitize_name(server_name)}_"
-            tool_names = [cast(str, r["tool_name"]) for r in rows]
-            texts = []
-            for r in rows:
-                tool_name = cast(str, r["tool_name"])
-                display = tool_name[len(prefix):] if tool_name.startswith(prefix) else tool_name
-                display_words = display.replace("_", " ")
-                summary = r["summary"] or ""
-                texts.append(f"{display_words}. {summary}" if summary else display_words)
-
-            embeddings = EmbeddingService().generate_embeddings_batch(texts)
-
-            with Database.transaction(str(FileMapperService.get_mcp_tools_db_path())) as conn:
-                # Replace-all-for-server: purge existing vec rows for these tool_names.
-                placeholders = ",".join("?" * len(tool_names))
-                existing = conn.execute(
-                    f"SELECT rowid FROM mcp_tool_vectors WHERE tool_name IN ({placeholders})",
-                    tool_names,
-                ).fetchall()
-                if existing:
-                    vec_rowids = [r[0] for r in existing]
-                    rowid_placeholders = ",".join("?" * len(vec_rowids))
-                    conn.execute(
-                        f"DELETE FROM mcp_tools_vec WHERE rowid IN ({rowid_placeholders})",
-                        vec_rowids,
-                    )
-                    conn.execute(
-                        f"DELETE FROM mcp_tool_vectors WHERE tool_name IN ({placeholders})",
-                        tool_names,
-                    )
-
-                # Insert fresh rows — mcp_tool_vectors assigns a new rowid.
-                for tool_name, embedding in zip(tool_names, embeddings):
-                    conn.execute(
-                        "INSERT INTO mcp_tool_vectors (tool_name) VALUES (?)",
-                        (tool_name,),
-                    )
-                    rowid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-                    blob = pack_embedding(embedding)
-                    conn.execute(
-                        "INSERT INTO mcp_tools_vec (rowid, embedding) VALUES (?, ?)",
-                        (rowid, blob),
-                    )
-                logger.info(
-                    "%s Embedded %d tools for server %r",
-                    _LOG_PREFIX, len(tool_names), server_name,
-                )
-        except Exception as exc:
-            logger.warning(
-                "%s embed_server_tools failed for server %r — FTS-only fallback: %s",
-                _LOG_PREFIX, server_id, exc,
-            )
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 
@@ -717,7 +552,7 @@ class McpClientService:
     def _write_tools(self, server_id: str, server_name: str, tools: list[dict[str, object]]) -> None:
         """Replace the tool index for one server in mcp_tools.sqlite."""
         _open_tools_db()
-        with Database.transaction(str(FileMapperService.get_mcp_tools_db_path())) as conn:
+        with Database.transaction(str(FileMapperService.get_mcp_tools_db_path())):
             McpTool.filter("server_id", server_id).delete()
             for t in tools:
                 name = _tool_name(server_name, cast(str, t["name"]))
@@ -730,58 +565,17 @@ class McpClientService:
                     raw_schema=schema_json,
                 )
                 tool.save()
-            # Rebuild FTS index for this server.
-            try:
-                conn.execute(
-                    "INSERT INTO mcp_tools_fts(mcp_tools_fts) VALUES('rebuild')"
-                )
-            except sqlite3.OperationalError:
-                pass
 
     def _delete_tools_for_server(self, server_id: str) -> None:
-        """Remove all tool rows (including vector embeddings) for a server.
+        """Remove all tool rows for a server.
 
-        Purges mcp_tool_vectors + mcp_tools_vec BEFORE deleting mcp_tools so
-        we can still read the tool_names for the vec lookup.  This single
-        chokepoint covers both delete_server and the _upsert_existing name-change
-        path — neither needs to repeat the purge logic.
+        This single chokepoint covers both delete_server and the
+        _upsert_existing name-change path — neither needs to repeat the purge
+        logic.
         """
         _open_tools_db()
-        with Database.transaction(str(FileMapperService.get_mcp_tools_db_path())) as conn:
-            tool_names = McpTool.filter("server_id", server_id).pluck("tool_name")
-
-            if tool_names:
-                placeholders = ",".join("?" * len(tool_names))
-                try:
-                    vec_rows = conn.execute(
-                        f"SELECT rowid FROM mcp_tool_vectors WHERE tool_name IN ({placeholders})",
-                        tool_names,
-                    ).fetchall()
-                    if vec_rows:
-                        vec_rowids = [r[0] for r in vec_rows]
-                        rowid_placeholders = ",".join("?" * len(vec_rowids))
-                        conn.execute(
-                            f"DELETE FROM mcp_tools_vec WHERE rowid IN ({rowid_placeholders})",
-                            vec_rowids,
-                        )
-                    conn.execute(
-                        f"DELETE FROM mcp_tool_vectors WHERE tool_name IN ({placeholders})",
-                        tool_names,
-                    )
-                except sqlite3.OperationalError as exc:
-                    if "no such table" in str(exc).lower():
-                        # Vec tables absent (sqlite_vec unavailable) — expected.
-                        logger.debug("%s Vec purge skipped (tables absent): %s", _LOG_PREFIX, exc)
-                    else:
-                        # Any other operational error (locked/corrupt DB) is real —
-                        # surface it instead of masking it behind the absent-table case.
-                        logger.warning("%s Vec purge failed unexpectedly: %s", _LOG_PREFIX, exc)
-
+        with Database.transaction(str(FileMapperService.get_mcp_tools_db_path())):
             McpTool.filter("server_id", server_id).delete()
-            try:
-                conn.execute("INSERT INTO mcp_tools_fts(mcp_tools_fts) VALUES('rebuild')")
-            except sqlite3.OperationalError:
-                pass
 
     def _delete_policy_rows(self, server_id: str) -> None:
         """Clear one server's lazily-provisioned policy rows — one exact-match

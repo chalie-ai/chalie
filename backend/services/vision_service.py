@@ -11,6 +11,11 @@ _VISION_SYSTEM = (
     "You are a precise vision assistant. Follow the user's instructions exactly."
 )
 
+#: Output ceiling for the candidate-provider probe. The expected reply is a small
+#: JSON object describing a test image; this leaves ample room for it without
+#: needing a context window the candidate has not been pinned to yet.
+_PROBE_MAX_TOKENS = 2048
+
 
 
 def build_vision_config(provider: Dict[str, object]) -> Dict[str, object]:
@@ -34,6 +39,12 @@ def send_image_with_config(config: Dict[str, object], image_bytes: bytes,
     ProviderService.send, which resolves the configured provider. The call is still
     bounded — every client enforces PROVIDER_CALL_TIMEOUT_S at its HTTP boundary.
     Returns None on any failure.
+
+    ``max_tokens`` is explicit because this is the one send that has no context
+    window to size against: a candidate has no ``providers.context_window`` to
+    pin, and the reply being asked for is one short JSON object either way.
+    Every other send derives its budget from that column via
+    ``ProviderService.send``.
     """
     try:
         from services.provider_api import ProviderApiRequest  # noqa: PLC0415
@@ -51,6 +62,7 @@ def send_image_with_config(config: Dict[str, object], image_bytes: bytes,
             type=ProviderType.VISION,
             thinking_mode=ThinkingLevel.LOW,
             cache_prefix=False,
+            max_tokens=_PROBE_MAX_TOKENS,
         )
         client = build_client(config)
         response = client.send(dto)

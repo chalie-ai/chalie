@@ -1,8 +1,8 @@
 """
 Ollama thin client — wraps the Ollama /api/chat endpoint.
 
-Native size-rejection signal: HTTP 413 → ResponseOverLimitError.
-This client maps it to ResponseOverLimitError instead.
+Native size-rejection signal: HTTP 413 → ContextLimit.
+This client maps it to ContextLimit instead.
 
 Known quirk (preserved): the `think` flag is gated on model capability
 (via /api/show), NOT on ThinkingLevel. ThinkingLevel is effectively ignored
@@ -28,12 +28,13 @@ import requests
 
 from configs.enums.thinking_level import ThinkingLevel
 from contracts.provider_client import ProviderClient
+from services.llm_clients.context_window import default_window_for_model
 from services.llm_clients.thinking_map import OLLAMA_THINK
 from exceptions import (
+    ContextLimit,
     ProviderResponseError,
     ProviderTimeoutError,
     RateLimitError,
-    ResponseOverLimitError,
 )
 from services.provider_api import (
     PROVIDER_CALL_TIMEOUT_S,
@@ -121,12 +122,21 @@ def _parse_chat_response(data: dict[str, object], default_model: str) -> Provide
             }
             for tc in cast(list[object], raw_tool_calls)
         ]
+    # Ollama reports prompt_eval_duration and eval_duration in NANOSECONDS.
+    # Defensive read: keys may be absent on older versions or streaming
+    # responses; convert to float milliseconds only when present.
+    _prompt_duration = data.get('prompt_eval_duration')
+    prefill_ms = (_prompt_duration / 1e6) if isinstance(_prompt_duration, (int, float)) else None
+    _eval_duration = data.get('eval_duration')
+    decode_ms = (_eval_duration / 1e6) if isinstance(_eval_duration, (int, float)) else None
     return ProviderApiResponse(
         text=text,
         model=cast(str, data.get('model', default_model)),
         provider='ollama',
         tokens_input=cast(Optional[int], data.get('prompt_eval_count')),
         tokens_output=cast(Optional[int], data.get('eval_count')),
+        prefill_ms=prefill_ms,
+        decode_ms=decode_ms,
         tool_calls=tool_calls,
         stop_reason='tool_use' if tool_calls else 'end_turn',
         response_code=200,
@@ -219,9 +229,9 @@ class OllamaClient(ProviderClient):
         if status == 429:
             raise RateLimitError(str(exc), provider='ollama') from exc
         if status == 413:
-            raise ResponseOverLimitError(
+            raise ContextLimit(
                 f"Ollama rejected payload with HTTP 413 (model={self.model})",
-                response_code=413, provider='ollama',
+                provider='ollama',
             ) from exc
         raise ProviderResponseError(str(exc), response_code=status or 0, provider='ollama') from exc
 
@@ -250,11 +260,20 @@ class OllamaClient(ProviderClient):
             self._handle_http_error(exc)
             raise  # pragma: no cover — _handle_http_error always raises
 
-    def get_context_limit(self) -> int:
-        """Query Ollama for model's context window size, cached per-instance."""
+    def get_context_limit(self) -> int | None:
+        """Query Ollama for the model's context window size, cached per-instance.
+
+        ``/api/show`` answering is itself the liveness proof, so a host that
+        replies without a ``context_length`` in ``model_info`` still yields a
+        family-based default rather than nothing — an unmeasured provider raises
+        on every turn, which is strictly worse than a conservative window.
+
+        Returns None only when the host cannot be reached or refuses the model:
+        a briefly-down Ollama must not stamp a fabricated window onto its row.
+        """
         if hasattr(self, '_cached_context_limit'):
             return self._cached_context_limit
-        raw_limit: Optional[int] = None
+        raw_limit: int | None = None
         try:
             resp = requests.post(
                 f"{self.host}/api/show",
@@ -268,11 +287,26 @@ class OllamaClient(ProviderClient):
                     if 'context_length' in key.lower():
                         raw_limit = int(val)
                         break
+                if raw_limit is None:
+                    raw_limit = default_window_for_model(self.model)
+                    logger.info(
+                        "[OllamaClient] /api/show reported no context_length for model=%s "
+                        "— using the family default %d",
+                        self.model, raw_limit,
+                    )
+            else:
+                logger.warning(
+                    "[OllamaClient] /api/show returned HTTP %s for model=%s — "
+                    "leaving the window unset; the next send re-probes it",
+                    resp.status_code, self.model,
+                )
         except Exception as exc:
-            logger.debug("[OllamaClient] Failed to get context limit: %s", exc)
-        if raw_limit is None:
-            raw_limit = 8192  # Conservative default
-        self._cached_context_limit: int = raw_limit
+            logger.warning(
+                "[OllamaClient] Could not reach %s to size model=%s: %s",
+                self.host, self.model, exc,
+            )
+
+        self._cached_context_limit: int | None = raw_limit
         return self._cached_context_limit
 
     def estimate_request_tokens(self, dto: ProviderApiRequest) -> int:

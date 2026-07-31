@@ -24,12 +24,6 @@ class McpTools(Action):
     cookie_only_methods: ClassVar[frozenset[str]] = frozenset({"get"})
     response_dto = {"get": DocumentedResponse(McpTool, listing=True)}
 
-    def slug(self) -> str:
-        return "mcp-clients"
-
-    def verb(self) -> str:
-        return "tools"
-
     def get(self, id: int | str) -> ResponseReturnValue:
         svc = McpClientService()
         server_id = cast(str, id)

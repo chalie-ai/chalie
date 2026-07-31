@@ -11,12 +11,15 @@
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
-pip install -e backend/                 # core dependencies
-pip install -e 'backend/[voice-cpu]'    # optional TTS/STT (GPU/ROCm variants in backend/pyproject.toml)
+pip install -e backend/                 # all dependencies, voice (TTS/STT/VAD) included
 python backend/run.py                   # SQLite auto-initializes; no external services required
 ```
 
 There is no `.env` and no environment-variable configuration: code-level config is Python constants, runtime settings live in the Brain interface, and secrets auto-generate on first run.
+
+This manual flow syncs Python dependencies only. The Playwright browser and the on-device voice models are fetched once by `installer/install.sh` (or the Docker build), not by `pip install -e backend/` or `python backend/run.py` — abilities that need them fail loudly with a reinstall hint until you've run the installer at least once.
+
+`run.py` will not start with a dependency missing. Before any heavy import it checks every entry in `backend/pyproject.toml` against the installed distributions; if one is absent it names it on stderr, serves a terminal error page on the public port instead of the starting page, and exits non-zero. A backend that boots without its dependencies silently takes the degraded branch of some `except ImportError` and lies about its own state. So after a pull that changes `pyproject.toml`, re-run `pip install -e backend/`.
 
 Frontend:
 
@@ -46,7 +49,7 @@ Write feature tests, not mock theater: drive the real entry point on the real st
 - Schema changes ship with a migration in `backend/migrations/` in the same commit. A migration module exposes `needed(conn)` (self-contained precondition — False on databases already in target shape) and `apply(db_path)`, and registers in `migrations/runner.py`'s `_STEPS`; the runner records each outcome once in the `schema_migrations` ledger at boot.
 - No single-use variables — inline `call_func(y)`, not `x = y; call_func(x)`.
 - Match the surrounding code's style and comment density; comments explain *why*, never *what*.
-- New REST endpoints subclass `api.endpoint.Endpoint` (CRUD groups, `backend/api/endpoints/`) or `api.action.Action` (verb operations, `backend/api/actions/<slug>/<verb>.py`) — the base owns routing, auth, and response envelopes; handlers never build them. Legacy module-level Namespaces are being migrated onto this contract.
+- New REST endpoints subclass `api.endpoint.Endpoint` (CRUD groups, `backend/api/endpoints/`) or `api.action.Action` (verb operations, `backend/api/actions/<slug>/<verb>.py`) — the base owns routing, auth, and response envelopes; handlers never build them. A controller declares no path of its own: mount it in `backend/api/routes.py`, the single table every URL comes from — a class under either directory that the table forgets makes that module refuse to import, naming it, rather than 404-ing at runtime. Legacy module-level Namespaces are being migrated onto this contract.
 - A feature that introduces a new concept adds its term to [VOCABULARY.md](VOCABULARY.md).
 
 ## Git workflow

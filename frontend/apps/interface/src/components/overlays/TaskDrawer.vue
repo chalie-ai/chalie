@@ -322,8 +322,8 @@ onBeforeUnmount(() => {
     border-color 0.15s ease;
 
   &:hover {
-    color: var(--error, #e55);
-    border-color: var(--error, #e55);
+    color: var(--error);
+    border-color: var(--error);
   }
 }
 

@@ -10,7 +10,7 @@
 
 The describe ladder (vision provider primary, OCR fallback) lives in
 ``services/image_description.py`` as ``ImageDescription``; this file is the
-user-facing tool that drives it through ``DocumentService`` + ``FileMapperService``.
+user-facing tool that drives it directly on the image filepath.
 
 The paired channel config (``VisionConfig``) lives in
 ``configs/channels/vision.py`` — delegate configs are ProcessorConfig subclasses
@@ -19,19 +19,22 @@ and belong with the other channels, not in the ability."""
 from __future__ import annotations
 
 import logging
-from typing import ClassVar, cast
+import os
+from typing import ClassVar
 
 from abilities._delegate import DelegateAbility
 from configs.enums.param_key import Keys
 from abilities._result import ToolResult
+from contracts.params.param_bag import ParamBag
+from contracts.params.vision_params_bag import VisionParamsBag
+from configs.enums.ability_category import AbilityCategory
 
 logger = logging.getLogger(__name__)
 
 
 
-class VisionAbility(DelegateAbility):
-    def get_name(self) -> str:
-        return "vision"
+class VisionAbility(DelegateAbility[VisionParamsBag]):
+    SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("see image", "describe image", "analyze image", "look at image")
 
     def get_summary(self) -> str:
         return (
@@ -55,10 +58,16 @@ class VisionAbility(DelegateAbility):
         return "read & see image contents"
 
     # Action-less single-purpose tool: the dispatcher pre-gate rejects a MISSING
-    # or empty image/query as code=missing-params before run() is reached
-    # (precedent: save_graph.py, save_pattern.py, file_permissions.py). The
-    # pre-gate is truthiness-based, so whitespace-only residue still reaches run().
-    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.image, Keys.query)}
+    # or empty image/instructions as code=missing-params before run() is reached
+    # (precedent: save_graph.py, save_pattern.py). The pre-gate is
+    # truthiness-based; the bag's from_params rejects the whitespace-only residue.
+    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.image, Keys.instructions)}
+
+    # The typed input contract: the dispatch seam builds the bag via
+    # VisionParamsBag.from_params before run() is called.
+    PARAMS: ClassVar[type[ParamBag] | None] = VisionParamsBag
+    NAME: ClassVar[str] = "vision"
+    CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.DELEGATE
 
     _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
@@ -66,59 +75,36 @@ class VisionAbility(DelegateAbility):
             Keys.image: {
                 "type": "string",
                 "description": (
-                    "The 8-character document id (doc_id). If this is not available "
-                    "in context, use the `document.search` tool to look it up."
+                    "Absolute filepath to the image file. Must be a path on disk "
+                    "that the agent can read."
                 ),
             },
-            Keys.query: {
+            Keys.instructions: {
                 "type": "string",
                 "description": "What to find out about the image, in natural language.",
             },
         },
-        "required": [Keys.image, Keys.query],
+        "required": [Keys.image, Keys.instructions],
     }
 
     def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    def run(self, params: dict[str, object]) -> ToolResult:
-        # The dispatcher pre-gate is truthiness-based, so a non-empty but
-        # whitespace-only image/query slips past it and must be rejected here
-        # (precedent: save_graph.py, file_permissions.py).
-        doc_id = (cast(str, params.get(Keys.image)) or "").strip()
-        query = (cast(str, params.get(Keys.query)) or "").strip()
-        if not doc_id or not query:
-            missing = ", ".join(
-                name for name, val in (("image", doc_id), ("query", query)) if not val
-            )
-            return ToolResult.err(
-                f"Missing required parameter(s): {missing}.",
-                code="missing-params",
-                valid=("image", "query"),
-            )
+    def run(self, params: VisionParamsBag) -> ToolResult:
+        image_path = params.image
+        instructions = params.instructions
 
-        from services.document_service import DocumentService  # noqa: PLC0415
-        from services.file_mapper_service import FileMapperService  # noqa: PLC0415
-
-        doc = DocumentService().get_document(doc_id)
-        if not doc:
+        if not os.path.isfile(image_path):
             return ToolResult.err(
-                f"No document found for id={doc_id}.",
+                f"Image file not found: {image_path}",
                 code="not-found",
-                hint="use document.search to look up the document id",
-            )
-        if not doc.get("file_path"):
-            return ToolResult.err(
-                f"Document {doc_id} has no file on disk.",
-                code="no-file-on-disk",
-                hint="the document has no stored file; re-upload the image",
+                hint="Check the filepath and ensure the image exists on disk",
             )
 
-        abs_path = str(FileMapperService.get_documents_path(cast(str, doc["file_path"])))
         try:
             from services.image_description import ImageDescription  # noqa: PLC0415
 
-            description = ImageDescription(abs_path, query).get_value()
+            description = ImageDescription(image_path, instructions).get_value()
         except Exception as exc:  # noqa: BLE001 — surfaced, never swallowed
             logger.exception("[VISION] describe failed")
             return ToolResult.err(

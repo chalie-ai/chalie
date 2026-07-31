@@ -6,9 +6,10 @@ The model thinks as little as possible: it names WHAT to act on by visible text
 delegate run (key = the invoking mp's transcript uid); every successful call
 returns the same JSON envelope DICT with a mechanical `changed` diff (the
 dispatcher renders it as compact JSON — never a pre-dumped JSON string).
-Screenshots ingest through the same document pipeline chat attachments use, so
-the page's vision description is produced at ingest time and rides back inline in
-the screenshot result — the agent sees the page without a separate vision call.
+Screenshots ingest through the same file-ingest pipeline (FileParserService)
+chat attachments use, so the page's vision description is produced at ingest
+time and rides back inline in the screenshot result — the agent sees the page
+without a separate vision call.
 
 Every result is an :class:`abilities._result.ToolResult` built only via
 ``ok()`` / ``err()``. Errors carry a STABLE KEBAB-CASE ``code`` (never the
@@ -25,25 +26,38 @@ from typing import ClassVar, cast
 from urllib.parse import urlparse
 
 from abilities._ability import Ability
-from configs.enums.param_key import Keys
 from abilities._result import ToolResult
-from tools.browser.session import record_screenshot, run_verb
+from configs.enums.param_key import Keys
+from contracts.params.browser_params_bag import (
+    BrowserBackParams,
+    BrowserClickParams,
+    BrowserFillParams,
+    BrowserFindParams,
+    BrowserOpenParams,
+    BrowserParamsBag,
+    BrowserReadParams,
+    BrowserScreenshotParams,
+    BrowserScrollParams,
+    BrowserSelectParams,
+    BrowserStyleParams,
+)
+from contracts.params.param_bag import ParamBag
+from tools.browser.session import run_verb
 
 logger = logging.getLogger(__name__)
 
 
-class BrowserAbility(Ability):
+class BrowserAbility(Ability[BrowserParamsBag]):
     DISCOVERABLE: ClassVar[bool] = False  # delegate-exclusive; pinned on WebBrowseConfig only
+    NAME: ClassVar[str] = "browser"
 
-    def get_name(self) -> str:
-        return "browser"
 
     def get_summary(self) -> str:
         return (
             "Drive a web page step by step: open a URL, read it, find text on it, "
             "click buttons and links by their visible label, fill and submit forms, "
             "scroll, go back, read an element's exact computed colours and fonts, "
-            "and capture screenshots into the document store. The "
+            "and capture screenshots into the documents folder. The "
             "page stays open between calls; every action returns the same JSON "
             "envelope describing the page and what just changed."
         )
@@ -131,41 +145,93 @@ class BrowserAbility(Ability):
         "style": (Keys.target,),
     }
 
-    # verb -> params forwarded to the session layer (the required half is the
-    # dispatcher pre-gate's job, above).
-    _FORWARDED: ClassVar[dict[str, tuple[str, ...]]] = {
-        "open": (Keys.url,),
-        "read": (Keys.section,),
-        "find": (Keys.query,),
-        "click": (Keys.target,),
-        "fill": (Keys.target, Keys.value_),
-        "select": (Keys.target, Keys.value_),
-        "scroll": (Keys.direction,),
-        "back": (),
-        "screenshot": (),
-        "style": (Keys.target,),
-    }
+    # The typed input contract: the dispatch seam builds the bag via
+    # BrowserParamsBag.from_params before run() is called.
+    PARAMS: ClassVar[type[ParamBag] | None] = BrowserParamsBag
 
-    def run(self, params: dict[str, object]) -> ToolResult:
-        action = (cast("str", params.get(Keys.action)) or "").strip().lower()
-        if action == "open":
-            from tools.browser.security import validate_url  # noqa: PLC0415
-            ok, reason = validate_url(str(params[Keys.url]).strip())
-            if not ok:
-                return ToolResult.err(
-                    f"URL blocked: {reason}",
-                    code="url-blocked",
-                    hint="Only public http(s) URLs are reachable; private, "
-                         "loopback, link-local and non-http(s) URLs are refused.",
-                )
-        if action == "screenshot":
+    def run(self, params: BrowserParamsBag) -> ToolResult:
+        # The router factory only ever yields the ten leaves; a hand-built
+        # foreign subclass (or the bare router) is rejected loudly BEFORE the
+        # shared path reads a field it may not carry.
+        if not isinstance(
+            params,
+            (
+                BrowserOpenParams, BrowserReadParams, BrowserFindParams,
+                BrowserClickParams, BrowserFillParams, BrowserSelectParams,
+                BrowserScrollParams, BrowserBackParams, BrowserScreenshotParams,
+                BrowserStyleParams,
+            ),
+        ):
+            return ToolResult.err(
+                f"Unknown browser params bag: {type(params).__name__}.",
+                code="unknown-action",
+                valid=("open", "read", "find", "click", "fill", "select", "scroll", "back", "screenshot", "style"),
+            )
+
+        if isinstance(params, BrowserOpenParams):
+            return self._do_open(params)
+        if isinstance(params, BrowserReadParams):
+            return self._do_read(params)
+        if isinstance(params, BrowserFindParams):
+            return self._do_find(params)
+        if isinstance(params, BrowserClickParams):
+            return self._do_click(params)
+        if isinstance(params, BrowserFillParams):
+            return self._do_fill(params)
+        if isinstance(params, BrowserSelectParams):
+            return self._do_select(params)
+        if isinstance(params, BrowserScrollParams):
+            return self._do_scroll(params)
+        if isinstance(params, BrowserBackParams):
+            return self._do_back()
+        if isinstance(params, BrowserScreenshotParams):
             return self._screenshot()
-        kwargs: dict[str, object] = {
-            k: str(params[k]).strip()
-            for k in self._FORWARDED[action]
-            if str(params.get(k) or "").strip()
-        }
-        envelope = self._run_verb(action, kwargs)
+        return self._do_style(params)
+
+    def _do_open(self, params: BrowserOpenParams) -> ToolResult:
+        from tools.browser.security import validate_url  # noqa: PLC0415
+        ok, reason = validate_url(params.url)
+        if not ok:
+            return ToolResult.err(
+                f"URL blocked: {reason}",
+                code="url-blocked",
+                hint="Only public http(s) URLs are reachable; private, "
+                     "loopback, link-local and non-http(s) URLs are refused.",
+            )
+        envelope = self._run_verb("open", {"url": params.url})
+        return self._reply(envelope)
+
+    def _do_read(self, params: BrowserReadParams) -> ToolResult:
+        kwargs: dict[str, object] = {"section": params.section} if params.section else {}
+        envelope = self._run_verb("read", kwargs)
+        return self._reply(envelope)
+
+    def _do_find(self, params: BrowserFindParams) -> ToolResult:
+        envelope = self._run_verb("find", {"query": params.query})
+        return self._reply(envelope)
+
+    def _do_click(self, params: BrowserClickParams) -> ToolResult:
+        envelope = self._run_verb("click", {"target": params.target})
+        return self._reply(envelope)
+
+    def _do_fill(self, params: BrowserFillParams) -> ToolResult:
+        envelope = self._run_verb("fill", {"target": params.target, "value": params.value})
+        return self._reply(envelope)
+
+    def _do_select(self, params: BrowserSelectParams) -> ToolResult:
+        envelope = self._run_verb("select", {"target": params.target, "value": params.value})
+        return self._reply(envelope)
+
+    def _do_scroll(self, params: BrowserScrollParams) -> ToolResult:
+        envelope = self._run_verb("scroll", {"direction": params.direction})
+        return self._reply(envelope)
+
+    def _do_back(self) -> ToolResult:
+        envelope = self._run_verb("back", {})
+        return self._reply(envelope)
+
+    def _do_style(self, params: BrowserStyleParams) -> ToolResult:
+        envelope = self._run_verb("style", {"target": params.target})
         return self._reply(envelope)
 
     def _run_verb(self, verb: str, kwargs: dict[str, object]) -> dict[str, object]:
@@ -196,58 +262,40 @@ class BrowserAbility(Ability):
         if grabbed.get("error"):
             return self._reply(grabbed)
 
-        from abilities.document import ingest_file  # noqa: PLC0415
-        from services.document_service import DocumentService  # noqa: PLC0415
+        from services.file_parser_service import FileParserService  # noqa: PLC0415
         from services.tmp_storage import new_tmp_path  # noqa: PLC0415
 
         page: dict[str, object] = cast("dict[str, object]", grabbed["page"])
         host = urlparse(cast("str", page["url"])).hostname or "page"
-        doc_svc = DocumentService()
         tmp = new_tmp_path(f"{token_hex(4)}.png")
         try:
             with open(tmp, "wb") as fh:
                 fh.write(cast("bytes", grabbed["png"]))
-            ingested = ingest_file(
-                doc_svc,
+            saved_path, extracted_text = FileParserService().ingest(
                 tmp,
                 name=f"screenshot-{host}.png",
                 subdir="screenshots",
-                source_type="screenshot",
             )
-        finally:
-            if os.path.isfile(tmp):
-                os.remove(tmp)
-        if ingested.get("error") or ingested.get("status") != "ready":
+        except ValueError as exc:
             return ToolResult.err(
-                f"Screenshot ingest failed: {ingested.get('error') or ingested.get('status')}",
+                f"Screenshot ingest failed: {exc}",
                 code="screenshot-ingest-failed",
                 hint="The page was captured but could not be stored or read; retry "
                      "the screenshot.",
                 url=cast("str", page["url"]),
             )
+        finally:
+            if os.path.isfile(tmp):
+                os.remove(tmp)
 
-        record_screenshot(self._session_key(), cast("str", ingested["id"]), cast("str", page["url"]))
-        # The shared ingest already ran the page through vision (a screenshot is an
-        # image, so it routes to services.image_description.ImageDescription),
-        # storing the description as the document's clean_text — the same content
-        # document(action='view') surfaces. Hand it back inline so the agent sees
-        # the page directly.
-        doc = doc_svc.get_document(cast("str", ingested["id"]))
-        if doc is None:
-            return ToolResult.err(
-                "Screenshot stored but its document record vanished before it "
-                "could be read.",
-                code="screenshot-doc-missing",
-                hint="Retry the screenshot.",
-                url=cast("str", page["url"]),
-            )
+        # The FileParserService already ran the image through vision (via
+        # ImageDescription), storing the description as the extracted text.
+        # Hand it back inline so the agent sees the page directly.
         return ToolResult.ok({
             "page": page,
             "data": {
-                "doc_id": ingested["id"],
-                "name": ingested["name"],
-                "status": ingested["status"],
-                "vision": doc.get("clean_text") or "",
+                "name": os.path.basename(saved_path),
+                "vision": extracted_text,
             },
             "changed": {"navigated": False, "dialog": None, "popup": None, "summary": ""},
             "error": None,

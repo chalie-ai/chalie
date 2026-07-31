@@ -27,3 +27,4 @@ class ProviderRequest(Request):
     api_key: str | None = None
     dimensions: int | None = None
     timeout: int | None = Field(default=120)
+    context_window: int | None = None

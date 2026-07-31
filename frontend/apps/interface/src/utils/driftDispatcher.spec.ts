@@ -76,6 +76,11 @@ vi.mock('../stores/permissions', () => ({
   usePermissionsStore: () => ({ enqueue: enqueueMock }),
 }));
 
+const { recordVoiceMock } = vi.hoisted(() => ({ recordVoiceMock: vi.fn() }));
+vi.mock('../stores/voiceTranscripts', () => ({
+  useVoiceTranscriptsStore: () => ({ record: recordVoiceMock }),
+}));
+
 const { dispatchDrift, registerSessionHooks } = await import('./driftDispatcher');
 
 // Fake stand-in for the SessionHooks a real `session.init()` would register —
@@ -189,8 +194,11 @@ describe('dispatchDrift — turn_signal frame', () => {
   // frames alone. Without it, the SOLE releaser is the execution path and
   // `_reconcileWorking` never touches the hold, so the spine's `isSurfaceBusy`
   // gate strands forever and every later send silently queues.
-  it('status=updated releases the send\'s POST-scoped busy hold', () => {
+  it('status=updated releases the send\'s POST-scoped busy hold only AFTER the refetch settles — releasing sooner would let a second queued send slip through against stale state (TKT-1516)', async () => {
     dispatchDrift(frame({ status: 'updated', turn_id: 11, type: 'user' }));
+    expect(releasePendingSendMock).not.toHaveBeenCalled();
+    await Promise.resolve();
+    await Promise.resolve();
     expect(releasePendingSendMock).toHaveBeenCalledWith(11, 'user');
   });
 
@@ -214,6 +222,31 @@ describe('dispatchDrift — turn_signal frame', () => {
   it('status=provider_retry falls back to the default retry copy when no message is present', () => {
     dispatchDrift(frame({ status: 'provider_retry', type: 'user' }));
     expect(showToastMock).toHaveBeenCalledWith('The AI provider had a problem — retrying…');
+  });
+
+  // Pre-synthesis pushes these as it moves a settled reply pending → ready/failed.
+  // The frame is addressed by transcript row, so it carries no turn_id and no
+  // type — and it must NOT be treated as a turn signal that needs either.
+  it('status=voice_transcript records the state against its transcript row, with no refetch and no DOM effect', () => {
+    dispatchDrift(frame({ status: 'voice_transcript', transcript_id: 412, state: 'ready' }));
+    expect(recordVoiceMock).toHaveBeenCalledWith(412, 'ready');
+    expect(threadMock).not.toHaveBeenCalled();
+    expect(upsertTurnToSurfacesMock).not.toHaveBeenCalled();
+  });
+
+  it('a voice_transcript frame with no transcript_id is claimed and dropped — there is no row to paint', () => {
+    dispatchDrift(frame({ status: 'voice_transcript', state: 'ready' }));
+    expect(recordVoiceMock).not.toHaveBeenCalled();
+  });
+
+  // The store's state union is the contract; anything outside it would paint an
+  // unstyled button forever, so it is dropped loudly rather than stored.
+  it('a voice_transcript frame carrying an unknown state warns and stores nothing', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => { /* silence */ });
+    dispatchDrift(frame({ status: 'voice_transcript', transcript_id: 412, state: 'synthesizing' }));
+    expect(recordVoiceMock).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
   });
 });
 
@@ -318,11 +351,78 @@ describe('dispatchDrift — turn_execution frame', () => {
     expect(drainQueuesMock).toHaveBeenCalled();
   });
 
-  it('every turn_execution state releases the send\'s POST-scoped busy hold', () => {
-    for (const [i, state] of (['working', 'completed', 'cancelled', 'crashed'] as const).entries()) {
+  it('completed/cancelled/crashed release the send\'s POST-scoped busy hold synchronously', () => {
+    for (const [i, state] of (['completed', 'cancelled', 'crashed'] as const).entries()) {
       dispatchDrift(frame({ state, turn_id: 50 + i, started_at: '2026-01-01T00:00:00Z', type: 'user' }));
       expect(releasePendingSendMock).toHaveBeenCalledWith(50 + i, 'user');
     }
+  });
+
+  // A crash is the ONLY terminal state with nothing behind it: the backend
+  // emits one lifecycle frame and stops, and a crashed turn frequently has no
+  // assistant row, so TranscriptService never fires the 'updated' signal that
+  // masks the same hole on 'completed'. Without a refetch here the rendered
+  // block keeps the `working: true` it was last upserted with — TurnView keeps
+  // appending its live-act row and renders 'thinking…' forever — and `crashed`,
+  // which only ever arrives over REST, never reaches the crash note built for
+  // exactly this case. Force, because a terminal frame outranks the version
+  // guard.
+  it('state=crashed refetches the settled block with force, so working clears and crashed can render', async () => {
+    threadMock.mockResolvedValue({
+      turn_id: 40, gist: null, preview: 'x', last_activity_at: null, working: false, crashed: true,
+      duration_ms: 0, type: 'user',
+      messages: [{ id: '1', role: 'user', content: 'hi', timestamp: '2026-01-01 00:00:00', turn_id: 40 }],
+    });
+    dispatchDrift(frame({ state: 'crashed', turn_id: 40, started_at: '2026-01-01T00:00:00Z', type: 'user' }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(threadMock).toHaveBeenCalledWith(40, 'user');
+    expect(upsertTurnToSurfacesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ turn_id: 40, working: false, crashed: true }), 'user', { force: true },
+    );
+    expect(setErrorMessageMock).toHaveBeenCalled();
+  });
+
+  // Same terminal path, deliberately: 'completed' must settle on its own frame
+  // rather than depending on append_assistant's 'updated' winning a race it is
+  // not guaranteed to win.
+  it('state=completed refetches the settled block with force too — one common terminal path', async () => {
+    threadMock.mockResolvedValue({
+      turn_id: 41, gist: null, preview: 'x', last_activity_at: null, working: false,
+      duration_ms: 0, type: 'user',
+      messages: [{ id: '1', role: 'assistant', content: 'done', timestamp: '2026-01-01 00:00:00', turn_id: 41 }],
+    });
+    dispatchDrift(frame({ state: 'completed', turn_id: 41, started_at: '2026-01-01T00:00:00Z', type: 'user' }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(upsertTurnToSurfacesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ turn_id: 41, working: false }), 'user', { force: true },
+    );
+    expect(setErrorMessageMock).not.toHaveBeenCalled();
+  });
+
+  // The settle bookkeeping is synchronous and must not become contingent on
+  // the network: a refetch that never resolves cannot re-wedge the send gate.
+  it('state=crashed still settles synchronously when the refetch rejects', async () => {
+    threadMock.mockRejectedValue(new Error('network down'));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => { /* silence */ });
+    dispatchDrift(frame({ state: 'crashed', turn_id: 42, started_at: '2026-01-01T00:00:00Z', type: 'user' }));
+    expect(releasePendingSendMock).toHaveBeenCalledWith(42, 'user');
+    expect(setTurnWorkingMock).toHaveBeenCalledWith(42, 'user', false);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  // 'working' is the one state with an in-flight refetch — releasing the hold
+  // synchronously here would reopen the spine's busy gate before that refetch
+  // resolves, letting a second queued send slip through against stale
+  // (pre-refetch) state (TKT-1516). The release must wait for the refetch to
+  // settle.
+  it('state=working releases the send\'s POST-scoped busy hold only AFTER the refetch settles', async () => {
+    dispatchDrift(frame({ state: 'working', turn_id: 60, started_at: '2026-01-01T00:00:00Z', type: 'user' }));
+    expect(releasePendingSendMock).not.toHaveBeenCalled();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(releasePendingSendMock).toHaveBeenCalledWith(60, 'user');
   });
 
   it('state=cancelled still clears data-working and drains queues when the refetch rejects', async () => {

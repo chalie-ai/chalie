@@ -42,7 +42,7 @@ Most AI tools forget you the moment you close the tab. Chalie runs on your own m
 | 🔌 **MCP, in and out** | Connects to remote MCP servers and exposes its own tools to other agents. |
 | 📬 **Email, calendar, contacts** | IMAP, CalDAV, CardDAV — the accounts you already have. |
 | 🗓 **Scheduler & places** | Natural-language recurring jobs and location-aware nudges. |
-| 🐍 **Files, shell & code** | Searches files, runs guarded shell commands, executes sandboxed Python. |
+| 🧰 **Files, shell & code** | Searches files, runs guarded shell commands, and delegates coding tasks to an agent that writes and runs TypeScript in its own persistent, sandboxed workspace. |
 | 🎙 **Voice, fully local** | Moonshine STT + Kokoro TTS, both ONNX. No cloud transcription, ever. |
 | 💾 **Backup & restore** | Snapshot the whole instance to one file, optionally AES-256 encrypted. |
 
@@ -68,8 +68,7 @@ ollama pull gemma4:31b   # the open model that placed in the benchmark's front p
 **From source:**
 ```bash
 git clone https://github.com/chalie-ai/chalie.git && cd chalie
-uv pip install --system -e backend/          # core deps · Python 3.11+
-uv pip install --system -e backend/[voice]   # optional: TTS/STT
+uv pip install --system -e backend/          # all dependencies, voice (TTS/STT/VAD) included · Python 3.11+
 ./run.sh  # → http://localhost:31025/on-boarding/
 ```
 

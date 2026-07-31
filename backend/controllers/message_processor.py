@@ -57,6 +57,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import shutil
 from collections import Counter
 from threading import Thread
 from typing import TYPE_CHECKING, Protocol, cast
@@ -66,10 +67,10 @@ from configs.enums.channels import Channel
 from configs.enums.provider_type import ProviderType
 from configs.enums.thinking_level import ThinkingLevel
 from exceptions import (
+    ContextLimit,
+    EmptyCompletionLoop,
     ProviderResponseError,
     ProviderRetriesExhaustedError,
-    RequestOverCapError,
-    ResponseOverLimitError,
     RunAwayLoop,
 )
 from models.provider_request import ProviderRequest
@@ -100,8 +101,7 @@ logger = logging.getLogger(__name__)
 _MAX_PROVIDER_ATTEMPTS = 3
 #: Real tool-calls a ``user`` turn must make before a proactive-skill scan fires.
 _PROACTIVE_SUGGESTION_MIN_CALLS = 4
-#: Pulls the document id out of the upload ability's JSON result for doc-linking.
-_SEED_UPLOAD_ID_RE = re.compile(r'"id":"([0-9a-f]+)"')
+
 #: Runaway-loop thresholds. A turn has no iteration cap, so a model stuck
 #: re-emitting the same tool call or the same prose would loop until the context
 #: caps out. The same (tool, params) invoked this many times, or the same
@@ -109,6 +109,23 @@ _SEED_UPLOAD_ID_RE = re.compile(r'"id":"([0-9a-f]+)"')
 #: trips a loud ``RunAwayLoop`` (a CRASHED turn).
 _RUNAWAY_TOOL_CALL_LIMIT = 5
 _RUNAWAY_TEXT_LIMIT = 3
+
+#: Empty-completion steers granted before the turn trips ``EmptyCompletionLoop``
+#: (a CRASHED turn): a completion with no tool calls and no text, on a turn with
+#: no tool activity at all, is steered into a retry — the steer text enters the
+#: next request body, since without it the re-send would be byte-identical.
+_EMPTY_COMPLETION_STEER_LIMIT = 2
+_EMPTY_COMPLETION_STEER = (
+    "Your previous reply was empty — no message and no tool calls. An empty "
+    "reply is never a valid answer. Address the user's request now: call the "
+    "tools you need, or write your reply."
+)
+
+#: Consecutive ``ContextLimit`` hits a single turn may recover from before the
+#: error is allowed out. Compaction is the only lever, so a hit that survives it
+#: will survive the next one too — recursing past this is an infinite loop, not
+#: persistence.
+_CONTEXT_LIMIT_RECOVERY_LIMIT = 3
 
 
 class _TurnCancelled(Exception):
@@ -165,9 +182,23 @@ class MessageProcessor:
         # Runaway-loop guard tallies — scoped to this turn_execution (this
         # instance persists across the whole recursive _step chain). Keyed by
         # identical tool call ``(name, canonical-params)`` and by identical
-        # (stripped, non-empty) response text; read only in _guard_runaway.
+        # (stripped, non-empty) response text. ``_invocation_key`` is the shared
+        # key constructor; ``repeat_call_count`` is the read path used by
+        # DispatchService to steer from the second identical call;
+        # ``_guard_runaway`` is the only writer.
         self._tool_invocations: Counter[tuple[str, str]] = Counter()
         self._text_emissions: Counter[str] = Counter()
+
+        # Empty-completion guard — scoped to this turn_execution like the tallies
+        # above: counts completions with no tool calls and no text on a turn with
+        # no tool activity at all; the flag arms a one-shot steer for the next
+        # _build_messages.
+        self._empty_completions: int = 0
+        self._empty_completion_steer: bool = False
+        # Reset by every send that gets through, so it counts consecutive
+        # failures to fit rather than a turn's lifetime total — a long turn may
+        # legitimately outgrow the window more than once as tools add output.
+        self._context_limit_hits: int = 0
 
         # Infrastructure handles.
         self.db = Database()
@@ -279,8 +310,10 @@ class MessageProcessor:
     def _step(self) -> str:
         """One provider step, recursing until the model stops calling tools.
 
-        Send → on over-cap, compact and continue (re-enter with the transcript
-        reviewer armed) → store any prose the model emitted → if it made no tool
+        Send → on ``ContextLimit``, compact and continue (re-enter with the
+        transcript reviewer armed; a payload that will not shrink is let out
+        after ``_CONTEXT_LIMIT_RECOVERY_LIMIT`` attempts rather than spun on)
+        → store any prose the model emitted → if it made no tool
         calls the turn is done (end); otherwise dispatch the calls and recurse.
         A cancel observed at the top of any step aborts the whole turn. Every
         provider client is a single blocking, non-streaming call (§ llm_clients/*)
@@ -294,17 +327,42 @@ class MessageProcessor:
             raise _TurnCancelled()
         try:
             response = self._send_with_retry(self._build_request())
-        except (RequestOverCapError, ResponseOverLimitError):
-            self.dispatch_service.dispatch("chat_history_compactor", {"act_summary": "Compacting conversation"})
-            self.post_compaction_continuation = True
-            if "review_transcript" not in self.active_tools:
-                self.active_tools.append("review_transcript")
+        except ContextLimit as limit:
+            # Compaction is the only lever here, so a hit that survives it is
+            # not a retry — it is a request that cannot be made to fit (one
+            # oversized turn, a window smaller than the prompt itself). Let it
+            # out rather than recursing forever on an unshrinkable payload.
+            self._context_limit_hits += 1
+            if self._context_limit_hits > _CONTEXT_LIMIT_RECOVERY_LIMIT:
+                raise
+            limit.recover()
             return self._step()
+        self._context_limit_hits = 0
         self.post_compaction_continuation = False
         if self.turn_execution_service.should_stop():
             raise _TurnCancelled()
         tool_calls = response.tool_calls
         if not tool_calls:
+            if not (response.text or "").strip() and not self._tool_invocations:
+                # The model did NOTHING this turn: no text, no tool calls now,
+                # and no tool activity on any earlier step (the tally is
+                # populated by every tool-bearing step). Settling would store
+                # an empty assistant row and render silence as an answered
+                # turn. A turn that DID run tools may still finish silently —
+                # background channels end that way by design.
+                self._empty_completions += 1
+                if self._empty_completions > _EMPTY_COMPLETION_STEER_LIMIT:
+                    raise EmptyCompletionLoop(
+                        f"turn {self.turn_id}: model returned "
+                        f"{self._empty_completions} empty completions (no text, "
+                        f"no tool calls) — refusing to settle an unanswered turn",
+                    )
+                logger.warning(
+                    "[MessageProcessor] turn %s: empty completion %s/%s — steering a retry",
+                    self.turn_id, self._empty_completions, _EMPTY_COMPLETION_STEER_LIMIT,
+                )
+                self._empty_completion_steer = True
+                return self._step()
             formatted = self._store(response.text)
             self._end(response.text)
             return formatted
@@ -317,8 +375,9 @@ class MessageProcessor:
     # ── provider send ──────────────────────────────────────────────────────────
 
     def _send_with_retry(self, request: ProviderRequest) -> ProviderResponse:
-        """Send with the turn's resend budget. Over-cap/over-limit errors are
-        re-raised untouched (``run`` compacts and continues); every other
+        """Send with the turn's resend budget. ``ContextLimit`` is re-raised
+        untouched — resending an oversized request unchanged just fails again,
+        so the step loop compacts and continues instead; every other
         provider failure is retried up to ``_MAX_PROVIDER_ATTEMPTS``, emitting a
         user-facing retry notice between attempts, and a cancel observed
         mid-retry aborts the turn. Exhausting the budget raises a clean,
@@ -327,7 +386,7 @@ class MessageProcessor:
         for attempt in range(1, _MAX_PROVIDER_ATTEMPTS + 1):
             try:
                 return self.provider_service.send(request)
-            except (RequestOverCapError, ResponseOverLimitError):
+            except ContextLimit:
                 raise
             except Exception as exc:  # noqa: BLE001 — resend policy lives here, not in the provider
                 last_exc = exc
@@ -382,6 +441,9 @@ class MessageProcessor:
         (history + tool-result re-feed live inside ``prompt_service``) wrapped by
         the compaction checkpoint, plus this turn's image when one is attached."""
         body = self.compaction_service.checkpoint(self.prompt_service.user_prompt())
+        if self._empty_completion_steer:
+            self._empty_completion_steer = False
+            body += "\n\n" + _EMPTY_COMPLETION_STEER
         message: dict[str, object] = {"role": "user", "content": body}
         image = self.prompt_service.image()
         if image is not None:
@@ -402,11 +464,39 @@ class MessageProcessor:
 
     def _format(self, text: str) -> str:
         """Render markdown to HTML for surface-broadcasting channels; pass raw
-        text through for background/silent channels (``broadcast_to`` is None)."""
+        text through for background/silent channels (``broadcast_to`` is None).
+        HTML branch is sanitized at the persist-time boundary so both the live
+        WS send and the GET/refresh read paths inherit it."""
         if self.config.broadcast_to is not None:
-            from services.markup import markdown_to_html  # noqa: PLC0415
-            return markdown_to_html(text)
+            from services.markup import markdown_to_html, sanitize  # noqa: PLC0415
+            return sanitize(markdown_to_html(text))
         return text or ""
+
+    @staticmethod
+    def _invocation_key(name: str, canonical: dict[str, object]) -> tuple[str, str]:
+        """The guard's per-tool tally key: ``(name, canonical-params-json)``.
+
+        Keyed on the CANONICAL (sanitised + key-healed) params dispatch will
+        actually execute, not the raw provider args: a model cycling synonym
+        keys (city/loc/place/region → location) would otherwise mint a fresh
+        key each step while running byte-identical calls, evading the tally.
+        ``canonical`` must therefore be the output of
+        ``DispatchService.canonical_params`` — this is the sole key constructor,
+        shared by the writer (``_guard_runaway``) and the reader
+        (``DispatchService._repeat_call_steer`` via ``repeat_call_count``)."""
+        return (name, json.dumps(canonical, sort_keys=True, default=str))
+
+    def repeat_call_count(self, tool_name: str, canonical_params: dict[str, object]) -> int:
+        """How many times this tool has been invoked with these exact canonical
+        params this turn.
+
+        Read by :meth:`~services.dispatch_service.DispatchService._repeat_call_steer`
+        to steer the model from the second identical call. The count was tallied
+        by :meth:`_guard_runaway` BEFORE dispatch, so a call that has not yet
+        dispatched has not yet been counted. Dispatches bypassing ``_step``
+        (compactor, document upload, async delegate's dedicated mp) have zero
+        tally and never steer here."""
+        return self._tool_invocations[self._invocation_key(tool_name, canonical_params)]
 
     def _guard_runaway(self, text: str, tool_calls: list[dict[str, object]]) -> None:
         """Trip a loud ``RunAwayLoop`` when this turn's step chain is repeating
@@ -433,14 +523,10 @@ class MessageProcessor:
                 )
         for call in tool_calls:
             name = cast("str", call["name"])
-            # Key on the CANONICAL (sanitised + key-healed) params dispatch will
-            # actually execute, not the raw provider args: a model cycling synonym
-            # keys (city/loc/place/region → location) would otherwise mint a fresh
-            # key each step while running byte-identical calls, evading the tally.
             canonical = self.dispatch_service.canonical_params(
                 name, cast("dict[str, object]", call.get("input") or {}),
             )
-            key = (name, json.dumps(canonical, sort_keys=True, default=str))
+            key = self._invocation_key(name, canonical)
             self._tool_invocations[key] += 1
             if self._tool_invocations[key] >= _RUNAWAY_TOOL_CALL_LIMIT:
                 raise RunAwayLoop(
@@ -485,6 +571,7 @@ class MessageProcessor:
         role = self.config.role
         try:
             if role == "user" and self.channel == Channel.USER:
+                self._voice_presynthesis()
                 self._proactive_suggestion()
             elif role == "user_summary":
                 UserSynthesis.persist_user_summary(response_text)
@@ -494,6 +581,20 @@ class MessageProcessor:
                 self._disclose_to_human(response_text)
         except Exception as exc:  # noqa: BLE001 — post-turn work must never fail the turn
             logger.warning("[post_turn] %s handler failed (isolated): %s", role, exc)
+
+    def _voice_presynthesis(self) -> None:
+        """Kick background speech pre-synthesis for this turn's settled row on a
+        fire-and-forget daemon thread — the pipeline owns every gate and terminal
+        state, and running it inline would delay the turn-complete frame the
+        frontend waits on (``finish(COMPLETED)`` stamps after post-turn work)."""
+        settle_id = Transcript.settle0(self.channel, self.turn_id)
+        if settle_id is None:
+            return
+        from services.voice_transcript_service import VoiceTranscriptService  # noqa: PLC0415
+        Thread(
+            target=VoiceTranscriptService.instance().synthesize_settled,
+            args=(settle_id,), daemon=True,
+        ).start()
 
     def _proactive_suggestion(self) -> None:
         """After a ``user`` turn that made enough real tool calls, hand the act
@@ -598,7 +699,8 @@ class MessageProcessor:
         attachments in parallel before the first send. The recall dispatches like a
         normal tool call — ``_auto`` marks it the framework seed (``caller='seed'``
         in ``handle_recall``); the recorded row grounds the model's first request
-        and is turn-scoped, so it drops at the next turn.
+        and is turn-scoped, so it drops at the next turn. ``PromptService.act_trail``
+        renders it as a ``[background_memory]`` block, not a tool-call row.
 
         ``seeding_turn_zero`` is raised for the duration: seed dispatches are
         recorded on the trail but never surface a live pill (§6.10 — the WS
@@ -618,27 +720,89 @@ class MessageProcessor:
             self.seeding_turn_zero = False
 
     def _seed_upload_attachment(self, path: str) -> None:
-        """Upload one attachment through the document ability and link the stored
-        doc to this turn's input row. Only files inside the tmp-upload sandbox are
-        accepted; anything else is refused loudly."""
-        import os  # noqa: PLC0415
-        from services.tmp_storage import TMP_PATH_PREFIX  # noqa: PLC0415
+        """Ingest an attachment via FileParserService and dispatch by type.
+
+        Only files inside the tmp-upload sandbox are accepted; anything else is
+        refused loudly. The file is ingested (extracted, copied flat to
+        data/documents/uploads/, indexed), so its content appears on the
+        turn-zero act trail as a ``read`` or ``vision`` tool call — the model
+        sees exactly what it would if a human had handed it the file.
+
+        On ingest ValueError (extraction failure), falls back to the manual
+        move into uploads/ with a warning, then still dispatches ``read`` so
+        the failure surfaces loudly on the act trail.
+
+        Records the transcript link (transcript_files row) keyed on the
+        transcript row id (self.uid) and the stored path relative to the
+        documents root. Skipped for skip_input_row configs (uid is None).
+
+        Dispatches ``vision`` for image MIME, ``read`` for everything else,
+        both on the SAVED absolute path.
+        """
+        import mimetypes
+        import os
+
+        from services.tmp_storage import TMP_PATH_PREFIX
+        from services.file_mapper_service import FileMapperService
+        from services.file_parser_service import FileParserService
+        from models.transcript_file import TranscriptFile
+
         real = os.path.realpath(path)
         if not real.startswith(TMP_PATH_PREFIX) or not os.path.isfile(real):
             logger.warning("[MessageProcessor] refusing attachment outside tmp sandbox: %s", path)
             return
-        result = self.dispatch_service.dispatch("document", {"action": "upload", "path": real})
-        if self.uid is None:
-            return
-        match = _SEED_UPLOAD_ID_RE.search(result)
-        if match:
-            self.transcript_service.link_doc(match.group(1))
+
+        basename = re.sub(r"^chalie_([0-9a-f]{8}_)?", "", os.path.basename(real)) or os.path.basename(real)
+
+        try:
+            saved_path, _text = FileParserService().ingest(real, name=basename, subdir="uploads")
+            # Ingest succeeded: file is now flat in data/documents/uploads/<basename>.
+            # Delete the tmp file (it was copied, not moved, by FileParserService).
+            try:
+                os.unlink(real)
+            except OSError:
+                logger.warning("[MessageProcessor] staged attachment not cleaned up: %s", real)
+        except ValueError as exc:
+            # Extraction failed: fall back to manual move into uploads/ so the
+            # dispatched read still lands (it will surface the error loudly).
+            logger.warning(
+                "[MessageProcessor] ingest failed for %s — falling back to manual move: %s",
+                path, exc,
+            )
+            uploads_dir = FileMapperService.get_documents_path("uploads")
+            uploads_dir.mkdir(parents=True, exist_ok=True)
+            stem, ext = os.path.splitext(basename)
+            dest = uploads_dir / basename
+            counter = 1
+            while dest.exists():
+                dest = uploads_dir / f"{stem}_{counter}{ext}"
+                counter += 1
+            shutil.move(real, dest)
+            saved_path = str(dest)
+
+        # Record the transcript link (if uid is set — skip for skip_input_row configs).
+        if self.uid is not None:
+            relpath = os.path.relpath(saved_path, FileMapperService.get_documents_path())
+            TranscriptFile(transcript_id=self.uid, path=relpath).link()
+
+        mime = mimetypes.guess_type(saved_path)[0] or ""
+        if mime.startswith("image/"):
+            self.dispatch_service.dispatch("vision", {"image": saved_path, "instructions": "Describe this image"})
+        else:
+            self.dispatch_service.dispatch("read", {"source": saved_path})
 
     def _maybe_fire_gist(self) -> None:
-        """On a fork whose parent turn has no stored gist yet, ingest it so the
-        reply prompt carries the thread's condensed context. MAIN turns skip
-        this; any ingest hiccup is swallowed (best-effort context)."""
-        if not self._forked:
+        """Ingest this thread's gist when it has none stored yet, so the reply
+        prompt carries the thread's condensed context.
+
+        Two threads qualify. A fork, whose parent turn is the thread being
+        replied into. And a schedule fire, which is always a MAIN turn — its
+        ``turn_id`` IS the schedule's id (§13.1), so the gist generated here is
+        the label the scheduler surfaces; without this the schedule channel
+        would never produce one. Other MAIN turns skip this. The ``bulk_get``
+        emptiness check keeps it once-only per thread on both paths; any ingest
+        hiccup is swallowed (best-effort context)."""
+        if not self._forked and self.channel != Channel.SCHEDULE:
             return
         try:
             if not self.gist_service.bulk_get(self.channel, [self.turn_id]):

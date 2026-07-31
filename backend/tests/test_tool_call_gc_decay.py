@@ -1,13 +1,13 @@
-"""Feature tests — off-turn GC of orphaned ``tool_calls`` rows.
+"""Feature tests — GC of orphaned ``tool_calls`` rows.
 
 Retention deletes ``transcript`` rows out from under the tool calls that
 anchored to them, leaving dangling ``transcript_id``s no live read can reach
-(every read joins ``transcript``). ``ToolCall.decay`` — fronted by the
-``ToolCallGcService`` Decayable registered on the ``DecayEngine`` — reaps those
-orphans once they age past the 14-day window, and NOTHING else: a still-anchored
-call survives however old, and a young orphan waits out the window.
+(every read joins ``transcript``). ``ToolCall.decay`` — run by the hourly
+garbage-collection job after the transcript sweep — reaps those orphans once
+they age past the 90-day window, and NOTHING else: a still-anchored call
+survives however old, and a young orphan waits out the window.
 
-Real migrated SQLite (the ``db`` template), real model/engine, zero mocks. The
+Real migrated SQLite (the ``db`` template), real model, zero mocks. The
 orphan rows are seeded exactly as reality produces them — a tool call whose
 ``transcript_id`` has no ``transcript`` row — with foreign-key enforcement off
 for seeding, mirroring the drifted live state that carries such orphans.
@@ -20,9 +20,7 @@ from typing import cast
 import pytest
 
 from models.tool_call import ToolCall
-from services.decay_engine_service import DecayEngineService
 from services.time_utils import utc_now
-from services.tool_call_gc_service import ToolCallGcService
 
 pytestmark = pytest.mark.unit
 
@@ -43,9 +41,9 @@ def _insert_call(db: sqlite3.Connection, transcript_id: int, created_sql: str) -
 def _seed(db: sqlite3.Connection) -> dict[str, int]:
     """Seed the age×anchor matrix and return the row ids by scenario key.
 
-    Two orphans past the window (``orphan_15d``, ``orphan_400d``) must be reaped;
-    everything else — a young orphan, an ancient still-anchored call, a fresh
-    anchored call — must survive.
+    Three orphans past the window (``orphan_100d``, ``orphan_400d``,
+    ``will_orphan_100d``) must be reaped; everything else — a young orphan, an
+    ancient still-anchored call, a fresh anchored call — must survive.
     """
     db.execute("PRAGMA foreign_keys=OFF")  # seed dangling-anchor orphans as reality has them
     cur = db.execute(
@@ -60,16 +58,16 @@ def _seed(db: sqlite3.Connection) -> dict[str, int]:
 
     ids = {
         # orphan (transcript never existed) + past the window → REAPED
-        "orphan_15d": _insert_call(db, 900001, "datetime('now', '-15 days')"),
+        "orphan_100d": _insert_call(db, 900001, "datetime('now', '-100 days')"),
         "orphan_400d": _insert_call(db, 900002, "datetime('now', '-400 days')"),
         # orphan but still inside the window → SURVIVES
-        "orphan_13d": _insert_call(db, 900003, "datetime('now', '-13 days')"),
+        "orphan_60d": _insert_call(db, 900003, "datetime('now', '-60 days')"),
         # still anchored, however old → SURVIVES
-        "anchored_100d": _insert_call(db, live_transcript, "datetime('now', '-100 days')"),
+        "anchored_400d": _insert_call(db, live_transcript, "datetime('now', '-400 days')"),
         # anchored + fresh → SURVIVES
         "anchored_now": _insert_call(db, live_transcript, "datetime('now')"),
         # anchored-then-orphaned + old → REAPED once its transcript is purged below
-        "will_orphan_30d": _insert_call(db, doomed_transcript, "datetime('now', '-30 days')"),
+        "will_orphan_100d": _insert_call(db, doomed_transcript, "datetime('now', '-100 days')"),
     }
     db.execute("DELETE FROM transcript WHERE id = ?", (doomed_transcript,))
     db.commit()
@@ -97,21 +95,21 @@ class TestDecay:
         ids = _seed(db)
         deleted = ToolCall.decay()
 
-        assert deleted == 3  # orphan_15d, orphan_400d, will_orphan_30d
+        assert deleted == 3  # orphan_100d, orphan_400d, will_orphan_100d
         survivors = _surviving_ids(db)
-        assert survivors == {ids["orphan_13d"], ids["anchored_100d"], ids["anchored_now"]}
+        assert survivors == {ids["orphan_60d"], ids["anchored_400d"], ids["anchored_now"]}
 
     def test_keeps_anchored_calls_however_old(self, db: sqlite3.Connection) -> None:
         ids = _seed(db)
         ToolCall.decay()
-        # The 100-day-old call is far past the window but still anchored — kept.
-        assert ids["anchored_100d"] in _surviving_ids(db)
+        # The 400-day-old call is far past the window but still anchored — kept.
+        assert ids["anchored_400d"] in _surviving_ids(db)
 
     def test_keeps_young_orphans(self, db: sqlite3.Connection) -> None:
         ids = _seed(db)
         ToolCall.decay()
-        # Orphaned but only 13 days old — inside the 14-day window, kept.
-        assert ids["orphan_13d"] in _surviving_ids(db)
+        # Orphaned but only 60 days old — inside the 90-day window, kept.
+        assert ids["orphan_60d"] in _surviving_ids(db)
 
     def test_idempotent(self, db: sqlite3.Connection) -> None:
         _seed(db)
@@ -127,32 +125,6 @@ class TestDecay:
         _insert_call(db, cast(int, cur.lastrowid), "datetime('now')")
         db.commit()
         assert ToolCall.decay() == 0
-
-
-class TestServiceDelegation:
-    def test_gc_service_delegates_to_model(self, db: sqlite3.Connection) -> None:
-        ids = _seed(db)
-        deleted = ToolCallGcService().decay()
-
-        assert deleted == 3
-        assert _surviving_ids(db) == {
-            ids["orphan_13d"], ids["anchored_100d"], ids["anchored_now"],
-        }
-
-
-class TestEngineIntegration:
-    def test_decay_cycle_reaps_aged_orphans(self, db: sqlite3.Connection) -> None:
-        # Proves the sweep is actually wired into the registered decay cycle,
-        # not merely callable in isolation.
-        ids = _seed(db)
-        DecayEngineService().run_once()
-
-        survivors = _surviving_ids(db)
-        assert ids["orphan_15d"] not in survivors
-        assert ids["orphan_400d"] not in survivors
-        assert ids["will_orphan_30d"] not in survivors
-        assert ids["orphan_13d"] in survivors
-        assert ids["anchored_100d"] in survivors
 
 
 class TestProductionTimestampFormat:

@@ -1,5 +1,14 @@
 export type UsageWindow = 'hour' | 'day' | 'week' | 'month' | 'lifetime';
 
+export type UsageType = 'all' | 'foreground' | 'background';
+
+/** The only place filter values map to their display vocabulary; 'all' sends no wire filter. */
+export const USAGE_TYPES: { value: UsageType; label: string }[] = [
+  { value: 'all', label: 'All' },
+  { value: 'foreground', label: 'Foreground' },
+  { value: 'background', label: 'Background' },
+];
+
 export interface BucketValue {
   input: number;
   output: number;

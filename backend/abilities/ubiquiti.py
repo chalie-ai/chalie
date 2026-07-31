@@ -32,6 +32,8 @@ from typing import ClassVar, NamedTuple, cast
 from abilities._capability import CapabilityAbility
 from configs.enums.param_key import Keys
 from abilities._result import ToolResult
+from contracts.params.capability_params_bag import CapabilityParamsBag
+from configs.enums.ability_category import AbilityCategory
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[UBIQUITI ABILITY]"
@@ -103,6 +105,7 @@ class UbiquitiAbility(CapabilityAbility):
     ACTION_HANDLERS: ClassVar[dict[str, str]] = {
         action: spec.handler for action, spec in _ACTION_SPEC.items()
     }
+    SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("unifi", "network control", "router")
 
     # Pre-gated by the dispatcher BEFORE run() (and before the policy gate): a
     # known action missing a required param yields one code=missing-params error
@@ -131,9 +134,8 @@ class UbiquitiAbility(CapabilityAbility):
         "update_traffic_rule": (Keys.rule_id, Keys.updates),
         "authorize_guest": (Keys.target,),
     }
-
-    def get_name(self) -> str:
-        return "ubiquiti"
+    NAME: ClassVar[str] = "ubiquiti"
+    CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.SMART_HOME
 
     def get_summary(self) -> str:
         return (
@@ -254,9 +256,9 @@ class UbiquitiAbility(CapabilityAbility):
 
     # ── Entry point — translate the flat action, then delegate to the base ─────
 
-    def run(self, params: dict[str, object]) -> ToolResult:
-        action = str(params.get(Keys.action, self.DEFAULT_ACTION)).lower()
-        params[Keys.action] = action
+    def run(self, params: CapabilityParamsBag) -> ToolResult:
+        action = self._resolve_action(params)
+        handler_params = dict(params.extra)
 
         spec = _ACTION_SPEC.get(action)
         if spec is not None:
@@ -267,14 +269,14 @@ class UbiquitiAbility(CapabilityAbility):
             # so it never leaks into a REST body; ``device_status`` keeps it because
             # its handler (get_info) reads ``target`` directly.
             if action in _TARGET_TO_MAC:
-                target = (cast(str, params.get(Keys.target)) or "").strip()
+                target = (cast(str, handler_params.get(Keys.target)) or "").strip()
                 if target and action != "device_status":
-                    params["mac"] = target
-                    params.pop(Keys.target, None)
+                    handler_params["mac"] = target
+                    handler_params.pop(Keys.target, None)
             for key, value in spec.inject.items():
-                params.setdefault(key, value)
+                handler_params.setdefault(key, value)
 
-        result = super().run(params)
+        result = self._dispatch(action, handler_params)
         if result.status != "success" or not isinstance(result.body, dict):
             # not-connected / unknown-action / handler-unavailable already carry a
             # canonical code from the base — surface them untouched.
@@ -307,10 +309,13 @@ def _shape_result(action: str, body: dict[str, object]) -> ToolResult:
 
     for row_key in _LIST_BODIES:
         if row_key in body and isinstance(body[row_key], list):
+            rows = cast(list[object], body[row_key])
+            if not rows:
+                return ToolResult.no_results(action=action)
             return ToolResult.ok(
-                {row_key: body[row_key]},
+                {row_key: rows},
                 action=action,
-                count=body.get("count", len(cast(list[object], body[row_key]))),
+                count=body.get("count", len(rows)),
             )
 
     # device_status / site_health / control / write echoes: structured already.

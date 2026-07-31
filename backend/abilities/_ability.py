@@ -1,8 +1,9 @@
 """The ``Ability`` ABC — describes and runs one tool, nothing more.
 
-An Ability declares what a tool *is* through five zero-arg getters
-(``get_name`` / ``get_summary`` / ``get_examples`` / ``get_search_tooltip`` /
-``get_parameters``) and how it *runs* (``run()``). The full LLM-facing tool
+An Ability declares what a tool *is* through the ``NAME`` class constant and
+four zero-arg getters (``get_summary`` / ``get_examples`` /
+``get_search_tooltip`` / ``get_parameters``) and how it *runs* (``run()``).
+The full LLM-facing tool
 descriptor is assembled in ONE place — the ``final`` ``get_input_schema()`` — which
 is also the SINGLE site that injects the ``act_summary`` framework field.
 Subclasses cannot override it; they only fill in the getters. The ``async``
@@ -10,10 +11,10 @@ backgrounding flag is NOT injected here: it is a delegate-only primitive added b
 ``DelegateAbility`` (``abilities/_delegate.py``), so plain tools never carry it.
 
 Dispatch — matching, binding, policy gating, execution, recording — lives in
-``ToolDispatcher`` (``abilities/_dispatcher.py``), the single chokepoint every
-ACT-loop tool call takes. This module imports nothing from the registry / policy
-/ dispatcher, so ``_registry`` can import ``Ability`` here with no circular-import
-dance.
+``DispatchService`` (``services/dispatch_service.py``), the single chokepoint
+every ACT-loop tool call takes. This module imports nothing from the registry /
+policy / dispatcher, so ``_registry`` can import ``Ability`` here with no
+circular-import dance.
 """
 
 from __future__ import annotations
@@ -21,18 +22,16 @@ from __future__ import annotations
 import copy
 import typing
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Callable, ClassVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, cast
+
+from typing_extensions import TypeVar
 
 from abilities._result import ToolResult
-from exceptions import ToolParamError
+from configs.enums.ability_category import AbilityCategory
+from contracts.params.param_bag import ParamBag
 
 if TYPE_CHECKING:
     from controllers.message_processor import MessageProcessor
-
-# Sentinel distinguishing "no default supplied" from an explicit default of None
-# in Ability.param(): a required param with no value raises; an optional one with
-# default=None returns None.
-_MISSING = object()
 
 # The act_summary framework field, injected into EVERY tool descriptor by
 # get_input_schema — the one place it is declared. It is the per-call act-trail
@@ -47,8 +46,16 @@ _ACT_SUMMARY_PROPERTY: dict[str, object] = {
     ),
 }
 
+# What run() receives: the ability's typed ParamBag. Every first-party ability
+# declares ``Ability[ItsParamsBag]`` and mypy then enforces that its run()
+# accepts exactly that bag. The PEP 696 default keeps bare ``Ability``
+# annotations (registry, dispatcher) valid and covers the synthetic
+# ``_MCPAbility`` proxies, whose run() receives the raw params dict because a
+# remote MCP schema can never have a compile-time bag.
+B = TypeVar("B", default=Any)
 
-class Ability(ABC):
+
+class Ability(ABC, Generic[B]):
     """The getters read ``self.mp`` (the invoking MessageProcessor,
     constructor-injected) when a value depends on the live request; at
     ``self.mp is None`` — introspection / search-index build — they MUST return
@@ -68,13 +75,25 @@ class Ability(ABC):
     """
 
     # Global discovery flag. True (the default) means find_tools may surface this
-    # ability — semantically via the abilities.sqlite index (query mode) and by
-    # exact name (select mode). False removes it from the index AND the select
-    # roster entirely: it can ONLY reach a processor by being pinned directly in
-    # that processor's ProcessorConfig.always_available. Internal/framework tools
-    # (the compactors, thinking, find_tools itself, the pattern writers, the raw
-    # web tools, memory) set this False; user-facing tools leave it True.
+    # ability — by exact name or alias lookup through the registry. False removes
+    # it from the discoverable roster entirely: it can ONLY reach a processor by
+    # being pinned directly in that processor's ProcessorConfig.always_available.
+    # Internal/framework tools (the compactors, thinking, find_tools itself, the
+    # pattern writers, the raw web tools, memory) set this False; user-facing
+    # tools leave it True.
     DISCOVERABLE: ClassVar[bool] = True
+
+    # Alternate names a model may use to load this tool by exact match.
+    # Consumed by find_tools discovery; empty default means the canonical
+    # name is the only alias.
+    SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ()
+
+    # The heading this tool is listed under in the find_tools menu. REQUIRED on
+    # every DISCOVERABLE ability — the registry raises at load time when one is
+    # missing, so a new tool cannot silently join the roster with no heading to
+    # render under. None is correct (and enforced-as-fine) only for
+    # DISCOVERABLE=False abilities, which never appear in the menu at all.
+    CATEGORY: ClassVar[AbilityCategory | None] = None
 
     # Settle flag. True (the default) means a tool_calls row for this ability
     # demotes its transcript row's settled=1 back to 0 — the row carries a
@@ -95,75 +114,44 @@ class Ability(ABC):
     # "no pre-validation" so unmigrated tools are untouched by the contract.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {}
 
+    # Param names exempt from the dispatcher pre-gate's non-empty requirement:
+    # they are still required to be PRESENT in the input (``p not in params``
+    # triggers ``missing-params``), but an empty string (``""``) is a legitimate
+    # value for them. The default is empty — every param is non-empty by
+    # default — so an ability with no ``ALLOW_EMPTY`` behaves exactly as before.
+    ALLOW_EMPTY: ClassVar[tuple[str, ...]] = ()
+
+    # Param names whose VALUES reach run() exactly as the model sent them — the
+    # dispatch seam's scrub (leaked provider sentinel tokens out, surrounding
+    # whitespace trimmed) is skipped for them. Declare a param here when the
+    # tool STORES its value rather than interpreting it: file content,
+    # replacement text. For those, a leading tab or a trailing newline is data
+    # the model chose byte by byte, not noise to tidy away — trimming it is a
+    # silent rewrite of the user's file. The default is empty, so every param is
+    # scrubbed unless it opts out.
+    VERBATIM: ClassVar[tuple[str, ...]] = ()
+
+    # The ability's typed input contract: every first-party ability sets its
+    # ParamBag class here and run() receives an instance the dispatcher builds
+    # via the bag's from_params factory — a bad input comes back from the bag
+    # as an error ToolResult the dispatcher returns as-is, never an exception.
+    # None is reserved for the synthetic _MCPAbility proxies (remote schema, no
+    # compile-time bag): their run() receives the raw params dict.
+    PARAMS: ClassVar["type[ParamBag] | None"] = None
+
+    # The ability's canonical, immutable identifier — the key used by the
+    # registry, the dispatcher, the policy gate, and the tool descriptor.
+    # Subclasses MUST set this; the registry raises on missing or empty NAME.
+    NAME: ClassVar[str]
+
     def __init__(self, mp: "MessageProcessor | None" = None) -> None:
         self.mp = mp
-        # Set by ToolDispatcher._run() immediately before run(): the flattened
+        # Set by DispatchService._run() immediately before run(): the flattened
         # client telemetry dict (location / locale / time / currency …) or None
         # when no client context is stored yet (fresh boot, no heartbeat).
         self.telemetry: "dict[str, object] | None" = None
 
-    def __init_subclass__(cls, **kwargs: object) -> None:
-        super().__init_subclass__(**kwargs)
-        # get_input_schema / param are the single assembler and the one sanctioned
-        # param path — sealed. A subclass that redefines either would silently fork
-        # the contract, so it is rejected at import. Subclasses enrich via
-        # get_parameters() / get_summary() instead.
-        for sealed in ("get_input_schema", "param"):
-            if sealed in cls.__dict__:
-                raise TypeError(
-                    f"{cls.__name__} must not override Ability.{sealed} — "
-                    f"enrich get_parameters()/get_summary() instead"
-                )
-        # _inject_framework_fields is the single injection site — sealed against
-        # arbitrary subclasses (redefining it would fork the act_summary/async
-        # contract). The lone sanctioned override is DelegateAbility, which adds
-        # the delegate-only ``async`` property on top of super()'s act_summary.
-        if "_inject_framework_fields" in cls.__dict__ and cls.__name__ != "DelegateAbility":
-            raise TypeError(
-                f"{cls.__name__} must not override Ability._inject_framework_fields — "
-                f"enrich get_parameters()/get_summary() instead"
-            )
-
-        # Synthetic proxies (e.g. _MCPAbility) source their metadata from a remote
-        # schema and are constructed with arguments — skip metadata validation.
-        if getattr(cls, "_SYNTHETIC", False):
-            return
-        # Abstract base mix-ins (e.g. SearchableAbility, which lists ABC directly
-        # in its bases) are not concrete abilities — skip their metadata probe.
-        # We deliberately do NOT consult __abstractmethods__ here: ABCMeta sets it
-        # AFTER __init_subclass__ returns, so it is always unset at this point. A
-        # concrete-looking subclass that still omits a getter is caught downstream
-        # instead — get_examples / get_search_tooltip by the probe below (the
-        # inherited abstract getter returns None and fails the shape check), and
-        # get_name / get_summary / get_parameters / run at registry instantiation
-        # (ABC blocks it).
-        if ABC in cls.__bases__:
-            return
-
-        # Concrete ability: validate its metadata shape AT IMPORT, through the
-        # getters, on a throwaway mp=None instance (deterministic at build time).
-        # This keeps the "won't import with bad metadata" guarantee for EVERY
-        # ability — including the never-indexed ones (thinking, the compactors)
-        # that the search-index builder skips.
-        probe = cls()
-        examples = probe.get_examples()
-        if not isinstance(examples, list) or not all(isinstance(e, str) for e in examples):
-            raise TypeError(f"{cls.__name__}.get_examples() must return list[str]")
-        if not (6 <= len(examples) <= 8):
-            raise TypeError(
-                f"{cls.__name__}.get_examples() must return 6–8 entries, got {len(examples)}"
-            )
-        if cls.__module__.startswith("abilities.") and not probe.get_search_tooltip():
-            raise TypeError(f"{cls.__name__}.get_search_tooltip() must be non-empty")
-        follow_up = probe.get_follow_up(ToolResult.ok(""))
-        if not isinstance(follow_up, str):
-            raise TypeError(f"{cls.__name__}.get_follow_up() must return str")
-
-    # ── Metadata getters — every concrete ability implements all five ──────────
-
-    @abstractmethod
-    def get_name(self) -> str:
-        ...
+    # ── Metadata getters — every concrete ability implements all four ──────────
 
     @abstractmethod
     def get_summary(self) -> str:
@@ -196,9 +184,8 @@ class Ability(ABC):
         interpolate live values straight from the result the model already sees
         (the downloaded ``path``, the activated tool ``name``, the anchor
         ``date_time``) — present-in-context data lifts compliance over a generic
-        nudge. An override that needs data the result lacks MUST degrade to ``""``;
-        it is probed at import on an empty ``ToolResult`` and so must never assume a
-        shape. No ``self.mp`` — the nudge is request-agnostic.
+        nudge. An override that needs data the result lacks MUST degrade to ``""``
+        rather than assume a shape. No ``self.mp`` — the nudge is request-agnostic.
         """
         return ""
 
@@ -215,12 +202,14 @@ class Ability(ABC):
     # ── Instance method — the actual tool logic ───────────────────────────────
 
     @abstractmethod
-    def run(self, params: dict[str, object]) -> "ToolResult":
+    def run(self, params: B) -> "ToolResult":
         """MUST return a :class:`abilities._result.ToolResult` — anything else
-        HARD-FAILS as ``code=non-canonical-result``. Raise ``ToolParamError``
-        (via ``self.param``) for bad inputs; the dispatcher renders it
-        canonically. The ability NEVER formats the ``[tool(...)]`` wire envelope
-        — the dispatcher owns it."""
+        HARD-FAILS as ``code=non-canonical-result``. ``params`` is this ability's
+        declared ``PARAMS`` bag, constructed (= validated) by the dispatcher: a
+        bad input never reaches run() — the bag returned the error ToolResult
+        from ``from_params`` and the dispatcher passed it straight to the wire.
+        The ability NEVER formats the ``[tool(...)]`` wire envelope — the
+        dispatcher owns it."""
         ...
 
     # ── The single, final tool-descriptor assembler ───────────────────────────
@@ -229,10 +218,10 @@ class Ability(ABC):
     def get_input_schema(self) -> dict[str, object]:
         """This is the ONE place a tool schema is built and the ONE place
         ``act_summary`` is declared (``async`` is added on top by
-        ``DelegateAbility`` for delegate tools only). ``final`` — sealed at import
-        by ``__init_subclass__``."""
+        ``DelegateAbility`` for delegate tools only). ``final`` — do not override;
+        enrich ``get_parameters()`` / ``get_summary()`` instead."""
         return {
-            "name": self.get_name(),
+            "name": self.NAME,
             "description": self.get_summary(),
             "input_schema": self._inject_framework_fields(self.get_parameters()),
         }
@@ -249,56 +238,22 @@ class Ability(ABC):
 
         return schema
 
-    # ── The one sanctioned param-handling path ─────────────────────────────────
-
-    @typing.final
-    def param(
-        self,
-        params: dict[str, object],
-        name: str,
-        *,
-        default: object = _MISSING,
-        choices: "tuple[object, ...] | None" = None,
-        clamp: "tuple[object, ...] | None" = None,
-        required: bool = False,
-    ) -> object:
-        """All failures raise ``ToolParamError`` — the dispatcher catches it and
-        renders ``code=invalid-param`` with a ``hint`` and ``valid=`` so the model
-        fixes the call without re-reading the schema. ``final`` — sealed at import
-        by ``__init_subclass__``."""
-        value = params.get(name)
-        if value is None:
-            if required:
-                raise ToolParamError(
-                    f"Required parameter '{name}' is missing.",
-                    code="invalid-param",
-                    hint=f"pass '{name}'.",
-                )
-            if default is _MISSING:
-                return None
-            return default
-
-        if choices is not None and value not in choices:
-            raise ToolParamError(
-                f"'{value}' is not a valid value for '{name}'.",
-                code="invalid-param",
-                hint=f"choose one of: {', '.join(str(c) for c in choices)}.",
-                valid=tuple(str(c) for c in choices),
-            )
-
-        if clamp is not None:
-            lo, hi = clamp
-            try:
-                numeric = cast("Callable[[str], float]", type(lo))(cast("str", value))
-            except (TypeError, ValueError):
-                raise ToolParamError(
-                    f"'{name}' must be a number.",
-                    code="invalid-param",
-                    hint=f"pass a number between {lo} and {hi}.",
-                ) from None
-            value = max(cast("float", lo), min(cast("float", hi), numeric))
-
-        return value
+    def _append_active(self, names: list[str]) -> None:
+        """Append tool names to ``mp.active_tools`` (skipping dupes) so they are
+        live for the rest of this ACT turn. The activation seam shared by the
+        discovery tools (``find_tools``, ``mcp_tools``); a no-op off-spine
+        (``mp is None``)."""
+        if not names:
+            return
+        proc = self.mp
+        if proc is None:
+            return
+        active = cast("list[str] | None", getattr(proc, "active_tools", None))
+        if active is None:
+            return
+        for name in names:
+            if name not in active:
+                active.append(name)
 
     def classify_action(self, params: dict[str, object]) -> "str | None":
         """Derive the risk class the policy gate keys on, from the inputs alone.
@@ -318,13 +273,15 @@ class Ability(ABC):
         return None
 
     @classmethod
-    def enrich_rich_payload(cls, payload: dict[str, object], row: dict[str, object]) -> dict[str, object]:
+    def enrich_rich_payload(cls, payload: dict[str, object]) -> dict[str, object]:
         """Resolve a rich-media payload's runtime state at parse time.
 
-        The default implementation returns the payload unchanged. Override on
-        subclasses whose card needs data that does NOT live in the LLM-visible
-        tool result.
+        The default implementation returns the payload unchanged. Override on a
+        subclass whose card must reflect state that changed AFTER the tool ran —
+        the persisted ``tool_calls.result`` is a frozen snapshot.
 
         Called by ``rich_media_parser.parse()`` exactly once per rich segment.
+        The tool call's wall-clock anchor is NOT passed here: it is generic
+        segment metadata (``segment["created_at"]``), not per-ability state.
         """
         return payload

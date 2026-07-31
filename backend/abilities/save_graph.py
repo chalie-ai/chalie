@@ -1,28 +1,20 @@
 """SaveGraph — record a durable, non-behavioural fact in the data graph."""
 import json
-from typing import ClassVar, cast
+from typing import ClassVar
 
-from abilities._budget import BudgetCappedAbility
+from abilities._ability import Ability
 from configs.enums.param_key import Keys
 from abilities._pattern_provenance import pattern_provenance
 from abilities._result import ToolResult
-from contracts.constants.data_graph import VALID_KINDS
+from contracts.params.param_bag import ParamBag
+from contracts.params.save_graph_params_bag import ALLOWED_KINDS, SaveGraphParamsBag
 from models.tool_call import ToolCall
 
-# Subset: exclude system (internal-write only). VALID_KINDS already omits
-# document (ingest-only) and behavioral_pattern (save_pattern's tool).
-ALLOWED_KINDS = sorted(VALID_KINDS - {"system"})
 
-# One-line invalid-kind recovery hint carrying a minimal, fully-valid example so
-# a weak model can self-correct without re-reading the schema.
-_INVALID_KIND_HINT = "pick one of the allowed kinds, e.g. kind=user_specific key=residence value=Lisbon"
-
-
-class SaveGraph(BudgetCappedAbility):
+class SaveGraph(Ability[SaveGraphParamsBag]):
     SYSTEM = True
     DISCOVERABLE: ClassVar[bool] = False  # pattern-write tool; pinned on the pattern configs only
-
-    BUDGET_CAP: ClassVar[int] = 50
+    NAME: ClassVar[str] = "save_graph"
 
     def _seen_from_trail(self) -> set[tuple[str, str, str]]:
         """Build the dedup set from this turn's prior save_graph rows."""
@@ -56,19 +48,22 @@ class SaveGraph(BudgetCappedAbility):
 
     # Action-less single-purpose tool: the dispatcher pre-gate rejects a MISSING
     # or empty kind/key/value as code=missing-params before run() is reached
-    # (precedent: _delegate.py, file_permissions.py). The pre-gate is
-    # truthiness-based, so whitespace-only residue still reaches run().
+    # (precedent: _delegate.py). The pre-gate is truthiness-based; the bag's
+    # from_params rejects the whitespace-only residue that slips past it.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.kind, Keys.key, Keys.value_)}
 
-    def get_name(self) -> str:
-        return "save_graph"
+    # The typed input contract: the dispatch seam builds the bag via
+    # SaveGraphParamsBag.from_params before run() is called.
+    PARAMS: ClassVar[type[ParamBag] | None] = SaveGraphParamsBag
 
     def get_summary(self) -> str:
+        from abilities.save_pattern import SavePattern  # noqa: PLC0415
+
         return (
             "Record a durable fact about the user that is NOT a repeating "
             "behaviour (preferences, identity, relationships, places, "
             "documents, timestamped events). Pick the right `kind`. Use "
-            "save_pattern for repeating behaviours. Allowed kinds: "
+            f"{SavePattern.NAME} for repeating behaviours. Allowed kinds: "
             f"{', '.join(ALLOWED_KINDS)}."
         )
 
@@ -98,35 +93,9 @@ class SaveGraph(BudgetCappedAbility):
     def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    def run(self, params: dict[str, object]) -> ToolResult:
-        capped = self.budget_exceeded()
-        if capped is not None:
-            return capped
-
+    def run(self, params: SaveGraphParamsBag) -> ToolResult:
         proc = self.mp
-        kind = params.get(Keys.kind, "")
-        if kind not in ALLOWED_KINDS:
-            return ToolResult.err(
-                f"Unknown kind {kind!r}; not a storable fact kind.",
-                code="invalid-param",
-                valid=tuple(ALLOWED_KINDS),
-                hint=_INVALID_KIND_HINT,
-            )
-
-        # The dispatcher pre-gate is truthiness-based, so a non-empty but
-        # whitespace-only key/value slips past it and must be rejected here
-        # (precedent: file_permissions.py).
-        key = cast("str", params.get(Keys.key, "")).strip()
-        value = cast("str", params.get(Keys.value_, "")).strip()
-        if not key or not value:
-            missing = ", ".join(
-                name for name, val in (("key", key), ("value", value)) if not val
-            )
-            return ToolResult.err(
-                f"Missing required parameter(s): {missing}.",
-                code="missing-params",
-                valid=("kind", "key", "value"),
-            )
+        kind, key, value = params.kind, params.key, params.value_
 
         # Derive the dedup set from the persisted trail — single DB round-trip.
         seen = self._seen_from_trail()
@@ -153,7 +122,7 @@ class SaveGraph(BudgetCappedAbility):
             from services.contact_service import ContactService
             ContactService().store(key, value, source=source)  # returns ContactRow, NOT a status envelope
             status = "created"
-        else:  # unreachable — run() gates kind ∈ ALLOWED_KINDS, all of which branch above
+        else:  # unreachable — the bag gates kind ∈ ALLOWED_KINDS, all of which branch above
             raise RuntimeError(f"save_graph: no vertical wired for kind {kind!r}")
 
         if status == "reinforced":

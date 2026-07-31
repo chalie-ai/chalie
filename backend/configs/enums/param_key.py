@@ -55,20 +55,22 @@ class Keys(StrEnum):
     action = "action"
     active_only = "active_only"
     area = "area"
+    args = "args"
     automation_id = "automation_id"
     body = "body"
     buffer_minutes = "buffer_minutes"
     category = "category"
     cc = "cc"
-    code = "code"
     command = "command"
     content = "content"
     contents = "contents"
     context_lines = "context_lines"
+    current_path = "current_path"
     date_from = "date_from"
     date_time = "date_time"
     date_to = "date_to"
     day = "day"
+    destination = "destination"
     destination_location = "destination_location"
     direction = "direction"
     directory = "directory"
@@ -77,9 +79,12 @@ class Keys(StrEnum):
     dtend = "dtend"
     dtstart = "dtstart"
     duration_seconds = "duration_seconds"
+    end_line = "end_line"
     entity_id = "entity_id"
     evidence_transcript_ids = "evidence_transcript_ids"
     frequency = "frequency"
+    fuzzy = "fuzzy"
+    glob = "glob"
     goal = "goal"
     headers = "headers"
     host = "host"
@@ -104,17 +109,23 @@ class Keys(StrEnum):
     minutes = "minutes"
     month = "month"
     name_ = "name"  # trailing underscore: bare ``name`` is reserved by Enum
+    new_path = "new_path"
     operation = "operation"
     page = "page"
     path = "path"
+    pattern = "pattern"
+    permission_code = "permission_code"
     permissions = "permissions"
     port_idx = "port_idx"
     provider = "provider"
     query = "query"
     quota_mb = "quota_mb"
     recurrence = "recurrence"
+    replace_ = "replace"  # trailing underscore: bare `replace` is a str method (StrEnum base)
+    replaces = "replaces"
     rule = "rule"
     rule_id = "rule_id"
+    search = "search"
     section = "section"
     select = "select"
     sender = "sender"
@@ -123,6 +134,7 @@ class Keys(StrEnum):
     service_data = "service_data"
     source = "source"
     start_at = "start_at"
+    start_line = "start_line"
     subject = "subject"
     summary = "summary"
     tags = "tags"
@@ -133,6 +145,7 @@ class Keys(StrEnum):
     timeout_s = "timeout_s"
     title_ = "title"  # trailing underscore: bare ``title`` clashes with ``str.title``
     to = "to"
+    tools = "tools"
     triage = "triage"
     uid = "uid"
     unanswered = "unanswered"
@@ -203,13 +216,12 @@ VARIANTS: "dict[str, frozenset[str]]" = {
     }),
     # the list tool's historical 'id' alias for its list selector. Canonical = list.
     Keys.list: frozenset({Keys.id}),
-    # web_browse names its task slot 'goal'; its sibling delegate web_search names
-    # the SAME "what to do" slot 'query'. A model fluent in web_search reaches for
-    # 'query' on web_browse — the two delegates are routinely conflated — so 'query'
-    # heals to 'goal'. Scoped to web_browse (the only tool that declares 'goal'), so
-    # the 14 tools that declare 'query' as their OWN canonical are never touched.
-    # Canonical = goal.
-    Keys.goal: frozenset({Keys.query}),
+    # the delegate family's standardized task slot. Delegates historically named
+    # it 'goal' (web_browse) or 'query' (web_search), so a model that learned the
+    # old spellings — or conflates sibling delegates — still lands. Scoped to the
+    # tools that declare 'instructions' (the delegates), so the tools that declare
+    # 'query' as their OWN canonical are never touched. Canonical = instructions.
+    Keys.instructions: frozenset({Keys.goal, Keys.query}),
     # ── multi-tool parameters (highest blast radius — one heal helps many tools) ──
     Keys.action: frozenset({"method"}),
     Keys.query: frozenset({"keyword", "q", "search_query", "search_term", "term"}),
@@ -232,7 +244,6 @@ VARIANTS: "dict[str, frozenset[str]]" = {
     Keys.body: frozenset({"message", "msg", "text"}),
     Keys.buffer_minutes: frozenset({"window"}),
     Keys.category: frozenset({"tag", "topic"}),
-    Keys.code: frozenset({"python", "script", Keys.source}),
     Keys.command: frozenset({"bash", "cmd", "script", "shell"}),
     Keys.context_lines: frozenset({"surrounding_lines"}),
     Keys.destination_location: frozenset({"dest", "end_location"}),
@@ -261,6 +272,7 @@ VARIANTS: "dict[str, frozenset[str]]" = {
     Keys.permissions: frozenset({"chmod", "perms"}),
     Keys.port_idx: frozenset({"port_id", "port_number"}),
     Keys.recurrence: frozenset({"frequency", "repeat", "rrule", "schedule"}),
+    Keys.replaces: frozenset({"old_value", "previous_value"}),
     Keys.sender: frozenset({"author", "from", "from_address", "from_email"}),
     Keys.to: frozenset({"dest", "recipient", "recipients"}),
     Keys.triage: frozenset({"category", "label"}),

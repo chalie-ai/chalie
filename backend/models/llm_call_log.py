@@ -26,6 +26,8 @@ class LlmCallLog(Model):
         "tokens_cache_create",
         "tokens_thinking",
         "latency_ms",
+        "prefill_ms",
+        "decode_ms",
         "created_at",
     )
 

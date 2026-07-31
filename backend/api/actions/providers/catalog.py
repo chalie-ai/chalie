@@ -26,12 +26,6 @@ class ProviderCatalog(Action):
     cookie_only_methods: ClassVar[frozenset[str]] = frozenset({"get"})
     response_dto = {"get": DocumentedResponse(CatalogEntry, listing=True)}
 
-    def slug(self) -> str:
-        return "providers"
-
-    def verb(self) -> str:
-        return "catalog"
-
     def get(self, id: int | str) -> ResponseReturnValue:
         if not self.is_create(id):
             raise NotFoundError("Not found")

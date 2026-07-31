@@ -1,4 +1,4 @@
-"""SearchFilesAbility — locate files by name (glob) or content (grep).
+"""SearchFilesAbility — locate files by name (glob), content (grep), or index (content).
 
 Cross-platform alternative to ``bash find`` / ``bash grep`` so the LLM
 gets consistent behaviour across macOS, Linux, and Windows — including
@@ -10,6 +10,10 @@ Returns a sealed :class:`abilities._result.ToolResult` (never a wire envelope):
 * ``grep`` success → ``{"matches": [{"file": <abs>, "line": <int>,
   "text": <line>, "context": <surrounding lines>}, …]}`` — one row per matched
   line.
+* ``content`` success → ``{"files": [<abs path>, …]}`` ranked by relevance from
+  the FTS5 file index (:class:`services.file_index_service.FileIndexService`) —
+  fast and able to see inside PDF/DOCX/PPTX, but may lag the live filesystem;
+  glob/grep stay live and exact.
 * Results are PAGINATED at 5 per page (a result = a file for glob, a matched
   line for grep). Pass ``page`` to walk the list; when more than one page exists
   the body carries a "use the `page` parameter … page N from M pages" note and
@@ -21,7 +25,8 @@ Returns a sealed :class:`abilities._result.ToolResult` (never a wire envelope):
   walk, so a read can never park forever on a special file.
 * A walk that hits the time budget or the result ceiling sets
   ``meta truncated=true`` so the cut is never silent.
-* Zero hits → SUCCESS with ``count=0`` and a broaden suggestion in the body.
+* Zero hits → ``err(code="no-results")`` with the broaden suggestion as
+  ``hint`` — never a quiet zero-row success.
 * Bad inputs → ``err()`` with a stable kebab ``code`` (``unknown-action`` /
   ``invalid-param`` / ``empty-query`` / ``directory-not-found`` /
   ``not-a-directory`` / ``invalid-regex``).
@@ -33,22 +38,31 @@ import os
 import re
 import time
 from collections import deque
-from collections.abc import Generator
+from collections.abc import Generator, Sequence
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import ClassVar, cast
 
 from abilities._ability import Ability
-from configs.enums.param_key import Keys
 from abilities._result import ToolResult
+from configs.enums.param_key import Keys
+from contracts.params.param_bag import ParamBag
+from contracts.params.search_files_params_bag import (
+    DEFAULT_CONTEXT_LINES,
+    SearchFilesContentParams,
+    SearchFilesGlobParams,
+    SearchFilesGrepParams,
+    SearchFilesParamsBag,
+)
+from services.file_index_service import FileIndexService
+from configs.enums.ability_category import AbilityCategory
 
+_CONTENT_LIMIT = 50
 _RESULTS_PER_PAGE = 5
 # Safety ceiling on total results gathered for one query, so a pathological
 # match-dense tree (e.g. a 100MB file with a million matching lines) can never
 # bloat the cache file or memory. A hit sets truncated=true.
 _MAX_RESULTS = 5000
-_DEFAULT_CONTEXT_LINES = 5
-_MAX_CONTEXT_LINES = 20
 _BUDGET_RATIO = 0.8
 # Cooperative wall-clock budget (seconds) for a single walk. NOT a framework
 # execution timeout — it bounds the traversal so an enormous tree returns a
@@ -63,24 +77,35 @@ _NARROW_HINT = "Narrow the directory or tighten the pattern for complete results
 _BROADEN_HINT = "Broaden the pattern or widen the directory and try again."
 
 
-class SearchFilesAbility(Ability):
+class SearchFilesAbility(Ability[SearchFilesParamsBag]):
     # The dispatcher pre-gates these BEFORE the policy gate: an unknown action →
     # code=unknown-action with valid=(glob, grep); a present action missing
     # 'query' → a single code=missing-params error. A present-but-whitespace
-    # query passes the pre-gate (the value is truthy), so run() still guards it.
+    # query passes the pre-gate (the value is truthy); the bag's router rejects
+    # it as empty-query before run() is reached.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
         "glob": (Keys.query,),
         "grep": (Keys.query,),
+        "content": (Keys.query,),
     }
 
-    def get_name(self) -> str:
-        return "search_files"
+    # The typed input contract: the dispatch seam builds the bag via
+    # SearchFilesParamsBag.from_params before run() is called.
+    PARAMS: ClassVar[type[ParamBag] | None] = SearchFilesParamsBag
+    SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("find files", "file search", "locate files", "grep")
+    NAME: ClassVar[str] = "search_files"
+    CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.FILE_OPERATIONS
 
     def get_summary(self) -> str:
+        from abilities.bash import BashAbility  # noqa: PLC0415
+        from abilities.read import ReadAbility  # noqa: PLC0415
+
         return (
-            "Locate files on disk by filename pattern (glob) or by content (grep). "
-            "Use this BEFORE reaching for bash when you need to find a file you "
-            "don't already know the path of. Use in conjunction with the `read` "
+            "Locate files on disk by name (glob), by live content (grep), or by "
+            "pre-built index (content). The index action is fast/fuzzy/binary-capable "
+            "but may lag the live filesystem by a moment; glob and grep are live/exact. "
+            f"Use this BEFORE reaching for {BashAbility.NAME} when you need to find a file you "
+            f"don't already know the path of. Use in conjunction with the `{ReadAbility.NAME}` "
             "tool to then get a located file's contents into context."
         )
 
@@ -92,8 +117,8 @@ class SearchFilesAbility(Ability):
             "list every markdown doc under docs/",
             "grep for 'TODO' in my notes folder",
             "which file defines _FIND_TOOLS_GUARDRAILS",
-            "show me all log files in /tmp",
-            "find files matching test_*.py",
+            "find the document that mentions 'quarterly report'",
+            "which of my notes talks about the kitchen renovation",
         ]
 
     def get_search_tooltip(self) -> str:
@@ -104,12 +129,16 @@ class SearchFilesAbility(Ability):
         "properties": {
             Keys.action: {
                 "type": "string",
-                "enum": ["glob", "grep"],
+                "enum": ["glob", "grep", "content"],
                 "description": (
                     "'glob' = match files by name/pattern (e.g. '*.py', "
                     "'**/test_*.yaml'). 'grep' = search for content matches "
-                    "inside files. Pick 'glob' when you know the filename "
-                    "shape, 'grep' when you know what's inside the file."
+                    "inside files (live, exact, text-only). 'content' = ranked "
+                    "full-text search over a pre-built index of file contents "
+                    "(fast, fuzzy, can see inside PDF/DOCX/PPTX, but may lag "
+                    "the live filesystem by a moment). Pick 'glob' for filename "
+                    "shapes, 'grep' for live exact text search, 'content' for "
+                    "fuzzy ranked search across all indexed files."
                 ),
             },
             Keys.query: {
@@ -117,7 +146,9 @@ class SearchFilesAbility(Ability):
                 "description": (
                     "For 'glob': a filename or glob pattern (e.g. '*.md', "
                     "'**/*.log', 'config.*'). For 'grep': the literal "
-                    "string or regex to search file contents for."
+                    "string or regex to search file contents for. For 'content': "
+                    "words or phrases expected to appear in the file's content "
+                    "(fuzzy, ranked by relevance)."
                 ),
             },
             Keys.directory: {
@@ -152,49 +183,46 @@ class SearchFilesAbility(Ability):
     def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    def run(self, params: dict[str, object]) -> ToolResult:
-        action = cast(str, params.get(Keys.action, ""))
-        query = cast(str, params.get(Keys.query) or "").strip()
-        directory = cast(str, params.get(Keys.directory) or "").strip()
+    def run(self, params: SearchFilesParamsBag) -> ToolResult:
+        # The router factory only ever yields the three leaves; the isinstance
+        # chain hands _search each leaf's exact fields (glob renders no
+        # context, but the gather/cache key still carries the default width).
+        if isinstance(params, SearchFilesGlobParams):
+            return self._search("glob", params.query, params.directory, params.page, DEFAULT_CONTEXT_LINES)
+        if isinstance(params, SearchFilesGrepParams):
+            return self._search("grep", params.query, params.directory, params.page, params.context_lines)
+        if isinstance(params, SearchFilesContentParams):
+            return self._search_content(params.query, params.page)
+        return ToolResult.err(
+            f"Unknown search_files params bag: {type(params).__name__}.",
+            code="unknown-action",
+            valid=("glob", "grep", "content"),
+        )
 
-        # The dispatcher's ACTION_REQUIRED pre-gate has already rejected an
-        # unknown action and a missing 'query'; this guards the residue it lets
-        # through — a present-but-whitespace query (truthy to the pre-gate).
-        if action not in ("glob", "grep"):
+    def _search_content(self, query: str, page: int) -> ToolResult:
+        # No /tmp cache: the FTS query is instant and caching would only add
+        # staleness on top of the index's own lag. Paginated as "glob" so the
+        # body carries a "files" list, same shape as a name search.
+        paths = FileIndexService().search(query, limit=_CONTENT_LIMIT)
+        return _paginate("glob", paths, page, False)
+
+    def _search(self, action: str, query: str, directory: str, page: int, context_lines: int) -> ToolResult:
+        root = self._resolve_directory(directory)
+        if isinstance(root, ToolResult):
+            return root
+        # re.error is the ONLY caught failure — a bad grep pattern is a user
+        # input fault. Every other failure bubbles to the dispatcher.
+        try:
+            results, truncated = _gather(action, query, root, context_lines)
+        except re.error as exc:
             return ToolResult.err(
-                f"Invalid action {action!r}. Must be 'glob' or 'grep'.",
-                code="unknown-action",
-                valid=("glob", "grep"),
+                f"Invalid regex {query!r}: {str(exc)[:120]}",
+                code="invalid-regex",
+                hint="escape the special characters or pass a valid Python regex.",
             )
-        if not query:
-            return ToolResult.err(
-                "query is required and must not be empty.",
-                code="empty-query",
-                hint="pass a non-empty filename pattern (glob) or search string (grep).",
-            )
+        return _paginate(action, results, page, truncated)
 
-        page = _parse_int(params.get(Keys.page), default=1, low=1, high=None)
-        if page is None:
-            return ToolResult.err(
-                f"page must be an integer >= 1, got {params.get(Keys.page)!r}.",
-                code="invalid-param",
-                hint="pass a 1-based page number.",
-            )
-
-        if action == "grep":
-            context_lines = _parse_int(
-                params.get(Keys.context_lines), default=_DEFAULT_CONTEXT_LINES, low=0, high=_MAX_CONTEXT_LINES
-            )
-            if context_lines is None:
-                return ToolResult.err(
-                    f"context_lines must be between 0 and {_MAX_CONTEXT_LINES}, "
-                    f"got {params.get(Keys.context_lines)!r}.",
-                    code="invalid-param",
-                    hint=f"pass an integer between 0 and {_MAX_CONTEXT_LINES}.",
-                )
-        else:
-            context_lines = _DEFAULT_CONTEXT_LINES
-
+    def _resolve_directory(self, directory: str) -> "Path | ToolResult":
         root_str = directory or "/"
         try:
             root = Path(os.path.expanduser(root_str)).resolve()
@@ -216,33 +244,7 @@ class SearchFilesAbility(Ability):
                 code="not-a-directory",
                 hint="pass a directory path, not a file path.",
             )
-
-        # re.error is the ONLY caught failure — a bad grep pattern is a user
-        # input fault. Every other failure bubbles to the dispatcher.
-        try:
-            results, truncated = _gather(action, query, root, context_lines)
-        except re.error as exc:
-            return ToolResult.err(
-                f"Invalid regex {query!r}: {str(exc)[:120]}",
-                code="invalid-regex",
-                hint="escape the special characters or pass a valid Python regex.",
-            )
-        return _paginate(action, results, page, truncated)
-
-
-def _parse_int(raw: object, *, default: int, low: int, high: "int | None") -> "int | None":
-    """Return the validated int, or *default* when absent, or None on any
-    out-of-range / non-integer value so the caller can raise a stable error.
-    """
-    if raw is None:
-        return default
-    try:
-        value = int(cast("str | int", raw))
-    except (TypeError, ValueError):
-        return None
-    if value < low or (high is not None and value > high):
-        return None
-    return value
+        return root
 
 
 def _cache_path(action: str, query: str, context_lines: int, root: Path) -> str:
@@ -285,8 +287,15 @@ def _gather(action: str, query: str, root: Path, context_lines: int) -> tuple[li
     return results, truncated
 
 
-def _paginate(action: str, results: list[object], page: int, truncated: bool) -> ToolResult:
+def _paginate(action: str, results: Sequence[object], page: int, truncated: bool) -> ToolResult:
     total = len(results)
+    if not total:
+        kind = "files matched" if action == "glob" else "matches found"
+        hint = f"No {kind}. {_BROADEN_HINT}"
+        if truncated:
+            hint = f"{hint} {_NARROW_HINT}"
+        return ToolResult.no_results(hint=hint, truncated=truncated)
+
     page_count = max(1, (total + _RESULTS_PER_PAGE - 1) // _RESULTS_PER_PAGE)
     page = min(page, page_count)
     start = (page - 1) * _RESULTS_PER_PAGE
@@ -296,9 +305,6 @@ def _paginate(action: str, results: list[object], page: int, truncated: bool) ->
     body: dict[str, object] = {key: shown}
 
     notes: list[str] = []
-    if not total:
-        kind = "files matched" if action == "glob" else "matches found"
-        notes.append(f"No {kind}. {_BROADEN_HINT}")
     if page_count > 1:
         notes.append(
             "Result list is too large to fit in 1 response, use the `page` "

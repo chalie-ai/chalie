@@ -67,7 +67,7 @@ class RegistryInvariant:
         all_declared: "set[str]" = set()
 
         for ability in abilities:
-            name = ability.get_name()
+            name = ability.NAME
             try:
                 properties = cast(dict[str, object], (ability.get_parameters() or {}).get("properties") or {})
             except Exception as exc:  # noqa: BLE001

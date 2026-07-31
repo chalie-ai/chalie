@@ -26,28 +26,32 @@ happens at the outer ``web_browse`` tool.
 
 from __future__ import annotations
 
-from typing import ClassVar, cast
+from typing import ClassVar
 
 from abilities._delegate import DelegateAbility, delegate_result
 from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 from configs.channels.web_browse import WebBrowseConfig
+from contracts.params.param_bag import ParamBag
+from contracts.params.delegate_params_bag import DelegateParamsBag
+from configs.enums.ability_category import AbilityCategory
 
 
-class WebBrowseAbility(DelegateAbility):
-    def get_name(self) -> str:
-        return "web_browse"
+class WebBrowseAbility(DelegateAbility[DelegateParamsBag]):
+    SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("browse web", "browser", "visit website", "interactive browsing")
+    NAME: ClassVar[str] = "web_browse"
+    CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.DELEGATE
 
     def get_summary(self) -> str:
         return (
-            "Spawn a subagent with full web browser control to perform an action on "
-            "one or more websites. It drives a real browser — rendering pages, "
-            "filling forms, navigating multi-step flows — and inspects screenshots "
-            "with its own vision. Screenshots are saved as documents whose doc_id "
-            "any vision tool can view later. Use for acting on a specific site — "
-            "not for general lookups. Give the subagent one narrow, concrete goal; "
-            "fire several in parallel for different tasks on the same site rather "
-            "than handing one subagent a broad, generic goal."
+            "Spawn a background browsing agent with full web browser control to "
+            "perform an action on one or more websites. It drives a real browser — "
+            "rendering pages, filling forms, navigating multi-step flows — and "
+            "inspects screenshots with its own vision. Screenshots are saved as "
+            "image files whose path any vision tool can view later. Use for acting "
+            "on a specific site — not for general lookups. Give it one narrow, "
+            "concrete goal; fire several in parallel for different tasks on the "
+            "same site rather than handing one agent a broad, generic goal."
         )
 
     def get_examples(self) -> list[str]:
@@ -66,16 +70,15 @@ class WebBrowseAbility(DelegateAbility):
         return "delegate an interactive web-browsing task"
 
     def get_follow_up(self, tr: ToolResult) -> str:
-        """Pull the full text of a page the agent reached.
+        """Pull the full text of a page the agent reached."""
+        from abilities.read import ReadAbility  # noqa: PLC0415
 
-        Screenshots already ride back described (see :meth:`_with_screenshots`),
-        so the only standing next step is reading a page's full text."""
-        return "To get a full textual version of this page call the `read` tool."
+        return f"To get a full textual version of this page call the `{ReadAbility.NAME}` tool."
 
     _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
-            Keys.goal: {
+            Keys.instructions: {
                 "type": "string",
                 "description": (
                     "What to accomplish in the browser. Include everything the "
@@ -84,59 +87,32 @@ class WebBrowseAbility(DelegateAbility):
                 ),
             },
         },
-        "required": [Keys.goal],
+        "required": [Keys.instructions],
     }
 
     # An action-less delegate: the dispatcher's ACTION_REQUIRED pre-gate (the
-    # ``""`` key covers action-less tools) rejects a missing/empty ``goal`` with
-    # ``code=missing-params`` BEFORE the policy gate and BEFORE run() — so an empty
-    # goal never spawns an expensive browser delegate on nothing.
-    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.goal,)}
+    # ``""`` key covers action-less tools) rejects missing/empty ``instructions``
+    # with ``code=missing-params`` BEFORE the policy gate and BEFORE run() — so an
+    # empty instruction never spawns an expensive browser delegate on nothing.
+    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.instructions,)}
+
+    # The typed input contract: the dispatch seam builds the shared delegate
+    # bag via DelegateParamsBag.from_params before run() is called.
+    PARAMS: ClassVar[type[ParamBag] | None] = DelegateParamsBag
 
     def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    def run(self, params: dict[str, object]) -> ToolResult:
+    def run(self, params: DelegateParamsBag) -> ToolResult:
         from controllers.message_processor import MessageProcessor  # noqa: PLC0415
-        from tools.browser.session import screenshot_ledger  # noqa: PLC0415
 
         mp = self.mp
         if mp is None:
             raise RuntimeError("web_browse.run() dispatched without a bound MessageProcessor")
 
         cfg = WebBrowseConfig(mp.config.policy_channel)
-        delegate_mp = MessageProcessor.process(
-            cfg, raw_input=cast(str, self.param(params, Keys.goal, required=True)),
-        )
+        delegate_mp = MessageProcessor.process(cfg, raw_input=params.instructions)
         result = delegate_mp.result()
-        tr = delegate_result(
+        return delegate_result(
             result, hint="Restate the goal more concretely or break it into steps, then retry."
-        )
-        # Screenshots ride back off the sub-turn's uid-keyed ledger (the frozen
-        # config no longer carries per-run state, §2.5) — the same key
-        # browser._session_key() records under and PromptService reads.
-        return self._with_screenshots(tr, screenshot_ledger(delegate_mp.uid or 0))
-
-    @staticmethod
-    def _with_screenshots(tr: ToolResult, shots: list[tuple[str, str]]) -> ToolResult:
-        """Mechanical, not prompt-dependent: each screenshot rides back already
-        DESCRIBED. Ingest ran every capture through vision (browser._screenshot →
-        document pipeline), storing the description as the document's clean_text;
-        we surface it inline here — exactly as the raw browser tool hands its own
-        caller a described page — so the model sees what each page shows without a
-        separate vision call, even when the delegate forgot to mention a shot."""
-        if tr.status != "success" or not shots:
-            return tr
-        from services.document_service import DocumentService  # noqa: PLC0415
-
-        doc_svc = DocumentService()
-        blocks = []
-        for doc_id, url in shots:
-            doc = doc_svc.get_document(doc_id)
-            vision = (doc.get("clean_text") if doc else "") or "(description unavailable)"
-            blocks.append(f"- {url} (doc_id={doc_id}):\n{vision}")
-        joined = "\n\n".join(blocks)
-        return ToolResult.ok(
-            f"{tr.body}\n\nScreenshots captured this run (each already described):\n{joined}",
-            screenshots=len(shots),
         )

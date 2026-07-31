@@ -7,9 +7,19 @@ ToolDispatcher._execute as the callback).
 Settings: internal (always allowed, hidden in Brain) · allow · ask · deny.
 Channels: PolicyChannel values.
 
-A small set of read-only / scratch / infrastructure tools (``INTERNAL``) ALWAYS
-bypass the gate regardless of channel or any seeded row — they are never
-user-gated and carry no seed rows. ANY action on these tools runs unconditionally.
+The seed file (policy_defaults.json) is the single source of truth for the
+policy table. ``apply_seed`` converges the table to the seed on every boot: it
+INSERT-OR-IGNOREs every seeded row, then DELETES every row whose permission is
+neither in the seed nor an MCP tool permission. Retiring an ability needs only
+a seed-file edit — never a migration. The seed is exhaustive (80 permissions ×
+3 channels = 240 rows), so matching on the permission column alone is correct
+and complete.
+
+A small set of tools (``INTERNAL``) ALWAYS bypass the gate regardless of channel
+or any seeded row — read-only / scratch / infrastructure tools, plus
+delegate-exclusive inner tools whose user-facing permission is the OUTER delegate
+tool (``pim`` covers email/calendar/contacts exactly as ``web_search`` covers
+search). They are never user-gated and carry no seed rows.
 
 The gate is dead simple: short-circuit INTERNAL tools, else SELECT the setting
 (lazily creating an 'ask' row on a miss), then run | block | prompt. The decision
@@ -37,14 +47,22 @@ CHANNEL = PolicyChannel
 VALID_CHANNELS = {c.value for c in CHANNEL}
 VALID_SETTINGS = {"internal", "allow", "ask", "deny"}
 
-# Read-only / scratch / infrastructure tools that ALWAYS bypass the gate, on
-# every channel, with no seed row. ANY action on these runs unconditionally —
-# they are never user-gated and never appear in the Brain policy surface.
+# Tools that ALWAYS bypass the gate, on every channel, with no seed row. Two
+# admission grounds: (1) read-only / scratch / infrastructure tools — never
+# user-gated; (2) delegate-exclusive inner tools (DISCOVERABLE=False, pinned on
+# one delegate config) — the user-facing permission is the OUTER delegate tool
+# (``web_search`` covers search/news/web_download, ``web_browse`` covers browser,
+# ``pim`` covers email/calendar/contacts, ``code_agent`` covers ``run_script``).
+# The general file primitives (read / write_file / edit_file / move / make_dir /
+# delete / set_permissions) are NOT here: they carry seeded ``allow`` rows, so
+# the user can tighten them per channel. ANY action on INTERNAL tools runs unconditionally;
+# they never appear in the Brain policy surface, and the reap pass removes any
+# stale rows for them so this frozenset stays the single source of truth.
 INTERNAL = frozenset({
-    "browser", "chalie_docs", "chat_history_compactor", "find_skills",
-    "find_tools", "memory", "news", "read", "review_tool_calls",
-    "review_transcript", "save_graph", "save_pattern", "search",
-    "skill_manager", "web_download",
+    "browser", "calendar", "chalie_docs", "chat_history_compactor", "contacts",
+    "email", "find_skills", "find_tools", "mcp_tools", "memory", "news",
+    "review_tool_calls", "review_transcript", "run_script", "save_graph",
+    "save_pattern", "search", "skill_manager", "web_download",
 })
 
 # Channels with no human at a prompt: an `ask` becomes a `deny` (D2).
@@ -158,8 +176,11 @@ class PolicyManager:
         return [{k: str(v) for k, v in row.items()} for row in rows]
 
     def upsert(self, channel: str, permission: str, setting: str) -> int:
-        """Single-cell upsert. Returns rows affected (0 on invalid input)."""
+        """Single-cell upsert. Returns rows affected (0 on invalid input —
+        including INTERNAL tools, which are never user-gated so no row may exist)."""
         if channel not in VALID_CHANNELS or setting not in VALID_SETTINGS:
+            return 0
+        if permission.split(".", 1)[0] in INTERNAL:
             return 0
         return Policy.upsert(channel, permission, setting)
 
@@ -177,13 +198,26 @@ class PolicyManager:
     # ── Seed / reset (static policy_defaults.json) ────────────────────────────
 
     def apply_seed(self) -> int:
-        """Load policy_defaults.json via INSERT OR IGNORE. Returns rows inserted."""
+        """Converge the policy table to the seed file.
+
+        This runs every boot (run.py). Two passes:
+        1. INSERT-OR-IGNORE every seeded row — this is the source of truth.
+        2. DELETE every row whose permission is neither in the seed nor an MCP
+           tool permission (created lazily and legitimately absent from the seed).
+
+        Retiring an ability needs only a seed-file edit — never a migration.
+        Returns the number of rows inserted by pass 1."""
         from services.file_mapper_service import FileMapperService  # noqa: PLC0415
         with open(FileMapperService.get_policy_defaults_path()) as f:
             seed = cast(list[dict[str, str]], json.load(f))
         inserted = 0
         for r in seed:
             inserted += Policy.insert_or_ignore(r["channel"], r["permission"], r["setting"])
+        # Reap pass: delete rows whose permission is not in the seed and not MCP
+        seed_permissions = {r["permission"] for r in seed}
+        reaped = Policy.delete_unseeded(seed_permissions)
+        if reaped:
+            logger.info("[PolicyManager] reaped %d stale policy rows", reaped)
         return inserted
 
     def reset_to_defaults(self) -> int:

@@ -15,11 +15,15 @@ export interface TimerPayload {
   id: string | number;
   title: string;
   duration_seconds: number;
-  /** Wall-clock start instant grafted on by the backend; LLM never supplies it. */
-  started_at: string;
 }
 
-const props = defineProps<{ payload: TimerPayload; synthesis?: string }>();
+/**
+ * `createdAt` is the segment's wall-clock anchor (the tool call's moment, ISO-8601
+ * UTC from the backend) — the instant the countdown runs from. It rides the
+ * segment, not the payload: the payload IS the tool body the model reads, and a
+ * literal timestamp in there is something a later ACT iteration would reason about.
+ */
+const props = defineProps<{ payload: TimerPayload; synthesis?: string; createdAt?: string | null }>();
 
 /** pathLength / stroke-dasharray value for the SVG progress ring. */
 const RING_PATH_LENGTH = 100;
@@ -32,7 +36,7 @@ const STALE_RELOAD_GRACE_MS = 60 * 1_000;
  *  audio + ring pulse stop) so an unattended timer doesn't bleep forever. */
 const ALARM_AUTO_STOP_MS = 30 * 1_000;
 
-function parseStartedAt(s: string | undefined | null): number | null {
+function parseAnchor(s: string | undefined | null): number | null {
   if (!s) return null;
   const t = Date.parse(s);
   return Number.isFinite(t) ? t : null;
@@ -96,7 +100,7 @@ function startAlarm(): AlarmHandle {
 
 const title = (props.payload.title || props.synthesis || 'Timer').toString();
 const totalSeconds = Number(props.payload.duration_seconds) || 0;
-const startedAtMs = parseStartedAt(props.payload.started_at);
+const startedAtMs = parseAnchor(props.createdAt);
 const isInvalid = totalSeconds <= 0 || startedAtMs == null;
 
 const totalMs = isInvalid ? 0 : totalSeconds * 1_000;
@@ -354,20 +358,20 @@ onBeforeUnmount((): void => {
 
 .timer-card__ring-track {
   fill: none;
-  stroke: var(--border, color-mix(in oklab, var(--violet) 18%, transparent));
+  stroke: var(--border);
   stroke-width: 3;
 }
 
 .timer-card__ring-fill {
   fill: none;
-  stroke: var(--violet, #8a5cff);
+  stroke: var(--violet);
   stroke-width: 3;
   stroke-linecap: round;
   transition: stroke-dashoffset 0.4s linear;
 }
 
 .timer-card--done .timer-card__ring-fill {
-  stroke: var(--amber, #ffb257);
+  stroke: var(--amber);
   animation: timer-ring-pulse 1s ease-in-out infinite;
 }
 
@@ -406,7 +410,7 @@ onBeforeUnmount((): void => {
 }
 
 .timer-card__time {
-  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
+  font-family: var(--font-mono);
   font-size: 0.78rem;
   color: var(--text-tertiary);
   letter-spacing: 0.04em;
@@ -426,7 +430,7 @@ onBeforeUnmount((): void => {
   width: 32px;
   height: 32px;
   border-radius: 50%;
-  border: 1px solid var(--border, color-mix(in oklab, var(--violet) 22%, transparent));
+  border: 1px solid var(--border);
   background: transparent;
   color: var(--text-secondary);
   display: inline-flex;

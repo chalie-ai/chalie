@@ -33,6 +33,8 @@ from abilities._ability import Ability
 from abilities._compaction_config import CompactionConfig
 from abilities._result import ToolResult
 from configs.enums.thinking_level import ThinkingLevel
+from contracts.params.chat_history_compactor_params_bag import ChatHistoryCompactorParamsBag
+from contracts.params.param_bag import ParamBag
 from models.compaction import Compaction
 
 if TYPE_CHECKING:
@@ -93,7 +95,7 @@ Write one living document with exactly these sections:
 - Voice — tone, recurring names, in-jokes that have stuck. 1-3 lines.
 - Last — the final user message (one line) and your reply (one line).
 
-Drop: one-off mentions, resolved loops, social filler, and all plumbing (timestamps, System Awareness blocks, Checkpoint headers, telemetry).
+Drop: one-off mentions, resolved loops, social filler, and all plumbing (timestamps).
 
 Rules:
 - 200-400 tokens. Older facts compress harder than newer ones.
@@ -102,12 +104,12 @@ Rules:
 - Output ONLY the document."""
 
 
-class ChatHistoryCompactor(Ability):
+class ChatHistoryCompactor(Ability[ChatHistoryCompactorParamsBag]):
     DISCOVERABLE: ClassVar[bool] = False  # internal-only compaction tool; pinned, never discovered
+    NAME: ClassVar[str] = "chat_history_compactor"
     counts_as_settle: ClassVar[bool] = False  # never demotes a settle0
+    PARAMS: ClassVar[type[ParamBag] | None] = ChatHistoryCompactorParamsBag
 
-    def get_name(self) -> str:
-        return "chat_history_compactor"
 
     def get_summary(self) -> str:
         return "Internal-only chat-history compaction. Never user-invocable."
@@ -130,7 +132,7 @@ class ChatHistoryCompactor(Ability):
     def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    def run(self, params: dict[str, object]) -> ToolResult:
+    def run(self, params: ChatHistoryCompactorParamsBag) -> ToolResult:
         from controllers.message_processor import MessageProcessor  # noqa: PLC0415
 
         mp = cast("_CompactionParent", self.mp)

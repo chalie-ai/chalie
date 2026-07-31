@@ -97,16 +97,20 @@ class _MCPAbility(Ability):
     tool schema (lazily fetched + cached via McpClientService); the search-facing
     getters return empty because a synthetic proxy is never indexed.
 
-    _SYNTHETIC=True exempts it from __init_subclass__ metadata validation (no
-    EXAMPLES/SEARCH_TOOLTIP shape check) and from the registry's boot-time
-    instantiation (_all_concrete_subclasses skips it — it takes a tool_name).
+    _SYNTHETIC=True exempts it from the registry's boot-time instantiation
+    (_all_concrete_subclasses skips it — its __init__ takes a tool_name).
     """
 
     _SYNTHETIC: ClassVar[bool] = True
 
     def __init__(self, tool_name: str, mp: "MessageProcessor | None" = None) -> None:
         super().__init__(mp)
-        self._tool_name = tool_name
+        # Instance-level NAME: the synthetic proxy takes its identity from the
+        # remote tool at construction time, unlike native abilities' ClassVar.
+        # Written through the instance dict — Python's per-instance shadow of a
+        # class attribute — because the base contract declares NAME a ClassVar
+        # and this synthetic proxy is its one sanctioned exception.
+        vars(self)["NAME"] = tool_name
         self._remote: "dict[str, object] | None" = None
         self._fetched = False
 
@@ -116,12 +120,9 @@ class _MCPAbility(Ability):
         build_tools treats that as 'skip this tool'."""
         if not self._fetched:
             from services.mcp_client_service import McpClientService  # noqa: PLC0415
-            self._remote = McpClientService().get_tool_schema(self._tool_name)
+            self._remote = McpClientService().get_tool_schema(self.NAME)
             self._fetched = True
         return self._remote
-
-    def get_name(self) -> str:
-        return self._tool_name
 
     def get_summary(self) -> str:
         remote = self.remote_schema()
@@ -138,4 +139,4 @@ class _MCPAbility(Ability):
         return cast("dict[str, object]", (remote or {}).get("input_schema", {}))
 
     def run(self, params: "dict[str, object]") -> ToolResult:
-        return _dispatch_mcp(self._tool_name, params)
+        return _dispatch_mcp(self.NAME, params)

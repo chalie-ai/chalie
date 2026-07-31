@@ -34,6 +34,7 @@ Tool subprocesses have **zero access** to Chalie's internal state. A tool cannot
 - API key authentication for programmatic access
 - All authenticated endpoints use the `@require_session` decorator
 - No default or hardcoded credentials — account password is set during onboarding
+- Optional `credentials.json` at the install root logs the instance in on the first request — a development convenience; Chalie never creates the file, it is gitignored, and in its absence every request follows the normal login flow
 
 ---
 

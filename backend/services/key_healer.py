@@ -17,7 +17,7 @@ the ACTION_REQUIRED pre-gate, the policy gate, or ``run()`` ever sees the params
    e.g. ``source"`` → ``source`` and ``MAX_CHARS`` → ``max_chars`` — with zero
    per-tool knowledge. (This heals a common model defect: a model stores
    ``{"source\"": "https://…"}`` and ``read`` bounces on
-   ``source-required`` because the corrupt KEY never matched.) This layer is
+   ``missing-params`` because the corrupt KEY never matched.) This layer is
    :class:`~services.key_normalizer.KeyNormalizer`.
 
 2. **Variant resolution (registry-driven, per-tool).** A sanitised key that is
@@ -30,9 +30,8 @@ the ACTION_REQUIRED pre-gate, the policy gate, or ``run()`` ever sees the params
    :class:`KeyHealer`.
 
 Resolution is two-pass and **declared-canonical-first**, so a parameter that is
-itself a synonym of another (calendar's ``summary`` vs ``title``; ``document``'s
-``id`` vs the ``list`` tool's ``id`` alias) always wins as itself and is never
-rewritten away. An unrecognised key passes through **verbatim** (never the lossy
+itself a synonym of another (calendar's ``summary`` vs ``title``) always wins as
+itself and is never rewritten away. An unrecognised key passes through **verbatim** (never the lossy
 lower-cased form), so MCP camelCase keys (``serverName``) and any out-of-band key
 survive intact for the tool or framework to handle.
 

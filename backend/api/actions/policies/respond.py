@@ -19,12 +19,6 @@ class RespondAction(Action):
 
     request_dto = PolicyRespondRequest
 
-    def slug(self) -> str:
-        return "policies"
-
-    def verb(self) -> str:
-        return "respond"
-
     def _service(self) -> PolicyManager:
         return PolicyManager()
 

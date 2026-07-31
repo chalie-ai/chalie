@@ -27,12 +27,6 @@ class SchedulerTurns(Action):
     cookie_only_methods: ClassVar[frozenset[str]] = frozenset({"get"})
     response_dto = {"get": DocumentedResponse(SchedulerTurn, listing=True)}
 
-    def slug(self) -> str:
-        return "scheduler"
-
-    def verb(self) -> str:
-        return "turns"
-
     def get(self, id: int | str) -> ResponseReturnValue:
         """List prompt-schedule threads, one row per schedule (§13.5).
 

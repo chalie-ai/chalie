@@ -1,19 +1,29 @@
-"""Feature test: turn-0 attachment uploads fan out in parallel at a barrier.
+"""Feature test: turn-0 attachments fan out in parallel at a barrier.
 
-Drives the REAL ``MessageProcessor._seed_turn_zero`` — the SAME production method
-that fires once before iteration 0 — with N real image attachments on a real
-``UserConfig`` channel against the real test DB and real files.  ZERO mocks.
+Drives the REAL ``MessageProcessor._seed_turn_zero`` — the SAME production
+method that fires once before iteration 0 — with N real image attachments on a
+real ``UserConfig`` channel against the real test DB and real files. ZERO
+mocks — the ``_DOCUMENTS_DIR`` and ``get_file_index_db_path`` patches are the
+same conftest-blessed path redirections every docs-dir test uses (both are
+needed BEFORE ingest runs: FileIndexService's db_path resolves at call time
+inside ``FileParserService.ingest``, so both patches must be in place first).
+
+Attachments are ingested via ``FileParserService.ingest(..., subdir="uploads")``,
+so they land flat under ``<documents>/uploads/``, not the documents root — the
+staging prefix (``chalie_<8hex>_``) is stripped from the basename before
+landing.
 """
 
 import io
-from typing import cast
+import os
+import uuid
+from pathlib import Path
 
 import pytest
 
 from configs.channels import UserConfig
 from controllers.message_processor import MessageProcessor
-from services.document_service import DocumentService
-from services.provider_db_service import ProviderDbService
+from services.file_mapper_service import FileMapperService
 from services.tmp_storage import new_tmp_path
 
 pytestmark = pytest.mark.unit
@@ -40,8 +50,10 @@ def _png_with_text(text: str) -> bytes:
 
 
 def _write_attachment(label: str) -> str:
-    """Paths must be under ``TMP_PATH_PREFIX`` so the guard passes."""
-    path = new_tmp_path(f"seed_parallel_{label}.png")
+    """Stage exactly the way ``ThreadsEndpoint._stage_uploads`` does: paths
+    must be under ``TMP_PATH_PREFIX`` (so the sandbox guard passes) with an
+    8-hex collision prefix on the basename."""
+    path = new_tmp_path(f"{uuid.uuid4().hex[:8]}_seed_parallel_{label}.png")
     with open(path, "wb") as fh:
         fh.write(_png_with_text(label.upper()))
     return path
@@ -52,70 +64,65 @@ def _build_parent(attachments: "list[str]") -> MessageProcessor:
     private-field poking. The constructor is "constructed inert": it wires every
     coordinating service (``dispatch_service`` included) eagerly but performs no
     DB writes and never assigns ``self.uid`` outside ``begin()``'s transaction.
-    ``_seed_turn_zero`` -> ``_seed_upload_attachment`` tolerates that: it uploads
-    through the real, fully-wired ``dispatch_service`` regardless, and only skips
-    the (here-irrelevant) input-row doc-link when ``self.uid`` is ``None``."""
+    ``_seed_turn_zero`` -> ``_seed_upload_attachment`` tolerates that: it moves
+    the file and dispatches ``read`` through the real, fully-wired
+    ``dispatch_service`` regardless."""
     return MessageProcessor(
         UserConfig(), -1, "Here are some files.", {"attachments": attachments},
     )
 
 
-def test_seed_uploads_all_attachments_in_parallel(db: object) -> None:
-    """Proves the barrier joins all uploads before _seed_turn_zero returns."""
-    ProviderDbService().set_vision_provider(None)
+def _redirect_docs_and_index(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Hermetic redirection every docs-dir test uses (blessed pattern): both
+    patches land BEFORE any ingest runs, so the real data/ dirs and the real
+    data/file_index.sqlite are never touched."""
+    docs_dir = tmp_path / "docs"
+    monkeypatch.setattr(FileMapperService, "_DOCUMENTS_DIR", docs_dir)
+    monkeypatch.setattr(
+        FileMapperService, "get_file_index_db_path", lambda *_: tmp_path / "file_index.sqlite"
+    )
+    return docs_dir
 
-    import os
+
+def test_seed_moves_all_attachments_in_parallel(
+    db: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Proves the barrier joins all ingests before _seed_turn_zero returns: every
+    attachment lands flat in <documents>/uploads/ with its staging prefix
+    stripped — none lost, none duplicated, staging left clean."""
+    docs_dir = _redirect_docs_and_index(tmp_path, monkeypatch)
 
     labels = ["alpha", "bravo", "charlie"]
     attachments = [_write_attachment(label) for label in labels]
-    # _read_attachment uses os.path.basename, so the stored name is the file's
-    # actual basename (which includes the Chalie temp prefix).
-    names = [os.path.basename(p) for p in attachments]
-
-    svc = DocumentService()
-    before = {d["id"] for d in svc.get_all_documents()}
 
     parent = _build_parent(attachments)
-    # The REAL production method — the barrier (pool __exit__) joins all uploads.
+    # The REAL production method — the barrier (pool __exit__) joins all ingests.
     parent._seed_turn_zero()
 
-    after = svc.get_all_documents()
-    new_docs = [d for d in after if d["id"] not in before]
-
-    # Exactly N landed — no upload lost, none duplicated.
-    assert len(new_docs) == len(attachments), (
-        f"expected {len(attachments)} new docs, got {len(new_docs)}: "
-        f"{[(d['id'], d['original_name'], d['status']) for d in new_docs]}"
-    )
-    # Distinct doc_ids — the random-hex identity never collided under concurrency.
-    assert len({d["id"] for d in new_docs}) == len(attachments)
-    # Every original name is present — each distinct file ingested as itself.
-    assert {d["original_name"] for d in new_docs} == set(names)
-    # Each reached a terminal ready state and is independently retrievable.
-    for doc in new_docs:
-        assert doc["status"] == "ready", (doc["original_name"], doc["status"])
-        fetched = svc.get_document(cast(str, doc["id"]))
-        assert fetched is not None and fetched["id"] == doc["id"]
+    uploads_dir = docs_dir / "uploads"
+    landed = sorted(p.name for p in uploads_dir.iterdir())
+    assert landed == sorted(f"seed_parallel_{label}.png" for label in labels), landed
+    # Nothing else landed directly under the documents root.
+    assert [p.name for p in docs_dir.iterdir()] == ["uploads"]
+    # The staged tmp files are gone from staging — copied-then-deleted on
+    # ingest success, moved on the extraction-failure fallback; either way
+    # nothing is left behind at the original tmp path.
+    assert not any(os.path.exists(p) for p in attachments), attachments
 
 
-def test_seed_skips_unreadable_attachment_without_aborting_others(db: object) -> None:
-    """Proves the per-task OSError guard doesn't take down the whole barrier."""
-    ProviderDbService().set_vision_provider(None)
+def test_seed_skips_unreadable_attachment_without_aborting_others(
+    db: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Proves the per-task guard doesn't take down the whole barrier: the
+    attachment outside the tmp sandbox is refused, the good one still lands
+    in <documents>/uploads/."""
+    docs_dir = _redirect_docs_and_index(tmp_path, monkeypatch)
 
     good = _write_attachment("delta")
     bad = "/nonexistent/not_under_tmp_prefix.png"  # fails the realpath guard
 
-    svc = DocumentService()
-    before = {d["id"] for d in svc.get_all_documents()}
-
     parent = _build_parent([good, bad])
     parent._seed_turn_zero()
 
-    import os
-
-    new_docs = [d for d in svc.get_all_documents() if d["id"] not in before]
-    assert len(new_docs) == 1, [
-        (d["original_name"], d["status"]) for d in new_docs
-    ]
-    assert new_docs[0]["original_name"] == os.path.basename(good)
-    assert new_docs[0]["status"] == "ready"
+    uploads_dir = docs_dir / "uploads"
+    assert [p.name for p in uploads_dir.iterdir()] == ["seed_parallel_delta.png"]

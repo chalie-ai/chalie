@@ -8,8 +8,8 @@ version: 1
 1. Use `memory` to recall any prior summaries or user preferences for this type of document before fetching.
 2. Ask the user for the document source (URL, file, or pasted text) and what format they want: executive summary, bullet-point key takeaways, section-by-section breakdown, or Q&A — then use `read` to fetch the content.
 3. If `read` returns incomplete content, use `browser` to render the page and extract the full text.
-4. Use `read` to extract author and publication/last-updated date from the document metadata or byline — note both at the top of the summary in `document`.
-5. Use `document` to capture the core structure: main argument or purpose, key sections, supporting evidence, conclusions, and any calls to action or recommendations.
-6. Use `document` to produce the requested summary format: executive summary (3–5 sentences), key takeaways (5–10 bullets), or section-by-section notes with page/section references.
-7. If the user wants Q&A, answer each question in `document` with a direct quote or paraphrase plus section reference.
-8. Use `news` to surface related recent coverage on the same topic if the user wants broader context — then save the full summary using `document`.
+4. Use `read` to extract author and publication/last-updated date from the document metadata or byline — note both at the top of the summary via `write_file`.
+5. Use `write_file` to capture the core structure: main argument or purpose, key sections, supporting evidence, conclusions, and any calls to action or recommendations.
+6. Use `write_file` to produce the requested summary format: executive summary (3–5 sentences), key takeaways (5–10 bullets), or section-by-section notes with page/section references.
+7. If the user wants Q&A, answer each question via `write_file` with a direct quote or paraphrase plus section reference.
+8. Use `news` to surface related recent coverage on the same topic if the user wants broader context — then save the full summary using `write_file`.

@@ -24,8 +24,11 @@ from typing import ClassVar, cast
 from abilities._ability import Ability
 from abilities._result import ToolResult
 from configs.enums.param_key import Keys
+from contracts.params.image_search_params_bag import ImageSearchParamsBag
+from contracts.params.param_bag import ParamBag
 from exceptions import DownloadTooLarge, FetchBlocked
 from tools.image_search import fetcher
+from configs.enums.ability_category import AbilityCategory
 
 logger = logging.getLogger(__name__)
 
@@ -34,9 +37,21 @@ _MAX_VERIFY_WORKERS = 4
 _VISION_PROMPT = "Does this image match: '{query}'? Answer yes/no and briefly why."
 
 
-class ImageSearchAbility(Ability):
-    def get_name(self) -> str:
-        return "image_search"
+class ImageSearchAbility(Ability[ImageSearchParamsBag]):
+    # Action-less single-purpose tool: the dispatcher pre-gate rejects a MISSING
+    # or empty query as code=missing-params before run() is reached (precedent:
+    # save_graph.py, save_pattern.py). The pre-gate is truthiness-based; the
+    # bag's from_params rejects the whitespace-only residue.
+    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.query,)}
+    NAME: ClassVar[str] = "image_search"
+    CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.WEB
+
+    # The typed input contract: the dispatch seam builds the bag via
+    # ImageSearchParamsBag.from_params before run() is called.
+    PARAMS: ClassVar[type[ParamBag] | None] = ImageSearchParamsBag
+
+    SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("find images", "search images", "picture search")
+
 
     def get_summary(self) -> str:
         return (
@@ -58,12 +73,6 @@ class ImageSearchAbility(Ability):
     def get_search_tooltip(self) -> str:
         return "find images on the web"
 
-    # Action-less single-purpose tool: the dispatcher pre-gate pre-rejects a MISSING
-    # or empty query as code=missing-params before run() is reached
-    # (precedent: save_graph.py, save_pattern.py, file_permissions.py). The
-    # pre-gate is truthiness-based, so whitespace-only residue still reaches run().
-    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.query,)}
-
     _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
@@ -78,17 +87,8 @@ class ImageSearchAbility(Ability):
     def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    def run(self, params: dict[str, object]) -> ToolResult:
-        # The dispatcher pre-gate is truthiness-based, so a non-empty but
-        # whitespace-only query slips past it and must be rejected here
-        # (precedent: save_graph.py, file_permissions.py).
-        query = (cast(str, params.get(Keys.query)) or "").strip()
-        if not query:
-            return ToolResult.err(
-                "Missing required parameter: query.",
-                code="missing-params",
-                valid=("query",),
-            )
+    def run(self, params: ImageSearchParamsBag) -> ToolResult:
+        query = params.query
 
         try:
             results = fetcher.fetch(query, limit=5)
@@ -101,7 +101,7 @@ class ImageSearchAbility(Ability):
             )
 
         if not results:
-            return ToolResult.ok(f'No images found for "{query}".', count=0)
+            return ToolResult.no_results(hint=f'No images found for "{query}".')
 
         try:
             checked, degraded, skipped = self._verify(query, results)
@@ -152,7 +152,7 @@ class ImageSearchAbility(Ability):
                 ],
             }
             return ToolResult.ok(body, rich=rich, count=len(checked), degraded=degraded)
-        return ToolResult.ok(body, count=len(checked), degraded=degraded)
+        return ToolResult.no_results(hint=body, degraded=degraded)
 
     def _verify(
         self, query: str, results: list[dict[str, str]]

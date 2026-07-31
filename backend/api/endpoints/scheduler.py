@@ -73,9 +73,6 @@ class Scheduler(Endpoint):
         "delete": DocumentedResponse(),
     }
 
-    def slug(self) -> str:
-        return "scheduler"
-
     def get_all(self, page: int = 1, limit: int = 20) -> ResponseReturnValue:
         """List every live schedule, newest first (``created_at`` DESC)."""
         items = [SchedulerItem.from_model(item) for item in ScheduledItem.recent()]

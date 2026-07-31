@@ -26,12 +26,6 @@ class McpDiscoverable(Action):
     cookie_only_methods: ClassVar[frozenset[str]] = frozenset({"get"})
     response_dto = {"get": DocumentedResponse(DiscoverableTools)}
 
-    def slug(self) -> str:
-        return "mcp-clients"
-
-    def verb(self) -> str:
-        return "discoverable"
-
     def get(self, id: int | str) -> ResponseReturnValue:
         if not self.is_create(id):
             raise NotFoundError("Not found")

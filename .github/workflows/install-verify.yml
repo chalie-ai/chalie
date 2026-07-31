@@ -1,0 +1,102 @@
+name: Install Verification
+
+# Runs the real installer end to end on a matrix of pristine distro containers
+# (see installer/verify/) and confirms dependencies resolve and — where a green
+# boot is the claim — that /ready reaches 200. Guards against installer
+# regressions and against upstream distro drift (a stock-Python bump, a wheel
+# disappearing) breaking the install experience.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch ref to install (installer self-fetches this from GitHub)
+        required: true
+        default: main
+  pull_request:
+    paths:
+      - installer/**
+      - backend/pyproject.toml
+  schedule:
+    - cron: '0 6 * * 1'   # weekly, Monday 06:00 UTC — catches distro drift
+
+# The installer self-fetches refs/heads/<ref>.tar.gz from the repo, so the ref
+# under test must exist on this repo. Same-repo branches and dispatch inputs work;
+# a pull_request from a fork cannot be self-fetched and is skipped by that fact.
+env:
+  REF: ${{ github.event.inputs.ref || github.head_ref || 'main' }}
+
+jobs:
+  linux:
+    name: ${{ matrix.row }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Native arm64 runners for the arm64 rows, native amd64 for the amd64
+          # rows — no emulation, and fast enough for the /ready boots.
+          - { row: debian12,         runner: ubuntu-24.04-arm }
+          - { row: ubuntu2404,       runner: ubuntu-24.04-arm }
+          - { row: ubuntu2204,       runner: ubuntu-24.04-arm }
+          - { row: fedora41,         runner: ubuntu-24.04-arm }
+          - { row: fedora40,         runner: ubuntu-24.04-arm }
+          - { row: alma9,            runner: ubuntu-24.04-arm }
+          - { row: opensuse-tw,      runner: ubuntu-24.04-arm }
+          - { row: alpine320,        runner: ubuntu-24.04-arm }
+          - { row: debian12-amd64,   runner: ubuntu-latest }
+          - { row: ubuntu2404-amd64, runner: ubuntu-latest }
+          - { row: arch,             runner: ubuntu-latest }
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Run install verification
+        run: installer/verify/run-matrix.sh --branch "$REF" "${{ matrix.row }}"
+
+      - name: Upload log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: install-log-${{ matrix.row }}
+          path: installer/verify/results/${{ matrix.row }}.log
+          retention-days: 14
+
+  # macOS cannot run in a container (Docker cannot host macOS), so it runs the
+  # same verify-inside.sh directly on a real Apple-Silicon runner. INSTALLER_PATH
+  # points the script at the checked-out installer instead of the container mount.
+  macos:
+    name: macos-14
+    runs-on: macos-14
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Run install verification
+        env:
+          CHALIE_BRANCH: ${{ env.REF }}
+          INSTALLER_PATH: ${{ github.workspace }}/installer/install.sh
+          ROW_NAME: macos-14
+          ROW_EXPECT: pass
+          DO_BOOT: '1'
+        run: |
+          set -o pipefail
+          bash installer/verify/verify-inside.sh 2>&1 | tee macos-14.log
+          # verify-inside.sh never exits non-zero (it observes failures); gate the
+          # CI step on the parsed verdict, exactly as run-matrix.sh does for Linux.
+          verdict="$(grep -oE 'VERDICT=[A-Z-]+' macos-14.log | tail -1 | cut -d= -f2)"
+          echo "verdict=$verdict"
+          case "$verdict" in
+            PASS|REFUSED|GAP-CONFIRMED|UNEXPECTED-PASS|INCONCLUSIVE) ;;
+            *) echo "macOS install verification failed (verdict=$verdict)"; exit 1 ;;
+          esac
+
+      - name: Upload log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: install-log-macos-14
+          path: macos-14.log
+          retention-days: 14

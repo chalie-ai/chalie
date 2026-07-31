@@ -50,8 +50,9 @@ from typing import TYPE_CHECKING, Callable, cast
 from abilities._mcp_ability import _MCPAbility
 from services.key_healer import KeyHealer
 from abilities._registry import AbilityRegistry
+from abilities.find_tools import FindToolsAbility
 from abilities._result import ToolResult
-from exceptions import ToolParamError, VaultLockedError
+from exceptions import VaultLockedError
 from models.tool_call import ToolCall
 from services.client_context import ClientContext
 from services.policy_manager import PolicyManager
@@ -88,24 +89,30 @@ class DispatchService:
         unknown) so the rendered trail tells the model what happened and it does
         not retry a blocked tool forever. No cancel check — the loop guards
         should_stop() one line before calling this.
-        """
+
+        Appends a steering suffix to the persisted result when the same tool
+        has already fired with identical params this turn, breaking the loop
+        before the hard runaway-kill threshold. The steer is persisted into the
+        tool_calls row so the model re-reads it on its next step (see
+        ``prompt_service`` rendering ``call.result``); the return value carries
+        the same string so callers see what the model will see."""
         params, act_summary, ability = self._prepare(tool_name, params)
         if ability is None:
             result_text = f"Unknown tool: {tool_name}"
-            steer = self._repeat_error_steer(tool_name, result_text)
+            steer = self._repeat_error_steer(tool_name, result_text) or self._repeat_call_steer(tool_name, params)
             self.mp.tool_call_service.record(
-                tool_name=tool_name, params=params, result=result_text,
+                tool_name=tool_name, params=params, result=result_text + steer,
                 summary=act_summary, state=ToolCall.ERROR, emit=False,
             )
             return result_text + steer
 
         result_text, call_id, state = self._dispatch_bound(tool_name, ability, params, act_summary)
-        steer = self._repeat_error_steer(tool_name, result_text)
+        steer = self._repeat_error_steer(tool_name, result_text) or self._repeat_call_steer(tool_name, params)
         if call_id is not None:
-            self.mp.tool_call_service.finish(call_id=call_id, result=result_text, state=state)
+            self.mp.tool_call_service.finish(call_id=call_id, result=result_text + steer, state=state)
         else:
             self.mp.tool_call_service.record(
-                tool_name=tool_name, params=params, result=result_text,
+                tool_name=tool_name, params=params, result=result_text + steer,
                 summary=act_summary, state=state, emit=True,
             )
         return result_text + steer
@@ -114,25 +121,34 @@ class DispatchService:
         self, tool_name: str, params: dict[str, object],
     ) -> "tuple[dict[str, object], str | None, Ability | None]":
         """Turn a raw provider tool call into its EXECUTED identity, without running
-        or recording anything: strip LLM sentinel tokens from the values, lift out
-        the model's ``act_summary`` narration, bind the ability, and heal the
-        argument KEYS against its declared schema (a stray-quote/case/alias key
-        rewritten to its canonical parameter). Returns
-        ``(healed_params, act_summary, ability)``; ``ability`` is ``None`` for an
-        unknown tool, in which case the params are sanitised + act_summary-stripped
-        but not healed (no schema to heal against).
+        or recording anything: lift out the model's ``act_summary`` narration, bind
+        the ability, heal the argument KEYS against its declared schema (a
+        stray-quote/case/alias key rewritten to its canonical parameter), then
+        scrub the argument VALUES. Returns ``(healed_params, act_summary,
+        ability)``; ``ability`` is ``None`` for an unknown tool, in which case the
+        params are scrubbed but not healed (no schema to heal against).
+
+        Keys are healed BEFORE the values are scrubbed so that an ability's
+        ``VERBATIM`` exemption — declared in canonical parameter names — still
+        applies when the model reached that parameter through a variant key.
+        Healing reads keys only and copies every value through untouched, so the
+        order is immaterial to the healing itself. ``act_summary`` is lifted first
+        and scrubbed on its own: it is a framework field, absent from every
+        ability's declared schema, so the healer must never see it.
 
         The ONE canonicalisation recipe: :meth:`dispatch` runs it to execute the
         call, and :meth:`canonical_params` runs it to give the runaway guard a key
         byte-identical to what will actually execute — so the two can never drift.
         A registry/schema fault must never break dispatch, so a heal failure logs
-        and falls back to the raw (sanitised) params.
+        and falls back to the raw params.
         """
-        params = cast("dict[str, object]", self.mp.provider_service.sanitize_args(dict(params)))
-        act_summary = cast("str | None", params.pop("act_summary", None))
+        params = dict(params)
+        act_summary = cast(
+            "str | None", self.mp.provider_service.sanitize_args(params.pop("act_summary", None)),
+        )
         ability = self._bind(tool_name)
         if ability is None:
-            return params, act_summary, None
+            return self._scrub_values(params, ()), act_summary, None
         try:
             params = KeyHealer().heal(params, ability.get_parameters())
         except Exception:  # noqa: BLE001
@@ -140,7 +156,21 @@ class DispatchService:
                 "[DispatchService] key canonicalisation failed for %s — "
                 "proceeding with raw params", tool_name,
             )
-        return params, act_summary, ability
+        return self._scrub_values(params, ability.VERBATIM), act_summary, ability
+
+    def _scrub_values(
+        self, params: dict[str, object], verbatim: tuple[str, ...],
+    ) -> dict[str, object]:
+        """Every argument VALUE through the provider scrub — leaked sentinel tokens
+        out, surrounding whitespace trimmed — EXCEPT the params the ability named
+        in ``VERBATIM``, which pass through exactly as the model sent them.
+
+        The scrub is right for an argument the tool INTERPRETS (a path, a query, a
+        city) and wrong for one it STORES: trimming ``"    return x\\n"`` down to
+        ``"return x"`` silently rewrites content the model chose byte by byte, and
+        the tool then writes the rewritten version to the user's file."""
+        scrub = self.mp.provider_service.sanitize_args
+        return {key: value if key in verbatim else scrub(value) for key, value in params.items()}
 
     def canonical_params(self, tool_name: str, params: dict[str, object]) -> dict[str, object]:
         """The params ``run()`` will actually receive for *tool_name* — sanitised,
@@ -219,6 +249,28 @@ class DispatchService:
         )
         return _REPEAT_ERROR_STEER if seen else ""
 
+    def _repeat_call_steer(self, tool_name: str, params: dict[str, object]) -> str:
+        """Steering suffix when the runaway guard has already tallied this many
+        identical calls this turn — else ``""``.
+
+        Reads the tally set by :meth:`~controllers.message_processor.MessageProcessor._guard_runaway`
+        BEFORE dispatch, so the steer fires on the SECOND identical call —
+        before the hard kill threshold at ``_RUNAWAY_TOOL_CALL_LIMIT``.
+
+        ``params`` is the post-``_prepare`` identity (sanitised + act_summary-
+        lifted + key-healed) — only ``async`` remains to be stripped to byte-
+        match the guard's key. A copy is taken and ``async`` popped on the copy
+        so the live ``params`` dict is never mutated.
+
+        Dispatches that bypass ``_step`` (the compactor, document upload, or
+        the async delegate's dedicated mp) have zero tally on this mp and so
+        never steer here."""
+        identity = dict(params)
+        identity.pop("async", None)
+        if self.mp.repeat_call_count(tool_name, identity) >= _REPEAT_CALL_STEER_THRESHOLD:
+            return _REPEAT_CALL_STEER
+        return ""
+
     # ── Policy gate ─────────────────────────────────────────────────────────────
 
     def _authorize(self, permission: str, callback: "Callable[[], str]") -> str:
@@ -274,7 +326,7 @@ class DispatchService:
         act_summary (popped from params by ``dispatch()``) is the live summary;
         it is NOT a run() argument."""
         run_async = bool(params.pop("async", False))
-        tool_name = ability.get_name()
+        tool_name = ability.NAME
 
         call_id = self.mp.tool_call_service.start(
             tool_name=tool_name, params=params, summary=act_summary,
@@ -335,7 +387,15 @@ class DispatchService:
                 valid=tuple(k for k in action_map if k),
             )
 
-        missing = [p for p in action_map[key] if not params.get(p)]
+        # Non-empty is the global rule; ``ALLOW_EMPTY`` opts a param out of it.
+        # An opted-out param is still required to be PRESENT — only its emptiness
+        # stops being a failure, so ``replace=""`` reaches the ability while a
+        # genuinely absent ``replace`` is still reported missing.
+        exempt = ability.ALLOW_EMPTY
+        missing = [
+            p for p in action_map[key]
+            if (p not in params if p in exempt else not params.get(p))
+        ]
         if missing:
             named = ", ".join(missing)
             return ToolResult.err(
@@ -359,11 +419,12 @@ class DispatchService:
         running tool are cooperative cancellation (should_stop) and the
         network-level I/O timeouts inside individual abilities.
 
-        Returns a :class:`ToolResult`. A ``ToolParamError`` raised from run() is
-        rendered canonically with its code/hint/valid. A raised exception becomes
-        ``code=unhandled-exception`` (with the VaultLockedError friendly
-        message). A non-ToolResult return value HARD-FAILS as
-        ``code=non-canonical-result``."""
+        Returns a :class:`ToolResult`. A bad parameter never raises: the
+        ability's PARAMS bag returns the error ``ToolResult`` it authored at
+        the failure site, and that result is passed through untouched. A
+        raised exception becomes ``code=unhandled-exception`` (with the
+        VaultLockedError friendly message). A non-ToolResult return value
+        HARD-FAILS as ``code=non-canonical-result``."""
         try:
             ctx = ClientContext.current()
             ability.telemetry = ctx.as_dict() if ctx else None
@@ -371,9 +432,20 @@ class DispatchService:
             ability.telemetry = None
 
         try:
-            raw = ability.run(params)
-        except ToolParamError as exc:
-            return ToolResult.err(exc.message, code=exc.code, hint=exc.hint, valid=exc.valid)
+            # The typed-input door: every first-party ability declares PARAMS,
+            # and its bag is built HERE via from_params — which returns either
+            # the bag or the error ToolResult the bag authored at the failure
+            # site. Value or error, both are return values; no exception
+            # crosses this boundary. The raw-dict branch serves the synthetic
+            # _MCPAbility proxies only, whose schemas live on the remote MCP
+            # server and can never have a compile-time bag.
+            if ability.PARAMS is None:
+                raw = ability.run(params)
+            else:
+                built = ability.PARAMS.from_params(params)
+                if isinstance(built, ToolResult):
+                    return built
+                raw = ability.run(built)
         except Exception as exc:  # noqa: BLE001
             # VaultLockedError gets a friendlier message.
             try:
@@ -394,10 +466,10 @@ class DispatchService:
             logger.error(
                 "[DispatchService] %s.run() returned a non-ToolResult (%s) — every "
                 "ability must return abilities._result.ToolResult via ok()/err().",
-                ability.get_name(), offending,
+                ability.NAME, offending,
             )
             return ToolResult.err(
-                f"{ability.get_name()} returned a non-canonical result of type "
+                f"{ability.NAME} returned a non-canonical result of type "
                 f"{offending}; abilities must return a ToolResult.",
                 code="non-canonical-result",
             )
@@ -436,7 +508,7 @@ class DispatchService:
         ``[end:<tool>]``."""
         if tr.status == "error":
             head_parts = ["status=error", f"code={tr.code}"]
-            head_parts.extend(f"{k}={_meta_val(v)}" for k, v in tr.meta.items())
+            head_parts.extend(f"{k}={self._meta_val(v)}" for k, v in tr.meta.items())
             lines = [f"[{tool_name}({', '.join(head_parts)})]", str(tr.body)]
             if tr.hint:
                 lines.append(f"hint: {tr.hint}")
@@ -446,7 +518,7 @@ class DispatchService:
             return "\n".join(lines)
 
         head_parts = ["status=success"]
-        head_parts.extend(f"{k}={_meta_val(v)}" for k, v in tr.meta.items())
+        head_parts.extend(f"{k}={self._meta_val(v)}" for k, v in tr.meta.items())
         if isinstance(tr.body, (dict, list)):
             body_str = json.dumps(tr.body, ensure_ascii=False, separators=(",", ":"))
         else:
@@ -473,6 +545,13 @@ class DispatchService:
         instruction = _RICH_INSTRUCTION.format(tag=tag)
         return f"{payload_json}\n\n{instruction}"
 
+    def _meta_val(self, v: object) -> str:
+        """Render a scalar meta value: booleans lower-cased (``true``/``false``),
+        everything else via ``str``."""
+        if isinstance(v, bool):
+            return "true" if v else "false"
+        return str(v)
+
 
 # Body shown to the model when a card is paired: the structured tool body is the
 # card payload (parsed by rich_media_parser), and the model MUST wrap its
@@ -490,17 +569,24 @@ _FOLLOW_UP_BLOCK = "[follow_up_instruction]\n{text}\n[end:follow_up_instruction]
 # Appended to the SECOND (and later) identical error a tool returns in one turn,
 # to break a retry loop. Written plainly so smaller models act on it.
 _REPEAT_ERROR_STEER = (
-    "\n\n[loop-guard] You already made this exact call this turn and got the same "
-    "error. Do NOT call it again the same way. First, look up the tool's correct "
-    "inputs with the `find_tools` tool and fix your input, then try once more. If "
-    "it still fails, stop retrying: tell the user what error you are getting, that "
-    "this tool may not be working right now, and ask them how they want to proceed."
+    f"\n\n[loop-guard] You already made this exact call this turn and got the same "
+    f"error. Do NOT call it again the same way. First, look up the tool's correct "
+    f"inputs with the `{FindToolsAbility.NAME}` tool and fix your input, then try once more. If "
+    f"it still fails, stop retrying: tell the user what error you are getting, that "
+    f"this tool may not be working right now, and ask them how they want to proceed."
 )
 
+#: Repeat-call steer fires when the runaway guard has already tallied this many
+#: identical calls this turn. Below this threshold every call dispatches normally.
+_REPEAT_CALL_STEER_THRESHOLD = 2
 
-def _meta_val(v: object) -> str:
-    """Render a scalar meta value: booleans lower-cased (``true``/``false``),
-    everything else via ``str``."""
-    if isinstance(v, bool):
-        return "true" if v else "false"
-    return str(v)
+# Appended to the SECOND (and later) identical call a tool makes in one turn —
+# BEFORE the runaway kill threshold — to steer the model out of the loop rather
+# than waiting for the hard crash. Written plainly so smaller models act on it.
+_REPEAT_CALL_STEER = (
+    "\n\n[loop-guard] You already invoked this exact tool with these exact "
+    "parameters this turn and got the result above. Do NOT call it again with "
+    "the same parameters. Change the parameters, use a different tool, or stop "
+    "calling tools and answer with what you already have. Repeating the identical "
+    "call again will abort this turn."
+)

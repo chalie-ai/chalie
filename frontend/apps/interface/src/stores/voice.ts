@@ -196,10 +196,8 @@ export const useVoiceStore = defineStore('voice', () => {
       }
     } catch (err: unknown) {
       console.error('[VoiceRecorder] STT error:', err);
-      // Prefer server-supplied hint when voice deps are missing.
       useSessionStore().errorMessage =
-        (err as { userMessage?: string }).userMessage ??
-        (err instanceof Error ? err.message : 'Transcription failed');
+        err instanceof Error ? err.message : 'Transcription failed';
     } finally {
       recorderState.value = 'idle';
     }
@@ -268,22 +266,15 @@ export const useVoiceStore = defineStore('voice', () => {
     const resp = await voice.transcribe(file);
 
     if (!resp.ok) {
-      const body = await resp.json().catch(() => ({})) as {
-        error?: string;
-        reason?: string;
-        hint?: string;
-      };
-      const err: Error & { userMessage?: string } = new Error(
-        body.error ?? `STT error: ${resp.status}`,
-      );
-      if (body.reason === 'deps_missing') {
-        err.userMessage = body.hint ?? body.error ?? 'Voice dependencies not installed';
-      }
-      throw err;
+      // The failure envelope carries one string; when voice deps or models are
+      // missing the server folds its install hint into it, so this message is
+      // already what the user should be shown.
+      const body = await resp.json().catch(() => ({})) as { error?: string };
+      throw new Error(body.error ?? `STT error: ${resp.status}`);
     }
 
-    const data = await resp.json() as { text?: string };
-    return data.text ?? null;
+    const body = await resp.json() as { result?: { text?: string } };
+    return body.result?.text ?? null;
   }
 
   /** Release the mic track and reset state — call on unload / teardown. */

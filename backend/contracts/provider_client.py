@@ -44,15 +44,20 @@ class ProviderClient(Protocol):
         """Transform the DTO to native, call the provider, parse back.
 
         Raises:
-            ResponseOverLimitError: provider rejected the payload for size.
+            ContextLimit: provider rejected the payload for size.
             ProviderResponseError: other API or HTTP error.
             RateLimitError: HTTP 429.
             ProviderTimeoutError: the call exceeded PROVIDER_CALL_TIMEOUT_S.
         """
         ...
 
-    def get_context_limit(self) -> int:
-        """Return the model's input context window (tokens)."""
+    def get_context_limit(self) -> int | None:
+        """Return the model's real input context window (tokens), or None when
+        the value cannot be determined.
+
+        Implementations MUST cache the result (including None) so a second call
+        does not re-probe.
+        """
         ...
 
     def estimate_request_tokens(self, dto: ProviderApiRequest) -> int:

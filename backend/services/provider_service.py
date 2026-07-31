@@ -3,8 +3,9 @@
 Resolves the per-turn provider selection, builds and holds the thin transport
 client, and sends one :class:`~models.provider_request.ProviderRequest`
 through the pre-flight cap chokepoint, then logs the call. Retry is NOT this
-layer's job (§6.4): a size fault raises ``RequestOverCapError`` /
-``ResponseOverLimitError`` (the MessageProcessor's cue to compact-then-retry);
+layer's job (§6.4): a size fault raises ``ContextLimit`` — measured pre-flight
+here, or reported by the provider and re-raised with this turn attached — which
+is the MessageProcessor's cue to compact-then-retry;
 any other provider failure bubbles straight up for the MP's own resend policy
 to catch. The two transient notices this layer DOES own — neither a turn state,
 both emitted through ``mp.push_websocket``, which is their only broadcast gate —
@@ -23,14 +24,14 @@ is read-only reached from here, unmodified.
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import TYPE_CHECKING, cast
 
 from configs.enums.provider_type import ProviderType
-from exceptions import ProviderError, RequestOverCapError
+from exceptions import ContextLimit, ProviderError
 from models.turn_signal import TurnSignal
 from services.llm_clients.factory import build_client
-from services.provider_api import MAX_CONTEXT_WINDOW
 
 if TYPE_CHECKING:
     from controllers.message_processor import MessageProcessor
@@ -45,10 +46,20 @@ _LLM_SENTINEL_PATTERNS = (
     re.compile(r'<\|[^|<>]*\|'),
 )
 
+logger = logging.getLogger(__name__)
 
-def _window_of(client: "ProviderClient") -> int:
-    """The one context-window computation: client's declared limit, hard-capped at MAX_CONTEXT_WINDOW."""
-    return min(client.get_context_limit(), MAX_CONTEXT_WINDOW)
+
+def _window_of(config: dict[str, object]) -> int:
+    """The context window for ``config`` — always ``providers.context_window``.
+
+    A thin pass-through to :meth:`ProviderDbService.pin_context_window`, which
+    self-heals the column (probe once, clamp, persist) and raises when the
+    window cannot be determined. There is deliberately no fallback here: this
+    layer is a reader of that column, never a second opinion on it.
+    """
+    from services.provider_db_service import ProviderDbService  # noqa: PLC0415
+
+    return ProviderDbService().pin_context_window(config)
 
 
 class ProviderService:
@@ -66,18 +77,28 @@ class ProviderService:
         silent rather than zero — the surface hides a meter it has no reading
         for, and a fabricated 0 would read as a real, empty context."""
         config = self._select(request.type)
+        window = _window_of(config)
+        # Stamp the DTO before the client ever sees it: a client that asked its
+        # own provider would be a second window for the same send.
+        request.context_window = window
         client = build_client(config)
-        window = _window_of(client)
-        cap = window - max(int(0.10 * window), 8000)
+        cap = int(0.90 * window)
         measured = client.estimate_request_tokens(cast("ProviderApiRequest", request))
         if measured >= cap:
-            raise RequestOverCapError(
-                f"Request ({measured} tokens) exceeds cap ({cap}); window={window}",
-                window=window, measured=measured, cap=cap,
+            raise ContextLimit(
+                f"Request ({measured} tokens) reached 90% of the {window}-token context window",
+                self.mp, window=window, measured=measured,
                 provider=cast(str, config.get("platform") or ""),
                 model=cast(str, config.get("model") or ""),
             )
-        response = cast("ProviderResponse", client.send(cast("ProviderApiRequest", request)))
+        try:
+            response = cast("ProviderResponse", client.send(cast("ProviderApiRequest", request)))
+        except ContextLimit as limit:
+            # The client knows the provider said "too long"; only this layer
+            # knows whose turn it was. Attach it so the handler can compact.
+            limit.mp = self.mp
+            limit.window = limit.window or window
+            raise
         self.mp.llm_log_service.record(response)
         if request.type is ProviderType.CHAT and response.tokens_input is not None:
             self.mp.push_websocket(
@@ -90,8 +111,8 @@ class ProviderService:
         return self._resolve(request.type).estimate_request_tokens(cast("ProviderApiRequest", request))
 
     def context_limit(self, provider_type: ProviderType = ProviderType.CHAT) -> int:
-        """Context window for ``provider_type``: the client's declared limit, hard-capped at MAX_CONTEXT_WINDOW."""
-        return _window_of(self._resolve(provider_type))
+        """Context window for ``provider_type`` — see :func:`_window_of`."""
+        return _window_of(self._select(provider_type))
 
     def selected_provider(self) -> ProviderClient:
         """The resolved CHAT provider client (e.g. for prompt-template metadata)."""
@@ -105,7 +126,14 @@ class ProviderService:
         )
 
     def sanitize_args(self, value: object) -> object:
-        """Strip leaked provider sentinel tokens (``<|...|>``) from tool args, recursively."""
+        """Strip leaked provider sentinel tokens (``<|...|>``) from tool args and trim
+        surrounding whitespace, recursively.
+
+        The trim is right for an argument the tool INTERPRETS — a path, a query, a
+        city name — where padding is noise from the model's formatting. It is wrong
+        for one the tool STORES, so an ability names those params in
+        ``Ability.VERBATIM`` and :meth:`DispatchService._scrub_values` routes them
+        around this method entirely."""
         if isinstance(value, str):
             for pattern in _LLM_SENTINEL_PATTERNS:
                 value = pattern.sub("", value)

@@ -6,7 +6,7 @@ import re
 import shlex
 import subprocess
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar, cast
+from typing import TYPE_CHECKING, ClassVar
 
 if TYPE_CHECKING:
     from typing import TypedDict
@@ -15,15 +15,16 @@ if TYPE_CHECKING:
         truncated: bool
 
 from abilities._ability import Ability
-from configs.enums.param_key import Keys
 from abilities._result import ToolResult, truncate
+from configs.enums.param_key import Keys
+from contracts.params.bash_params_bag import BashParamsBag
+from contracts.params.param_bag import ParamBag
+from configs.enums.ability_category import AbilityCategory
 
 logger = logging.getLogger(__name__)
 
 _MAX_OUTPUT_CHARS = 100 * 1024
 _TRUNCATION_NOTICE = "... (output truncated at 100KB)"
-_DEFAULT_TIMEOUT_S = 30
-_MAX_TIMEOUT_S = 300
 _NONPRINTABLE_THRESHOLD = 0.10
 _EMPTY_SUCCESS_MSG = "(no output — command succeeded silently)"
 # Single source of truth for where bash runs — the same value the model is told
@@ -108,22 +109,23 @@ _SECRET_SUFFIXES: tuple[str, ...] = (
 _SECRET_PREFIXES: tuple[str, ...] = ("ANTHROPIC_", "OPENAI_")
 
 
-class BashAbility(Ability):
+class BashAbility(Ability[BashParamsBag]):
     """Execute shell commands via ``bash -c`` with policy-gated classification."""
+
+    PARAMS: ClassVar[type[ParamBag] | None] = BashParamsBag
+    NAME: ClassVar[str] = "bash"
+    CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.SYSTEM
+    SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("shell", "terminal", "shell command", "run command")
 
     _SUMMARY: ClassVar[str] = (
         "Run a shell command via bash. "
-        "DO USE bash when you need to perform CLI actions which are NOT "
+        f"DO USE {NAME} when you need to perform CLI actions which are NOT "
         "possible via any other available tool. "
-        "DO NOT USE bash for: downloading files (use web_download), "
-        "file operations within your workspace (use document), "
-        "file operations outside your workspace (use read, file_write, "
-        "file_permissions, search_files). "
-        "Prefer document over direct file tools when the file is within your workspace."
+        f"DO NOT USE {NAME} for: downloading files (use web_download), "
+        "file operations (use read, write_file, edit_file, make_dir, delete, "
+        "set_permissions, search_files)."
     )
 
-    def get_name(self) -> str:
-        return "bash"
 
     def get_search_tooltip(self) -> str:
         return "Shell command execution"
@@ -160,8 +162,9 @@ class BashAbility(Ability):
                     "Shell command to run via bash -c. "
                     "MUST NOT be used when other tools apply: "
                     "use read for file/URL reading, search_files for finding files, "
-                    "file_write for writing files, file_permissions for chmod, "
-                    "web_download for downloads, document for saving notes."
+                    "write_file for writing files, make_dir for directories, "
+                    "delete for removals, set_permissions for chmod, "
+                    "web_download for downloads, write_file for saving notes."
                 ),
             },
             Keys.timeout_s: {
@@ -187,20 +190,13 @@ class BashAbility(Ability):
         no model-supplied action to trust. Returns ``read`` (the benign
         inspection floor) when no heavier pattern matches.
         """
-        command = (cast(str, params.get(Keys.command)) or "").strip()
+        command = str(params.get(Keys.command) or "").strip()
         if not command:
             return _DEFAULT_ACTION
         return _classify_heuristic(command) or _DEFAULT_ACTION
 
-    def run(self, params: dict[str, object]) -> ToolResult:
-        command = (cast(str, params.get(Keys.command)) or "").strip()
-        if not command:
-            return ToolResult.err(
-                "command is required.",
-                code="missing-command",
-                hint="pass the shell command to run in 'command'.",
-            )
-
+    def run(self, params: BashParamsBag) -> ToolResult:
+        command = params.command
         destructive_error = _check_destructive(command)
         if destructive_error:
             return ToolResult.err(
@@ -209,10 +205,8 @@ class BashAbility(Ability):
                 hint="this command is blocked outright; it cannot be run.",
             )
 
-        timeout_s = _resolve_timeout(cast("int | None", params.get(Keys.timeout_s)))
         safe_env = _build_safe_env()
-
-        return _run_command(command, timeout_s, safe_env)
+        return _run_command(command, params.timeout_s, safe_env)
 
 
 # ── Classification ─────────────────────────────────────────────────────────
@@ -291,19 +285,6 @@ def _check_destructive(command: str) -> str | None:
                 "This command cannot be executed."
             )
     return None
-
-
-# ── Parameter resolution ──────────────────────────────────────────────────
-
-
-def _resolve_timeout(timeout_param: int | None) -> int:
-    if timeout_param is None:
-        return _DEFAULT_TIMEOUT_S
-    try:
-        value = int(timeout_param)
-    except (TypeError, ValueError):
-        return _DEFAULT_TIMEOUT_S
-    return max(1, min(value, _MAX_TIMEOUT_S))
 
 
 # ── Subprocess execution ──────────────────────────────────────────────────

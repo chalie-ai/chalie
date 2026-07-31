@@ -232,8 +232,7 @@ class OnnxInferenceService:
             )
         return actual_sha
 
-    def _load_head_arrays(self, task_name: str, task_dir: Path, meta: dict[str, object]) -> Optional[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]:
-        head_asset = cast(str, meta.get("head_asset"))
+    def _load_head_arrays(self, task_name: str, task_dir: Path, head_asset: str) -> Optional[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]:
         if not head_asset:
             logger.warning(f"{LOG_PREFIX} No head_asset in meta for '{task_name}'")
             return None
@@ -263,7 +262,8 @@ class OnnxInferenceService:
         if actual_sha is None:
             return None
 
-        arrays = self._load_head_arrays(task_name, task_dir, meta)
+        head_asset = cast(str, meta.get("head_asset"))
+        arrays = self._load_head_arrays(task_name, task_dir, head_asset)
         if arrays is None:
             return None
         w1, b1, w2, b2 = arrays

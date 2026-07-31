@@ -45,8 +45,10 @@ const deviceText = computed((): string => {
 
 // World telemetry tags like `[signal:news]` are bare brackets (no link target),
 // so the shared renderer leaves them as text — wrap them as world-tag chips here.
+// (?=(X))\1 emulates an atomic group — JS has no possessive quantifiers, so this
+// prevents char-by-char backtracking while probing for the closing bracket.
 function mdToHtml(md: string): string {
-  return renderMd(md).replace(/\[([^\]]+)\]/g, '<span class="world-tag">$1</span>');
+  return renderMd(md).replace(/\[(?=([^\]]+))\1\]/g, '<span class="world-tag">$1</span>');
 }
 </script>
 

@@ -2,7 +2,7 @@
 
 Pulls a URL's body to a unique temp path (for later reading or processing) and
 returns the path, byte count, and content type so the model can hand it to
-``document.upload`` or a file tool.
+``read`` or another file tool.
 
 Security:
   - SSRF guard: a SINGLE gate in ``services.web_fetch`` blocks requests to
@@ -25,16 +25,19 @@ import logging
 import os
 import tempfile
 import uuid
-from typing import ClassVar, cast
+from typing import ClassVar
 from urllib.parse import urlparse
 
 import requests
 
 from abilities._ability import Ability
-from configs.enums.param_key import Keys
 from abilities._result import ToolResult
-from services.web_fetch import DOWNLOAD, stream_to_file
+from configs.enums.param_key import Keys
+from contracts.params.param_bag import ParamBag
+from contracts.params.web_download_params_bag import WebDownloadParamsBag
 from exceptions import DownloadTooLarge, FetchBlocked
+from services.web_fetch import DOWNLOAD, stream_to_file
+from configs.enums.ability_category import AbilityCategory
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +45,7 @@ _DOWNLOAD_DIR = os.path.join(tempfile.gettempdir(), "chalie_downloads")
 _BLOCKED_SCHEMES = frozenset({"file", "data"})
 
 
-class WebDownloadAbility(Ability):
+class WebDownloadAbility(Ability[WebDownloadParamsBag]):
     #: The download size cap (100 MB). Enforced by ``stream_to_file`` during the
     #: stream and declared in ``meta`` on success; an over-cap pull is a
     #: ``too-large`` error with the partial file removed.
@@ -55,13 +58,19 @@ class WebDownloadAbility(Ability):
     #: been canonicalised to ``url`` via ``VARIANTS[Keys.url]`` before this fires.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.url,)}
 
-    def get_name(self) -> str:
-        return "web_download"
+    # The typed input contract: the dispatch seam builds the bag via
+    # WebDownloadParamsBag.from_params before run() is called.
+    PARAMS: ClassVar[type[ParamBag] | None] = WebDownloadParamsBag
+    SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("download", "download file", "download url")
+    NAME: ClassVar[str] = "web_download"
+    CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.WEB
 
     def get_summary(self) -> str:
+        from abilities.read import ReadAbility  # noqa: PLC0415
+
         return (
             "Download a file from the internet to a temporary location for later "
-            "reading or processing. Use in conjunction with the `read` tool to then "
+            f"reading or processing. Use in conjunction with the `{ReadAbility.NAME}` tool to then "
             "get the file's contents into context."
         )
 
@@ -80,10 +89,12 @@ class WebDownloadAbility(Ability):
 
     def get_follow_up(self, tr: ToolResult) -> str:
         """Read the downloaded file's content straight from its path."""
+        from abilities.read import ReadAbility  # noqa: PLC0415
+
         path = tr.body.get("path") if isinstance(tr.body, dict) else None
         if not path:
             return ""
-        return f"File downloaded. Use the `read({path})` tool to fetch its content."
+        return f"File downloaded. Use the `{ReadAbility.NAME}({path})` tool to fetch its content."
 
     _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
@@ -103,9 +114,8 @@ class WebDownloadAbility(Ability):
     def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    def run(self, params: dict[str, object]) -> ToolResult:
-        url = self.param(params, Keys.url, required=True)
-        url = str(url).strip()
+    def run(self, params: WebDownloadParamsBag) -> ToolResult:
+        url = params.url
 
         scheme = urlparse(url).scheme
         if scheme in _BLOCKED_SCHEMES:
@@ -116,8 +126,7 @@ class WebDownloadAbility(Ability):
                 source=url,
             )
 
-        timeout_min = self.param(params, Keys.timeout, default=15, clamp=(1, 120))
-        timeout_sec = float(cast(float, timeout_min)) * 60
+        timeout_sec = params.timeout * 60.0
 
         dest_path = _build_dest_path(url)
         try:

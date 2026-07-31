@@ -11,15 +11,9 @@ through a vertical model's ORM primitives —
 query against ``data_graph`` or its shadow tables.
 
 Recall span (ruling 4): ``user_specific``, ``system``, ``misc``,
-``place``, ``discovery``, ``document`` — deliberately NOT ``contact`` (no
+``place``, ``discovery`` — deliberately NOT ``contact`` (no
 recall need identified) and deliberately NOT ``behavioral_pattern`` (surfaced
-deterministically, never semantically — see the note below). ``document`` is in
-``_VERTICALS`` so an explicit ``kinds=["document"]`` call (document search,
-``abilities/document.py`` / ``api/documents.py``) reaches it through this
-service; it is deliberately absent from every default span
-(``memory_retrieval._DG_RECALL_KINDS``, ``api/memory.py._RECALL_KINDS``),
-which pass their own explicit ``kinds=`` lists that omit it — so it never
-enters generic cross-kind recall uninvited.
+deterministically, never semantically — see the note below).
 
 Embedding backfill — why this service does NOT port
 ``_backfill_missing_embeddings`` (f035ebc0:services/data_graph_service.py):
@@ -54,9 +48,9 @@ import logging
 import math
 from typing import cast
 
+from contracts.tuples.recall_signals import RecallSignals
 from models.data_graph import DataGraphRow
 from models.discovery import DiscoveryRow
-from models.document import DocumentRow
 from models.fact import FactRow
 from models.misc import MiscRow
 from models.place import PlaceRow
@@ -65,11 +59,9 @@ from services.time_utils import parse_utc, utc_now
 
 logger = logging.getLogger(__name__)
 
-# Recall span (ruling 4) — every kind fused into cross-kind recall. `document`
-# only surfaces for a caller that explicitly asks (`kinds=["document"]`); every
-# default-span caller passes its own explicit `kinds=` list that omits it.
+# Recall span (ruling 4) — every kind fused into cross-kind recall.
 _VERTICALS: tuple[type[DataGraphRow], ...] = (
-    FactRow, SystemMemoryRow, MiscRow, PlaceRow, DiscoveryRow, DocumentRow,
+    FactRow, SystemMemoryRow, MiscRow, PlaceRow, DiscoveryRow,
 )
 
 # Fusion weights (ruling 2, ported VERBATIM from the deleted
@@ -98,14 +90,14 @@ def _sigmoid(x: float) -> float:
     return 1.0 / (1.0 + math.exp(-x))
 
 
-def _composite_score(row: DataGraphRow, sig: dict[str, object]) -> float:
+def _composite_score(row: DataGraphRow, signals: RecallSignals) -> float:
     """The weighted-composite fusion (ruling 2, VERBATIM): a cosine/FTS base
     scaled by ``retrieval_weight`` and an ACT-R-style recency/evidence boost."""
     base = (
-        _KEY_COS_WEIGHT * cast("float", sig.get("key_cos", 0.0))
-        + _VALUE_COS_WEIGHT * cast("float", sig.get("value_cos", 0.0))
-        + _FTS_BONUS_WEIGHT * cast("float", sig.get("fts_bonus", 0.0))
-        + _VARIANT_COS_WEIGHT * cast("float", sig.get("variant_cos", 0.0))
+        _KEY_COS_WEIGHT * signals.key_cos
+        + _VALUE_COS_WEIGHT * signals.value_cos
+        + _FTS_BONUS_WEIGHT * signals.fts_bonus
+        + _VARIANT_COS_WEIGHT * signals.variant_cos
     )
     now_ts = utc_now().timestamp()
     ref_ts_str = row.last_accessed_at or row.last_confirmed_at
@@ -120,13 +112,13 @@ def _composite_score(row: DataGraphRow, sig: dict[str, object]) -> float:
     return base * retrieval_weight * (1 + _ACTR_SIGMOID_WEIGHT * _sigmoid(actr_boost))
 
 
-def _cos_score(sig: dict[str, object]) -> float:
-    return max(cast("float", sig.get("key_cos", 0.0)), cast("float", sig.get("value_cos", 0.0)))
+def _cos_score(key_cos: float, value_cos: float) -> float:
+    return max(key_cos, value_cos)
 
 
-def _project(row: DataGraphRow, composite: float, sig: dict[str, object]) -> dict[str, object]:
+def _project(row: DataGraphRow, composite: float, signals: RecallSignals) -> dict[str, object]:
     """The data-graph recall hit shape (mirrors the deleted ``recall()``'s
-    return dict) — the one contract both ``memory_retrieval._search_data_graph``
+    return dict) — the one contract both ``MemoryService._search_data_graph``
     and ``api/memory.py`` adapt from independently."""
     return {
         "id": row.id,
@@ -138,13 +130,13 @@ def _project(row: DataGraphRow, composite: float, sig: dict[str, object]) -> dic
         "retrieval_weight": row.retrieval_weight,
         "evidence_count": row.evidence_count,
         "composite_score": composite,
-        "cos_score": _cos_score(sig),
+        "cos_score": _cos_score(signals.key_cos, signals.value_cos),
     }
 
 
 def _expand_supersession(
-    scored: list[tuple[DataGraphRow, float, dict[str, object]]], limit: int
-) -> list[tuple[DataGraphRow, float, dict[str, object]]]:
+    scored: list[tuple[DataGraphRow, float, RecallSignals]], limit: int
+) -> list[tuple[DataGraphRow, float, RecallSignals]]:
     """Ruling 3: for each of the top-scored hits, walk its supersession
     predecessors (off ``valid_to``/``valid_from``, not an edge table) and add
     them as candidates at the historical-edge multiplier — the replacement for
@@ -158,7 +150,7 @@ def _expand_supersession(
         for predecessor in type(row).superseded_predecessors(row.key, limit=3):
             if predecessor.id in seen_ids:
                 continue
-            expanded.append((predecessor, composite * _PREDECESSOR_MULTIPLIER, {}))
+            expanded.append((predecessor, composite * _PREDECESSOR_MULTIPLIER, RecallSignals()))
             seen_ids.add(predecessor.id)
     expanded.sort(key=lambda item: item[1], reverse=True)
     return expanded
@@ -207,7 +199,7 @@ def recall(
     swallow-and-log, since a recall miss must never break the caller's turn).
 
     ``include_episodes`` defaults False: both current callers
-    (``memory_retrieval._search_data_graph``, ``api/memory.py``) already run
+    (``MemoryService._search_data_graph``, ``api/memory.py``) already run
     their own separate episode lane at the call site — merging episodes here
     too would double-count them. Pass ``include_episodes=True`` only from a
     caller that wants ONE unified data-graph-plus-episode list."""
@@ -220,15 +212,14 @@ def recall(
         verticals = [v for v in _VERTICALS if kinds is None or v.KIND in kinds]
         k = min(limit * _K_MULTIPLIER, _MAX_K)
 
-        scored: list[tuple[DataGraphRow, float, dict[str, object]]] = []
+        scored: list[tuple[DataGraphRow, float, RecallSignals]] = []
         for vertical in verticals:
-            for entry in vertical.gather_candidates(query, query_embedding, k).values():
-                row = cast("DataGraphRow", entry["row"])
-                scored.append((row, _composite_score(row, entry), entry))
+            for row, signals in vertical.gather_candidates(query, query_embedding, k).values():
+                scored.append((row, _composite_score(row, signals), signals))
         scored.sort(key=lambda item: item[1], reverse=True)
 
         expanded = _expand_supersession(scored, limit)
-        results = [_project(row, composite, sig) for row, composite, sig in expanded[:limit]]
+        results = [_project(row, composite, signals) for row, composite, signals in expanded[:limit]]
 
         if include_episodes:
             results = (results + _episode_candidates(query, query_embedding, limit))[:limit]

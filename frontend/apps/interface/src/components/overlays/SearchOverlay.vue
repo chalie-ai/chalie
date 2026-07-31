@@ -8,11 +8,11 @@ import type { ConversationThread } from '../../api/conversation';
 
 const session = useSessionStore();
 
-/** Thread search — a direct GET /api/threads?q=, no client-side cache. */
+/** Thread search — a direct GET /api/threads/all?q=, no client-side cache. */
 async function searchThreads(q: string): Promise<ConversationThread[]> {
   if (!q.trim()) return [];
   try {
-    const { threads } = await convoApi.threads(20, undefined, q, ConfigType.USER);
+    const { threads } = await convoApi.threads(5, undefined, q, ConfigType.USER);
     return threads;
   } catch (e) {
     console.warn('Thread search failed', e);

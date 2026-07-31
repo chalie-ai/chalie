@@ -17,7 +17,7 @@ LLM network boundary: ``ProviderService`` builds its thin transport client via
 ``services.llm_clients.factory.build_client`` (mirrors the existing pattern in
 ``test_message_markdown_to_html.py``); the fake client's ``send()`` calls the
 real ``TurnExecutionService.cancel()`` — the exact chokepoint both
-``DELETE /api/thread/<turn_id>`` and a turn's own self-cancel ability route
+``DELETE /api/threads/<turn_id>`` and a turn's own self-cancel ability route
 through — before returning a normal, terminal (no tool calls) response. That
 reproduces "the DELETE lands while the call is in flight" without touching any
 internal flag directly.
@@ -34,7 +34,7 @@ from models.provider_response import ProviderResponse
 from models.transcript import Transcript
 from models.turn_execution import TurnExecution
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 
 # ProviderService builds its thin transport client via this factory call — the
 # real network boundary (see test_message_markdown_to_html.py for precedent).

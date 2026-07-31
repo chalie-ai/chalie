@@ -20,17 +20,12 @@ export const auth = {
     return api.post<LoginResult>('/api/auth/login', { username, password }, NO_REDIRECT);
   },
 
-  // register() and setVoiceEnabled() back the onboarding multi-page entry, not
-  // the login page — they share this auth module deliberately.
+  // register() backs the onboarding page, not the login page — it shares this
+  // auth module deliberately.
 
   /** POST /auth/register — create the master account. */
   register(username: string, password: string): Promise<void> {
     return api.post<void>('/api/auth/register', { username, password }, NO_REDIRECT);
-  },
-
-  /** POST /api/voice-settings/-1 */
-  setVoiceEnabled(enabled: boolean): Promise<void> {
-    return api.post<void>('/api/voice-settings/-1', { enabled }, NO_REDIRECT);
   },
 };
 

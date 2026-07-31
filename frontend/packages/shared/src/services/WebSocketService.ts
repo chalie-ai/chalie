@@ -110,7 +110,7 @@ type Interval = ReturnType<typeof setInterval>;
 
 /**
  * WebSocket client — receive-only server→client push channel. Client→server
- * requests go over HTTP (POST /api/thread/<turn_id>, DELETE /api/thread/<turn_id>);
+ * requests go over HTTP (POST /api/threads/<turn_id>, DELETE /api/threads/<turn_id>);
  * the only client→server WS frame is `pong`.
  */
 export class WebSocketService {
@@ -352,12 +352,12 @@ export class WebSocketService {
     form.append('type', type);
     if (thinkingLevel) form.append('thinking_level', thinkingLevel);
     for (const file of files) form.append('files', file, file.name);
-    // POST /api/thread/<turn_id> — -1 creates a new thread, a real id replies
-    // into it. Both return HTTP 200 with {turn_id, type} — the caller binds the
-    // lane handle from this body the moment the server allocates it, with no WS
-    // round-trip. ``type`` is the ProcessorConfig identity the server resolves
-    // to a transcript channel.
-    const path = `/api/thread/${threadId ?? -1}`;
+    // POST /api/threads/<turn_id> — -1 creates a new thread, a real id replies
+    // into it. Both answer 200 with the turn_execution row under the standard
+    // {success, result} envelope — the caller binds the lane handle from that
+    // row the moment the server allocates it, with no WS round-trip. ``type``
+    // is the ProcessorConfig identity the server resolves to a transcript channel.
+    const path = `/api/threads/${threadId ?? -1}`;
     return fetch(this.buildHttpUrl(path), {
       method: 'POST',
       credentials: 'same-origin',
@@ -369,7 +369,8 @@ export class WebSocketService {
           onSendFailure('Chat request failed.');
           return null;
         }
-        return (await resp.json()) as { turn_id: number; type: string };
+        const body = (await resp.json()) as { result: { turn_id: number; type: string } };
+        return body.result;
       })
       .catch(() => {
         onSendFailure('Chat request failed.');

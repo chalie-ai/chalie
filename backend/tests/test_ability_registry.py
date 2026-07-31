@@ -21,6 +21,7 @@ import pytest
 from abilities._ability import Ability
 from abilities._registry import AbilityRegistry, _reset_for_tests
 from abilities._result import ToolResult
+from configs.enums.ability_category import AbilityCategory
 
 pytestmark = pytest.mark.unit
 
@@ -47,7 +48,7 @@ def clean_registry() -> Iterator[None]:
 
 def test_all_includes_registered_abilities() -> None:
     """AbilityRegistry.all() surfaces every concrete subclass on disk."""
-    names = [a.get_name() for a in AbilityRegistry.all()]
+    names = [a.NAME for a in AbilityRegistry.all()]
     assert "weather" in names
 
 
@@ -66,7 +67,8 @@ def test_registry_reflects_concrete_subclass_after_reset() -> None:
     """After reset, a newly defined subclass appears in the registry."""
 
     class _NewAbility(Ability):
-        def get_name(self) -> str: return "new_ability"
+        NAME = "new_ability"
+        CATEGORY = AbilityCategory.SYSTEM
         def get_summary(self) -> str: return "a freshly defined ability"
         def get_examples(self) -> list[str]: return ["do it", "run it", "start it", "go now", "begin", "execute"]
         def get_search_tooltip(self) -> str: return ""
@@ -78,12 +80,97 @@ def test_registry_reflects_concrete_subclass_after_reset() -> None:
 
     _reset_for_tests()
 
-    names = [a.get_name() for a in AbilityRegistry.all()]
+    names = [a.NAME for a in AbilityRegistry.all()]
     assert "new_ability" in names
-    assert AbilityRegistry.get("new_ability").get_name() == "new_ability"
+    assert AbilityRegistry.get("new_ability").NAME == "new_ability"
 
     del _NewAbility
     gc.collect()
+
+
+def test_missing_name_fails_load_with_loud_value_error() -> None:
+    """A concrete subclass that never declares NAME must fail registry load with
+    the crafted ValueError naming the class — not a raw AttributeError."""
+
+    class _NamelessAbility(Ability):
+        def get_summary(self) -> str: return "an ability that forgot its NAME"
+        def get_examples(self) -> list[str]: return ["a", "b", "c", "d", "e", "f"]
+        def get_search_tooltip(self) -> str: return ""
+        def get_parameters(self) -> dict[str, object]: return {}
+
+        def run(self, params: dict[str, object]) -> ToolResult:
+            from typing import cast
+            return cast("ToolResult", {"text": "ok"})
+
+    _reset_for_tests()
+    with pytest.raises(ValueError, match="_NamelessAbility"):
+        AbilityRegistry.all()
+
+    del _NamelessAbility
+    gc.collect()
+    _reset_for_tests()
+
+    # The registry rebuilds cleanly once the offender is gone.
+    assert AbilityRegistry.get("weather").NAME == "weather"
+
+
+def test_discoverable_without_category_fails_load_with_loud_value_error() -> None:
+    """A DISCOVERABLE ability with no CATEGORY has no heading to render under in
+    the find_tools menu — it would be activatable by name yet listed nowhere. The
+    registry must refuse to load it, naming the ability and the class."""
+
+    class _UncategorisedAbility(Ability):
+        NAME = "uncategorised_ability"
+        def get_summary(self) -> str: return "discoverable but has no category"
+        def get_examples(self) -> list[str]: return ["a", "b", "c", "d", "e", "f"]
+        def get_search_tooltip(self) -> str: return ""
+        def get_parameters(self) -> dict[str, object]: return {}
+
+        def run(self, params: dict[str, object]) -> ToolResult:
+            return ToolResult.ok("ok")
+
+    _reset_for_tests()
+    with pytest.raises(ValueError, match="_UncategorisedAbility"):
+        AbilityRegistry.all()
+
+    del _UncategorisedAbility
+    gc.collect()
+    _reset_for_tests()
+
+    assert AbilityRegistry.get("weather").NAME == "weather"
+
+
+def test_non_discoverable_without_category_loads_fine() -> None:
+    """The CATEGORY requirement is scoped to the menu: a DISCOVERABLE=False
+    ability never appears there, so leaving CATEGORY None must NOT block load."""
+
+    class _HiddenAbility(Ability):
+        NAME = "hidden_ability"
+        DISCOVERABLE = False
+        def get_summary(self) -> str: return "pinned only, never discovered"
+        def get_examples(self) -> list[str]: return ["a", "b", "c", "d", "e", "f"]
+        def get_search_tooltip(self) -> str: return ""
+        def get_parameters(self) -> dict[str, object]: return {}
+
+        def run(self, params: dict[str, object]) -> ToolResult:
+            return ToolResult.ok("ok")
+
+    _reset_for_tests()
+    assert AbilityRegistry.get("hidden_ability").CATEGORY is None
+    assert "hidden_ability" not in AbilityRegistry.discoverable_names()
+
+    del _HiddenAbility
+    gc.collect()
+    _reset_for_tests()
+
+
+def test_every_shipped_discoverable_ability_declares_a_category() -> None:
+    """The gate above proves the rule is enforced; this proves the shipped roster
+    actually satisfies it, so every tool renders under a heading."""
+    for name in AbilityRegistry.discoverable_names():
+        assert AbilityRegistry.get(name).CATEGORY is not None, (
+            f"discoverable ability '{name}' declares no CATEGORY"
+        )
 
 
 # ---------------------------------------------------------------------------

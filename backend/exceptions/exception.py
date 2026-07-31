@@ -13,9 +13,15 @@ their meaning and nothing downstream changes semantically.
 
 from __future__ import annotations
 
-from typing import ClassVar
+import logging
+from typing import TYPE_CHECKING, ClassVar
 
 from exceptions.chalie_exception import ChalieException
+
+if TYPE_CHECKING:
+    from controllers.message_processor import MessageProcessor
+
+logger = logging.getLogger(__name__)
 
 
 # ── API endpoint layer ────────────────────────────────────────────────────────
@@ -39,6 +45,12 @@ class ForbiddenError(EndpointError):
     status: ClassVar[int] = 403
 
 
+class ConflictError(EndpointError):
+    """Raised when a request conflicts with the current state of the resource."""
+
+    status: ClassVar[int] = 409
+
+
 # ── Provider layer ────────────────────────────────────────────────────────────
 
 
@@ -46,43 +58,60 @@ class ProviderError(ChalieException):
     """Base for all provider communication errors."""
 
 
-class RequestOverCapError(ProviderError):
-    """Pre-flight: measured request exceeds the context window cap.
+class ContextLimit(ProviderError):
+    """The request no longer fits the model's context window.
 
-    Replaces the OVER_CAP sentinel. The ACT loop catches this and fires
-    both compactors before retrying.
+    One exception for the two ways that fact surfaces, because they mean the
+    same thing and take the same recovery:
+
+    - Pre-flight, when the measured payload reaches 90% of the window
+      (``ProviderService.send``).
+    - Mid-inference, when the provider itself rejects the payload for length —
+      every client's native size signal (Anthropic/Ollama HTTP 413, OpenAI
+      ``context_length_exceeded``). Providers with no size-specific signal —
+      Gemini's catch-all 400, codex's non-zero exit, any openai_compatible host
+      not using OpenAI's code — are matched on their message prose instead, via
+      ``services.provider_api.is_token_limit_message``.
+
+    Carries the :class:`MessageProcessor` whose turn hit the wall. Clients raise
+    it without one — a client has no turn — and ``ProviderService.send``
+    attaches its own before re-raising, so any handler can reach the turn that
+    has to shrink.
     """
 
-    def __init__(self, message: str, window: int = 0, measured: int = 0,
-                 cap: int = 0, provider: str = "", model: str = "") -> None:
-        super().__init__(message)
-        self.window = window
-        self.measured = measured
-        self.cap = cap
-        self.provider = provider
-        self.model = model
-
-
-class ResponseOverLimitError(ProviderError):
-    """Post-flight: the provider rejected the request server-side for size.
-
-    Replaces PayloadTooLargeError and is raised by ALL provider clients on
-    their native size-rejection signals:
-      - Anthropic: HTTP 413
-      - OpenAI: HTTP 400 with error.code == 'context_length_exceeded'
-      - Gemini: token-count exceeded error
-      - Ollama: HTTP 413
-
-    The ACT loop catches this with the same compact-then-retry path as
-    RequestOverCapError.
-    """
-
-    def __init__(self, message: str, response_code: int = 0,
+    def __init__(self, message: str, mp: MessageProcessor | None = None, *,
+                 window: int = 0, measured: int = 0,
                  provider: str = "", model: str = "") -> None:
         super().__init__(message)
-        self.response_code = response_code
+        self.mp = mp
+        self.window = window
+        self.measured = measured
         self.provider = provider
         self.model = model
+
+    def recover(self) -> None:
+        """Compact the turn's history so the next send has room.
+
+        Fires the chat-history compactor on the turn that raised and arms the
+        transcript reviewer, so the model can go and read whatever was folded
+        away. Re-sending is deliberately NOT done here: the retry belongs to
+        the step loop that owns the recursion, not to an exception.
+        """
+        if self.mp is None:
+            raise RuntimeError(
+                "ContextLimit.recover() called without a MessageProcessor — "
+                "ProviderService.send must attach one before re-raising",
+            )
+        logger.warning(
+            "[ContextLimit] %s tokens against a %s window — compacting turn %s",
+            self.measured or "?", self.window or "?", self.mp.turn_id,
+        )
+        self.mp.dispatch_service.dispatch(
+            "chat_history_compactor", {"act_summary": "Compacting conversation"},
+        )
+        self.mp.post_compaction_continuation = True
+        if "review_transcript" not in self.mp.active_tools:
+            self.mp.active_tools.append("review_transcript")
 
 
 class ProviderResponseError(ProviderError):
@@ -138,7 +167,39 @@ class RunAwayLoop(ChalieException):
     """
 
 
+class EmptyCompletionLoop(ChalieException):
+    """The model keeps returning completely empty completions.
+
+    A completion with no tool calls and no text, on a turn that has run no
+    tools at all, means the model did nothing whatsoever — settling it
+    would render silence as an answered turn. The MessageProcessor steers
+    a bounded retry first; when the model stays empty past the limit it
+    trips this loudly and ``_drive`` stamps the turn CRASHED.
+    """
+
+
 # ── Search layer ──────────────────────────────────────────────────────────────
+
+
+class UnroutedPromptChannel(ChalieException):
+    """A turn's channel has no prompt builder in :meth:`PromptService.user_prompt`.
+
+    A missing dispatch arm is a wiring error at the config, not a turn that
+    happens to have nothing to say. Returning an empty body instead handed the
+    model a message with no content: a lenient provider answered plausible
+    nonsense, a strict one rejected the request and the crash named the vendor
+    rather than the omission (see Case V in ``docs/CASE-LAW.md``). Raising stamps
+    the turn CRASHED with the unrouted channel in the reason, which is where the
+    fault actually is. ``tests/test_code_agent_prompt.py`` enumerates every
+    ProcessorConfig so no shipped channel can reach this.
+    """
+
+    def __init__(self, channel: str) -> None:
+        super().__init__(
+            f"Channel {channel!r} has no prompt builder in PromptService.user_prompt — "
+            f"a config was added without its dispatch arm"
+        )
+        self.channel = channel
 
 
 class RateLimitException(ChalieException):
@@ -223,31 +284,6 @@ class SnapshotError(ChalieException):
     """Raised when an import is rejected loudly (bad password handled by the
     zip layer, corrupt zip, checksum mismatch, or a schema-downgrade block)."""
 
-
-# ── Ability / tool layer ──────────────────────────────────────────────────────
-
-
-class ToolParamError(ChalieException):
-    """Raised by ``Ability.param`` when an input is missing/invalid/out-of-choice.
-
-    Carries the same self-correction fields as an error ``ToolResult`` so the
-    dispatcher can render it canonically (``code``/``hint``/``valid``) without the
-    ability ever formatting an envelope.
-    """
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        code: str = "invalid-param",
-        hint: str | None = None,
-        valid: tuple[str, ...] = (),
-    ) -> None:
-        super().__init__(message)
-        self.message = message
-        self.code = code
-        self.hint = hint
-        self.valid = tuple(valid)
 
 # ── Text reader layer ─────────────────────────────────────────────────────────
 

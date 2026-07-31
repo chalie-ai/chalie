@@ -6,11 +6,26 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Shared parsing/seeding plumbing for the ``test_ability_*_tool_result`` suite."""
+"""Shared ``ToolResult`` plumbing for ability tests: envelope parsing/seeding
+for the ``test_ability_*_tool_result`` suite, plus the :func:`built` unwrap
+every happy-path ``from_params`` call site uses."""
 
 import json
 import sqlite3
-from typing import cast
+from typing import TypeVar, cast
+
+from abilities._result import ToolResult
+from contracts.params.param_bag import ParamBag
+
+B = TypeVar("B", bound=ParamBag)
+
+
+def built(bag: "B | ToolResult") -> B:
+    """Unwrap a ``from_params`` result the test expects to be a valid bag —
+    the test-side mirror of the dispatch seam's isinstance guard, failing
+    loudly with the bag-authored error if the params were in fact bad."""
+    assert not isinstance(bag, ToolResult), f"unexpected param error: {bag.body!r}"
+    return bag
 
 
 class MP:

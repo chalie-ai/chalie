@@ -2,10 +2,6 @@
 import { ref } from 'vue';
 import { auth, HttpError } from '../api/auth';
 
-type Phase = 'account' | 'voice';
-
-const phase = ref<Phase>('account');
-
 const username = ref('');
 const password = ref('');
 const confirmPassword = ref('');
@@ -48,7 +44,7 @@ async function handleAccountSubmit(): Promise<void> {
   pending.value = true;
   try {
     await auth.register(username.value.trim(), password.value);
-    phase.value = 'voice';
+    window.location.replace('/brain/');
   } catch (err) {
     if (err instanceof HttpError && err.status === 409) {
       showToast('Account already exists', 'error');
@@ -62,24 +58,11 @@ async function handleAccountSubmit(): Promise<void> {
     pending.value = false;
   }
 }
-
-async function enableVoice(): Promise<void> {
-  try {
-    await auth.setVoiceEnabled(true);
-  } catch (e) {
-    console.warn('[on-boarding] voice enable request failed:', e);
-  }
-  window.location.replace('/brain/');
-}
-
-function skipVoice(): void {
-  window.location.replace('/brain/');
-}
 </script>
 
 <template>
   <div class="ob-container">
-    <div v-if="phase === 'account'" class="ob-card">
+    <div class="ob-card">
       <div class="ob-card-header">
         <h1>Create Master Account</h1>
         <p>Your gateway to the Chalie dashboard.</p>
@@ -136,26 +119,6 @@ function skipVoice(): void {
           </button>
         </div>
       </form>
-    </div>
-
-    <div v-else-if="phase === 'voice'" class="ob-card">
-      <div class="ob-card-header">
-        <h1>Voice Support</h1>
-        <p>Chalie can speak responses and listen to voice input.</p>
-      </div>
-
-      <div class="info-box">
-        <p>
-          Enabling voice will download additional dependencies (~500 MB) in the background. Your GPU
-          will be detected automatically for optimal performance.
-        </p>
-        <p>You can change this later in the Brain dashboard settings.</p>
-      </div>
-
-      <div class="form-actions">
-        <button class="btn-primary" @click="enableVoice">Enable Voice</button>
-        <button class="btn-secondary" @click="skipVoice">Skip</button>
-      </div>
     </div>
   </div>
 
@@ -232,11 +195,19 @@ function skipVoice(): void {
   }
 }
 
-.warning-box,
-.info-box {
+.warning-box {
   border-radius: 6px;
   padding: 16px;
   margin-bottom: 24px;
+  background: color-mix(in srgb, var(--error) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--error) 35%, transparent);
+  border-left: 3px solid var(--error);
+
+  h3 {
+    color: var(--error);
+    font-size: 13px;
+    margin-bottom: 8px;
+  }
 
   p {
     font-size: 13px;
@@ -248,24 +219,6 @@ function skipVoice(): void {
       margin-bottom: 0;
     }
   }
-}
-
-.warning-box {
-  background: color-mix(in srgb, var(--error) 8%, transparent);
-  border: 1px solid color-mix(in srgb, var(--error) 35%, transparent);
-  border-left: 3px solid var(--error);
-
-  h3 {
-    color: var(--error);
-    font-size: 13px;
-    margin-bottom: 8px;
-  }
-}
-
-.info-box {
-  background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
-  border: 1px solid color-mix(in srgb, var(--accent-primary) 35%, transparent);
-  border-left: 3px solid var(--accent-primary);
 }
 
 .form-group {
@@ -309,8 +262,7 @@ function skipVoice(): void {
   margin-top: 28px;
 }
 
-.btn-primary,
-.btn-secondary {
+.btn-primary {
   flex: 1;
   padding: 0.65rem;
   font-size: 0.9rem;
@@ -318,9 +270,6 @@ function skipVoice(): void {
   border-radius: var(--bs-border-radius);
   cursor: pointer;
   transition: opacity 0.2s;
-}
-
-.btn-primary {
   color: #fff;
   background: var(--accent-primary);
   border: none;
@@ -332,16 +281,6 @@ function skipVoice(): void {
   &:disabled {
     opacity: 0.5;
     cursor: not-allowed;
-  }
-}
-
-.btn-secondary {
-  color: var(--text);
-  background: transparent;
-  border: 1px solid var(--border);
-
-  &:hover {
-    opacity: 0.75;
   }
 }
 

@@ -2,7 +2,7 @@
 Anthropic thin client — transforms ProviderApiRequest → Anthropic Messages API
 and parses back to ProviderApiResponse.
 
-Native size-rejection signal: HTTP 413 → ResponseOverLimitError.
+Native size-rejection signal: HTTP 413 → ContextLimit.
 VERIFIED: anthropic._exceptions.RequestTooLargeError has class-level
 status_code == 413 and is a subclass of anthropic.APIError.  The catch
 ``except (anthropic.BadRequestError, anthropic.APIError)`` with
@@ -42,10 +42,10 @@ if TYPE_CHECKING:
 from configs.enums.thinking_level import ThinkingLevel
 from contracts.provider_client import ProviderClient
 from exceptions import (
+    ContextLimit,
     ProviderResponseError,
     ProviderTimeoutError,
     RateLimitError,
-    ResponseOverLimitError,
 )
 from services.llm_clients.thinking_map import ANTHROPIC_NONE_THINKING, ANTHROPIC_THINKING_BUDGETS
 from services.provider_api import (
@@ -201,9 +201,9 @@ class AnthropicClient(ProviderClient):
             # getattr(exc, 'status_code', None) returns 413 for that class.
             status = getattr(exc, 'status_code', None)
             if status == 413:
-                raise ResponseOverLimitError(
+                raise ContextLimit(
                     f"Anthropic rejected payload (HTTP 413): {exc}",
-                    response_code=413, provider='anthropic',
+                    provider='anthropic',
                 ) from exc
             if 'thinking' in str(exc).lower() and 'thinking' in create_kwargs:
                 logger.info(
@@ -217,11 +217,10 @@ class AnthropicClient(ProviderClient):
 
     def send(self, dto: ProviderApiRequest) -> ProviderApiResponse:
         """Transform DTO → Anthropic Messages API → ProviderApiResponse."""
-        # Compute max_tokens using the window already known to ProviderService.send().
-        # The window is not available here; use the DTO's explicit value if set,
-        # else fall back to a safe ceiling matching the old _MAX_TOKENS.
-        window = self.get_context_limit()
-        max_out = dto.resolve_max_tokens(window)
+        # The window is stamped on the DTO by ProviderService.send() straight from
+        # providers.context_window, so max_tokens is sized against the same number
+        # the cap check and the context meter used — never a client-local opinion.
+        max_out = dto.resolve_max_tokens()
 
         client = self._get_client()
         start = time.time()
@@ -271,8 +270,13 @@ class AnthropicClient(ProviderClient):
             response_code=200,
         )
 
-    def get_context_limit(self) -> int:
-        """All Claude 3+ models support 200k context."""
+    def get_context_limit(self) -> int | None:
+        """All Claude 3+ models support 200k context.
+
+        Anthropic publishes no per-model window endpoint, so the documented
+        figure is the measurement — not a fallback. Used only to seed
+        ``providers.context_window``; sends read that column.
+        """
         return 200_000
 
     def estimate_request_tokens(self, dto: ProviderApiRequest) -> int:

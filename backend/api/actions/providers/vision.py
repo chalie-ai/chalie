@@ -44,12 +44,6 @@ class ProviderVision(Action):
         ),
     }
 
-    def slug(self) -> str:
-        return "providers"
-
-    def verb(self) -> str:
-        return "vision"
-
     def get(self, id: int | str) -> ResponseReturnValue:
         if not self.is_create(id):
             raise NotFoundError("Not found")

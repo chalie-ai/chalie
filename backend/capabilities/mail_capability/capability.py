@@ -14,7 +14,6 @@ from capabilities.mail_capability.carddav_handler import CarddavHandler
 from capabilities.mail_capability.imap_handler import ImapHandler, SmtpCreds
 from capabilities.mail_capability.providers import UnifiedProvider, build_custom_provider, \
     discover_provider
-from services.database import Database
 from services.file_mapper_service import FileMapperService
 from utils.data_utils import parse_json_column
 
@@ -341,16 +340,6 @@ class MailCapability(AbstractCapability):
         self._connected = False
         self._cycle_count = 0
 
-        try:
-            with Database.transaction() as conn:
-                conn.execute(
-                    "UPDATE scheduled_items SET status='cancelled' "
-                    "WHERE source='mail' AND status='pending'"
-                )
-            logger.info("[mail] Scheduled items cancelled.")
-        except Exception as exc:
-            logger.warning("[mail] disconnect cleanup: %s", exc)
-
         self.delete_credentials()
         logger.info("[mail] Disconnected and credentials removed.")
 
@@ -392,7 +381,7 @@ class MailCapability(AbstractCapability):
                         except Exception:
                             pass
             except Exception as exc:
-                logger.error("[mail] ingest() IMAP: %s", exc)
+                logger.exception("[mail] ingest() IMAP: %s", exc)
 
         if self._caldav_ok and provider.caldav_url:
             try:
@@ -404,7 +393,7 @@ class MailCapability(AbstractCapability):
                     events = self._caldav_handler.ingest(cast("_CalDAVClient", client))
                     items.extend(events)
             except Exception as exc:
-                logger.error("[mail] ingest() CalDAV: %s", exc)
+                logger.exception("[mail] ingest() CalDAV: %s", exc)
 
         if self._carddav_ok and provider.carddav_url:
             try:
@@ -416,7 +405,7 @@ class MailCapability(AbstractCapability):
                     contacts = self._carddav_handler.sync_contacts(cast("_CaldavClientProto", client))
                     items.extend(contacts)
             except Exception as exc:
-                logger.error("[mail] ingest() CardDAV: %s", exc)
+                logger.exception("[mail] ingest() CardDAV: %s", exc)
 
         return items
 
@@ -445,7 +434,7 @@ class MailCapability(AbstractCapability):
             if client is not None:
                 self._carddav_handler.monitor(client)
         except Exception as exc:
-            logger.error("[mail] _do_monitor() CardDAV: %s", exc)
+            logger.exception("[mail] _do_monitor() CardDAV: %s", exc)
 
     def _do_monitor(self) -> None:
         if not self.is_connected():

@@ -57,7 +57,7 @@ from services.source_profiles import CHANNEL_USER
 if TYPE_CHECKING:
     from services.embedding_service import EmbeddingService
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 
 _DIM = 768
 

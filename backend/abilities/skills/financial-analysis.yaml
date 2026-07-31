@@ -7,9 +7,9 @@ version: 1
 
 1. Use `memory` to recall any prior financial data, benchmarks, or analysis context already discussed.
 2. Ask the user for the analysis objective: ratio analysis, DCF valuation, budget variance, or rolling forecast — and use `memory` to recall any financial data or assumptions already on record.
-3. Use `code_eval` to validate input data completeness before running calculations — flag any missing fields, implausible values, or gaps.
-4. Use `code_eval` to calculate the requested metrics: financial ratios (profitability, liquidity, leverage, efficiency, valuation), DCF with WACC and terminal value, or budget variances with favorable/unfavorable classification.
+3. Use `code_agent` to validate input data completeness before running calculations — flag any missing fields, implausible values, or gaps.
+4. Use `code_agent` to calculate the requested metrics: financial ratios (profitability, liquidity, leverage, efficiency, valuation), DCF with WACC and terminal value, or budget variances with favorable/unfavorable classification.
 5. Use `search` to benchmark calculated ratios against industry standards and flag any metric significantly outside the normal range.
-6. Use `code_eval` to generate scenario analysis where appropriate — base, bull, and bear cases for forecasts or sensitivity tables for DCF.
-7. Use `document` to produce an executive summary with: key findings, material variances explained with root causes, and the top 3 recommended actions.
-8. Use `document` to save the full analysis report with supporting data and assumptions documented.
+6. Use `code_agent` to generate scenario analysis where appropriate — base, bull, and bear cases for forecasts or sensitivity tables for DCF.
+7. Use `write_file` to produce an executive summary with: key findings, material variances explained with root causes, and the top 3 recommended actions.
+8. Use `write_file` to save the full analysis report with supporting data and assumptions documented.

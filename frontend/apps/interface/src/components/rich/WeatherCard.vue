@@ -149,7 +149,7 @@ const hourCells = computed<HourCell[]>(() => {
   width: 100%;
   max-width: 100%;
   background: transparent;
-  border: 1px solid var(--border, color-mix(in oklab, var(--violet) 22%, transparent));
+  border: 1px solid var(--border);
 }
 
 .weather-card__sky {
@@ -351,7 +351,7 @@ const hourCells = computed<HourCell[]>(() => {
 }
 
 .weather-card__loc {
-  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
+  font-family: var(--font-mono);
   font-size: 0.75rem;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -415,7 +415,7 @@ const hourCells = computed<HourCell[]>(() => {
 }
 
 .weather-card__hour-temp {
-  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
+  font-family: var(--font-mono);
   font-size: 0.75rem;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
@@ -450,7 +450,7 @@ const hourCells = computed<HourCell[]>(() => {
 }
 
 .weather-card__hour-label {
-  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
+  font-family: var(--font-mono);
   font-size: 0.656rem;
   color: var(--text-tertiary);
   font-variant-numeric: tabular-nums;

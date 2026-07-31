@@ -9,7 +9,7 @@ version: 1
 2. Use `read` to fetch the page content from the URL.
 3. If `read` returns incomplete content (X often requires JS rendering), use `browser` to navigate to the URL and extract the full thread or article text.
 4. Use `memory` to store the author, post date, engagement metrics visible on the page (likes, retweets, bookmarks), and any embedded images or links.
-5. Use `document` to reconstruct the chronological sequence of tweets and summarise the argument or narrative thread.
-6. Use `document` to extract the full article body with section headings, key claims, and any embedded images described.
-7. Present the output from `document` — summary, key quotes, or full thread reconstruction — attributed to the author with the URL and date.
+5. Use `write_file` to reconstruct the chronological sequence of tweets and summarise the argument or narrative thread.
+6. Use `write_file` to extract the full article body with section headings, key claims, and any embedded images described.
+7. Present the output — summary, key quotes, or full thread reconstruction — attributed to the author with the URL and date.
 8. Use `search` to find related coverage or replies if the user wants broader context on the topic.

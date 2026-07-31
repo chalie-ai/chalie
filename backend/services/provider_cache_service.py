@@ -66,6 +66,10 @@ class ProviderCacheService:
                 # which provider row backs it, breaking DB lookups keyed by
                 # provider name (e.g. compact_at threshold queries).
                 entry: dict[str, object] = {
+                    # 'id' is what makes the entry writable back: pin_context_window
+                    # persists a freshly probed window onto this row. Without it the
+                    # write is impossible and the probe would repeat on every send.
+                    'id': p['id'],
                     'name': p['name'],
                     'platform': p['platform'],
                     'model': p['model'],
@@ -78,6 +82,10 @@ class ProviderCacheService:
                     entry['dimensions'] = p['dimensions']
                 if p.get('timeout'):
                     entry['timeout'] = p['timeout']
+                if p.get('context_window'):
+                    # Only when set: absent means "unpinned", which makes
+                    # pin_context_window probe and persist it on the next send.
+                    entry['context_window'] = p['context_window']
                 providers_dict[cast(str, p['name'])] = entry
 
             # Check vault state — api_keys decrypt to None when vault is locked.
@@ -126,12 +134,16 @@ class ProviderCacheService:
             selected = service.get_selected_provider()
             if selected:
                 return {
+                    # See get_providers(): 'id' keeps the row writable so
+                    # pin_context_window can persist a probed window.
+                    'id': selected['id'],
                     'platform': selected['platform'],
                     'model': selected['model'],
                     'host': selected.get('host'),
                     'api_key': selected.get('api_key'),
                     'dimensions': selected.get('dimensions'),
                     'timeout': selected.get('timeout'),
+                    'context_window': selected.get('context_window'),
                 }
         except Exception as e:
             logger.debug(f"[ProviderCache] Failed to get selected provider: {e}")

@@ -9,7 +9,6 @@ import {
   Calendar,
   ChevronRight,
   DatabaseBackup,
-  FileText,
   LayoutGrid,
   List,
   Moon,
@@ -63,18 +62,6 @@ const NAV: NavItem[] = [
   },
   { id: 'scheduler', label: 'Scheduler', icon: Calendar, group: 'cognition' },
   { id: 'lists', label: 'Lists', icon: List, group: 'cognition' },
-  {
-    id: 'documents',
-    label: 'Documents',
-    icon: FileText,
-    group: 'cognition',
-    sub: [
-      { id: 'active', label: 'Active' },
-      { id: 'processing', label: 'Processing' },
-      { id: 'uploads', label: 'Uploads' },
-      { id: 'deleted', label: 'Deleted' },
-    ],
-  },
   { id: 'capabilities', label: 'Capabilities', icon: Settings, group: 'system' },
   {
     id: 'policies',

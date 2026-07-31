@@ -1,23 +1,21 @@
 """find_skills — surface curated step-by-step skill playbooks.
 
-Queries skills.sqlite through the SAME shared discovery cascade as find_tools
-(see :class:`abilities._search.SearchableAbility`): a ``query`` array of intents,
+Queries skills.sqlite through the discovery cascade in
+:class:`abilities._search.SearchableAbility`: a ``query`` array of intents,
 each run exact-title → bm25 on the title only (segment-gated) → vector on the
 full prose. Matching playbooks are returned with any personalisation rules
 derived from the user's behavioural patterns (written by SkillAssociationService).
 
-find_skills has no MCP surface and no name-ambiguity guard — that is the only
-way it differs from find_tools ("nothing more"). What it returns differs because
-a skill IS a playbook: the row carries the full ``content`` the model executes,
-not a tool activation.
+What it returns is shaped by what a skill IS — a playbook: the row carries the
+full ``content`` the model executes, not a tool activation.
 
 Returns a sealed :class:`abilities._result.ToolResult` (never a wire envelope):
 
 * matches → a JSON list, one row per skill ``{"name": <title>, "content": <full
   playbook content>, "rules": [{"pattern_name", "rule"}, …]}`` with ``meta
   count=<n>``.
-* zero hits against a HEALTHY index → SUCCESS with ``count=0`` and a body
-  ``{"matches": [], "note": …}`` — never an error.
+* zero hits against a HEALTHY index → ``err(code="no-results")`` with the
+  broaden suggestion as ``hint`` — a loud miss, never a quiet zero-row success.
 * a missing/blank query → ``err(code="missing-params")`` naming ``query``.
 * the index file missing OR a sqlite error while probing it →
   ``err(code="skill-index-error")``. This is the loud guardrail: a corrupt or
@@ -35,6 +33,8 @@ from typing import ClassVar, cast
 from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 from abilities._search import KNN_DEPTH, SearchableAbility
+from contracts.params.find_skills_params_bag import FindSkillsParamsBag
+from contracts.params.param_bag import ParamBag
 from models.skill import Skill
 from models.skill_association import SkillAssociation
 from services.file_mapper_service import FileMapperService
@@ -45,10 +45,11 @@ _BROADEN_HINT = "Try broadening the query or describing the task differently."
 
 
 class FindSkillsAbility(SearchableAbility):
+    PARAMS: ClassVar[type[ParamBag] | None] = FindSkillsParamsBag
+    NAME: ClassVar[str] = "find_skills"
+
     DISCOVERABLE: ClassVar[bool] = False  # framework discovery tool; always pinned, never discovered
 
-    def get_name(self) -> str:
-        return "find_skills"
 
     def get_summary(self) -> str:
         return (
@@ -86,15 +87,8 @@ class FindSkillsAbility(SearchableAbility):
 
     _LOG_PREFIX = "[FIND_SKILLS]"
 
-    def run(self, params: dict[str, object]) -> ToolResult:
-        rows = params.get(Keys.query)
-        if not isinstance(rows, list) or not rows:
-            return ToolResult.err(
-                "find_skills requires 'query': a non-empty array of skill names or "
-                "described tasks to find a playbook for.",
-                code="missing-params",
-                valid=("query",),
-            )
+    def run(self, params: FindSkillsParamsBag) -> ToolResult:
+        rows = params.query
 
         db_path = FileMapperService.get_skills_db_path()
         if not db_path.exists():
@@ -169,12 +163,10 @@ class FindSkillsAbility(SearchableAbility):
     def _result(self, ids: list[int]) -> ToolResult:
         """Build the success ToolResult from the cascade's winning skill ids.
 
-        Zero hits past a healthy probe is a genuine no-match SUCCESS, never an error."""
+        Zero hits past a healthy probe is a loud ``no-results`` error, never a
+        quiet zero-row success."""
         if not ids:
-            return ToolResult.ok(
-                {"matches": [], "note": f"No skill playbooks found. {_BROADEN_HINT}"},
-                count=0,
-            )
+            return ToolResult.no_results(hint=f"No skill playbooks found. {_BROADEN_HINT}")
         matches = [self._row(skill_id) for skill_id in ids]
         return ToolResult.ok(matches, count=len(matches))
 

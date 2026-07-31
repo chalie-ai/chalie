@@ -46,12 +46,6 @@ class SkillCopy(Action):
         )
     }
 
-    def slug(self) -> str:
-        return "skills"
-
-    def verb(self) -> str:
-        return "copy"
-
     def post(self, id: int | str, data: Request | None) -> ResponseReturnValue:
         if self.is_create(id):
             return self.not_allowed()

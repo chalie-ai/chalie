@@ -83,7 +83,7 @@ class TurnExecution(Model):
         """The most recent execution row for (channel, turn_id) regardless of
         open/closed state — the GET-side counterpart to :meth:`open_turn`'s
         live-row lookup, used to tell whether a turn's trailing, reply-less
-        exchange was cancelled (``api.threads.serialize_turn``'s orphan
+        exchange was cancelled (``TurnSerializerService``'s orphan
         filter) without requiring an ``mp`` handle (unlike the service's
         ``latest_for_turn``, this is reachable from a free function)."""
         return (

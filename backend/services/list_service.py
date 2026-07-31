@@ -76,7 +76,7 @@ class ListService:
         except Exception as e:
             if 'unique' in str(e).lower() or 'duplicate' in str(e).lower():
                 raise ValueError(f"A list named '{name}' already exists.") from e
-            logger.error(f"[LISTS] Failed to create list: {e}")
+            logger.exception(f"[LISTS] Failed to create list: {e}")
             raise
 
     def delete_list(self, list_id: str) -> bool:
@@ -96,7 +96,7 @@ class ListService:
             return True
 
         except Exception as e:
-            logger.error(f"[LISTS] delete_list failed: {e}")
+            logger.exception(f"[LISTS] delete_list failed: {e}")
             return False
 
     def clear_list(self, list_id: str) -> int:
@@ -117,7 +117,7 @@ class ListService:
             return count
 
         except Exception as e:
-            logger.error(f"[LISTS] clear_list failed: {e}")
+            logger.exception(f"[LISTS] clear_list failed: {e}")
             return -1
 
     def rename_list(self, list_id: str, new_name: str) -> bool:
@@ -144,7 +144,7 @@ class ListService:
             return updated
 
         except Exception as e:
-            logger.error(f"[LISTS] rename_list failed: {e}")
+            logger.exception(f"[LISTS] rename_list failed: {e}")
             return False
 
     def update_list(
@@ -206,7 +206,7 @@ class ListService:
                 'checked_count': sum(1 for it in items if it['checked']),
             }
         except Exception as e:
-            logger.error(f"[LISTS] get_list failed: {e}")
+            logger.exception(f"[LISTS] get_list failed: {e}")
             return None
 
     def get_all_lists(self) -> list[dict[str, object]]:
@@ -227,7 +227,7 @@ class ListService:
             ]
 
         except Exception as e:
-            logger.error(f"[LISTS] get_all_lists failed: {e}")
+            logger.exception(f"[LISTS] get_all_lists failed: {e}")
             return []
 
     # Item operations (batch)
@@ -287,7 +287,7 @@ class ListService:
             return added
 
         except Exception as e:
-            logger.error(f"[LISTS] add_items failed: {e}")
+            logger.exception(f"[LISTS] add_items failed: {e}")
             return 0
 
     def remove_items(self, list_id: str, items: list[str]) -> int:
@@ -312,7 +312,7 @@ class ListService:
             return removed
 
         except Exception as e:
-            logger.error(f"[LISTS] remove_items failed: {e}")
+            logger.exception(f"[LISTS] remove_items failed: {e}")
             return 0
 
     def check_items(self, list_id: str, items: list[str]) -> int:
@@ -343,7 +343,7 @@ class ListService:
             return count
 
         except Exception as e:
-            logger.error(f"[LISTS] _set_checked failed: {e}")
+            logger.exception(f"[LISTS] _set_checked failed: {e}")
             return 0
 
     # Item operations (id-addressed) — REST CRUD surface
@@ -465,7 +465,7 @@ class ListService:
         try:
             return List.by_id(list_id)
         except Exception as e:
-            logger.error(f"[LISTS] _get_list_row failed: {e}")
+            logger.exception(f"[LISTS] _get_list_row failed: {e}")
             return None
 
     def _find_by_name(self, name: str) -> List | None:
@@ -475,7 +475,7 @@ class ListService:
         try:
             return List.find_by_name(name)
         except Exception as e:
-            logger.error(f"[LISTS] _find_by_name failed: {e}")
+            logger.exception(f"[LISTS] _find_by_name failed: {e}")
             return None
 
     def _touch_list(self, list_id: str) -> None:

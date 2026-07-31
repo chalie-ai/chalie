@@ -16,10 +16,8 @@ contract cannot: that the live value off ``tr`` actually reaches the rendered
 nudge. Regressing any override to ignore ``tr`` (revert to static text) turns the
 matching case RED — verified by reverting ``web_download`` to static text.
 
-Everything else about the hook is enforced by the import-time probe CONTRACT in
-``Ability.__init_subclass__`` (it calls ``get_follow_up(ToolResult.ok(""))`` on
-every ability at registry import, so a non-``str`` return or a body-shape crash
-fails the import, not a test) — there is no separate conformance sweep to drift.
+Everything else about the hook is carried by its signature — ``-> str``, checked
+statically — so there is no separate conformance sweep to drift.
 The drop/keep/reword verdicts are plain text with no dynamic behaviour to break,
 so they carry no test. Real hot path, zero mocks: a real ``ToolResult`` through
 the real registered ability.
@@ -49,7 +47,7 @@ _CASES: dict[str, tuple[ToolResult, str]] = {
     ),
     "mcp_manager": (
         ToolResult.ok({"id": "x", "name": "weather", "url": "h", "status": "online"}),
-        "`weather` is now available. Call `find_tools` with `weather`",
+        "`weather` is now available. Call `mcp_tools` with action `list`",
     ),
     "web_download": (
         ToolResult.ok({"path": _DL_PATH, "bytes": 1, "content_type": "application/pdf"}),
@@ -69,6 +67,6 @@ _CASES: dict[str, tuple[ToolResult, str]] = {
 @pytest.mark.parametrize("name", sorted(_CASES))
 def test_dynamic_override_echoes_live_value_from_result(name: str) -> None:
     representative, must_contain = _CASES[name]
-    ability = next(a for a in AbilityRegistry.all() if a.get_name() == name)
+    ability = next(a for a in AbilityRegistry.all() if a.NAME == name)
     nudge = ability.get_follow_up(representative)
     assert must_contain in nudge, f"{name} nudge dropped its live value: {nudge!r}"

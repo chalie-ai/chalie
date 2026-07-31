@@ -11,5 +11,5 @@ version: 1
 4. Build a 7-day meal plan balancing nutrition, variety, and prep time. Reuse ingredients across meals to minimise waste.
 5. Use the `list` tool to create a shopping list grouped by store section — produce, dairy, protein, pantry, frozen.
 6. Use the `schedule` tool to set prep reminders for meals that need advance preparation (marinades, slow cooks, dough rising).
-7. Use the `document` tool to save the meal plan as a persistent weekly reference.
+7. Use the `write_file` tool to save the meal plan as a persistent weekly reference.
 8. Present the plan to the user day-by-day with estimated prep times and any make-ahead notes.

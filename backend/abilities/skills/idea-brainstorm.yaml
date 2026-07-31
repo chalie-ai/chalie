@@ -6,10 +6,10 @@ version: 1
 ---
 
 1. Use `memory` to recall any prior context, preferences, or related plans relevant to the topic.
-2. Ask one focused question at a time to clarify the purpose, constraints, and success criteria — prefer multiple-choice when possible — then log requirements in `document`.
+2. Ask one focused question at a time to clarify the purpose, constraints, and success criteria — prefer multiple-choice when possible — then log requirements via `write_file`.
 3. Use `search` to look up relevant background information, prior art, or examples that could inform the design.
-4. Use `document` to generate six distinct approaches: three high-confidence options (well-understood, likely to work) and three diverse exploratory options (different regions of the solution space).
-5. Present the approaches from `document` with trade-offs — lead with the recommended option and explain the reasoning behind that recommendation.
-6. Once the preferred direction is chosen, use `document` to build out the design in sections of 200-300 words — check each section with the user before continuing.
-7. Iterate based on feedback — revise any section in `document` that needs clarification or adjustment.
-8. Use `document` to save the validated design or plan as a persistent record, then store a concise summary in `memory`.
+4. Use `write_file` to generate six distinct approaches: three high-confidence options (well-understood, likely to work) and three diverse exploratory options (different regions of the solution space).
+5. Present the approaches with trade-offs — lead with the recommended option and explain the reasoning behind that recommendation.
+6. Once the preferred direction is chosen, use `write_file` to build out the design in sections of 200-300 words — check each section with the user before continuing.
+7. Iterate based on feedback — use `write_file` to revise any section that needs clarification or adjustment.
+8. Use `write_file` to save the validated design or plan as a persistent record, then store a concise summary in `memory`.

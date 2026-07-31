@@ -82,23 +82,6 @@ def _pick_known_title(db_path: Path) -> tuple[int, str, str]:
         conn.close()
 
 
-# ── missing / blank query → loud code=missing-params, NOT a silent success ──────
-
-
-def test_missing_query_is_missing_params(skills_db: Path, db: sqlite3.Connection) -> None:
-    mp = _mp(db)
-    out = mp.dispatch_service.dispatch("find_skills", {"act_summary": "x"})
-    assert "[find_skills(status=error, code=missing-params" in out
-    assert "code=error]" not in out
-
-
-def test_empty_query_array_is_missing_params(skills_db: Path, db: sqlite3.Connection) -> None:
-    mp = _mp(db)
-    out = mp.dispatch_service.dispatch("find_skills", {"query": [], "act_summary": "x"})
-    assert "[find_skills(status=error, code=missing-params" in out
-    assert "code=error]" not in out
-
-
 # ── index missing / corrupt → skill-index-error, NEVER a zero-hit success ───────
 
 
@@ -178,19 +161,19 @@ def test_multi_intent_array_routes_each_entry(skills_db: Path, db: sqlite3.Conne
     assert "Weekly Meal Planning" in names, f"got={names!r}"
 
 
-# ── zero hits (healthy index) → success, count=0, matches=[] + note ─────────────
+# ── zero hits (healthy index) → loud no-results error with broaden hint ─────────
 
 
-def test_zero_hit_is_success_with_note(skills_db: Path, db: sqlite3.Connection) -> None:
-    """A nonsense query against a HEALTHY index is a SUCCESS with count=0 and a
-    matches=[] + note body, never an error. The vector terminus rejects it at the
-    fine-tuned ceiling, so no junk playbook is surfaced."""
+def test_zero_hit_is_loud_no_results(skills_db: Path, db: sqlite3.Connection) -> None:
+    """A nonsense query against a HEALTHY index is a loud no-results ERROR with
+    the broaden suggestion as hint, never a quiet zero-row success. The vector
+    terminus rejects it at the fine-tuned ceiling, so no junk playbook is
+    surfaced."""
     mp = _mp(db)
     nonsense = "zxqwftbloopglarnk"
     out = mp.dispatch_service.dispatch("find_skills", {"query": [nonsense], "act_summary": "x"})
     head = _head(out)
-    assert "status=success" in head
-    assert "count=0" in head
-    body = json.loads(_body(out))
-    assert body["matches"] == []
-    assert "No skill playbooks found" in body["note"]
+    assert "status=error" in head
+    assert "code=no-results" in head
+    assert "No results found." in out
+    assert "No skill playbooks found" in out, f"broaden hint missing: {out!r}"

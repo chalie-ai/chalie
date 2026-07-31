@@ -46,6 +46,7 @@ import pytest
 
 from abilities._ability import Ability
 from abilities._result import ToolResult
+from configs.enums.ability_category import AbilityCategory
 from configs.enums.policy_channel import PolicyChannel
 from models.policy import Policy
 from models.provider_response import ProviderResponse
@@ -55,7 +56,7 @@ from services.time_utils import parse_utc
 from services.websocket import Websocket
 from tests.helpers import make_stub_config
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 
 # ProviderService builds its thin transport client via this factory call — the
 # real network boundary (see test_message_processor_runaway_loop.py). The
@@ -158,19 +159,18 @@ class _GatedAbility(Ability):
     binder can no longer supply. Leaves ``DISCOVERABLE`` at its default
     (``True``): a module-level test class is permanently visible to
     ``Ability.__subclasses__()`` for the rest of the process once collected, so
-    it cannot be kept off the registry — ``test_phase4_invariants.py`` already
-    designs around exactly this (its abilities.sqlite/discoverable check is a
-    subset assertion "when other test modules register DISCOVERABLE test
-    doubles into the live registry"). ``test_find_tools_channel_isolation.py``
-    pins the NON-discoverable roster by exact equality instead; staying
-    DISCOVERABLE keeps this fixture off that pinned set."""
+    it cannot be kept off the registry. ``test_find_tools_channel_isolation.py``
+    pins the NON-discoverable roster by exact equality; staying DISCOVERABLE
+    keeps this fixture off that pinned set."""
+
+    NAME: ClassVar[str] = "test_runner_gated"
+    # Required because the fixture stays DISCOVERABLE (see above); the registry
+    # rejects a discoverable ability with no find_tools heading.
+    CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.SYSTEM
 
     _release: ClassVar["threading.Event | None"] = None
     _started: ClassVar["threading.Event | None"] = None
     _done: ClassVar["list[bool] | None"] = None
-
-    def get_name(self) -> str:
-        return "test_runner_gated"
 
     def get_search_tooltip(self) -> str:
         return "block until released — runner feature-test fixture"

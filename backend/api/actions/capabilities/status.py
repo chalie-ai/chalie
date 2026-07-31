@@ -31,12 +31,6 @@ class CapabilitiesStatus(Action):
         "get": DocumentedResponse(CapabilityStatusResponse),
     }
 
-    def slug(self) -> str:
-        return "capabilities"
-
-    def verb(self) -> str:
-        return "status"
-
     def get(self, id: int | str) -> ResponseReturnValue:
         """Get connectivity status for a capability.
 

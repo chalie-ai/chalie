@@ -20,7 +20,10 @@ class PolicyResponse(Response):
 class BlockedEntryResponse(Response):
     """Read shape for one blocked-action log entry."""
 
-    action_id: int
+    # A permission name (e.g. "bash.modify_file"), not a row id: the DDL column
+    # is TEXT and PolicyBlockedLog derives its Policy link from
+    # ``action_id == permission``.
+    action_id: str
     context: str
     reason: str
     created_at: datetime

@@ -3,7 +3,6 @@ import type { App, AppContext, Component } from 'vue';
 import TurnView from '../components/conversation/TurnView.vue';
 import type { ConversationTurnBlock } from '../api/conversation';
 import { clearLiveTurnsForToolCallsResolved } from './liveActTrail';
-import { localDayKey } from './time';
 
 let appContext: AppContext | null = null;
 
@@ -101,12 +100,48 @@ export function isTurnWorking(turnId: number, type: string): boolean {
  *  busy" without a stable turn_id to key off (D3/D5). */
 export const SPINE_SURFACE_ID = 'spine';
 
-/** True if any rendered copy inside a registered surface's own container is
- *  currently working. */
-export function isSurfaceWorking(surfaceId: string): boolean {
-  const surface = _surfaces.get(surfaceId);
-  if (!surface) return false;
-  return surface.container.querySelector('[data-working]') != null;
+// ── Lanes — the spine is a thread with a fixed identity ──────────────────────
+//
+// Every lane runs independently: work in one never blocks a send in another,
+// so five threads can be replied to in parallel while the spine stays free. A
+// lane is identified by the same `(type, turn_id)` pair a turn is, which makes
+// the busy check one keyed lookup for every lane alike. The spine has no
+// turn_id of its own — it allocates a NEW one per send — so it takes the
+// reserved pair below.
+//
+// A turn element claims its own thread lane (`data-lane-type` /
+// `data-lane-turn-id`) only once the turn is FORKED: a forked turn's work
+// belongs to its thread, an unforked one's belongs to the spine. Absence
+// therefore means "spine lane", which also covers the ACT-cycle markers that
+// carry no turn identity at all. Forked-ness is re-derived from the block on
+// every upsert, so the claim survives the re-mount a mid-turn refetch performs
+// (anything recorded only in JS, or stamped once at settle time, would not).
+export const SPINE_LANE_TYPE = 'main';
+export const SPINE_LANE_TURN_ID = -1;
+
+/** True if this lane has work in flight — the single busy authority behind
+ *  both the send/queue gate and the dock's busy visual. A thread keys off its
+ *  own turn; the spine keys off the reserved pair and matches only working
+ *  elements no thread lane has claimed. */
+export function isLaneWorking(laneType: string, laneTurnId: number): boolean {
+  if (laneType !== SPINE_LANE_TYPE || laneTurnId !== SPINE_LANE_TURN_ID) {
+    return isTurnWorking(laneTurnId, laneType);
+  }
+  const spine = _surfaces.get(SPINE_SURFACE_ID);
+  if (!spine) return false;
+  return spine.container.querySelector('[data-working]:not([data-lane-turn-id])') != null;
+}
+
+/** Claim a turn for its own thread lane on every rendered copy. Called when a
+ *  reply is sent into it: the reply proves the fork immediately, whereas
+ *  `stampWorking` can only re-derive it once the refetch carrying the new
+ *  thread_message lands — a round-trip during which the spine would otherwise
+ *  read the reply's work as its own. */
+export function markThreadLane(turnId: number, type: string): void {
+  for (const el of getAllTurnEls(turnId, type)) {
+    el.setAttribute('data-lane-type', type);
+    el.setAttribute('data-lane-turn-id', String(turnId));
+  }
 }
 
 /** `type:turnId` keys marked done (D16, "settled unseen") — the `done`
@@ -206,9 +241,11 @@ export function resolveScopeContainer(threadId: number | null, type: string): HT
 // ── D13 — version guard ──────────────────────────────────────────────────────
 
 export interface UpsertOptions {
-  /** Bypass the monotonic version guard. Used ONLY by the post-cancel
-   *  reconcile: a cancelled turn's server-stripped block can legitimately
-   *  shrink (see driftDispatcher's cancelled-branch comment). */
+  /** Bypass the monotonic version guard. Two callers, both terminal: the
+   *  post-cancel reconcile, whose server-stripped block can legitimately
+   *  shrink (see driftDispatcher's cancelled-branch comment), and the
+   *  completed/crashed settle, where the turn is immutable and the settled
+   *  block must land (see driftDispatcher's terminal-branch comment). */
   force?: boolean;
 }
 
@@ -259,14 +296,13 @@ export function upsertTurn(
   return host;
 }
 
-/** Stamp the host's local calendar day (block's first-row timestamp, falling
- *  back to last activity) so the date-divider reconciler (utils/daymarks.ts)
- *  can group turns by day without re-reading block internals. Left unset when
- *  no parseable timestamp exists — such a turn simply joins the group above it. */
+/** Stamp the host's local calendar day (backend-supplied `day` key, formatted
+ *  YYYY-MM-DD) so the date-divider reconciler (utils/daymarks.ts) can group
+ *  turns by day without re-parsing timestamps. Left unset when no message
+ *  carries the key — such a turn simply joins the group above it. */
 function stampDay(host: HTMLElement, block: ConversationTurnBlock): void {
-  const iso = block.messages[0]?.timestamp ?? block.last_activity_at;
-  const d = iso ? new Date(iso) : null;
-  if (d && !Number.isNaN(d.getTime())) host.dataset.day = localDayKey(d);
+  const day = block.messages[0]?.day;
+  if (day) host.dataset.day = day;
 }
 
 /** Stamp `data-working` on a just-(re)mounted turn's own root element
@@ -279,6 +315,29 @@ function stampDay(host: HTMLElement, block: ConversationTurnBlock): void {
 function stampWorking(host: HTMLElement, block: ConversationTurnBlock, type: string): void {
   const el = getTurnEl(block.turn_id, type, host);
   if (!el) return;
+  // Lane claim (see SPINE_LANE_* above): a forked turn owns its work, so the
+  // spine must stop counting it as its own. Re-derived from the block on every
+  // upsert rather than recorded once, so a surface mounting this turn for the
+  // FIRST time (the thread panel opening, or a turn re-materialising after
+  // eviction) gets the claim too, not just the copy `markThreadLane` reached.
+  //
+  // Additive only, deliberately. Forked-ness is NOT monotonic server-side: a
+  // reply cancelled before it produces any output is stripped from the turn
+  // again, so a later block can legitimately arrive with no thread_message row.
+  // Clearing on that falsy read would still be wrong, because `markThreadLane`
+  // claims a turn the moment a reply is SENT and a refetch already in flight
+  // behind that send resolves with the pre-reply block — clearing would hand
+  // the reply's work straight back to the spine, which is the exact bug this
+  // claim exists to prevent. The cost is a claim that outlives the fork; that
+  // is safe only because turn_ids are never reissued, so the stale claim can
+  // only ever be re-read for this same turn's own future work, which is a
+  // further reply and therefore thread-owned anyway. Any future feature that
+  // runs SPINE-scoped work under an existing turn_id (a "regenerate the
+  // original answer", say) breaks that invariant and must revisit this.
+  if (block.messages.some((m) => m.thread_message)) {
+    el.setAttribute('data-lane-type', type);
+    el.setAttribute('data-lane-turn-id', String(block.turn_id));
+  }
   const working = block.working || _liveWorking.has(workingKey(block.turn_id, type));
   if (working) {
     el.setAttribute('data-working', 'true');

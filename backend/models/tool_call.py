@@ -161,8 +161,43 @@ class ToolCall(Model):
     # Off-turn GC: an orphaned tool call (its anchoring transcript row purged by
     # retention out from under it) is unreachable — every read joins transcript —
     # and is hard-deleted once it ages past this window. Still-anchored calls and
-    # young orphans are always kept.
-    ORPHAN_GC_AFTER_DAYS: ClassVar[int] = 14
+    # young orphans are always kept. Mirrors
+    # ``Transcript.UNLINKED_GC_AFTER_DAYS`` — the two sweeps share one window so
+    # a transcript row purged by the garbage collector immediately orphans its
+    # tool calls into the same age bracket the second half of the sweep reaps.
+    ORPHAN_GC_AFTER_DAYS: ClassVar[int] = 90
+
+    @classmethod
+    def delete_by_transcripts(cls, transcript_ids: list[int]) -> int:
+        """Hard-delete every ``tool_calls`` row anchored to any of the given
+        transcript ids — the FK pre-clear
+        :class:`~services.garbage_collector_service.GarbageCollectorService`
+        runs immediately before deleting those same transcript rows.
+        ``tool_calls.transcript_id`` is a NOT NULL foreign key with no ON
+        DELETE cascade (a deliberate schema choice, not an oversight — a
+        cascade would need a SQLite table rebuild and would change every
+        other transcript-delete path's semantics), so with ``PRAGMA
+        foreign_keys=ON`` a transcript row can only be deleted once its
+        anchored tool_calls are gone; this method is that step, run inside
+        the SAME ``Database.transaction()`` as the transcript delete so the
+        two tables move together and a rollback undoes both. A tool_call
+        this fresh is swept here too even though :meth:`decay` would not
+        have touched it yet — intended: a tool_call cannot outlive its
+        transcript row, since every read of it joins ``transcript`` and it
+        would be unreachable anyway. Binds the whole id list as one
+        JSON-array parameter via ``json_each`` (see
+        :meth:`~models.transcript.Transcript.delete_by_ids`) rather than one
+        ``?`` per id, since a first-run sweep's candidate set can exceed
+        SQLite's bound-variable limit. Empty ``transcript_ids`` is a clean
+        no-op — no query runs. Returns rows deleted."""
+        if not transcript_ids:
+            return 0
+        cursor = cls._bound_connection().execute(
+            f"DELETE FROM {cls.get_table()} "
+            "WHERE transcript_id IN (SELECT value FROM json_each(?))",
+            (json.dumps(transcript_ids),),
+        )
+        return cursor.rowcount or 0
 
     @classmethod
     def decay(cls) -> int:

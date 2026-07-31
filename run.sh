@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # run.sh — Canonical Chalie launcher (dev, installer, Docker)
 #
-# Resolves a Python interpreter, syncs core deps, then hands off to run.py.
-# Voice and playwright are managed at runtime by RuntimeDepsService.
+# Resolves a Python interpreter, syncs deps, then hands off to run.py.
+# Voice deps and the Playwright browser are installed once at install time
+# (installer/install.sh / the Docker build) — nothing here manages them.
 #
 # Usage:
 #   ./run.sh                          # start on default port 31025
@@ -50,7 +51,7 @@ else
 fi
 
 # ─── Dep Sync ────────────────────────────────────────────────────────────────
-# Syncs core deps only. Voice/playwright are runtime-managed (RuntimeDepsService).
+# Syncs the full dependency set (voice deps included — no optional groups).
 # uv is instant (~50ms) when deps are already satisfied.
 
 if command -v uv >/dev/null 2>&1; then

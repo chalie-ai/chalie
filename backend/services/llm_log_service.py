@@ -55,6 +55,8 @@ class LlmLogService:
                 tokens_cache_create=response.tokens_cache_create or 0,
                 tokens_thinking=response.tokens_thinking or 0,
                 latency_ms=response.latency_ms or 0,
+                prefill_ms=response.prefill_ms,
+                decode_ms=response.decode_ms,
             ).save()
         except Exception as e:
             logger.debug(f"[LLM_LOG] Failed to log call: {e}")
@@ -83,7 +85,7 @@ class LlmLogService:
         return {
             'generated_at': utc_now().isoformat(),
             'window': window,
-            'summary': LlmLogService._summarize(entries),
+            'summary': LlmLogService._summarize(entries, usage_type),
             'entries': entries,
         }
 
@@ -97,7 +99,7 @@ class LlmLogService:
 
         ``bucket_fmt`` is the ``strftime`` bucket width (by-hour or by-day),
         ``offset`` an optional ``datetime('now', ?)`` window bound (None =
-        lifetime), ``usage_type`` an optional 'chat'/'system' filter.
+        lifetime), ``usage_type`` an optional 'foreground'/'background' filter.
         """
         where_clauses: list[str] = []
         params: list[object] = []
@@ -129,19 +131,25 @@ class LlmLogService:
         return [dict(row) for row in cursor.fetchall()]
 
     @staticmethod
-    def _tokens_today() -> int:
-        """Total tokens (chat and system alike) logged since the start of the UTC day."""
+    def _tokens_today(usage_type: str | None) -> int:
+        """Tokens logged since the start of the UTC day, under the same ``usage_type`` filter as the caller."""
+        params: list[object] = []
+        type_sql = ""
+        if usage_type:
+            type_sql = " AND type = ?"
+            params.append(usage_type)
         row = Database.conn().execute(
-            """SELECT COALESCE(SUM(tokens_input + tokens_output +
-                                  tokens_cache_read + tokens_cache_create +
-                                  tokens_thinking), 0) AS total
-               FROM llm_call_log
-               WHERE created_at >= date('now')""",
+            f"""SELECT COALESCE(SUM(tokens_input + tokens_output +
+                                   tokens_cache_read + tokens_cache_create +
+                                   tokens_thinking), 0) AS total
+                FROM llm_call_log
+                WHERE created_at >= date('now'){type_sql}""",
+            params,
         ).fetchone()
         return int(row["total"]) if row is not None else 0
 
     @staticmethod
-    def _summarize(entries: list[dict[str, object]]) -> dict[str, object]:
+    def _summarize(entries: list[dict[str, object]], usage_type: str | None) -> dict[str, object]:
         """Derive aggregate summary stats (totals, cache hit %, most-active model) from bucketed entries."""
         total_input = sum(cast(int, e['tokens_input']) for e in entries)
         total_output = sum(cast(int, e['tokens_output']) for e in entries)
@@ -167,6 +175,6 @@ class LlmLogService:
         return {
             'total_tokens': total_tokens,
             'cache_hit_pct': cache_hit_pct,
-            'tokens_today': LlmLogService._tokens_today(),
+            'tokens_today': LlmLogService._tokens_today(usage_type),
             'most_active_model': most_active_model,
         }

@@ -6,8 +6,9 @@ Result contract:
   success body is a JSON list of ``{title, source, url, published_at, snippet}``
   rows (``snippet`` is the description truncated) with a ``count`` meta —
   verbatim, machine-readable headlines the model quotes instead of re-prosing a
-  blob. Zero articles from a provider that ANSWERED is a success with ``count=0``
-  and an explicit empty list, never a blank body and never an error.
+  blob. Zero articles from a provider that ANSWERED is a loud
+  ``code=no-results`` error, never a quiet zero-row success; the ``degraded``
+  meta is preserved on that error when the category path was degraded.
 
   A provider that is unreachable raises ``NewsFetchError`` from the service; the
   ability maps it to ``code=provider-unreachable`` with a recovery hint — a dead
@@ -23,17 +24,18 @@ from typing import ClassVar, Optional, cast
 from abilities._ability import Ability
 from configs.enums.param_key import Keys
 from abilities._result import ToolResult
+from contracts.params.news_params_bag import CATEGORIES, NewsParamsBag
+from contracts.params.param_bag import ParamBag
 from services import news_sources
 from services.news_service import NewsService
 from exceptions import NewsFetchError
 
 logger = logging.getLogger(__name__)
 
-_CATEGORIES = ("tech", "business", "sports", "science", "entertainment", "us", "uk")
 _SNIPPET_LEN = 200
 
 
-class NewsAbility(Ability):
+class NewsAbility(Ability[NewsParamsBag]):
     DISCOVERABLE: ClassVar[bool] = False  # delegate-exclusive; pinned on WebSearchConfig only
 
     # Pre-gated by the dispatcher BEFORE run() and BEFORE the policy gate: an
@@ -43,8 +45,10 @@ class NewsAbility(Ability):
     # run() never sees a query-less call.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.query,)}
 
-    def get_name(self) -> str:
-        return "news"
+    # The typed input contract: the dispatch seam builds the bag via
+    # NewsParamsBag.from_params before run() is called.
+    PARAMS: ClassVar[type[ParamBag] | None] = NewsParamsBag
+    NAME: ClassVar[str] = "news"
 
     def get_summary(self) -> str:
         return "Search news articles across global sources by query, with optional category filtering for broad topic browsing."
@@ -66,7 +70,9 @@ class NewsAbility(Ability):
 
     def get_follow_up(self, tr: ToolResult) -> str:
         """Pivot to web search when the headlines miss the user's intent."""
-        return "If the results don't match the context you're looking for, pivot to using the `search` tool to get data from other sources online."
+        from abilities.search import SearchAbility  # noqa: PLC0415
+
+        return f"If the results don't match the context you're looking for, pivot to using the `{SearchAbility.NAME}` tool to get data from other sources online."
 
     _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
@@ -77,7 +83,7 @@ class NewsAbility(Ability):
             },
             Keys.category: {
                 "type": "string",
-                "enum": list(_CATEGORIES),
+                "enum": list(CATEGORIES),
                 "description": "Narrow to a news category. Use only for broad topic browsing.",
             },
         },
@@ -102,22 +108,13 @@ class NewsAbility(Ability):
         "united arab emirates": "AE", "saudi arabia": "SA",
     }
 
-    def run(self, params: dict[str, object]) -> ToolResult:
-        # query presence is pre-gated by ACTION_REQUIRED; .strip() guards a
-        # whitespace-only value that the truthiness pre-gate lets through.
-        query = (cast("str", params.get(Keys.query) or "")).strip()
-        if not query:
-            return ToolResult.err(
-                "query is required and cannot be blank.",
-                code="missing-params",
-                hint="pass a plain natural-language query.",
-                valid=("query",),
-            )
-
-        # A bogus category must be rejected loudly, never silently degraded into
-        # an uncategorised search — the param helper raises ToolParamError
-        # (code=invalid-param) which the dispatcher renders canonically.
-        category = self.param(params, Keys.category, default=None, choices=_CATEGORIES)
+    def run(self, params: NewsParamsBag) -> ToolResult:
+        # The bag is built (= validated) at the dispatch seam: query is proven
+        # non-blank and category is None or a proven CATEGORIES member — a bogus
+        # category was already rejected loudly (invalid-param), never silently
+        # degraded into an uncategorised search.
+        query = params.query
+        category = params.category
         telemetry = self.telemetry or {}
 
         svc = self._get_service()
@@ -125,7 +122,7 @@ class NewsAbility(Ability):
 
         degraded = False
         if category:
-            source_ids = [s.id for s in news_sources.get_sources_by_category(cast("str", category))]
+            source_ids = [s.id for s in news_sources.get_sources_by_category(category)]
             articles = svc.fetch_feeds(source_ids)
             try:
                 articles.extend(svc.fetch_google_news(query, country_code=country_code))
@@ -157,6 +154,11 @@ class NewsAbility(Ability):
             for a in top
         ]
 
+        if not rows:
+            if degraded:
+                return ToolResult.no_results(degraded=True)
+            return ToolResult.no_results()
+
         if degraded:
             return ToolResult.ok(rows, count=len(rows), degraded=True)
         return ToolResult.ok(rows, count=len(rows))
@@ -180,4 +182,3 @@ class NewsAbility(Ability):
         if not country:
             return "US"
         return cls._COUNTRY_CODE_MAP.get(cast("str", country).lower().strip(), "US")
-

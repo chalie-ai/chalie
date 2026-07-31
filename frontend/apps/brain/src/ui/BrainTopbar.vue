@@ -13,7 +13,6 @@ const LABELS: Record<string, string> = {
   cognition: 'Cognition',
   scheduler: 'Scheduler',
   lists: 'Lists',
-  documents: 'Documents',
   capabilities: 'Capabilities',
   policies: 'Policies',
   skills: 'Skills',
@@ -77,17 +76,16 @@ function handleSearchKeydown(e: KeyboardEvent): void {
     </div>
 
     <div class="topbar-center">
-      <div
+      <button
+        type="button"
         class="topbar-search"
-        role="button"
-        tabindex="0"
         @click="shell.openCommandPalette()"
         @keydown="handleSearchKeydown"
       >
         <Search :size="14" />
         <span class="topbar-search-text">Search…</span>
         <kbd>⌘K</kbd>
-      </div>
+      </button>
     </div>
 
     <div class="topbar-actions">

@@ -2,7 +2,8 @@
 
 Subclass :class:`Endpoint` to migrate a CRUD endpoint group into ``api/endpoints/``.
 The base builds the Flask-RESTx wiring (Namespace, Resources, routes, auth) from
-``slug()`` alone; subclasses hold pure controller logic and zero route strings.
+the slug the route map passes in; subclasses hold pure controller logic and zero
+route strings. Paths live in ``api/routes.py``, never in a controller.
 
 Routes generated per subclass:
 
@@ -18,7 +19,7 @@ onto the uniform error envelope here — handlers never hand-build error bodies.
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
+from abc import ABC
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import ClassVar
@@ -70,8 +71,8 @@ class DocumentedResponse:
 class Endpoint(ABC):
     """Base for every CRUD endpoint group; subclasses hold controller logic only.
 
-    Subclasses must be constructible with no arguments — auto-discovery
-    instantiates them bare (see ``api._register_namespaces``).
+    Subclasses are constructed by ``api/routes.py`` with the slug they mount
+    under — a controller never knows or declares its own path.
     """
 
     id_type: ClassVar[type[int] | type[str]] = str
@@ -102,9 +103,14 @@ class Endpoint(ABC):
     never render, so it is a bug, not a default. Declaring entries here is the
     only swagger wiring a subclass ever does — :meth:`namespace` does the rest."""
 
-    @abstractmethod
-    def slug(self) -> str:
-        """URL segment this endpoint group lives under (``/api/{slug}/...``)."""
+    def __init__(self, slug: str) -> None:
+        """Bind this controller to the URL segment the route map mounts it under.
+
+        Controllers never name their own URL — ``api/routes.py`` is the single
+        place a path is decided, so the same controller can mount under more
+        than one slug and a path change never touches controller code.
+        """
+        self.slug = slug
 
     def get_all(self, page: int = 1, limit: int = 20) -> ResponseReturnValue:
         """Default: listing not supported."""
@@ -138,9 +144,9 @@ class Endpoint(ABC):
     def namespace(self) -> Namespace:
         """Build the fully-wired Namespace for this endpoint group."""
         ns = Namespace(
-            self.slug(),
-            path=f"/api/{self.slug()}",
-            description=f"{self.slug()} endpoint group",
+            self.slug,
+            path=f"/api/{self.slug}",
+            description=f"{self.slug} endpoint group",
         )
         endpoint = self
 
@@ -185,8 +191,8 @@ class Endpoint(ABC):
         # Explicit endpoint names: the generated Resource classes share their
         # class name across every subclass, and Flask requires globally unique
         # endpoint names — the slug disambiguates.
-        ns.route("/all", endpoint=f"{self.slug()}_all")(AllResource)
-        ns.route("/<string:id>", endpoint=f"{self.slug()}_item")(ItemResource)
+        ns.route("/all", endpoint=f"{self.slug}_all")(AllResource)
+        ns.route("/<string:id>", endpoint=f"{self.slug}_item")(ItemResource)
         self._document(
             ns,
             [

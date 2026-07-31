@@ -39,10 +39,13 @@ import json
 import logging
 from typing import TYPE_CHECKING, cast
 
+from abilities.memory import MemoryAbility
+from abilities.review_transcript import ReviewTranscriptAbility
 from configs.channels.dmn import DmnConfig
 from configs.channels.external_agent import EAMPConfig
 from configs.channels.user import UserConfig
 from configs.enums.channels import Channel
+from exceptions import UnroutedPromptChannel
 from models.behavioral_pattern import BehavioralPattern
 from models.fact import FactRow
 from models.tool_call import ToolCall
@@ -84,6 +87,7 @@ _CHANNEL_VISION = Channel.DELEGATE_VISION
 _CHANNEL_WEB_BROWSE = Channel.DELEGATE_WEB_BROWSE
 _CHANNEL_WEB_SEARCH = Channel.DELEGATE_WEB_SEARCH
 _CHANNEL_PIM = Channel.DELEGATE_PIM
+_CHANNEL_CODE_AGENT = Channel.DELEGATE_CODE_AGENT
 _CHANNEL_EXTERNAL_AGENT = "external_agent"
 _CHANNEL_COMPACTION = Channel.COMPACTION
 _CHANNEL_SUPER_EPISODE = Channel.SUPER_EPISODE_ENCODER
@@ -156,7 +160,14 @@ class PromptService:
 
     def user_prompt(self) -> str:
         """The turn's user-message body, ported from each config's
-        ``get_user_prompt``."""
+        ``get_user_prompt``.
+
+        A channel with no arm below raises :class:`UnroutedPromptChannel` rather
+        than returning an empty body. The sole caller is ``_build_messages`` on
+        the drive thread, so the raise stamps the turn CRASHED naming the
+        unrouted channel — the wiring error — instead of sending a contentless
+        message and letting the provider decide whether to answer nonsense or
+        reject it (Case V)."""
         channel = self._channel()
         if channel == _CHANNEL_USER:
             return self._user_prompt()
@@ -178,6 +189,8 @@ class PromptService:
             return self._web_search_prompt()
         if channel == _CHANNEL_PIM:
             return self._pim_prompt()
+        if channel == _CHANNEL_CODE_AGENT:
+            return self._code_agent_prompt()
         if channel == _CHANNEL_EXTERNAL_AGENT:
             return self._external_agent_prompt()
         if channel == _CHANNEL_SUPER_EPISODE:
@@ -192,8 +205,7 @@ class PromptService:
         # through.
         if channel in (_CHANNEL_SKILL_ASSOCIATION, _CHANNEL_VISION, _CHANNEL_COMPACTION):
             return self.mp.raw_input
-        logger.warning("[PromptService] user_prompt: unhandled channel=%s", channel)
-        return ""
+        raise UnroutedPromptChannel(channel)
 
     def image(self) -> dict[str, str] | None:
         """``VisionConfig.get_image``: the vision turn's attached image as a
@@ -237,18 +249,61 @@ class PromptService:
         leaves context once that exchange synthesises (its synthesis carries
         forward via Previous Messages). A mid-exchange compaction resets the
         visible trail: only calls after the most recent ``chat_history_compactor``
-        marker render, mirroring the pre-rewrite ``_render_act_trail``."""
+        marker render, mirroring the pre-rewrite ``_render_act_trail``.
+
+        The turn-0 auto-seed recall (``"_auto": true`` in its params) renders as
+        a ``[background_memory]`` context block instead of a tool-call row — a
+        seed presented as a call teaches the model that every turn opens with a
+        memory invocation. Same envelope body, relabeled wrapper; the
+        ``tool_calls`` row is untouched (episodic dedup and telemetry read it
+        there).
+
+        Interim-prose interleave: before the first surviving call anchored to
+        each assistant row of the current exchange, ``act_trail`` emits a line
+        ``[interim_response] <row content with newlines flattened to spaces>``.
+        Calls anchored directly to the input row (``transcript_id == mp.uid``)
+        render without an interim prefix; an assistant row anchoring no calls
+        (the final synthesis) never triggers an interim line; assistant rows
+        from a prior exchange never surface — ``exchange_assistant_rows``
+        floors at ``mp.uid`` so only this exchange's steps are in the lookup.
+        A chat-history compaction anchors to one assistant row and becomes the
+        interim cutoff: that row's interim prose AND its ordinary calls are
+        dropped (``call.id <= last_compaction``), while rows written after the
+        compactor marker still render with their interim prose."""
         calls = self.mp.tool_call_service.by_exchange()
         last_compaction = max(
             (cast("int", call.id) for call in calls if call.tool_name == "chat_history_compactor"),
             default=0,
         )
-        lines = [
-            f"[{call.tool_name}] {call.params} → {call.result}"
-            for call in calls
-            if call.tool_name != "chat_history_compactor" and cast("int", call.id) > last_compaction
-        ]
-        return "\n".join(lines)
+        cutoff = max(
+            (call.transcript_id for call in calls if call.tool_name == "chat_history_compactor"),
+            default=0,
+        )
+        interim_rows = self.mp.transcript_service.exchange_assistant_rows()
+        interim: dict[int, str] = {}
+        for row in interim_rows:
+            content = cast("str", row.to_dict().get("content") or "")
+            if not content or not content.strip():
+                continue
+            interim[cast("int", row.id)] = content.replace("\n", " ").strip()
+        emitted: set[int] = set()
+        parts: list[str] = []
+        for call in calls:
+            if call.tool_name == "chat_history_compactor" or cast("int", call.id) <= last_compaction:
+                continue
+            result = call.result
+            tid = call.transcript_id
+            if tid in interim and tid > cutoff and tid not in emitted:
+                parts.append(f"[interim_response] {interim[tid]}")
+                emitted.add(tid)
+            if call.tool_name == MemoryAbility.NAME and '"_auto": true' in call.params:
+                body = result.split("\n", 1)[1] if "\n" in result else result
+                parts.append(
+                    f"[background_memory]\n{body}".replace("[end:memory]", "[end:background_memory]")
+                )
+                continue
+            parts.append(f"[{call.tool_name}] {call.params} → {result}")
+        return "\n".join(parts)
 
     # ── dispatch + safe-fragment helpers ─────────────────────────────────────
 
@@ -272,7 +327,17 @@ class PromptService:
         try:
             return self.act_trail()
         except Exception as exc:  # noqa: BLE001 — a trail-render hiccup must not crash the turn
-            logger.debug("[PromptService] act_trail failed: %s", exc)
+            logger.warning("[PromptService] act_trail failed: %s", exc, exc_info=True)
+            return ""
+
+    def _world(self) -> str:
+        """``world_state.render()``, guarded — the turn's telemetry block, whose
+        ``local_time`` line is the ONLY date anchor any channel receives. Off-spine
+        telemetry, so a render hiccup must never crash the turn."""
+        try:
+            return world_state.render()
+        except Exception as exc:  # noqa: BLE001 — off-spine telemetry render must not crash the turn
+            logger.debug("[PromptService] world_state.render failed: %s", exc)
             return ""
 
     # ── UserConfig (channel="user") ──────────────────────────────────────────
@@ -300,11 +365,7 @@ class PromptService:
         if user_def:
             parts.append(user_def)
 
-        try:
-            rendered_ws = world_state.render()
-        except Exception as exc:  # noqa: BLE001 — off-spine telemetry render must not crash the turn
-            logger.debug("[PromptService] world_state.render failed: %s", exc)
-            rendered_ws = ""
+        rendered_ws = self._world()
         if rendered_ws:
             parts.append(rendered_ws)
 
@@ -317,11 +378,11 @@ class PromptService:
         if self.mp.post_compaction_continuation:
             query = self.mp.raw_input
             parts.append(
-                "You are continuing after a mid-turn compaction. "
+                f"You are continuing after a mid-turn compaction. "
                 f"The user query was: {query}. "
-                "Read the Checkpoint section above to recover what you were "
-                "working on, and use the review_transcript tool to read the "
-                "previous turns of this conversation."
+                f"Read the Checkpoint section above to recover what you were "
+                f"working on, and use the {ReviewTranscriptAbility.NAME} tool to read the "
+                f"previous turns of this conversation."
             )
 
         parts.append(f"user: {self.mp.raw_input}")
@@ -497,16 +558,9 @@ class PromptService:
     # ── WebBrowseConfig (channel="delegate:web_browse") ──────────────────────
 
     def _web_browse_prompt(self) -> str:
-        """``WebBrowseConfig.get_user_prompt``: the browsing goal, the
-        screenshots captured this run (the browser session's ledger, keyed on
-        the turn uid), then this turn's act trail."""
-        from tools.browser.session import screenshot_ledger  # noqa: PLC0415
-
+        """``WebBrowseConfig.get_user_prompt``: the browsing goal then this
+        turn's act trail."""
         parts = [f"Browsing goal:\n{self.mp.raw_input}"]
-        shots = screenshot_ledger(self.mp.uid or 0)
-        if shots:
-            lines = "\n".join(f"- doc_id={doc_id} ({url})" for doc_id, url in shots)
-            parts.append(f"Screenshots captured this run:\n{lines}")
         trail = self._trail()
         if trail:
             parts.append(trail)
@@ -529,6 +583,30 @@ class PromptService:
         """``PimConfig.get_user_prompt``: the personal-information instruction
         then this turn's act trail."""
         parts = [f"Instruction:\n{self.mp.raw_input}"]
+        trail = self._trail()
+        if trail:
+            parts.append(trail)
+        return "\n\n".join(parts)
+
+    # ── CodeAgentConfig (channel="delegate:code_agent") ──────────────────────
+
+    def _code_agent_prompt(self) -> str:
+        """``CodeAgentConfig.get_user_prompt``: World State, the coding task,
+        then this turn's act trail.
+
+        ``suppress_history=True`` makes this string the delegate's ENTIRE input,
+        so World State rides along deliberately: it carries the only date anchor
+        any channel receives, and a coding agent that cannot date its own work
+        writes wrong dates into the files it creates. Kept as its own builder
+        rather than remapped onto the user channel through ``prompt_channel`` —
+        a task is a hand-off, not a user utterance, and that assembly would also
+        inject the user-identity synthesis and a post-compaction banner naming a
+        tool this channel does not pin."""
+        parts: list[str] = []
+        rendered_ws = self._world()
+        if rendered_ws:
+            parts.append(rendered_ws)
+        parts.append(f"Task:\n{self.mp.raw_input}")
         trail = self._trail()
         if trail:
             parts.append(trail)

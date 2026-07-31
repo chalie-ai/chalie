@@ -1,10 +1,11 @@
 /**
  * MCP API — endpoints derived from frontend/brain/mcp.js.
  *
- * Inbound (server side — Chalie as MCP server):
- *   GET  /api/mcp-server                          → config
- *   PUT  /api/mcp-server                          → update config
- *   POST /api/mcp-server/regenerate-token         → regenerate token
+ * Inbound (server side — Chalie as MCP server) — Endpoint-contract routes in
+ * backend/api/endpoints/mcp_settings.py + backend/api/actions/mcp_server/*:
+ *   GET  /api/mcp-server/all                      one-item listing → config DTO.
+ *   POST /api/mcp-server/-1                       partial update → 204 empty body.
+ *   POST /api/mcp-server/regenerate-token         → 201, result DTO.
  *
  * Outbound (client side — Chalie connecting to external MCP servers) — thin
  * wrapper over the Endpoint-contract routes in
@@ -18,7 +19,7 @@
  *   POST   /api/mcp-clients/test/<id>            test connection → result DTO.
  */
 import { api } from '@chalie/shared';
-import { fetchAllPages } from './paginate';
+import { fetchAllPages, type ListingEnvelope } from './paginate';
 
 export interface McpServerConfig {
   enabled?: boolean;
@@ -51,16 +52,21 @@ interface SingleEnvelope<T> {
 }
 
 export const mcp = {
-  getServerConfig(): Promise<McpServerConfig> {
-    return api.get('/api/mcp-server');
+  async getServerConfig(): Promise<McpServerConfig> {
+    const res = await api.get<ListingEnvelope<McpServerConfig>>('/api/mcp-server/all');
+    return res.result[0];
   },
 
   updateServerConfig(body: Partial<McpServerConfig>): Promise<unknown> {
-    return api.put('/api/mcp-server', body);
+    return api.post('/api/mcp-server/-1', body);
   },
 
-  regenerateToken(): Promise<{ token: string }> {
-    return api.post('/api/mcp-server/regenerate-token', {});
+  async regenerateToken(): Promise<{ token: string }> {
+    const res = await api.post<SingleEnvelope<{ token: string; wrapper_id: string }>>(
+      '/api/mcp-server/regenerate-token',
+      {},
+    );
+    return res.result;
   },
 
   listClients(): Promise<McpClient[]> {

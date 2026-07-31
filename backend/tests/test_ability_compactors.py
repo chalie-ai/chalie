@@ -44,11 +44,13 @@ import pytest
 from abilities._compaction_config import CompactionConfig
 from abilities.chat_history_compactor import ChatHistoryCompactionConfig, ChatHistoryCompactor
 from configs.channels.user import UserConfig
+from contracts.params.chat_history_compactor_params_bag import ChatHistoryCompactorParamsBag
 from controllers.message_processor import MessageProcessor
 from models.compaction import Compaction
 from models.transcript import Transcript
 from services.provider_cache_service import ProviderCacheService
 from services.provider_db_service import ProviderDbService
+from tests._tool_result_harness import built
 
 if TYPE_CHECKING:
     # Reuse the compactor's own parent contract — no duplicate Protocol.
@@ -80,15 +82,17 @@ class _OfflineClient:
 
 
 def _seed_offline_provider_cap_zero(db: sqlite3.Connection) -> int:
-    """A real, selected ``providers`` row with a declared window small
-    enough that the compactor's cap formula (``window - max(0.10*window, 8000)``)
-    lands at/below zero — ``ProviderService.context_limit()`` then returns
-    8000 (patched via ``build_client`` below), and the cap<=0 branch means
-    ``_fit_compaction_input`` never has to call the also-offline-but-unexercised
-    ``ProviderService.measure()`` either. Fully hermetic."""
+    """A real, selected ``providers`` row with a pinned window small enough that
+    the compactor's cap formula (``window - max(0.10*window, 8000)``) lands at or
+    below zero. ``ProviderService.context_limit()`` reads that column straight
+    off the row, and the cap<=0 branch means ``_fit_compaction_input`` never has
+    to call the also-offline-but-unexercised ``ProviderService.measure()``
+    either. Pinning it here rather than leaving it NULL is what keeps the test
+    hermetic — an unpinned row would send ``pin_context_window`` to the host."""
     cur = db.execute(
-        "INSERT INTO providers (name, platform, model, host) "
-        "VALUES ('compactor-test', 'ollama', 'cap-model', 'http://localhost:11434')",
+        "INSERT INTO providers (name, platform, model, host, context_window) "
+        "VALUES ('compactor-test', 'ollama', 'cap-model', "
+        "'http://localhost:11434', 8000)",
     )
     pid = cast(int, cur.lastrowid)
     db.commit()
@@ -168,7 +172,7 @@ def test_run_completes_and_writes_a_checkpoint_without_crashing(db: sqlite3.Conn
     ability = ChatHistoryCompactor(mp)
 
     with patch(_BUILD_CLIENT, return_value=_OfflineClient()):
-        result = ability.run({})
+        result = ability.run(built(ChatHistoryCompactorParamsBag.from_params({})))
 
     assert result.status == "success"
     checkpoint = Compaction.latest_main("user")

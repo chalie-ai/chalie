@@ -8,7 +8,7 @@
 
 """Feature test — the turn_execution DTO returned by the live send endpoint.
 
-``POST /api/thread/-1`` returns the turn's freshly-opened turn_execution row
+``POST /api/threads/-1`` returns the turn's freshly-opened turn_execution row
 inline (not just a bare turn_id) so the FE holds the whole lifecycle handle
 with no WS round-trip. This drives the real endpoint against the real test db
 — zero mocks — and cross-checks the response body against a fresh DB read of
@@ -28,16 +28,16 @@ pytestmark = pytest.mark.unit
 def test_post_send_returns_full_turn_execution_dto_with_live_turn_id(
     authed_client: tuple[FlaskClient, sqlite3.Connection, object],
 ) -> None:
-    """POST /api/thread/-1 returns the turn's freshly-opened turn_execution row
+    """POST /api/threads/-1 returns the turn's freshly-opened turn_execution row
     inline — not just a bare turn_id — so the FE holds the whole lifecycle
     handle with no WS round-trip. The id it names is real: a fresh read of the
     same row from the db matches the response body field for field."""
     client, db_conn, _store = authed_client
 
-    resp = client.post('/api/thread/-1', data={'text': 'hello there'})
+    resp = client.post('/api/threads/-1', data={'text': 'hello there'})
 
     assert resp.status_code == 200
-    body = resp.get_json()
+    body = resp.get_json()['result']
     assert body['state'] == 'working'
     assert body['cancel_requested'] is False
     assert body['channel'] == 'user'
@@ -61,7 +61,7 @@ def test_post_send_returns_full_turn_execution_dto_with_live_turn_id(
     # real stop point is asynchronous. Joining it here (a real synchronization
     # primitive, not a sleep) keeps this test's db teardown from racing a write
     # still in flight, which would otherwise leak into whichever test runs next.
-    client.delete(f'/api/thread/{turn_id}')
+    client.delete(f'/api/threads/{turn_id}')
     turn_thread = next((t for t in threading.enumerate() if t.name == f"turn-{turn_id}"), None)
     if turn_thread is not None:
         turn_thread.join(timeout=10)

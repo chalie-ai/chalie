@@ -372,6 +372,14 @@ class SchemaConvergenceService:
                             f"[convergence] Type mismatch {table_name}.{col_name}: "
                             f"desired={desired_type!r}, live={live_type!r} (not auto-fixed)"
                         )
+                    desired_pk = desired_info[5]
+                    live_pk = live_info[5]
+                    if desired_pk != live_pk:
+                        logger.warning(
+                            f"[convergence] PRIMARY KEY drift {table_name}.{col_name}: "
+                            f"desired pk={desired_pk!r}, live pk={live_pk!r} (not auto-fixed — "
+                            f"requires an explicit migration helper)"
+                        )
 
         return tables_created, columns_added
 
@@ -820,7 +828,7 @@ class SchemaConvergenceService:
     def _run_seed_data(self, schema_sql: str, live_conn: sqlite3.Connection) -> None:
         stripped = re.sub(_RE_SQL_COMMENTS, "",schema_sql)
         for match in re.finditer(
-            r"(INSERT\s+OR\s+IGNORE\s+INTO\s+\w+[^;]+;)", stripped, re.IGNORECASE | re.DOTALL
+            r"(INSERT\s+OR\s+IGNORE\s+INTO\s+\w[^;]++;)", stripped, re.IGNORECASE | re.DOTALL
         ):
             stmt = match.group(1).strip()
             try:

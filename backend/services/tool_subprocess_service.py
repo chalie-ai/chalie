@@ -95,7 +95,7 @@ def _send_chalie_response(proc: subprocess.Popen[bytes], result: dict[str, objec
         cast(IO[bytes], proc.stdin).flush()
         return True
     except Exception as e:
-        logger.error(f"[SUBPROCESS INTERACTIVE] on_tool_output error: {e}")
+        logger.exception(f"[SUBPROCESS INTERACTIVE] on_tool_output error: {e}")
         return False
 
 

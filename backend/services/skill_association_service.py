@@ -94,12 +94,12 @@ class SkillAssociationService:
         except Exception as exc:
             exc_str = str(exc).lower()
             if "context" in exc_str or "token" in exc_str or "length" in exc_str:
-                logger.error(
+                logger.exception(
                     f"{LOG_PREFIX} prompt exceeds provider context window — "
                     f"patterns={len(patterns)} skills={len(skills)}: {exc}"
                 )
             else:
-                logger.error(f"{LOG_PREFIX} LLM call failed: {exc}")
+                logger.exception(f"{LOG_PREFIX} LLM call failed: {exc}")
             return None
 
         return _parse_associations(text)

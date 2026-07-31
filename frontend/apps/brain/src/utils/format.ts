@@ -39,8 +39,10 @@ export function mdToHtml(md: string | null | undefined): string {
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/\*([^*\n]+)\*/g, '<em>$1</em>')
     .replace(/`([^`]+)`/g, '<code>$1</code>')
+    // (?=(X))\1 emulates an atomic group — JS has no possessive quantifiers, so this
+    // prevents char-by-char backtracking while probing for the closing bracket.
     .replace(
-      /\[([^\]]+)\]\((https?:\/\/[^)\s]+|mailto:[^)\s]+)\)/g,
+      /\[(?=([^\]]+))\1\]\((?=((?:https?:\/\/|mailto:)[^)\s]+))\2\)/g,
       '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>',
     )
     .replace(/^[*-]\s+(.+)$/gm, '<li>$1</li>')

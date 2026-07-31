@@ -7,9 +7,9 @@ version: 1
 
 1. Use `memory` to recall any prior user research, personas, or journey maps already created.
 2. Use `memory` to recall any prior research artifacts, then identify the research task: persona generation, journey mapping, usability test planning, or research synthesis.
-3. For persona generation, collect user data inputs (demographics, usage frequency, features used, device, context, tech proficiency, pain points) and use `code_eval` to run clustering analysis and produce research-backed personas.
-4. For journey mapping, use `document` to identify the user goal, list every touchpoint and step in sequence, and annotate each with: what the user thinks, feels, and does — plus friction points and opportunities.
-5. For usability test planning, define the tasks to test, recruit criteria, success metrics, and use `code_eval` to calculate the required sample size given desired statistical confidence.
-6. For research synthesis, use `document` to group raw findings by theme, connect themes to user needs, score each theme by frequency and severity, and produce a prioritized opportunity list.
-7. Use `document` to translate research findings into specific design recommendations tied to evidence, not opinion.
-8. Use `document` to save personas, journey maps, test plans, and synthesis reports — use `memory` to store key user insights for future product decisions.
+3. For persona generation, collect user data inputs (demographics, usage frequency, features used, device, context, tech proficiency, pain points) and use `code_agent` to run clustering analysis and produce research-backed personas.
+4. For journey mapping, use `write_file` to identify the user goal, list every touchpoint and step in sequence, and annotate each with: what the user thinks, feels, and does — plus friction points and opportunities.
+5. For usability test planning, define the tasks to test, recruit criteria, success metrics, and use `code_agent` to calculate the required sample size given desired statistical confidence.
+6. For research synthesis, use `write_file` to group raw findings by theme, connect themes to user needs, score each theme by frequency and severity, and produce a prioritized opportunity list.
+7. Use `write_file` to translate research findings into specific design recommendations tied to evidence, not opinion.
+8. Use `write_file` to save personas, journey maps, test plans, and synthesis reports — use `memory` to store key user insights for future product decisions.

@@ -11,7 +11,7 @@ rework: a cancel observed at ``MessageProcessor._step``'s checkpoint discards
 the in-flight response before any reply row is stored, leaving a trailing,
 reply-less user row behind. Two independent read paths must both hide it:
 
-* ``GET /api/thread/<turn_id>`` (``api.threads._drop_trailing_cancelled_orphan``)
+* ``GET /api/threads/<turn_id>`` (``TurnSerializerService``'s orphan drop)
   — the single-turn expand/refetch read.
 * ``Transcript.recent_threads`` / ``Transcript.count_turns``
   (``Transcript._thread_query_filter``'s ``_CANCELLED_ORPHAN_HAVING``) — the
@@ -56,7 +56,7 @@ def _open_exchange(turn_id: int, question: str, answer: str) -> tuple[int, int]:
     return user_id, answer_id
 
 
-# ── (a) GET /api/thread/<turn_id> ───────────────────────────────────────────
+# ── (a) GET /api/threads/<turn_id> ───────────────────────────────────────────
 
 
 def test_get_thread_drops_trailing_cancelled_orphan_but_keeps_prior_exchange(
@@ -80,13 +80,13 @@ def test_get_thread_drops_trailing_cancelled_orphan_but_keeps_prior_exchange(
     opened = reply.turn_execution_service.open()
     assert opened is not None  # sanity: the real open-row write succeeded
 
-    cancel_resp = client.delete(f"/api/thread/{turn_id}")
+    cancel_resp = client.delete(f"/api/threads/{turn_id}")
     assert cancel_resp.status_code == 200
-    assert cancel_resp.get_json()["state"] == "cancelled"
+    assert cancel_resp.get_json()["result"]["cancelled"] is True
 
-    get_resp = client.get(f"/api/thread/{turn_id}")
+    get_resp = client.get(f"/api/threads/{turn_id}")
     assert get_resp.status_code == 200
-    ids = [m["id"] for m in get_resp.get_json()["messages"]]
+    ids = [m["id"] for m in get_resp.get_json()["result"]["messages"]]
 
     assert str(opener_user_id) in ids
     assert str(opener_answer_id) in ids
@@ -108,13 +108,13 @@ def test_get_thread_with_only_a_cancelled_orphan_returns_no_messages(
     opened = mp.turn_execution_service.open()
     assert opened is not None  # sanity: the real open-row write succeeded
 
-    cancel_resp = client.delete(f"/api/thread/{turn_id}")
+    cancel_resp = client.delete(f"/api/threads/{turn_id}")
     assert cancel_resp.status_code == 200
-    assert cancel_resp.get_json()["state"] == "cancelled"
+    assert cancel_resp.get_json()["result"]["cancelled"] is True
 
-    get_resp = client.get(f"/api/thread/{turn_id}")
+    get_resp = client.get(f"/api/threads/{turn_id}")
     assert get_resp.status_code == 200
-    assert get_resp.get_json()["messages"] == []
+    assert get_resp.get_json()["result"]["messages"] == []
 
 
 # ── (b) thread feed (recent_threads / count_turns) ──────────────────────────
@@ -134,7 +134,7 @@ def test_recent_threads_excludes_turn_whose_only_row_is_a_cancelled_orphan(
     cancelled = mp.turn_execution_service.cancel()
     assert cancelled is not None and cancelled.state == TurnExecution.CANCELLED  # sanity: real cancel
 
-    threads, _has_more, _returned = Transcript.recent_threads(_CHANNEL)
+    threads = Transcript.recent_threads(_CHANNEL)
 
     assert turn_id not in [t.get("turn_id") for t in threads]
     assert Transcript.count_turns(_CHANNEL) == 0
@@ -158,7 +158,7 @@ def test_recent_threads_keeps_turn_with_real_exchange_despite_trailing_cancelled
     cancelled = reply.turn_execution_service.cancel()
     assert cancelled is not None and cancelled.state == TurnExecution.CANCELLED  # sanity: real cancel
 
-    threads, _has_more, _returned = Transcript.recent_threads(_CHANNEL)
+    threads = Transcript.recent_threads(_CHANNEL)
 
     assert turn_id in [t.get("turn_id") for t in threads]
     assert Transcript.count_turns(_CHANNEL) == 1
@@ -170,7 +170,7 @@ def test_recent_threads_keeps_turn_with_real_exchange_despite_trailing_cancelled
 def test_recent_threads_search_matches_thread_gist_label_not_just_user_content(
     db: sqlite3.Connection,
 ) -> None:
-    """``GET /api/threads?q=`` must find a thread by its (LLM-generated) gist
+    """``GET /api/threads/all?q=`` must find a thread by its (LLM-generated) gist
     label even when the raw user message never used the search term — e.g. a
     user typed "send an email to Jane about the invoice" but the gist labelled
     the thread "Testing and Debugging", and the user later searches "debug".
@@ -186,21 +186,21 @@ def test_recent_threads_search_matches_thread_gist_label_not_just_user_content(
     _open_exchange(plain_turn_id, "What's the weather tomorrow?", "Sunny, 22C.")
 
     # (1) matches via the gist only — user content never said "debug"
-    debug_threads, _has_more, _returned = Transcript.recent_threads(_CHANNEL, query="debug")
+    debug_threads = Transcript.recent_threads(_CHANNEL, query="debug")
     debug_ids = [t.get("turn_id") for t in debug_threads]
     assert gisted_turn_id in debug_ids
     assert plain_turn_id not in debug_ids
     assert Transcript.count_turns(_CHANNEL, query="debug") == 1
 
     # (2) same thread also found via the other half of the gist ("Testing")
-    test_threads, _has_more, _returned = Transcript.recent_threads(_CHANNEL, query="test")
+    test_threads = Transcript.recent_threads(_CHANNEL, query="test")
     test_ids = [t.get("turn_id") for t in test_threads]
     assert gisted_turn_id in test_ids
     assert plain_turn_id not in test_ids
     assert Transcript.count_turns(_CHANNEL, query="test") == 1
 
     # (3) a term present in neither content nor gist excludes both threads
-    none_threads, _has_more, _returned = Transcript.recent_threads(_CHANNEL, query="zzz_no_match")
+    none_threads = Transcript.recent_threads(_CHANNEL, query="zzz_no_match")
     none_ids = [t.get("turn_id") for t in none_threads]
     assert gisted_turn_id not in none_ids
     assert plain_turn_id not in none_ids

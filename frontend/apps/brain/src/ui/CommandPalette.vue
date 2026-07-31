@@ -17,9 +17,7 @@ import {
   Settings,
   ShieldCheck,
   Sparkles,
-  Trash2,
   TriangleAlert,
-  Upload,
   Wrench,
 } from '@lucide/vue';
 import { useShellStore } from '../stores/shell';
@@ -59,10 +57,6 @@ const ALL_ITEMS: CPItem[] = [
   },
   { kind: 'Jump', label: 'Scheduler', icon: Calendar, path: '/scheduler' },
   { kind: 'Jump', label: 'Lists', icon: List, path: '/lists' },
-  { kind: 'Jump', label: 'Documents · Active', icon: FileText, path: '/documents/active' },
-  { kind: 'Jump', label: 'Documents · Processing', icon: FileText, path: '/documents/processing' },
-  { kind: 'Jump', label: 'Documents · Uploads', icon: Upload, path: '/documents/uploads' },
-  { kind: 'Jump', label: 'Documents · Deleted', icon: Trash2, path: '/documents/deleted' },
   { kind: 'Jump', label: 'Capabilities', icon: Settings, path: '/capabilities' },
   { kind: 'Jump', label: 'Policies · Chat', icon: ShieldCheck, path: '/policies/chat' },
   { kind: 'Jump', label: 'Policies · Background', icon: ShieldCheck, path: '/policies/background' },
@@ -141,6 +135,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onGlobalKeydown));
         ref="inputRef"
         v-model="query"
         class="cp-input"
+        aria-label="Search the brain"
         placeholder="Search the brain… (try 'memory', 'policy')"
         @keydown="onKeydown"
       />

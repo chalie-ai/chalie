@@ -40,12 +40,6 @@ class ProviderSelected(Action):
         "post": DocumentedResponse(ProviderRole, extras=((404, "Provider not found"),)),
     }
 
-    def slug(self) -> str:
-        return "providers"
-
-    def verb(self) -> str:
-        return "selected"
-
     def get(self, id: int | str) -> ResponseReturnValue:
         if not self.is_create(id):
             raise NotFoundError("Not found")

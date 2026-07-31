@@ -10,12 +10,6 @@ from services.policy_manager import PolicyManager
 class ResetAction(Action):
     """Action to reset all policies to their default values."""
 
-    def slug(self) -> str:
-        return "policies"
-
-    def verb(self) -> str:
-        return "reset"
-
     def _service(self) -> PolicyManager:
         return PolicyManager()
 

@@ -1,31 +1,31 @@
-"""Shared discovery-search base for find_tools and find_skills.
+"""Discovery-search cascade behind find_skills.
 
-Both abilities take a ``query`` ARRAY of intents — one tool/skill name or one
-described action per entry — and run every entry through ONE shared
-precise→broad escalation cascade (:meth:`SearchableAbility._discover`):
+``find_skills`` takes a ``query`` ARRAY of intents — one skill title or one
+described action per entry — and runs every entry through ONE precise→broad
+escalation cascade (:meth:`SearchableAbility._discover`):
 
 1. strip stopwords;
-2. **exact name match** on the whole normalised row → pinned (outside the global
-   cap); a bare name owned by more than one source is refused and surfaced;
-3. else **bm25 on the NAME/title only**, gated by name-segment alignment — NOT a
+2. **exact name match** on the whole normalised row → pinned (outside the
+   global cap);
+3. else **bm25 on the title only**, gated by name-segment alignment — NOT a
    bm25 score floor (the segment gate is the sole discriminator);
 4. else **vector search on the full prose**, kept only at/under ``VEC_CEILING``.
 
 The first rung that yields wins for that row; only the vector terminus failing
-leaves a row empty. The two indexes are single-purpose: names/titles → bm25
-(FTS5 trigram), full prose (summary/examples or use_for) → vec0 KNN cosine.
+leaves a row empty. The two indexes are single-purpose: titles → bm25
+(FTS5 trigram), full prose (use_for) → vec0 KNN cosine.
 
-Each concrete ability supplies only what differs — which DB/tables it queries
-and how it resolves an exact name (find_tools adds MCP and an ambiguity guard;
-find_skills has neither). Everything else — the cascade, the segment gate, the
-ceiling, per-name dedup, the embedding, the caps — lives here, shared verbatim.
+The concrete ability supplies only which DB/tables it queries and how it
+resolves an exact name; the cascade, the segment gate, the ceiling, per-name
+dedup, the embedding, and the caps live here. (Tool discovery no longer uses
+this cascade — ``find_tools`` is an exact-match roster lookup.)
 """
 
 import logging
 import re
 import sqlite3
 from abc import ABC
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import ClassVar, cast
 
@@ -39,7 +39,7 @@ KNN_DEPTH = 30  # k passed to the vec0 MATCH; per-name dedup + cap trim the list
 # Vector terminus ceiling for the discovery cascade — a row escalates to the
 # vector rung only when bm25-name missed, and a vector hit counts only when its
 # cosine distance is at or under this ceiling. FINE-TUNED 2026-06-23 over a
-# 36-query sweep against the real abilities.sqlite (Charlie-typo 1.008 KEEP vs
+# 36-query sweep against the since-retired tool index (Charlie-typo 1.008 KEEP vs
 # donut-junk 1.033 DROP, margin 0.025). DO NOT retune without re-running that sweep.
 VEC_CEILING = 1.02
 
@@ -125,7 +125,7 @@ class SearchableAbility(Ability, ABC):
 
     def _discover(
         self,
-        rows: "list[object]",
+        rows: "Sequence[str]",
         exact_fn: Callable[[str], "tuple[object | None, bool]"],
         bm25_fn: Callable[[list[str]], "list[object]"],
         vector_fn: Callable[[list[str]], "list[object]"],
@@ -141,7 +141,7 @@ class SearchableAbility(Ability, ABC):
         discovered: list[object] = []
         not_found: list[str] = []
         for raw in rows:
-            terms = search_terms(str(raw))
+            terms = search_terms(raw)
             if not terms:
                 continue
             key, ambiguous = exact_fn(self._norm(" ".join(terms)))

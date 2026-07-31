@@ -21,7 +21,7 @@ These run against the REAL production stack:
 - Real ``MessageProcessor`` instances carrying the REAL channel configs
   (``UserConfig`` / ``DmnConfig`` / ``WebBrowseConfig``).
 - Real ``AbilityRegistry.build_tools()`` resolution against the real registry.
-- Real abilities.sqlite + real EmbeddingService for the query path.
+- Exact-match lookup against ``AbilityRegistry.discovery_aliases()`` (canonical names + ``SEARCHABLE_AS`` aliases, normalized).
 
 No mocks, no stub configs — the configs under test are the ones production runs.
 """
@@ -32,11 +32,13 @@ import pytest
 
 from abilities._registry import AbilityRegistry
 from abilities.find_tools import FindToolsAbility
+from contracts.params.find_tools_params_bag import FindToolsParamsBag
 from configs.channels import DmnConfig, UserConfig
 from configs.channels.web_browse import WebBrowseConfig
 from configs.enums.policy_channel import PolicyChannel
 from controllers.message_processor import MessageProcessor
 from services.processor_config import ProcessorConfig
+from tests._tool_result_harness import built
 
 pytestmark = pytest.mark.unit
 
@@ -55,7 +57,7 @@ def _find_tools_on(mp: MessageProcessor, params: dict[str, object]) -> str | Map
     string on failure (the dispatcher adds the ``[find_tools(...)]`` envelope)."""
     ability = FindToolsAbility()
     ability.mp = mp
-    return ability.run(params).body
+    return ability.run(built(FindToolsParamsBag.from_params(params))).body
 
 
 # ---------------------------------------------------------------------------
@@ -82,11 +84,11 @@ class TestUserChannelCannotReachRawWebTools:
         )
 
     def test_query_cannot_surface_browser_on_user_channel(self, db: object) -> None:
-        """Even a query that is a perfect semantic match for browser must not
-        inject it — browser is DISCOVERABLE=False, so it never enters the global
-        roster the query path searches over."""
+        """Even an exact-name query for browser must not inject it — browser is
+        DISCOVERABLE=False, so it never enters the alias map the query path
+        resolves against."""
         mp = _mp_for(UserConfig())
-        _find_tools_on(mp, {"query": ["control a headless browser, click buttons and take a screenshot"]})
+        _find_tools_on(mp, {"query": ["web_browse"]})
 
         assert "browser" not in mp.active_tools, (
             "A non-discoverable tool must never be injected via the query path, "
@@ -189,11 +191,13 @@ _EXPECTED_NON_DISCOVERABLE = frozenset({
     "find_tools",              # the discovery entry point itself
     "find_skills",             # framework — always_available only
     "memory",                  # framework — always_available only
+    "mcp_manager",             # framework — always_available only
     "chat_history_compactor",  # internal — dispatched programmatically
     "skill_manager",           # system variant — SkillSuggestionConfig only
     "email",                   # personal info — pim delegate only
     "calendar",                # personal info — pim delegate only
     "contacts",                # personal info — pim delegate only
+    "run_script",               # code-agent-delegate-exclusive — CodeAgentConfig only
 })
 
 
@@ -202,7 +206,7 @@ def test_non_discoverable_set_is_exactly_the_expected_set() -> None:
     NOT in the global discovery roster must equal the expected non-discoverable
     set. Flipping any DISCOVERABLE flag (or adding a new non-discoverable
     ability) without updating this guard fails here."""
-    all_names = {a.get_name() for a in AbilityRegistry.all()}
+    all_names = {a.NAME for a in AbilityRegistry.all()}
     non_discoverable = all_names - AbilityRegistry.discoverable_names()
 
     assert non_discoverable == _EXPECTED_NON_DISCOVERABLE, (

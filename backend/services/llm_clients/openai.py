@@ -5,10 +5,14 @@ The openai_compatible path differs only in that a 'host' (base_url) is set in
 the config; the SDK call-path is identical.
 
 Native size-rejection signal:
-  HTTP 400 with error.code == 'context_length_exceeded' → ResponseOverLimitError.
+  HTTP 400 with error.code == 'context_length_exceeded' → ContextLimit.
   Confirmed from existing code: openai_mod.BadRequestError is caught in
   _call_completions; the 'context_length_exceeded' code is the canonical OpenAI
   signal (https://platform.openai.com/docs/guides/error-codes).
+  That code is OpenAI's own convention, and the openai_compatible hosts sharing
+  this client are under no obligation to use it, so the message prose is matched
+  as well (``is_token_limit_message``) — otherwise a size rejection from a
+  self-hosted server would surface as a generic 400 and never compact.
 
 Depends on: services.provider_api (contract), services.llm_service (estimate_tokens,
 _app_user_agent, _resolve_api_key, _strip_think_blocks — utilities).
@@ -44,11 +48,12 @@ if TYPE_CHECKING:
 from configs.enums.thinking_level import ThinkingLevel
 from contracts.provider_client import ProviderClient
 from exceptions import (
+    ContextLimit,
     ProviderResponseError,
     ProviderTimeoutError,
     RateLimitError,
-    ResponseOverLimitError,
 )
+from services.llm_clients.context_window import default_window_for_model
 from services.llm_clients.thinking_map import (
     OPENAI_COMPATIBLE_NONE_BODY,
     OPENAI_NONE_FALLBACK_EFFORT,
@@ -57,6 +62,7 @@ from services.llm_clients.thinking_map import (
 from services.provider_api import (
     ProviderApiRequest,
     ProviderApiResponse,
+    is_token_limit_message,
 )
 
 logger = logging.getLogger(__name__)
@@ -65,6 +71,40 @@ _APP_URL = "https://chalie.ai"
 _APP_TITLE = "Chalie"
 
 _COMPLETION_USAGE: TypeAlias = "_openai_mod.types.CompletionUsage"
+
+# Published context windows for official OpenAI models. api.openai.com/v1/models
+# returns no size information at all, so for platform='openai' the documented
+# figure IS the measurement — there is nothing else to read. Matched longest
+# prefix first, because 'gpt-4o'/'gpt-4.1' must not be caught by 'gpt-4'.
+# Deliberately NOT used for platform='openai_compatible': a third-party or
+# self-hosted host behind the same API serves whatever it likes under any name,
+# so that path pings the host to confirm it answers and falls back to a
+# family-based default (see _default_window_for_model).
+_OPENAI_PUBLISHED_WINDOWS: tuple[tuple[str, int], ...] = (
+    ('gpt-3.5-turbo', 16_385),
+    ('gpt-4-turbo', 128_000),
+    ('gpt-4.1', 1_047_576),
+    ('gpt-4o', 128_000),
+    ('gpt-4', 8_192),
+    ('gpt-5', 400_000),
+    ('o1', 200_000),
+    ('o3', 200_000),
+    ('o4', 200_000),
+)
+
+def _published_openai_window(model: str) -> int | None:
+    """Documented window for an official OpenAI model slug, or None if unknown.
+
+    Unknown means unknown: a new slug gets a loud failure upstream rather than a
+    neighbouring family's number, which could be wrong by two orders of magnitude.
+    """
+    slug = (model or '').lower()
+    for prefix, window in sorted(
+        _OPENAI_PUBLISHED_WINDOWS, key=lambda pair: len(pair[0]), reverse=True,
+    ):
+        if slug.startswith(prefix):
+            return window
+    return None
 
 
 def _openai_convert_messages(messages: "list[_Msg]") -> "list[_Msg]":
@@ -182,14 +222,21 @@ class OpenAIClient(ProviderClient):
         except openai_mod.APITimeoutError as exc:
             raise ProviderTimeoutError(str(exc), provider='openai') from exc
         except (openai_mod.BadRequestError, openai_mod.APIError) as exc:
-            # Confirmed: OpenAI sends HTTP 400 with error.code == 'context_length_exceeded'
+            # Confirmed: OpenAI sends HTTP 400 with error.code == 'context_length_exceeded'.
+            # That code is OpenAI's own — the openai_compatible hosts sharing this
+            # client (llama.cpp, vLLM, third-party gateways) rarely send it, so the
+            # message prose is checked too or their size rejections never compact.
             err_body = getattr(exc, 'body', None) or {}
             err_code = (err_body.get('error') or {}).get('code', '') if isinstance(err_body, dict) else ''
-            if err_code == 'context_length_exceeded' or 'context_length_exceeded' in str(exc).lower():
-                status = getattr(exc, 'status_code', 400)
-                raise ResponseOverLimitError(
-                    f"OpenAI rejected payload (context_length_exceeded): {exc}",
-                    response_code=status, provider='openai',
+            if (
+                err_code == 'context_length_exceeded'
+                or 'context_length_exceeded' in str(exc).lower()
+                or is_token_limit_message(str(exc))
+            ):
+                raise ContextLimit(
+                    f"Provider rejected payload (context length): {exc}",
+                    provider=cast(str, self._config.get('platform') or 'openai'),
+                    model=self.model,
                 ) from exc
             if _is_thinking_rejection(exc, create_kwargs):
                 # Ladder: only when we sent reasoning_effort='none' do we try
@@ -260,6 +307,25 @@ class OpenAIClient(ProviderClient):
         _completion_details = getattr(response.usage, 'completion_tokens_details', None)
         _reasoning = getattr(_completion_details, 'reasoning_tokens', None) if _completion_details else None
 
+        # Defensive reads for provider-reported telemetry that the SDK does not
+        # expose through typed attributes.
+        #
+        # Real OpenAI: usage.prompt_tokens_details.cached_tokens (int | None).
+        # llama.cpp OpenAI-compatible server: timings.cache_n (int | None).
+        _prompt_details = getattr(response.usage, 'prompt_tokens_details', None)
+        tokens_cache_read = getattr(_prompt_details, 'cached_tokens', None) if _prompt_details else None
+        timings = getattr(response, 'timings', None)
+        if isinstance(timings, dict):
+            if tokens_cache_read is None:
+                _cache_n = timings.get('cache_n')
+                if isinstance(_cache_n, int):
+                    tokens_cache_read = _cache_n
+            prefill_ms = timings.get('prompt_ms')
+            decode_ms = timings.get('predicted_ms')
+        else:
+            prefill_ms = None
+            decode_ms = None
+
         log_fn = logger.info if (text and text.strip()) or tool_calls else logger.warning
         log_fn(
             "[OpenAIClient] model=%s tokens=%d+%d latency=%dms finish=%s%s",
@@ -278,15 +344,130 @@ class OpenAIClient(ProviderClient):
             tokens_input=cast(_COMPLETION_USAGE, response.usage).prompt_tokens,
             tokens_output=cast(_COMPLETION_USAGE, response.usage).completion_tokens,
             tokens_thinking=_reasoning,
+            tokens_cache_read=tokens_cache_read,
             latency_ms=latency_ms,
+            prefill_ms=prefill_ms,
+            decode_ms=decode_ms,
             tool_calls=tool_calls,
             stop_reason=finish_reason,
             response_code=200,
         )
 
-    def get_context_limit(self) -> int:
-        """Default 128k for GPT-4 class models."""
-        return 128_000
+    def get_context_limit(self) -> int | None:
+        """Determine the model's context window, cached per-instance.
+
+        A hosted (openai_compatible) provider is pinged: a tiny one-shot
+        completion both proves the host answers and yields a window — read from
+        a size field on the response if the server volunteers one, otherwise a
+        family-based default. Official OpenAI (no host) falls to the published
+        table, since api.openai.com serves no size information anywhere.
+
+        Returns None only when a hosted provider cannot be reached at all, so
+        the caller leaves the column unset and the next send re-probes. Never
+        raises: a provider must stay creatable while its host is briefly down.
+        """
+        if hasattr(self, '_cached_context_limit'):
+            return self._cached_context_limit
+
+        # Official OpenAI publishes no window on any endpoint, so the documented
+        # table is the authoritative answer where it has one. A slug it does not
+        # know (a model newer than the table) still gets measured — it falls
+        # through to the same ping every hosted provider uses.
+        window = None if self._config.get('host') else _published_openai_window(self.model)
+        if window is None:
+            window = self._probe_via_ping()
+
+        self._cached_context_limit: int | None = window
+        return self._cached_context_limit
+
+    def _probe_via_ping(self) -> int | None:
+        """Confirm a hosted provider answers and derive its context window.
+
+        Sends a 5-token one-shot completion. A reply with a readable
+        ``usage.prompt_tokens`` proves the host and model are live; the window
+        is then taken from a size field on the response if one is present, else
+        a family-based default. Returns None (never raises) when the host cannot
+        be reached, so the row is left unset for the next send to re-probe.
+
+        A refusal is not a silence. Any HTTP status — a 400 rejecting a
+        parameter, a 401, a 404, a 429 — came from a host that is up, so it
+        sizes like any other live provider and lets the real fault surface at
+        send time, where the message actually names it.
+        """
+        import openai as openai_mod  # noqa: PLC0415
+
+        try:
+            client = self._get_client()
+            create = cast(
+                "Callable[..., _openai_mod.types.chat.ChatCompletion]",
+                client.chat.completions.create,
+            )
+            resp = create(
+                model=self.model,
+                messages=[{
+                    "role": "user",
+                    "content": "Do NOT think, answer immediately with 'pong'.",
+                }],
+                max_tokens=5,
+            )
+        except openai_mod.APIStatusError as exc:
+            # The host answered, and an answer is the liveness this probe exists
+            # to establish. Reasoning models reject max_tokens outright (they
+            # require max_completion_tokens), so a plain 400 here is routine —
+            # returning None for it would make pin_context_window raise and kill
+            # every turn for a provider whose only real problem is elsewhere.
+            window = default_window_for_model(self.model)
+            logger.warning(
+                "[OpenAIClient] Context-window ping for model=%s was refused with "
+                "HTTP %s (%s) — the host is up, so sizing it at %d (family-default)",
+                self.model, exc.status_code, exc, window,
+            )
+            return window
+        except Exception as exc:
+            logger.warning(
+                "[OpenAIClient] Context-window ping failed for model=%s: %s",
+                self.model, exc,
+            )
+            return None
+
+        usage = getattr(resp, 'usage', None)
+        prompt_tokens = getattr(usage, 'prompt_tokens', None) if usage else None
+        if not isinstance(prompt_tokens, int):
+            logger.warning(
+                "[OpenAIClient] Context-window ping for model=%s returned no usage — "
+                "treating the host as unusable, leaving the window unset",
+                self.model,
+            )
+            return None
+
+        reported = self._window_from_response(resp)
+        window = reported if reported is not None else default_window_for_model(self.model)
+        source = 'response' if reported is not None else 'family-default'
+        logger.info(
+            "[OpenAIClient] Context-window ping ok for model=%s (prompt_tokens=%d) — window=%d (%s)",
+            self.model, prompt_tokens, window, source,
+        )
+        return window
+
+    @staticmethod
+    def _window_from_response(resp: object) -> int | None:
+        """A window the server volunteered on the completion, or None.
+
+        Standard OpenAI responses carry no size; some self-hosted servers attach
+        one under ``model_info`` or a top-level field. Read defensively — the
+        SDK never types these, so they arrive as untyped extras or not at all.
+        """
+        model_info = getattr(resp, 'model_info', None)
+        if isinstance(model_info, dict):
+            for key in ('context_length', 'n_ctx', 'max_context_length'):
+                val = model_info.get(key)
+                if isinstance(val, int) and val > 0:
+                    return val
+        for attr in ('context_length', 'n_ctx'):
+            val = getattr(resp, attr, None)
+            if isinstance(val, int) and val > 0:
+                return val
+        return None
 
     def estimate_request_tokens(self, dto: ProviderApiRequest) -> int:
         """Estimate tokens using tiktoken if available, else heuristic."""

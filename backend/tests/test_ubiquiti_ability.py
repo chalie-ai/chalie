@@ -50,17 +50,7 @@ _ALLOW_ACTIONS = (
 )
 
 
-# ── Schema honesty: prose-DSL is gone, enum == ACTION_HANDLERS ──────────────────
-
-
-def test_prose_dsl_params_absent_from_parameters() -> None:
-    from abilities._registry import AbilityRegistry
-
-    props = cast("dict[str, object]", AbilityRegistry.get("ubiquiti").get_parameters()["properties"])
-    assert "command" not in props
-    assert "sub_action" not in props
-    assert "mac" not in props
-    assert "target" in props
+# ── Schema honesty: the declared enum == ACTION_HANDLERS ────────────────────────
 
 
 def test_action_enum_matches_action_handlers_exactly() -> None:

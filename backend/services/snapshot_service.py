@@ -15,7 +15,7 @@ Restore is two-phase so a half-finished swap can never corrupt a live instance:
     then clear the marker. On any failure it rolls the live artifacts back, logs
     loudly, and quarantines the staged set so boot does not loop.
 
-Consumed by ``api/snapshot.py`` (HTTP surface) and ``run.py`` (boot apply).
+Consumed by ``api/actions/snapshot/`` (HTTP surface) and ``run.py`` (boot apply).
 Depends on ``FileMapperService`` (all paths), ``SchemaConvergenceService``
 (shared ``column_set`` for the downgrade guard) and ``services.time_utils``
 (UTC stamps).

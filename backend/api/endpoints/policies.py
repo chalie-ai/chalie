@@ -33,9 +33,6 @@ class PoliciesEndpoint(Endpoint):
     request_dto = PolicyUpsertRequest
     response_dto = {"get_all": DocumentedResponse(PolicyResponse, listing=True)}
 
-    def slug(self) -> str:
-        return "policies"
-
     def _service(self) -> PolicyManager:
         return PolicyManager()
 

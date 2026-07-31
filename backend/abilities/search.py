@@ -29,6 +29,8 @@ from abilities._result import ToolResult
 from services.database import Database
 from services.file_mapper_service import FileMapperService
 from tools.search.fetcher import fetch_ddg_fallback, fetch_providers
+from contracts.params.param_bag import ParamBag
+from contracts.params.search_params_bag import SearchParamsBag
 from exceptions import RateLimitException
 
 logger = logging.getLogger(__name__)
@@ -43,7 +45,7 @@ _PER_PROVIDER = 5
 _MAX_RESULTS = 5
 
 
-class SearchAbility(Ability):
+class SearchAbility(Ability[SearchParamsBag]):
     DISCOVERABLE: ClassVar[bool] = False  # delegate-exclusive; pinned on WebSearchConfig only
 
     # Pre-gated by the dispatcher BEFORE run() and BEFORE the policy gate: an
@@ -53,8 +55,10 @@ class SearchAbility(Ability):
     # run() never sees a query-less call.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.query,)}
 
-    def get_name(self) -> str:
-        return "search"
+    # The typed input contract: the dispatch seam builds the bag via
+    # SearchParamsBag.from_params before run() is called.
+    PARAMS: ClassVar[type[ParamBag] | None] = SearchParamsBag
+    NAME: ClassVar[str] = "search"
 
     def get_summary(self) -> str:
         return "Search Wikipedia, GitHub, Reddit, arXiv, news, and more with automatic provider routing from a plain language query."
@@ -76,7 +80,9 @@ class SearchAbility(Ability):
 
     def get_follow_up(self, tr: ToolResult) -> str:
         """Nudge to fetch a promising result's full page before quoting it."""
-        return "For the pages that are aligned with your query, use the `read(url=…)` tool with that result's url to get the full content of the page before quoting it or stating its claims as fact."
+        from abilities.read import ReadAbility  # noqa: PLC0415
+
+        return f"For the pages that are aligned with your query, use the `{ReadAbility.NAME}(url=…)` tool with that result's url to get the full content of the page before quoting it or stating its claims as fact."
 
     def get_parameters(self) -> dict[str, object]:
         return {
@@ -93,17 +99,8 @@ class SearchAbility(Ability):
     _DB: ClassVar[str] = str(FileMapperService.get_search_providers_db_path())
     _providers: ClassVar[dict[str, object] | None] = None
 
-    def run(self, params: dict[str, object]) -> ToolResult:
-        # query presence is pre-gated by ACTION_REQUIRED; .strip() guards a
-        # whitespace-only value that the truthiness pre-gate lets through.
-        query = (cast("str", params.get(Keys.query) or "")).strip()
-        if not query:
-            return ToolResult.err(
-                "query is required and cannot be blank.",
-                code="missing-params",
-                hint="pass a plain natural-language query.",
-                valid=("query",),
-            )
+    def run(self, params: SearchParamsBag) -> ToolResult:
+        query = params.query  # pre-gated by ACTION_REQUIRED; bag's require_str rejects blank
 
         t0 = time.time()
         try:
@@ -151,6 +148,11 @@ class SearchAbility(Ability):
         from tools.search.render import render_records
         body = render_records(items)
 
+        if not items:
+            if fell_back or meta.get("ddg_supplement"):
+                return ToolResult.no_results(fallback=_DDG)
+            return ToolResult.no_results()
+
         if fell_back or meta.get("ddg_supplement"):
             return ToolResult.ok(body, count=len(items), fallback=_DDG)
         return ToolResult.ok(body, count=len(items))
@@ -167,7 +169,7 @@ class SearchAbility(Ability):
             rows = conn.execute("SELECT * FROM providers WHERE enabled = 1").fetchall()
             cls._providers = {row["name"]: dict(row) for row in rows}
         except Exception as e:
-            logger.error("[SEARCH] Failed to load providers: %s", e)
+            logger.exception("[SEARCH] Failed to load providers: %s", e)
             return {}
 
         return cls._providers

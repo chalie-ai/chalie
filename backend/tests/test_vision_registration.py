@@ -12,7 +12,6 @@ background channel. Channel containment for vision is the policy gate above
 roster are orthogonal.
 """
 
-import sqlite3
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import cast
@@ -23,14 +22,15 @@ from abilities._registry import AbilityRegistry
 from abilities.find_tools import FindToolsAbility
 from abilities.vision import VisionAbility
 from configs.channels import DmnConfig, UserConfig
+from contracts.params.find_tools_params_bag import FindToolsParamsBag
 from configs.enums.policy_channel import PolicyChannel
-from run import _migrate_legacy_policy_rules
 from services.database import Database
 from services.file_mapper_service import FileMapperService
 from controllers.message_processor import MessageProcessor
 from services.policy_manager import PolicyManager
 from services.processor_config import ProcessorConfig
 from services.schema_convergence_service import SchemaConvergenceService
+from tests._tool_result_harness import built
 
 pytestmark = pytest.mark.unit
 
@@ -50,11 +50,10 @@ def _mp_for(config: ProcessorConfig) -> MessageProcessor:
 def _find_tools_on(mp: MessageProcessor, params: dict[str, object]) -> Mapping[str, object]:
     ability = FindToolsAbility()
     ability.mp = mp
-    return cast(Mapping[str, object], ability.run(params).body)
+    return cast(Mapping[str, object], ability.run(built(FindToolsParamsBag.from_params(params))).body)
 
 
 def _seeded_policy_db(tmp_path: Path) -> PolicyManager:
-    _migrate_legacy_policy_rules()                                    # no-op on fresh
     SchemaConvergenceService().converge()  # creates policy
     PolicyManager().apply_seed()                                  # reads the JSON
     return PolicyManager()
@@ -68,7 +67,7 @@ class TestVisionPolicyDefaults:
 
     @pytest.fixture(autouse=True)
     def _gateway_to_tmp_db(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-        # _migrate_legacy_policy_rules()/converge()/apply_seed()/_setting() all resolve
+        # converge()/apply_seed()/_setting() all resolve
         # their path through the Database gateway (FileMapperService.get_db_path).
         # Redirect the gateway to the same tmp file so the seed writes and the
         # _setting reads share one database, not the real chalie.db.
@@ -138,24 +137,19 @@ class TestVisionVisibility:
 
 
 # ---------------------------------------------------------------------------
-# 3. Search index — real rebuilt abilities.sqlite + real registry resolution.
+# 3. Registration — vision is discoverable and its aliases resolve correctly.
 # ---------------------------------------------------------------------------
-
 class TestVisionSearchIndex:
 
-    def test_registry_resolves_vision_to_vision_ability(self) -> None:
-        assert isinstance(AbilityRegistry.get("vision"), VisionAbility)
+    def test_vision_is_discoverable_and_aliases_resolve(self) -> None:
+        """Pin the visibility model for vision: it must be in the global
+        discoverable roster AND its SEARCHABLE_AS aliases must resolve to it
+        via the alias map (e.g. "see image" -> "vision")."""
+        assert "vision" in AbilityRegistry.discoverable_names()
 
-    def test_abilities_sqlite_contains_vision_row(self) -> None:
-        db_path = FileMapperService.get_abilities_db_path()
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-        try:
-            row = conn.execute(
-                "SELECT name FROM abilities WHERE name = ?", ("vision",)
-            ).fetchone()
-        finally:
-            conn.close()
-        assert row is not None, (
-            "abilities.sqlite has no 'vision' row — rebuild "
-            "(python -m utils.build_ability_db) did not capture VisionAbility."
-        )
+        aliases = AbilityRegistry.discovery_aliases()
+        for alias in VisionAbility.SEARCHABLE_AS:
+            canonical = aliases.get(alias)
+            assert canonical == "vision", (
+                f"alias {alias!r} must resolve to 'vision', got {canonical!r}"
+            )

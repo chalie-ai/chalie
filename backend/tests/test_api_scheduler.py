@@ -21,6 +21,13 @@ def _unwrap_single(body: "dict[str, object]") -> "dict[str, object]":
     return cast("dict[str, object]", body["result"])
 
 
+def _find_turn(client: FlaskClient, item_id: object) -> "dict[str, object]":
+    """The ``/scheduler/turns`` row for one schedule — its ``turn_id`` IS the
+    schedule's id on the ``schedule`` channel."""
+    body = cast("dict[str, object]", client.get("/api/scheduler/turns").get_json())
+    return next(t for t in _unwrap_listing(body) if t["turn_id"] == item_id)
+
+
 def _unwrap_error(body: "dict[str, object]") -> str:
     """Assert the error envelope shape and return the error message."""
     assert body.get("success") is False
@@ -144,9 +151,9 @@ class TestSchedulerAPI:
         after = db.execute("SELECT COUNT(*) FROM scheduled_items").fetchone()[0]
         assert after == before, "an invalid cron expression must persist nothing"
 
-    # ----- Eager 1-1 gist: a schedule is born with its prompt as its label -----
+    # ----- 1-1 gist: generated on the first fire, prompt is the fallback -----
 
-    def test_create_seeds_thread_gist_from_prompt(
+    def test_create_leaves_gist_unset_and_turns_falls_back_to_the_prompt(
         self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]
     ) -> None:
         client, db, _store = authed_client
@@ -158,20 +165,39 @@ class TestSchedulerAPI:
         assert resp.status_code == 201, resp.get_json()
         item_id = _unwrap_single(cast("dict[str, object]", resp.get_json()))["id"]
 
-        # The gist is written synchronously at create time (no fork-time LLM
-        # wait): keyed (channel='schedule', turn_id=id), content == the prompt.
+        # Creating a schedule writes no gist: the label is generated from the
+        # fired thread on the first fire, keyed (channel='schedule', turn_id=id).
+        # Seeding the raw prompt here would be indistinguishable from a real
+        # gist and would permanently suppress generation.
         row = db.execute(
             "SELECT gist FROM thread_gist WHERE channel = ? AND turn_id = ?",
             ("schedule", item_id),
         ).fetchone()
-        assert row is not None, "create must seed a thread_gist row"
-        assert row["gist"] == "Water the plants"
+        assert row is None, "create must not write a gist — it is generated on the first fire"
 
-        # …and it surfaces on /turns as that schedule's label.
-        turns_body = cast("dict[str, object]", client.get("/api/scheduler/turns").get_json())
-        turns = _unwrap_listing(turns_body)
-        mine = next(t for t in turns if t["turn_id"] == item_id)
-        assert mine["gist"] == "Water the plants"
+        # Until then /turns carries gist=None and the prompt as preview, which
+        # is what the caller renders as the fallback title.
+        mine = _find_turn(client, item_id)
+        assert mine["gist"] is None
+        assert mine["preview"] == "Water the plants"
+
+    def test_turns_surfaces_the_generated_gist_as_the_label(
+        self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]
+    ) -> None:
+        client, db, _store = authed_client
+        item_id = insert_scheduled_item(db, message="Water the plants")
+
+        # Stand in for the first fire's gist ingest, which writes on
+        # (channel='schedule', turn_id=id) — the schedule's own turn (§13.1).
+        db.execute(
+            "INSERT INTO thread_gist (channel, turn_id, gist, created_at) VALUES (?, ?, ?, ?)",
+            ("schedule", item_id, "Watering reminder", "2026-07-18T00:00:00+00:00"),
+        )
+        db.commit()
+
+        mine = _find_turn(client, item_id)
+        assert mine["gist"] == "Watering reminder", "the stored gist is the schedule's label"
+        assert mine["preview"] == "Water the plants", "the prompt stays available as preview"
 
     # ----- GET /scheduler/<id> -----
 

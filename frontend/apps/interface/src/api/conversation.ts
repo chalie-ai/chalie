@@ -1,8 +1,7 @@
 import { api } from '@chalie/shared';
 
-/** A single attachment served from /api/documents/preview/<id> (URL is backend-provided). */
+/** A single attachment served from /api/files/preview/<path> (URL is backend-provided). */
 export interface ConversationAttachment {
-  doc_id: string;
   filename: string;
   mime_type: string;
   is_image: boolean;
@@ -16,6 +15,13 @@ export interface ConversationSegment {
   tag?: string;
   payload?: Record<string, unknown>;
   synthesis?: string;
+  /**
+   * Rich segments only: the tool call's wall-clock moment, ISO-8601 UTC (null
+   * when the row carried no usable timestamp). Generic card metadata — a card
+   * that needs a time anchor reads it from here rather than from `payload`,
+   * which is the tool body the model reads.
+   */
+  created_at?: string | null;
 }
 
 /** One row inside a turn block (see ConversationTurnBlock.messages). */
@@ -24,6 +30,8 @@ export interface ConversationMessage {
   role: 'user' | 'assistant';
   content: string;
   timestamp: string;
+  /** User-local calendar day `YYYY-MM-DD`, supplied by the backend for divider grouping. */
+  day: string;
   /**
    * The turn this row belongs to — a turn (thread) is many rows (input → steps →
    * synthesis → replies) sharing one `turn_id`; the feed groups by this. Null for
@@ -50,9 +58,23 @@ export interface ConversationMessage {
    * has any of them is a thread, so the feed shows its opener.
    */
   thread_message?: boolean;
+  /**
+   * True on the ONE assistant row that closes a turn_execution — the final
+   * reply. Only that row is spoken, so it is the only one that carries a
+   * speaker button.
+   */
+  settled?: boolean;
+  /**
+   * Pre-synthesis outcome for a settled row, as of this fetch: 'ready' (audio
+   * stored), 'failed' (gave up after its attempts), or absent/null for a row
+   * with no attempt on record — history from before pre-synthesis, whose first
+   * press starts the pipeline. Live changes arrive as `voice_transcript` WS
+   * frames instead (see stores/voiceTranscripts.ts).
+   */
+  voice_state?: 'pending' | 'ready' | 'failed' | null;
 }
 
-/** Collapsed thread metadata returned by /api/threads. */
+/** Collapsed thread metadata returned by /api/threads/all. */
 export interface ConversationThread {
   turn_id: number | null;
   last_activity_at: string | null;
@@ -105,15 +127,30 @@ export interface ConversationTurnBlock {
   type: string;
 }
 
+interface ListingEnvelope<T> {
+  success: true;
+  result: T[];
+  pagination: { page: number; limit: number; total: number };
+}
+
+interface SingleEnvelope<T> {
+  success: true;
+  result: T;
+}
+
 export const conversation = {
   /**
-   * GET /api/threads — collapsed thread metadata for the feed (id +
+   * GET /api/threads/all — collapsed thread metadata for the feed (id +
    * gist/preview/last activity). Returns the `limit` most-recently-active
    * threads; `threads_returned` advances pagination. With `query`, the same
    * getter filters to matching threads (the search overlay's source).
    *
    * `type` (the ProcessorConfig identity) is forwarded to the backend, which
    * resolves it to a transcript channel; defaults to "user" server-side when omitted.
+   *
+   * The backend uses page/limit pagination; callers pass offset (default 0).
+   * We derive `page = floor(offset/limit)+1` and recompute `has_more` from the
+   * server-supplied pagination.total so the consumer's shape is unchanged.
    */
   threads(
     limit = 20,
@@ -121,22 +158,26 @@ export const conversation = {
     query?: string,
     type?: string,
   ): Promise<{ threads: ConversationThread[]; has_more: boolean; threads_returned: number }> {
-    const params = new URLSearchParams({ limit: String(limit) });
-    if (offset != null) params.set('offset', String(offset));
+    const page = Math.floor((offset ?? 0) / limit) + 1;
+    const params = new URLSearchParams({ limit: String(limit), page: String(page) });
     if (query) params.set('q', query);
     if (type) params.set('type', type);
-    return api.get(`/api/threads?${params.toString()}`);
+    return api.get<ListingEnvelope<ConversationThread>>(`/api/threads/all?${params.toString()}`).then((body) => {
+      const threads = body.result;
+      const has_more = page * limit < body.pagination.total;
+      return { threads, has_more, threads_returned: threads.length };
+    });
   },
 
   /**
-   * GET /api/thread/<turn_id> — one turn's full block (expand + WS refetch).
+   * GET /api/threads/<turn_id> — one turn's full block (expand + WS refetch).
    *
    * `type` is forwarded when supplied; the backend resolves it to a transcript
    * channel and defaults to "user" when omitted.
    */
   thread(turnId: number, type?: string): Promise<ConversationTurnBlock> {
     const params = type ? `?type=${encodeURIComponent(type)}` : '';
-    return api.get(`/api/thread/${turnId}${params}`);
+    return api.get<SingleEnvelope<ConversationTurnBlock>>(`/api/threads/${turnId}${params}`).then((body) => body.result);
   },
 
   /**
@@ -149,6 +190,6 @@ export const conversation = {
     const q = new URLSearchParams();
     for (const id of turnIds) q.append('id[]', String(id));
     if (type) q.set('type', type);
-    return api.get(`/api/threads/batch?${q.toString()}`);
+    return api.get<SingleEnvelope<{ blocks: ConversationTurnBlock[] }>>(`/api/threads/batch?${q.toString()}`).then((body) => body.result);
   },
 };

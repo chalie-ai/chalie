@@ -3,11 +3,12 @@
 import logging
 from typing import Dict, Optional, List, cast
 
-from exceptions import VaultLockedError
+from exceptions import ProviderError, VaultLockedError
 from models.provider import Provider as ProviderModel
 from models.setting import Setting
 from services.database import Database
 from services.log_utils import safe
+from services.provider_api import MAX_CONTEXT_WINDOW
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,7 @@ class ProviderDbService:
             "dimensions": provider.dimensions,
             "timeout": provider.timeout,
             "supports_vision": bool(provider.supports_vision),
+            "context_window": provider.context_window,
         }
         if provider.api_key:
             try:
@@ -76,6 +78,7 @@ class ProviderDbService:
                 "dimensions": row["dimensions"],
                 "timeout": row["timeout"],
                 "supports_vision": bool(cast(int, row["supports_vision"])),
+                "context_window": row.get("context_window"),
             }
             for row in ProviderModel.list_summaries()
         ]
@@ -88,7 +91,7 @@ class ProviderDbService:
 
     def create_provider(self, data: Dict[str, object]) -> Optional[Dict[str, object]]:
         default_model = data.get("model")
-        if not default_model:
+        if not isinstance(default_model, str) or not default_model:
             raise ValueError("'model' is required")
 
         platform = data.get("platform", "")
@@ -131,6 +134,19 @@ class ProviderDbService:
             }
             vision = 1 if probe_provider(probe_config) else 0
 
+        # Validate and clamp context_window on create. An explicit value in the
+        # payload is the operator's word and always wins; otherwise ask the
+        # provider itself, so the row carries a measured window from birth
+        # rather than leaving every send to guess.
+        context_window = data.get("context_window")
+        if context_window is not None:
+            context_window = self._validate_context_window(context_window)
+        else:
+            context_window = self._probe_context_window(
+                str(platform), default_model,
+                cast(Optional[str], data.get("host")), api_key_val,
+            )
+
         with Database.transaction():
             provider = ProviderModel(
                 name=data["name"],
@@ -141,6 +157,7 @@ class ProviderDbService:
                 dimensions=data.get("dimensions"),
                 timeout=data.get("timeout", 120),
                 supports_vision=vision,
+                context_window=context_window,
             ).save()
         new_id = provider.id
         # Auto-activate this provider if none is currently selected. Atomic in
@@ -160,6 +177,14 @@ class ProviderDbService:
         for key in ["name", "platform", "model", "host", "dimensions", "timeout"]:
             if key in data:
                 updates[key] = data[key]
+
+        # Validate and clamp context_window on update
+        if "context_window" in data:
+            cw = data["context_window"]
+            if cw is None:
+                updates["context_window"] = None
+            else:
+                updates["context_window"] = self._validate_context_window(cw)
 
         # Re-probe vision support only when a probe-relevant field changes
         # (platform/model/host/api_key). Name-only edits never re-probe.
@@ -189,6 +214,17 @@ class ProviderDbService:
                 }
                 updates["supports_vision"] = 1 if probe_provider(probe_config) else 0
 
+            # The window belongs to the model behind the host, so the same
+            # field change that invalidates the vision verdict invalidates it
+            # too. An explicit value in this payload still wins.
+            if "context_window" not in data:
+                probed = self._probe_context_window(
+                    cast(str, eff_platform), cast(str, eff_model),
+                    cast(Optional[str], eff_host), cast(Optional[str], eff_api_key),
+                )
+                if probed is not None:
+                    updates["context_window"] = probed
+
         # Handle api_key separately for encryption
         if "api_key" in data:
             if data["api_key"] is None:
@@ -204,6 +240,130 @@ class ProviderDbService:
             ProviderModel.touch(provider_id)
 
         return self.get_provider_by_id(provider_id)
+
+    def pin_context_window(self, config: Dict[str, object]) -> int:
+        """Return this provider's context window, probing and persisting once.
+
+        The self-heal that runs in front of every LLM call. A row that already
+        carries a window answers immediately; one that does not gets probed,
+        clamped to ``MAX_CONTEXT_WINDOW``, written back, and answered from the
+        column ever after. Nothing downstream is allowed a second opinion — this
+        return value is the only window any send, compaction, or context meter
+        is ever sized against.
+
+        Persisting is what makes the probe a one-off rather than per-call:
+        ``ProviderService.send`` builds a fresh client every time, so a client's
+        per-instance probe cache dies with it and an unseeded row would re-probe
+        on every single send. The cache bust is equally load-bearing — provider
+        rows are served from ``ProviderCacheService`` and invalidation lives at
+        the API layer, so without it the stale ``context_window: None`` would
+        survive in memory and the probe would repeat anyway.
+
+        Raises when the window cannot be determined. A probe fails because the
+        host is unreachable, the vault is locked, or the model is unknown to its
+        platform — in every one of those cases the call this window was being
+        computed for was going nowhere regardless. Substituting a guess would
+        only convert a clear failure into a wrong answer.
+        """
+        platform = cast(str, config.get("platform") or "")
+        model = cast(str, config.get("model") or "")
+
+        stored = config.get("context_window")
+        if isinstance(stored, int) and not isinstance(stored, bool) and stored > 0:
+            return min(stored, MAX_CONTEXT_WINDOW)
+
+        window = self._probe_context_window(
+            platform, model,
+            cast(Optional[str], config.get("host")),
+            cast(Optional[str], config.get("api_key")),
+        )
+        if window is None:
+            raise ProviderError(
+                f"Cannot determine the context window for platform={platform} "
+                f"model={model} — the provider could not be probed. Fix the host "
+                f"or credential, or set the window on the provider explicitly."
+            )
+
+        provider_id = config.get("id")
+        if isinstance(provider_id, int):
+            # Best-effort: a failed write costs one repeated probe, never the turn.
+            try:
+                from services.provider_probe import invalidate_provider_cache  # noqa: PLC0415
+                self.update_provider(provider_id, {"context_window": window})
+                invalidate_provider_cache()
+                logger.info(
+                    "[Provider] Pinned context window %d for id=%s (platform=%s model=%s)",
+                    window, provider_id, platform, model,
+                )
+            except Exception:
+                logger.exception(
+                    "[Provider] Could not persist context window %d for id=%s",
+                    window, provider_id,
+                )
+        else:
+            logger.warning(
+                "[Provider] Probed context window %d for platform=%s model=%s but the "
+                "config carries no row id — cannot persist, so this will re-probe",
+                window, platform, model,
+            )
+        config["context_window"] = window
+        return window
+
+    @staticmethod
+    def _probe_context_window(
+        platform: str, model: str, host: Optional[str], api_key: Optional[str],
+    ) -> Optional[int]:
+        """Ask the provider for the model's real context window, clamped.
+
+        Returns None when the window cannot be determined, so a caller writing a
+        row (create/update) leaves the column alone rather than storing a guess,
+        and :meth:`pin_context_window` turns it into a loud failure instead.
+
+        Never raises: a provider must remain creatable while its host is down.
+        """
+        try:
+            from services.llm_clients.factory import build_client  # noqa: PLC0415
+            client = build_client({
+                'platform': platform, 'model': model,
+                'host': host, 'api_key': api_key,
+            })
+            window = client.get_context_limit()
+        except Exception as exc:
+            logger.warning(
+                "[Provider] Context-window probe failed for platform=%s model=%s: %s",
+                platform, model, exc,
+            )
+            return None
+        if not isinstance(window, int) or window < 1:
+            logger.warning(
+                "[Provider] No context window reported for platform=%s model=%s — "
+                "leaving it unset; the next send re-probes it",
+                platform, model,
+            )
+            return None
+        return min(window, MAX_CONTEXT_WINDOW)
+
+    @staticmethod
+    def _validate_context_window(value: object) -> int:
+        """Validate and clamp a context_window value.
+
+        Must be an integer in [1, MAX_CONTEXT_WINDOW]. Returns the clamped
+        value (capped at MAX_CONTEXT_WINDOW) if valid. Raises ValueError
+        when the value is below 1.
+
+        Imported ceiling: ``services.provider_api.MAX_CONTEXT_WINDOW``.
+        """
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise ValueError("context_window must be an integer")
+        if value < 1:
+            raise ValueError("context_window must be >= 1")
+        if value > MAX_CONTEXT_WINDOW:
+            logger.info(
+                "[Provider] context_window %s clamped to %s (MAX_CONTEXT_WINDOW)",
+                value, MAX_CONTEXT_WINDOW,
+            )
+            return MAX_CONTEXT_WINDOW
+        return value
 
     def _provider_roles(self, provider_id: int) -> List[str]:
         """An empty list means the provider holds no role and is safe to delete.

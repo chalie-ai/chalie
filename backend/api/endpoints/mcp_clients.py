@@ -48,9 +48,6 @@ class McpClients(Endpoint):
         "post": DocumentedResponse(McpServer, extras=((404, "Server not found"),)),
     }
 
-    def slug(self) -> str:
-        return "mcp-clients"
-
     def _service(self) -> McpClientService:
         return McpClientService()
 
@@ -110,9 +107,7 @@ class McpClients(Endpoint):
             enabled=dto.enabled if dto.enabled is not None else True,
         )
         try:
-            sync_result = svc.ping_and_sync(cast(str, server["id"]))
-            if sync_result.get("reachable"):
-                svc.embed_server_tools(cast(str, server["id"]))
+            svc.ping_and_sync(cast(str, server["id"]))
             refreshed = svc.get_server(cast(str, server["id"]))
             if refreshed:
                 server = refreshed

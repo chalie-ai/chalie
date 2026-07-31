@@ -14,6 +14,7 @@ only touches its own table.
 
 from __future__ import annotations
 
+import json
 from typing import ClassVar, Self, cast
 
 from models.model import Model
@@ -33,6 +34,22 @@ class Transcript(Model):
     @classmethod
     def get_table(cls) -> str:
         return "transcript"
+
+    channel: str
+    role: str
+    content: str
+    tool_call_id: str | None
+    tool_name: str | None
+    internal: int
+    deliberation_score: float | None
+    created_at: str
+    xml_migrated: int
+    location_lat: float | None
+    location_lon: float | None
+    location_name: str | None
+    turn_id: int | None
+    settled: int
+    thinking_level: str | None
 
     # settle0 — the FIRST assistant row of a turn with settled=1: the boundary
     # between a turn's main exchange and its fork continuation. The write path
@@ -179,7 +196,7 @@ class Transcript(Model):
     def count_turns(cls, channel: str, *, exclude_roles: tuple[str, ...] = (),
                     query: str = "") -> int:
         """Distinct turn count for a channel (NULL-safe ``_TURN_KEY``) — the
-        feed's ``has_more`` source. A non-empty ``query`` counts only threads
+        feed's pagination total. A non-empty ``query`` counts only threads
         matching the search filter."""
         role_filter = "".join(" AND role != ?" for _ in exclude_roles)
         having, having_params = cls._thread_query_filter(query)
@@ -193,15 +210,16 @@ class Transcript(Model):
     @classmethod
     def recent_threads(cls, channel: str, *, exclude_roles: tuple[str, ...] = (),
                        limit: int = 20, offset: int = 0, query: str = "",
-                       ) -> tuple[list[dict[str, object]], bool, int]:
+                       ) -> list[dict[str, object]]:
         """Thread-level metadata for the collapsed feed: one summary per thread
         (turn_id), ordered by last activity (``MAX(id)``). Each dict carries
         ``turn_id``, ``last_activity_at``, ``last_row_id``, ``row_count``,
         ``preview`` (first row's content, truncated) and ``working`` (no settled
         assistant row yet). Legacy NULL-turn_id rows each form their own
         singleton thread via ``_TURN_KEY``. A non-empty ``query`` restricts the
-        page to threads with a matching user-role row. Returns
-        ``(threads, has_more, threads_returned)``."""
+        page to threads with a matching user-role row. Page-position facts
+        (total, has-more) come from :meth:`count_turns` — the one authority —
+        so this returns the page and nothing else."""
         role_filter = "".join(" AND role != ?" for _ in exclude_roles)
         having, having_params = cls._thread_query_filter(query)
         conn = cls._bound_connection()
@@ -214,7 +232,7 @@ class Transcript(Model):
             ).fetchall()
         ]
         if not page_keys:
-            return [], False, 0
+            return []
 
         placeholders = cls._placeholders(len(page_keys))
         meta_rows = conn.execute(
@@ -258,17 +276,13 @@ class Transcript(Model):
             for key in page_keys
         ]
         threads.sort(key=lambda t: cast("int", t.get("last_row_id") or 0), reverse=True)
-        threads_returned = len(threads)
-        has_more = cls.count_turns(
-            channel, exclude_roles=exclude_roles, query=query,
-        ) > offset + threads_returned
-        return threads, has_more, threads_returned
+        return threads
 
     @classmethod
     def by_turn(cls, channel: str, turn_id: int) -> list[dict[str, object]]:
         """Every row of one thread (``channel``/``turn_id``), oldest-first, as
         plain column dicts — the expand-on-click / turn-serialisation payload
-        the REST reads (``api.threads.serialize_turn``) and the
+        the REST reads (``TurnSerializerService.serialize``) and the
         ``delegate:thread_gist`` prompt project. The WHOLE turn, no settle0
         floor: the caller tags rows past settle0 itself. Dict-shaped (like
         ``recent_threads``) because every consumer treats rows as
@@ -331,6 +345,107 @@ class Transcript(Model):
         if not scope_ids:
             return list(ids)
         return [int(r[0]) for r in scope_ids]
+
+    # ── off-turn GC (unlinked-transcript sweep) ──────────────────────────────
+
+    # Retention purges a transcript row once it ages past this window AND no
+    # live episode still cites it — the age floor that keeps a fresh,
+    # not-yet-consolidated turn from disappearing out from under an in-flight
+    # recall. Mirrors ``ToolCall.ORPHAN_GC_AFTER_DAYS`` in spirit (same window,
+    # same "age + no live reference" shape) but is its own constant since the
+    # two tables decay on independent conditions.
+    UNLINKED_GC_AFTER_DAYS: ClassVar[int] = 90
+
+    @classmethod
+    def unlinked_ids(cls) -> list[int]:
+        """``id``s of transcript rows unlinked from any live episode, once
+        aged past :attr:`UNLINKED_GC_AFTER_DAYS` — the read half of the GC
+        sweep. Split from the delete so the caller
+        (:class:`~services.garbage_collector_service.GarbageCollectorService`)
+        can pre-clear each doomed id's anchored ``tool_calls`` rows BEFORE
+        deleting the transcript rows themselves: ``tool_calls.transcript_id``
+        is a foreign key with no ON DELETE cascade (a deliberate schema
+        choice — a cascade would need a SQLite table rebuild and would
+        change every other transcript-delete path's semantics), so with
+        ``PRAGMA foreign_keys=ON`` the parent row cannot be deleted while a
+        child still anchors to it. Both sweeps then run off this SAME id set
+        inside one transaction, so the two tables never observe a
+        half-swept state.
+
+        A row is a candidate when it is older than the window AND cited by
+        no live episode's ``transcript_ids`` JSON array (a ``json_each``
+        membership test — never the ``transcript_id_start``/``_end`` range,
+        which is a min/max convenience column, not a citation proxy). A
+        settled row (a turn's settle0 boundary, :attr:`_SETTLE_PREDICATE`) is
+        additionally protected: it is retained whenever its ``(channel,
+        turn_id)`` still holds another row that is itself too young to be a
+        candidate or is episode-cited, so a partially-swept turn can never
+        lose its settle marker and misreport as still "working"
+        (:meth:`recent_threads`). A turn that is candidate in full — every one
+        of its rows old and uncited — has no such surviving sibling, so its
+        settle row is included with the rest. Legacy NULL-``turn_id`` rows
+        carry no turn and so no such protection.
+
+        Two deliberate shapes keep this scan-bound at production row counts
+        instead of minutes: the age filter compares ``created_at`` directly
+        against ``datetime('now', ?)`` rather than wrapping the column in
+        ``julianday(...)`` — the column is ``transcript.created_at``'s
+        SQLite-native ``datetime('now')`` space-separated shape (the write
+        path never sets it itself; :meth:`~models.model.Model._fields`
+        omits an unset attribute from the INSERT, so the column ``DEFAULT``
+        always fires), so plain lexicographic TEXT comparison already equals
+        chronological order and the RHS — a constant with no column
+        reference — is evaluated once per statement rather than once per
+        row, unlike a function wrapped around the column, which defeats
+        that and forces a full scan of every row through the function.
+        Second, the two episode-citation checks share one ``cited`` CTE
+        (forced ``MATERIALIZED`` so SQLite builds it exactly once) instead
+        of each row re-running its own correlated ``episodes`` ×
+        ``json_each`` scan; ``NOT IN`` against it is safe because
+        ``episodes.transcript_ids`` is a JSON array of integer ids, so
+        ``j.value`` is never NULL."""
+        cutoff = f"-{cls.UNLINKED_GC_AFTER_DAYS} days"
+        rows = cls._bound_connection().execute(
+            "WITH cited(id) AS MATERIALIZED ("
+            "  SELECT j.value FROM episodes e, json_each(e.transcript_ids) j "
+            "  WHERE e.deleted_at IS NULL"
+            ") "
+            "SELECT id FROM transcript "
+            "WHERE created_at < datetime('now', ?) "
+            "  AND transcript.id NOT IN (SELECT id FROM cited) "
+            f"  AND (NOT ({cls._SETTLE_PREDICATE}) "
+            "       OR turn_id IS NULL "
+            "       OR NOT EXISTS (SELECT 1 FROM transcript t2 "
+            "                      WHERE t2.channel = transcript.channel "
+            "                        AND t2.turn_id = transcript.turn_id "
+            "                        AND t2.id != transcript.id "
+            "                        AND (t2.created_at >= datetime('now', ?) "
+            "                             OR t2.id IN (SELECT id FROM cited))))",
+            (cutoff, cutoff),
+        ).fetchall()
+        return [int(r[0]) for r in rows]
+
+    @classmethod
+    def delete_by_ids(cls, ids: list[int]) -> int:
+        """Hard-delete transcript rows by explicit ``id`` list — the write
+        half of the :meth:`unlinked_ids` GC pair (see there for why the sweep
+        is split in two). Binds the whole id list as ONE JSON-array
+        parameter matched via ``json_each`` rather than one ``?`` per id
+        (the codebase's sanctioned shape for a large IN-list, e.g. the
+        episode-citation check in :meth:`unlinked_ids` itself), since a
+        first-run sweep's candidate set can exceed SQLite's bound-variable
+        limit. Empty ``ids`` is a clean no-op — no query runs. Single
+        autocommitting DELETE on the bound connection; the caller wraps this
+        together with the ``tool_calls`` pre-clear in one
+        ``Database.transaction()`` (I6 — ``Database`` owns multi-write
+        transactions). Returns rows deleted."""
+        if not ids:
+            return 0
+        cursor = cls._bound_connection().execute(
+            f"DELETE FROM {cls.get_table()} WHERE id IN (SELECT value FROM json_each(?))",
+            (json.dumps(ids),),
+        )
+        return cursor.rowcount or 0
 
     # ── SQL fragment builders (shared, no duplication) ───────────────────────
 

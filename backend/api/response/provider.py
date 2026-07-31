@@ -23,6 +23,7 @@ class Provider(Response):
     dimensions: int | None
     timeout: int | None
     supports_vision: bool
+    context_window: int | None
 
     @classmethod
     def from_row(cls, row: dict[str, object]) -> "Provider":
@@ -36,4 +37,5 @@ class Provider(Response):
             dimensions=cast("int | None", row.get("dimensions")),
             timeout=cast("int | None", row.get("timeout")),
             supports_vision=bool(row.get("supports_vision")),
+            context_window=cast("int | None", row.get("context_window")),
         )

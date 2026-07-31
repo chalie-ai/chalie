@@ -100,6 +100,25 @@ class Policy(Model):
         with Database.transaction() as conn:
             return conn.execute("DELETE FROM policy").rowcount
 
+    @classmethod
+    def delete_unseeded(cls, permissions: set[str]) -> int:
+        """Delete every row whose ``permission`` is not in ``permissions`` and
+        is not an MCP tool permission (which are created lazily and legitimately
+        absent from the seed). Returns rows deleted.
+
+        Uses ``substr(permission, 1, 5)`` to spare MCP rows — SQLite ``LIKE``
+        treats ``_`` as a wildcard, so ``permission LIKE '_mcp_%'`` would also
+        match ``xmcpy...``. The substr predicate is the safe twin."""
+        if not permissions:
+            return 0
+        placeholders = ", ".join("?" for _ in permissions)
+        with Database.transaction() as conn:
+            return conn.execute(
+                f"DELETE FROM policy WHERE permission NOT IN ({placeholders}) "
+                "AND substr(permission, 1, 5) != '_mcp_'",
+                tuple(permissions),
+            ).rowcount
+
     # ── Relationship ─────────────────────────────────────────────────────────
 
     def get_blocked_entry(self) -> list[PolicyBlockedLog]:

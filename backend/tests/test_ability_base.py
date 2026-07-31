@@ -1,23 +1,22 @@
 """Feature tests for the Ability ABC contract (abilities/_ability.py).
 
-SPEC CHANGE: the five ``NAME`` / ``SUMMARY`` / ``EXAMPLES`` /
-``SEARCH_TOOLTIP`` / ``INPUT_SCHEMA`` ClassVars were replaced by five zero-arg
-``@abstractmethod`` getters (``get_name`` / ``get_summary`` / ``get_examples`` /
-``get_search_tooltip`` / ``get_parameters``), and ``get_input_schema()`` became a
-``@typing.final`` template method — the SINGLE place a tool descriptor is built
-and the SINGLE injection site for the framework field ``act_summary`` (always,
-required). The ``async`` backgrounding flag is NOT a base-``Ability`` field: it is
-a delegate-only primitive added by ``DelegateAbility._inject_framework_fields``
-(iff the bound processor's config sets ``SUPPORTS_ASYNC``), so plain tools never
-carry it. The MessageProcessor is now constructor-injected
-(``Ability(mp=...)`` → ``self.mp``).
+The identity contract: each ability declares ``NAME: ClassVar[str]`` — the
+single registry name every caller reads.
+The remaining metadata is carried by four zero-arg ``@abstractmethod`` getters
+(``get_summary`` / ``get_examples`` / ``get_search_tooltip`` /
+``get_parameters``), and ``get_input_schema()`` is a ``@typing.final`` template
+method — the SINGLE place a tool descriptor is built and the SINGLE injection
+site for the framework field ``act_summary`` (always, required). The ``async``
+backgrounding flag is NOT a base-``Ability`` field: it is a delegate-only
+primitive added by ``DelegateAbility._inject_framework_fields`` (iff the bound
+processor's config sets ``SUPPORTS_ASYNC``), so plain tools never carry it.
+The MessageProcessor is constructor-injected (``Ability(mp=...)`` → ``self.mp``).
 
-Because the metadata is now carried by ``@abstractmethod`` getters, a subclass
-that omits one is *abstract* — it no longer raises at class-creation (the old
-ClassVar guard's behaviour) but instead cannot be instantiated and never reaches
-the registry. The shape checks that CAN run at import (examples length/type, and
-the seal on the assembler) still raise at class-creation, via ``cls()`` in
-``__init_subclass__``.
+A subclass that omits a getter is *abstract* — it cannot be instantiated and so
+never reaches the registry. A missing ``NAME`` is caught by the registry's
+loud ValueError at load time (see test_ability_registry.py).
+``get_input_schema`` is sealed by ``@typing.final``, which the type checker
+enforces; there is no runtime guard duplicating it.
 
 Subclass namespace isolation: every test-local subclass uses a unique class name
 and is deleted with gc.collect() so Ability.__subclasses__() stays clean between
@@ -62,7 +61,7 @@ def _getters(
     examples = list(_VALID_EXAMPLES) if examples is None else examples
     parameters = {"type": "object", "properties": {}, "required": []} if parameters is None else parameters
     return {
-        "get_name": lambda self: name,
+        "NAME": name,
         "get_summary": lambda self: summary,
         "get_examples": lambda self: examples,
         "get_search_tooltip": lambda self: tooltip,
@@ -77,7 +76,7 @@ def _make_subclass(
     base: "type[Ability]" = Ability,
     **overrides: object,
 ) -> "type[Ability]":
-    """Build an Ability subclass dynamically; triggers __init_subclass__.
+    """Build an Ability subclass dynamically.
 
     ``drop`` names getters to OMIT (leaving the abstractmethod unfilled, so the
     class stays abstract). ``base`` picks the parent (``Ability`` by default, or
@@ -96,22 +95,13 @@ def _make_subclass(
 # ---------------------------------------------------------------------------
 
 
-def test_missing_name_getter_makes_class_abstract() -> None:
-    """A subclass that omits get_name is abstract — instantiation raises TypeError
-    naming the missing getter. (Replaces the old 'missing NAME ClassVar' guard.)"""
-    cls = _make_subclass("_MissingName", drop=("get_name",))
-    with pytest.raises(TypeError, match="get_name"):
+def test_missing_examples_getter_makes_class_abstract() -> None:
+    """A subclass that omits get_examples is abstract — instantiation raises
+    TypeError naming the missing getter, so it never reaches the registry."""
+    cls = _make_subclass("_MissingExamples", drop=("get_examples",))
+    with pytest.raises(TypeError, match="get_examples"):
         cls()
     del cls
-    gc.collect()
-
-
-def test_missing_examples_getter_rejected_at_class_creation() -> None:
-    """A subclass that omits get_examples is rejected when the class is built: the
-    __init_subclass__ probe calls the inherited abstract get_examples() (→ None),
-    which fails the list[str] shape check — so it never becomes a usable ability."""
-    with pytest.raises(TypeError, match="get_examples"):
-        _make_subclass("_MissingExamples", drop=("get_examples",))
     gc.collect()
 
 
@@ -125,64 +115,6 @@ def test_subclass_without_run_cannot_be_instantiated() -> None:
 
 
 # ---------------------------------------------------------------------------
-# get_examples type + length validation — enforced at import via cls() probe
-# ---------------------------------------------------------------------------
-
-
-def test_examples_non_list_raises_at_class_creation() -> None:
-    """get_examples returning a non-list raises TypeError when the class is built."""
-    with pytest.raises(TypeError, match="get_examples"):
-        _make_subclass("_ExamplesString", get_examples=lambda self: "not a list")
-    gc.collect()
-
-
-def test_examples_too_short_raises_at_class_creation() -> None:
-    """get_examples with fewer than 6 entries raises TypeError (lower bound)."""
-    with pytest.raises(TypeError, match="6"):
-        _make_subclass("_ExamplesShort", get_examples=lambda self: ["a", "b", "c", "d"])
-    gc.collect()
-
-
-def test_examples_too_long_raises_at_class_creation() -> None:
-    """get_examples with more than 8 entries raises TypeError (upper bound)."""
-    with pytest.raises(TypeError, match="8"):
-        _make_subclass(
-            "_ExamplesLong",
-            get_examples=lambda self: ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"],
-        )
-    gc.collect()
-
-
-def test_examples_exactly_six_accepted() -> None:
-    """get_examples with exactly 6 entries is valid (lower boundary)."""
-    cls = _make_subclass("_ExamplesSix", get_examples=lambda self: ["a", "b", "c", "d", "e", "f"])
-    instance = cls()
-    assert len(instance.get_examples()) == 6
-    del cls
-    gc.collect()
-
-
-# ---------------------------------------------------------------------------
-# The assembler is sealed — overriding it (or the injector) is rejected at import
-# ---------------------------------------------------------------------------
-
-
-def test_overriding_get_input_schema_is_rejected() -> None:
-    """A subclass that redefines the final get_input_schema would fork the
-    act_summary/async contract — __init_subclass__ rejects it at class creation."""
-    with pytest.raises(TypeError, match="get_input_schema"):
-        _make_subclass("_OverridesAssembler", get_input_schema=lambda self: {})
-    gc.collect()
-
-
-def test_overriding_inject_framework_fields_is_rejected() -> None:
-    """The single injection site is sealed too — redefining it is rejected."""
-    with pytest.raises(TypeError, match="_inject_framework_fields"):
-        _make_subclass("_OverridesInjector", _inject_framework_fields=lambda self, params: params)
-    gc.collect()
-
-
-# ---------------------------------------------------------------------------
 # The single assembler: shape + framework-field injection
 # ---------------------------------------------------------------------------
 
@@ -192,13 +124,11 @@ def test_valid_concrete_subclass_assembles_full_descriptor() -> None:
     full LLM-facing descriptor assembled from the getters."""
     cls = _make_subclass(
         "_ValidAbility",
-        get_name=lambda self: "valid_ability",
-        get_summary=lambda self: "Does something useful",
         get_parameters=lambda self: {"type": "object", "properties": {"q": {"type": "string"}}, "required": ["q"]},
     )
     instance = cls()
 
-    assert instance.get_name() == "valid_ability"
+    assert instance.NAME == "valid_ability"
     assert instance.get_summary() == "Does something useful"
     assert len(instance.get_examples()) == 6
 

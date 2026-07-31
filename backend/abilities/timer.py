@@ -4,39 +4,41 @@ TimerAbility — Ephemeral countdown widget rendered as a rich-media card.
 Unlike ScheduleAbility (which persists scheduled_items rows in SQLite and
 fires events from a background worker), the timer is purely client-side:
 the ability returns a payload describing ``{title, duration_seconds}``
-and the frontend module computes the remaining time on each render from
-the wall-clock anchor injected by ``RichMediaParser`` from the tool_calls
-row's ``created_at``. No DB, no worker, no scheduler.
+and the frontend card computes the remaining time on each render from the
+wall-clock anchor on its rich segment — ``segment["created_at"]``, which
+``RichMediaParser`` normalises from the tool_calls row. No DB, no worker,
+no scheduler.
 
-The wall-clock anchor (``started_at``) is deliberately NOT in the JSON
-the LLM sees: it is added server-side at parse time so subsequent ACT
-iterations cannot misinterpret a literal timestamp as something they
-need to reason about, and the model never has to fill it.
+The anchor is deliberately NOT in the JSON the LLM sees. It cannot be:
+``DispatchService._render_rich`` REPLACES the model-visible tool body with
+the card payload, so a payload field is a field the model reads — and a
+literal timestamp is something a subsequent ACT iteration would try to
+reason about. Carrying it as segment metadata keeps the model's view to
+``{title, duration_seconds}`` while the card still gets its anchor.
 
 Rich-media rendering:
   A successful timer returns ``ToolResult.ok(payload, rich=payload)`` — the
   ``{title, duration_seconds}`` dict is both the structured body the model
   reads AND the card payload. The dispatcher (``ToolDispatcher._render``) owns
   ordinal assignment + the span-tag instruction and injects the card ONLY when
-  the invoking channel broadcasts to the user. ``started_at`` is grafted onto
-  the card payload later, at parse time, by ``enrich_rich_payload``.
+  the invoking channel broadcasts to the user.
 """
 
-from datetime import datetime, timezone
-from typing import ClassVar, cast
+from typing import ClassVar
 
 from abilities._ability import Ability
-from configs.enums.param_key import Keys
 from abilities._result import ToolResult
-from services.time_utils import parse_utc
+from configs.enums.param_key import Keys
+from contracts.params.param_bag import ParamBag
+from contracts.params.timer_params_bag import (
+    MAX_DURATION_SECONDS,
+    MIN_DURATION_SECONDS,
+    TimerParamsBag,
+)
+from configs.enums.ability_category import AbilityCategory
 
-_PARSE_UTC_SENTINEL = datetime.min.replace(tzinfo=timezone.utc)
 
-_MAX_DURATION_SECONDS = 24 * 60 * 60  # 24 hours
-_MIN_DURATION_SECONDS = 1
-
-
-class TimerAbility(Ability):
+class TimerAbility(Ability[TimerParamsBag]):
     SYSTEM = True
 
     # title + duration_seconds are both required; presence is enforced by the
@@ -45,8 +47,12 @@ class TimerAbility(Ability):
         "": (Keys.title_, Keys.duration_seconds),
     }
 
-    def get_name(self) -> str:
-        return "timer"
+    # The typed input contract: the dispatch seam builds the bag via
+    # TimerParamsBag.from_params before run() is called.
+    PARAMS: ClassVar[type[ParamBag] | None] = TimerParamsBag
+    SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("countdown", "set timer", "alarm")
+    NAME: ClassVar[str] = "timer"
+    CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.PRODUCTIVITY
 
     def get_summary(self) -> str:
         return "Start a live countdown timer with a title — renders an in-chat card with pause, stop, and an alarm when it ends."
@@ -74,8 +80,8 @@ class TimerAbility(Ability):
             Keys.duration_seconds: {
                 "type": "integer",
                 "description": "Total countdown length in seconds. Must be between 1 and 86400 (24 hours).",
-                "minimum": _MIN_DURATION_SECONDS,
-                "maximum": _MAX_DURATION_SECONDS,
+                "minimum": MIN_DURATION_SECONDS,
+                "maximum": MAX_DURATION_SECONDS,
             },
         },
         "required": [Keys.title_, Keys.duration_seconds],
@@ -84,19 +90,9 @@ class TimerAbility(Ability):
     def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    def run(self, params: dict[str, object]) -> ToolResult:
-        title = (cast(str, params.get(Keys.title_)) or "").strip()
-        duration_seconds = params.get(Keys.duration_seconds)
-
-        # bool is an int subclass — exclude it so a literal True/False is rejected
-        # rather than coerced into a 1-second / 0-second timer.
-        if isinstance(duration_seconds, bool) or not isinstance(duration_seconds, int) \
-                or duration_seconds < _MIN_DURATION_SECONDS or duration_seconds > _MAX_DURATION_SECONDS:
-            return ToolResult.err(
-                f"duration_seconds must be an integer between {_MIN_DURATION_SECONDS} and {_MAX_DURATION_SECONDS}",
-                code="invalid-duration",
-                hint=f"pass an integer number of seconds from {_MIN_DURATION_SECONDS} to {_MAX_DURATION_SECONDS}.",
-            )
+    def run(self, params: TimerParamsBag) -> ToolResult:
+        title = params.title
+        duration_seconds = params.duration_seconds
 
         if len(title) > 80:
             title = title[:80]
@@ -107,22 +103,6 @@ class TimerAbility(Ability):
         }
         # body == rich: the model reads the same dict the FE card renders. The
         # dispatcher injects the ordinal + span instruction only on a
-        # user-broadcast turn; started_at is grafted later by enrich_rich_payload.
+        # user-broadcast turn. The countdown's wall-clock anchor is NOT in here —
+        # it rides the rich segment as generic metadata (see the module docstring).
         return ToolResult.ok(payload, rich=payload)
-
-    @classmethod
-    def enrich_rich_payload(cls, payload: dict[str, object], row: dict[str, object]) -> dict[str, object]:
-        """``started_at`` is intentionally absent from the LLM-visible JSON; the FE
-        needs it to compute the countdown so the parser grafts it on at render
-        time. ``parse_utc`` returns a ``datetime.min`` sentinel on garbage rather
-        than raising — that sentinel must be rejected so the FE falls through to
-        its "Invalid timer payload" guard rather than rendering a year-0001
-        countdown that instantly fires the alarm.
-        """
-        created_at = row.get("created_at")
-        if not created_at:
-            return payload
-        parsed = parse_utc(cast(datetime | str, created_at))
-        if parsed == _PARSE_UTC_SENTINEL:
-            return payload
-        return {**payload, "started_at": parsed.isoformat()}

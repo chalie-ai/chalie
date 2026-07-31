@@ -8,6 +8,13 @@ import pytest
 from abilities import search_files
 from abilities._result import ToolResult
 from abilities.search_files import SearchFilesAbility
+from contracts.params.search_files_params_bag import (
+    SearchFilesContentParams,
+    SearchFilesParamsBag,
+)
+from services.file_index_service import FileIndexService
+from services.file_mapper_service import FileMapperService
+from tests.test_file_index_service import _minimal_pdf_bytes
 
 pytestmark = pytest.mark.unit
 
@@ -28,7 +35,12 @@ def _run(action: str, query: str, directory: str | None = None, **extra: object)
     params: dict[str, object] = {"action": action, "query": query, **extra}
     if directory is not None:
         params["directory"] = directory
-    return SearchFilesAbility().run(params)
+    # Build the bag exactly as the dispatch seam does — from_params returns the
+    # error ToolResult directly, so the error-path tests still see the envelope.
+    bag = SearchFilesParamsBag.from_params(params)
+    if isinstance(bag, ToolResult):
+        return bag
+    return SearchFilesAbility().run(bag)
 
 
 def _glob_files(tr: ToolResult) -> list[str]:
@@ -48,35 +60,24 @@ def _grep_rows(tr: ToolResult) -> list[dict[str, object]]:
 # ── validation ────────────────────────────────────────────────────
 
 
-def test_invalid_action_returns_error() -> None:
-    tr = _run("nope", "*.py", "/tmp")
-    assert tr.status == "error"
-    assert tr.code == "unknown-action"
-    assert tr.valid == ("glob", "grep")
-
-
-def test_missing_query_returns_error() -> None:
-    tr = _run("glob", "", "/tmp")
-    assert tr.status == "error"
-    assert tr.code == "empty-query"
-    assert "required" in str(tr.body)
-
-
-def test_page_below_one_returns_error(tmp_path: Path) -> None:
+def test_page_below_one_clamps_to_first_page(tmp_path: Path) -> None:
     (tmp_path / "a.py").write_text("x")
     tr = _run("glob", "*.py", str(tmp_path), page=0)
-    assert tr.status == "error"
-    assert tr.code == "invalid-param"
-    assert "page" in str(tr.body)
+    assert tr.status == "success"
+    assert tr.meta["page"] == 1
+    assert len(_glob_files(tr)) == 1
 
 
-def test_context_lines_over_20_returns_error(tmp_path: Path) -> None:
-    (tmp_path / "a.py").write_text("NEEDLE\n")
-    tr = _run("grep", "NEEDLE", str(tmp_path), context_lines=21)
-    assert tr.status == "error"
-    assert tr.code == "invalid-param"
-    assert "must be between 0 and 20" in str(tr.body)
-    assert "21" in str(tr.body)
+def test_context_lines_over_max_clamps_to_max(tmp_path: Path) -> None:
+    # 61 lines with the match in the middle: the clamped width of 20 renders
+    # 20 above + the match + 20 below = 41 context lines (an unclamped 21
+    # would render 43).
+    content = "\n".join(f"line {i}" for i in range(1, 62))
+    (tmp_path / "a.py").write_text(content)
+    tr = _run("grep", "line 31", str(tmp_path), context_lines=21)
+    rows = _grep_rows(tr)
+    assert len(rows) == 1
+    assert len(cast(str, rows[0]["context"]).split("\n")) == 41
 
 
 def test_directory_not_found_returns_error() -> None:
@@ -123,13 +124,12 @@ def test_glob_recursive(tmp_path: Path) -> None:
     assert names == ["found.log", "top.log"]
 
 
-def test_glob_no_match_is_success_with_broaden_note(tmp_path: Path) -> None:
+def test_glob_no_match_is_loud_no_results(tmp_path: Path) -> None:
     tr = _run("glob", "*.nonexistent", str(tmp_path))
-    assert tr.status == "success"
-    assert tr.code is None
-    assert _glob_files(tr) == []
-    assert tr.meta["count"] == 0
-    assert "broaden" in str(tr.body).lower()
+    assert tr.status == "error"
+    assert tr.code == "no-results"
+    assert tr.body == "No results found."
+    assert "broaden" in str(tr.hint).lower()
 
 
 # ── pagination (5 results per page) ───────────────────────────────
@@ -266,14 +266,13 @@ def test_grep_rows_span_multiple_files(tmp_path: Path) -> None:
     assert tr.meta["count"] == 2
 
 
-def test_grep_no_match_is_success_with_broaden_note(tmp_path: Path) -> None:
+def test_grep_no_match_is_loud_no_results(tmp_path: Path) -> None:
     (tmp_path / "a.py").write_text("nothing here\n")
     tr = _run("grep", "NONEXISTENT", str(tmp_path))
-    assert tr.status == "success"
-    assert tr.code is None
-    assert _grep_rows(tr) == []
-    assert tr.meta["count"] == 0
-    assert "broaden" in str(tr.body).lower()
+    assert tr.status == "error"
+    assert tr.code == "no-results"
+    assert tr.body == "No results found."
+    assert "broaden" in str(tr.hint).lower()
 
 
 def test_grep_context_lines_default_and_override(tmp_path: Path) -> None:
@@ -315,5 +314,82 @@ def test_grep_invalid_regex_returns_error(tmp_path: Path) -> None:
     assert tr.status == "error"
     assert tr.code == "invalid-regex"
     assert "Invalid regex" in str(tr.body)
+
+
+# ── content (FTS5 file index) ─────────────────────────────────────
+#
+# No cache involved (the ability's docstring is explicit: content is never
+# /tmp-cached), so the autouse _isolated_cache fixture above is inert for
+# these tests. Instead each test redirects FileMapperService._DATA_DIR to
+# tmp_path — the chokepoint FileIndexService() resolves its default db path
+# through (services/file_mapper_service.py get_file_index_db_path ->
+# _DATA_DIR / "file_index.sqlite") — so this test's own setup
+# FileIndexService() and the one _search_content() constructs internally
+# both land on the SAME real sqlite file. Same precedent as
+# tests/test_mcp_client_service.py (monkeypatch.setattr(FileMapperService,
+# "_DATA_DIR", tmp_path)).
+
+
+def test_content_finds_pdf_by_body_text(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(FileMapperService, "_DATA_DIR", tmp_path)
+    pdf_path = tmp_path / "invoice.pdf"
+    pdf_path.write_bytes(_minimal_pdf_bytes("ChalieContentProbeXyzzy"))
+    FileIndexService().index_file(str(pdf_path))  # real pdfplumber extraction path
+
+    tr = _run("content", "ChalieContentProbeXyzzy")
+    assert str(pdf_path) in _glob_files(tr)
+
+
+def test_content_paginates_five_per_page(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(FileMapperService, "_DATA_DIR", tmp_path)
+    service = FileIndexService()
+    paths = []
+    for i in range(7):
+        p = tmp_path / f"note{i:02d}.txt"
+        p.write_text(f"needletoken appears in note {i}")
+        service.index_file(str(p))
+        paths.append(str(p))
+
+    p1 = _run("content", "needletoken")
+    files1 = _glob_files(p1)
+    assert len(files1) == 5
+    assert p1.meta["page"] == 1
+    assert p1.meta["page_count"] == 2
+    assert p1.meta["count"] == 7
+
+    p2 = _run("content", "needletoken", page=2)
+    files2 = _glob_files(p2)
+    assert len(files2) == 2
+
+    # every indexed file appears exactly once across the two pages
+    assert len(files1) + len(files2) == 7
+    assert set(files1) | set(files2) == set(paths)
+
+
+def test_content_blank_or_missing_query_returns_empty_query_error() -> None:
+    blank = _run("content", "   ")
+    assert blank.status == "error"
+    assert blank.code == "empty-query"
+
+    missing = SearchFilesParamsBag.from_params({"action": "content"})
+    assert isinstance(missing, ToolResult)
+    assert missing.status == "error"
+    assert missing.code == "empty-query"
+
+
+def test_content_no_hit_is_loud_no_results(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(FileMapperService, "_DATA_DIR", tmp_path)
+    tr = _run("content", "NoSuchTermAnywhereInTheIndex12345")
+    assert tr.status == "error"
+    assert tr.code == "no-results"
+    assert tr.body == "No results found."
+    assert "broaden" in str(tr.hint).lower()
+
+
+def test_content_bag_routes_to_content_params_with_default_page() -> None:
+    bag = SearchFilesParamsBag.from_params({"action": "content", "query": "x"})
+    assert isinstance(bag, SearchFilesContentParams)
+    assert bag.query == "x"
+    assert bag.page == 1
 
 
