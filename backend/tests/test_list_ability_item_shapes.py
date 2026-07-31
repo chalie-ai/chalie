@@ -101,7 +101,7 @@ class TestCreateAndRemoveAcceptObjectForm:
             "name": "Groceries",
             "items": [{"content": "olives"}, {"content": "capers"}],
         })
-        created = next(l for l in ListService().get_all_lists() if l["name"] == "Groceries")
+        created = next(lst for lst in ListService().get_all_lists() if lst["name"] == "Groceries")
         assert _contents(cast(str, created["id"])) == ["olives", "capers"]
 
     def test_remove_matches_object_form(self, list_id: str) -> None:
