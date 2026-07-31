@@ -1,6 +1,6 @@
 [project]
 name = "chalie"
-version = "1.0.0-beta"
+version = "1.2.0-beta"
 description = "A personal intelligence layer"
 requires-python = ">=3.11"
 
