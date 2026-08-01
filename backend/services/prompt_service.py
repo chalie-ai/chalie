@@ -101,6 +101,21 @@ _USER_DEFINITION_FALLBACK = (
 _CONTENT_FIELD_PLACEHOLDER = "{{provider_content_field_name}}"
 _MISSING_TS_PLACEHOLDER = "????-??-?? ??:??"
 
+#: The single source of the HTML output contract, shared by every channel whose
+#: output is rendered to a human, and gated by ``ProcessorConfig.EMITS_HTML``.
+_RESPONSE_FORMAT = """
+
+────────────────────────────────
+
+## Response format
+
+In the {{provider_content_field_name}} field (what the user sees) format your response as HTML.
+Specifically only use the following tags: <p>, <h1>, <b>, <i>, <u>, <code>, <ul>, <li>, <table>, <thead>, <tbody>, <tfoot>, <tr>, <th>, <td>
+NEVER use markdown syntax. Use <b> not **, use <i> not _, use <h1> not #, use <ul><li> not - or *. No backtick fences. HTML tags only.
+Avoid using table structures to represent data. If you do need to use tables, output in html only NEVER as markdown and keep column count under 4.
+
+────────────────────────────────"""
+
 #: Appended to the system prompt on any channel whose config sets
 #: ``SUPPORTS_ASYNC`` — the SAME gate that exposes the ``async`` tool parameter —
 #: so enabling async on a new ProcessorConfig surfaces this guidance with zero
@@ -129,13 +144,17 @@ class PromptService:
     # ── public dispatch (channel-keyed, zero-param) ─────────────────────────
 
     def system_prompt(self) -> str:
-        """The turn's system instruction block, with the background-tasks
-        guidance appended on any channel that exposes the ``async`` tool flag
-        (``SUPPORTS_ASYNC``) — the one place all system-prompt assembly lands."""
+        """The turn's system instruction block: the per-channel body, plus the
+        shared response-format contract on any channel that renders to a human
+        (``EMITS_HTML``) and the background-tasks guidance on any channel that
+        exposes the ``async`` tool flag (``SUPPORTS_ASYNC``) — the one place all
+        system-prompt assembly and placeholder substitution lands."""
         base = self._system_prompt_body()
+        if self.mp.config.EMITS_HTML:
+            base += _RESPONSE_FORMAT
         if self.mp.config.SUPPORTS_ASYNC:
-            return base + _ASYNC_GUIDANCE
-        return base
+            base += _ASYNC_GUIDANCE
+        return self._substitute_content_field(base)
 
     def _system_prompt_body(self) -> str:
         """The per-channel system block.
@@ -344,13 +363,12 @@ class PromptService:
 
     def _user_system_prompt(self) -> str:
         """``UserConfig``: the voice line (cache-warm prefix) over the config's
-        ``system_prompt`` base literal, with the provider content-field
-        placeholder substituted. Runs for ``UserConfig`` and its
+        ``system_prompt`` base literal. Runs for ``UserConfig`` and its
         ``DiscoveryConfig`` subclass."""
         try:
             voice_line = f"When responding; {personality_service.get_voice()}"
             prompt = f"{voice_line}\n\n{self.mp.config.system_prompt}"
-            return self._substitute_content_field(prompt)
+            return prompt
         except Exception as exc:  # noqa: BLE001 — a prompt build hiccup must not crash the turn
             logger.warning("[PromptService] user system prompt build failed: %s", exc)
             return ""
@@ -625,13 +643,13 @@ class PromptService:
 
     def _external_agent_system_prompt(self) -> str:
         """``EAMPConfig.get_system_prompt``: the external-agent producer body
-        with the provider content-field placeholder substituted, the user's
-        first name resolved from data_graph, and the agent/project placeholders
-        filled — prefixed with the agent identity definition. Any failure yields
-        ``""`` (the pre-rewrite try/except contract)."""
+        with the user's first name resolved from data_graph and the
+        agent/project placeholders filled — prefixed with the agent identity
+        definition. Any failure yields ``""`` (the pre-rewrite try/except
+        contract)."""
         config = cast("_ExternalAgentConfig", self.mp.config)
         try:
-            body = self._substitute_content_field(config.system_prompt)
+            body = config.system_prompt
             summary = UserSynthesis.get(shorthand=True)
             user_name = summary.split()[0] if summary and summary.split() else "the user"
             body = (

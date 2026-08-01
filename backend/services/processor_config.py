@@ -31,6 +31,19 @@ class ProcessorConfig(ABC):
     honour a deferred result, so this is False everywhere except UserConfig.
     It gates schema *exposure* only — never routing."""
 
+    EMITS_HTML: ClassVar[bool] = False
+    """True → append the shared response-format contract to this channel's system
+    prompt, instructing the model to emit Chalie's HTML tag subset instead of
+    markdown. Declared by UserConfig and ScheduledConfig; DiscoveryConfig
+    inherits it from UserConfig along with the rest of that prompt.
+
+    Independent of ``broadcast_to`` — do not collapse the two. ``broadcast_to``
+    decides whether ``_format`` converts and sanitizes the output at persist
+    time; this decides whether the model was ever *told* to emit HTML. A channel
+    that sets ``broadcast_to`` without this leaks raw markdown to its surface,
+    because the ``markdown_to_html`` fallback is inline-only and cannot rescue
+    headings, lists, or tables."""
+
     BROADCASTS_STATE: ClassVar[bool] = False
     """True → this channel streams its live progress to its surface: the lean
     ``updated`` turn-state signal via ``mp.broadcast``, the turn-execution
@@ -115,8 +128,8 @@ class ProcessorConfig(ABC):
 
     broadcast_to: str | None
     """None = silent.  Non-None = stream live tool events to this channel and
-    deliver the turn's end message there.  Only UserConfig sets this ('user');
-    all others leave it None."""
+    deliver the turn's end message there.  UserConfig sets 'user' and
+    ScheduledConfig sets 'schedule'; every other channel leaves it None."""
 
     # ── Turn-0 auto-seed (declarative, not a hook) ────────────────────────────
 

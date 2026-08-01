@@ -36,6 +36,10 @@ class ScheduledConfig(ProcessorConfig):
     """Config for every schedule thread — fires and replies alike."""
 
     BROADCASTS_STATE: ClassVar[bool] = True
+    # The schedule thread is a rendered surface (its output is converted and
+    # sanitized as HTML at persist time), so it carries the same HTML output
+    # contract as the user channel.
+    EMITS_HTML: ClassVar[bool] = True
 
     def __init__(self) -> None:
         super().__init__(

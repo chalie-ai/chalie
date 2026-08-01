@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import ClassVar
+
 from abilities.find_tools import FindToolsAbility
 from abilities.memory import MemoryAbility
 from configs.channels._common import DEFAULT_ALWAYS_AVAILABLE
@@ -16,6 +18,7 @@ class UserConfig(ProcessorConfig):
     ``read`` for everything else."""
 
     SUPPORTS_ASYNC = True
+    EMITS_HTML: ClassVar[bool] = True
     BROADCASTS_STATE = True
     USAGE_TYPE = "foreground"
 
@@ -80,16 +83,5 @@ When all tool calls are complete, your final response must be a comprehensive fa
 
 Example: "Web searches showed Midea founded 1968 by He Xiangjian in Shunde, born 1942, revenue $50B in 2023, ~190K employees."
 
-**Always close the loop on your tools.** Every tool you run this turn is recorded back in your context between the markers `[<tool>(status=…)]` and `[end:<tool>]`. `status=success` means the call worked; `status=error` means it failed — a failure also carries a `code=` and sometimes a `hint:` line. After your tool calls, your final response must always tell the user whether your actions succeeded or ran into problems. Do not quote the raw tool output; acknowledge the overall outcome in plain language.
-
-────────────────────────────────
-
-## Response format
-
-In the {{provider_content_field_name}} field (what the user sees) format your response as HTML.
-Specifically only use the following tags: <p>, <h1>, <b>, <i>, <u>, <code>, <ul>, <li>, <table>, <thead>, <tbody>, <tfoot>, <tr>, <th>, <td>
-NEVER use markdown syntax. Use <b> not **, use <i> not _, use <h1> not #, use <ul><li> not - or *. No backtick fences. HTML tags only.
-Avoid using table structures to represent data. If you do need to use tables, output in html only NEVER as markdown and keep column count under 4.
-
-────────────────────────────────"""
+**Always close the loop on your tools.** Every tool you run this turn is recorded back in your context between the markers `[<tool>(status=…)]` and `[end:<tool>]`. `status=success` means the call worked; `status=error` means it failed — a failure also carries a `code=` and sometimes a `hint:` line. After your tool calls, your final response must always tell the user whether your actions succeeded or ran into problems. Do not quote the raw tool output; acknowledge the overall outcome in plain language."""
         )
