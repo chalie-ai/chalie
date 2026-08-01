@@ -58,7 +58,8 @@ Domain-specific terminology used throughout the Chalie system.
 | `ProcessorConfig` | Frozen dataclass parameterising one channel's `MessageProcessor`. | `UserConfig`, `DmnConfig`, `DiscoveryConfig` |
 | `policy_channel` | Enum picking which policy rows apply. | `CHAT`, `SUBCONSCIOUS`, `EXTERNAL_AGENT` |
 | `memory_seed` | Flag that fires a `memory.recall` at turn 0. | `UserConfig.memory_seed=True` |
-| `broadcast_to` | The live WebSocket output target for a channel. | `"user"` (UserConfig only) |
+| `broadcast_to` | The live WebSocket output target for a channel, and the gate that converts and sanitizes the turn's output as HTML at persist time. `None` on every silent channel. Distinct from `EMITS_HTML`, which decides whether the model was *told* to emit HTML. | `"user"` (UserConfig), `"schedule"` (ScheduledConfig) |
+| `EMITS_HTML` | The `ProcessorConfig` class constant that appends the shared response-format contract to a channel's system prompt, instructing the model to emit Chalie's HTML tag subset instead of markdown. Distinct from `broadcast_to`, which converts and sanitizes at persist time — this decides whether the model was ever *told* to emit HTML. A channel that sets `broadcast_to` without this leaks raw markdown, because the `markdown_to_html` fallback is inline-only and cannot rescue headings, lists, or tables. | declared by `UserConfig` and `ScheduledConfig`; `DiscoveryConfig` inherits it |
 | `SubconsciousWorker` | Idle-gated 5-minute cognition tick (consolidate, decay, patterns, synthesis…). | runs `_step_consolidate`, `_step_decay` |
 | `SchedulerService` | Background poller that wakes every wall-clock minute and fires any enabled schedule whose day/hour/minute cron fields match — no separate "due" state to track. | `day=None, hour=3, minute=0` → every day at 03:00 |
 | `WorldState` | Singleton holding the agent's "what's going on" cache. | `last_heartbeat_at`, `current_device_class` |
