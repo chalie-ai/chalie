@@ -34,6 +34,13 @@ PORT="31025"
 say()    { printf '\n=== %s ===\n' "$*"; }
 result() { printf 'RESULT %s\n' "$*"; }
 
+# The CLI lands in /usr/local/bin on Linux — already on PATH, so `command -v`
+# resolving it IS the assertion that the install put it somewhere usable. On
+# macOS it lands in ~/.local/bin behind a shell-profile line this script never
+# sources, hence the fallback. A Linux run reaching the fallback is a failure,
+# which is why the resolved path is printed alongside the version.
+_chalie_cli() { command -v chalie 2>/dev/null || echo "$HOME/.local/bin/chalie"; }
+
 # The installer checks for Python 3.11+ but deliberately never installs it — a
 # real machine is expected to already have python3. Official distro base images
 # are more stripped than a real install (Debian/Ubuntu bases ship no python3 at
@@ -163,8 +170,9 @@ PY
   deno_v="$("$HOME/.local/bin/deno" --version 2>/dev/null | head -1 || echo ABSENT)"
   echo "deno=$deno_v"
   [ -d "$HOME/.cache/ms-playwright" ] && echo "playwright-browsers=present" || echo "playwright-browsers=ABSENT"
-  cli_v="$("$HOME/.local/bin/chalie" version 2>/dev/null || echo ABSENT)"
-  echo "chalie-cli=$cli_v"
+  cli_path="$(_chalie_cli)"
+  cli_v="$("$cli_path" version 2>/dev/null || echo ABSENT)"
+  echo "chalie-cli=$cli_v (resolved: $cli_path)"
 else
   say "dependency audit — SKIPPED (no venv; installer did not reach it)"
   result "dep_audit_rc=skipped"
@@ -173,7 +181,7 @@ fi
 # ── Boot + /ready (only where a green boot is the claim) ─────────────────────
 if [ "$DO_BOOT" = "1" ] && [ "$ort_ok" = "1" ]; then
   say "boot + /ready (first boot downloads the embedding model, ~400 MB)"
-  "$HOME/.local/bin/chalie" start
+  "$(_chalie_cli)" start
   for i in $(seq 1 60); do
     # No -f: let curl report the real HTTP status (503 while preflight warms up)
     # rather than erroring out. -w always prints a code — "000" when the port is

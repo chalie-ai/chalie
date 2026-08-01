@@ -14,7 +14,10 @@
 set -euo pipefail
 
 CHALIE_HOME="$HOME/.chalie"
-CHALIE_BIN="$HOME/.local/bin"
+# Where uv and the bundled Deno sandbox runtime live. run.sh puts this on the
+# backend's PATH, which is how `shutil.which("deno")` finds it at runtime — so
+# this stays under $HOME regardless of where the user-facing CLI goes.
+CHALIE_RUNTIME_BIN="$HOME/.local/bin"
 CHALIE_REPO="chalie-ai/chalie"
 GITHUB_API="https://api.github.com/repos/$CHALIE_REPO/releases/latest"
 
@@ -93,6 +96,25 @@ _detect_linux_distro() {
     echo "${ID_LIKE:-$ID}"
   else
     echo "unknown"
+  fi
+}
+
+# Where the user-facing `chalie` command goes.
+#
+# Linux: /usr/local/bin, which PAM puts on PATH for every session from
+# /etc/environment — login or not, bash or zsh or fish. No shell startup file
+# needs editing, so the command works in the shell that ran the installer. It
+# costs no new privilege either: _install_build_deps already requires root on
+# every Linux run.
+#
+# macOS: a macOS install needs root nowhere else (build deps are skipped and
+# Playwright installs unprivileged), so writing to /usr/local/bin would add a
+# sudo prompt for one file. Keep the CLI under $HOME and add a profile line.
+_cli_bin_dir() {
+  if [[ "$(_detect_os)" == "linux" ]]; then
+    echo "/usr/local/bin"
+  else
+    echo "$HOME/.local/bin"
   fi
 }
 
@@ -391,7 +413,7 @@ _download_voice_models() {
 # ─── Deno (code_agent sandbox runtime) ──────────────────────────────────────
 _install_deno() {
   _section "Deno Sandbox Runtime"
-  local deno_bin="$CHALIE_BIN/deno"
+  local deno_bin="$CHALIE_RUNTIME_BIN/deno"
   if [[ -x "$deno_bin" ]] && "$deno_bin" --version >/dev/null 2>&1; then
     _ok "Deno already installed ($("$deno_bin" --version | head -1))"
     return 0
@@ -413,7 +435,7 @@ _install_deno() {
   esac
   url="https://github.com/denoland/deno/releases/latest/download/$archive"
 
-  mkdir -p "$CHALIE_BIN"
+  mkdir -p "$CHALIE_RUNTIME_BIN"
   tmpdir="$(mktemp -d)"
   _info "Downloading Deno ($os/$arch)…"
   if ! curl -fsSL "$url" -o "$tmpdir/deno.zip"; then
@@ -437,9 +459,11 @@ _install_deno() {
 # ─── Install CLI Wrapper ─────────────────────────────────────────────────────
 _install_cli() {
   _section "CLI Wrapper"
-  mkdir -p "$CHALIE_BIN"
+  local cli_dir tmp_cli
+  cli_dir="$(_cli_bin_dir)"
+  tmp_cli="$(mktemp)"
 
-  cat > "$CHALIE_BIN/chalie" <<'CHALIE_CLI'
+  cat > "$tmp_cli" <<'CHALIE_CLI'
 #!/usr/bin/env bash
 CHALIE_HOME="${CHALIE_HOME:-$HOME/.chalie}"
 PID_FILE="$CHALIE_HOME/chalie.pid"
@@ -540,26 +564,53 @@ case "$_cmd" in
 esac
 CHALIE_CLI
 
-  chmod +x "$CHALIE_BIN/chalie"
-  _ok "CLI installed at $CHALIE_BIN/chalie"
+  if [[ "$(_detect_os)" == "linux" ]]; then
+    # _run_privileged is a no-op when already root, so this adds no prompt to
+    # root installs (Docker build, CI) and reuses the sudo the build-deps step
+    # has already required of everyone else. -D creates the target directory on
+    # the rare minimal image that ships without one.
+    _run_privileged install -D -m 0755 "$tmp_cli" "$cli_dir/chalie"
+  else
+    mkdir -p "$cli_dir"
+    install -m 0755 "$tmp_cli" "$cli_dir/chalie"
+  fi
+  rm -f "$tmp_cli"
+  _ok "CLI installed at $cli_dir/chalie"
 
-  # Ensure ~/.local/bin is in PATH
-  local path_line='export PATH="$HOME/.local/bin:$PATH"'
-  local added_path=false
+  # Installs made before the CLI moved left a wrapper in ~/.local/bin — and
+  # those same installs prepended that directory to PATH, so the stale copy
+  # would shadow the one just written. Drop the installer's own dead artifact.
+  if [[ "$cli_dir" != "$CHALIE_RUNTIME_BIN" && -f "$CHALIE_RUNTIME_BIN/chalie" ]]; then
+    rm -f "$CHALIE_RUNTIME_BIN/chalie"
+    _info "Removed the superseded CLI at $CHALIE_RUNTIME_BIN/chalie"
+  fi
 
-  if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
-    for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
-      if [[ -f "$rc" ]]; then
-        if ! grep -qF '.local/bin' "$rc" 2>/dev/null; then
-          printf '\n# Added by Chalie installer\n%s\n' "$path_line" >> "$rc"
-          added_path=true
-        fi
-      fi
-    done
-    if [[ "$added_path" == "true" ]]; then
-      _info "Added ~/.local/bin to PATH in shell config"
-      _warn "Run 'source ~/.bashrc' (or open a new terminal) to use the chalie command"
-    fi
+  _ensure_cli_on_path
+}
+
+# On Linux the CLI lands in /usr/local/bin, which is already on PATH for every
+# session — nothing to do. Only the macOS install, which keeps the CLI under
+# $HOME, needs a line in the user's shell profile.
+_ensure_cli_on_path() {
+  [[ "$(_detect_os)" == "linux" ]] && return 0
+
+  local rc
+  case "$(basename "${SHELL:-/bin/zsh}")" in
+    zsh)  rc="$HOME/.zshrc" ;;
+    bash) rc="$HOME/.bash_profile" ;;  # macOS terminals run login shells
+    *)
+      _warn "Add $(_cli_bin_dir) to PATH in your shell profile to use the chalie command"
+      return 0
+      ;;
+  esac
+
+  # Guard on the file's contents, not on $PATH: _ensure_uv exports
+  # ~/.local/bin into this process before we get here, so a $PATH test would
+  # always see the directory present and never write the line.
+  if ! grep -qF '.local/bin' "$rc" 2>/dev/null; then
+    printf '\n# Added by Chalie installer\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$rc"
+    _info "Added ~/.local/bin to PATH in $rc"
+    _warn "Open a new terminal (or run 'source $rc') to use the chalie command"
   fi
 }
 
@@ -616,7 +667,7 @@ main() {
     read -r -p "  Start Chalie now? [Y/n] " _start_reply
     printf "\n"
     if [[ "${_start_reply,,}" != "n" ]]; then
-      "$CHALIE_BIN/chalie" start
+      "$(_cli_bin_dir)/chalie" start
     fi
   fi
 }
