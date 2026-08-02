@@ -197,7 +197,18 @@ _install_build_deps() {
       _run_privileged dnf install -y gcc gcc-c++ make libffi-devel sqlite-devel gettext curl unzip
       ;;
     *)
-      _warn "Unknown distro '$distro' — assuming build tools are present"
+      # Refuse rather than continue. Carrying on installs a Chalie whose browser
+      # cannot launch (Chromium's system libraries are never installed) while the
+      # installer still reports success — a broken instance that looks healthy.
+      # A clear refusal is the honest outcome for a platform we do not support.
+      _error "Unsupported Linux distribution: '$distro'"
+      _error ""
+      _error "Chalie supports Debian/Ubuntu (apt) and Fedora/RHEL/CentOS (dnf)."
+      _error "Installing here would leave the browser unable to start, so the"
+      _error "installer stops instead of producing a half-working instance."
+      _error ""
+      _error "Docker works on any distribution: https://chalie.ai/guide/installation"
+      exit 1
       ;;
   esac
   _ok "Build dependencies ready"
@@ -363,17 +374,13 @@ _install_playwright() {
         # Ubuntu 24.04's t64 transition) that a hand-listed set would miss.
         _run_privileged "$pw" install --with-deps chromium
         ;;
-      *fedora*|*rhel*|*centos*)
+      # No fallback branch: _install_build_deps already refused anything that is
+      # not apt or dnf, so by here the distro is one of these two.
+      *)
         _run_privileged dnf install -y \
           nss nspr atk at-spi2-atk at-spi2-core cups-libs libdrm libxkbcommon \
           libXcomposite libXdamage libXrandr libXext libXfixes libX11 libxcb \
           mesa-libgbm pango cairo alsa-lib
-        "$pw" install chromium
-        ;;
-      *)
-        # Unhandled distro: fetch the browser; its system libraries are the
-        # user's responsibility (same class as the build-deps unknown-distro case).
-        _warn "Unknown distro '$distro' — installing Chromium without system libraries"
         "$pw" install chromium
         ;;
     esac

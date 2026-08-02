@@ -23,7 +23,7 @@ curl -fsSL https://chalie.ai/install | bash
 chalie     # → http://localhost:31025
 ```
 
-> **Beta — on purpose.** It's `v1.0.0-beta` because the bar is software you'd trust with your own life's admin, and it isn't all the way there yet. Hit a sharp edge? [Open an issue](https://github.com/chalie-ai/chalie/issues) — we respond fast.
+> **Beta — on purpose.** The bar is software you'd trust with your own life's admin, and it isn't all the way there yet. Hit a sharp edge? [Open an issue](https://github.com/chalie-ai/chalie/issues) — we respond fast.
 
 <p align="center"><img src="assets/chalie-hero.png" alt="How Chalie works — it perceives, remembers, reasons, and acts on your behalf, behind an Allow / Ask / Deny gate" width="100%"></p>
 
@@ -73,6 +73,29 @@ uv pip install --system -e backend/          # all dependencies, voice (TTS/STT/
 ```
 
 Full walkthrough → [chalie.ai/guide/installation](https://chalie.ai/guide/installation).
+
+### Supported systems
+
+| Platform | Status |
+|---|---|
+| **macOS — Apple Silicon** | Supported. Intel Macs are not: `onnxruntime` no longer publishes wheels for them. |
+| **Linux — apt** (amd64/arm64) | Supported. Verified on Debian 12 and Ubuntu 24.04. |
+| **Linux — dnf** (amd64/arm64) | Supported. Verified on Fedora 40 and 41. |
+| **Anything else** | The installer refuses outright rather than leaving you a half-installed instance. Docker runs anywhere → [installation guide](https://chalie.ai/guide/installation). |
+
+Every supported platform is re-proved on each merge to `main`. [`installer/verify`](installer/verify/) runs the real installer on a pristine machine, boots Chalie, and passes only once readiness, the web interface, Chromium, a Kokoro → Moonshine voice round trip, and Deno all check out.
+
+### System requirements
+
+What the runtime itself needs — a model's own requirements are separate:
+
+| | |
+|---|---|
+| **Python 3.11+** | Already installed. The installer checks for it and deliberately never installs it, so distributions shipping something older — Ubuntu 22.04 (3.10), AlmaLinux 9 (3.9) — are refused until you supply one. |
+| **Root or `sudo`** | Linux only, for the system build packages and the CLI. macOS needs neither. |
+| **~2 GB RAM** | Resident set measured at 1.5–1.7 GB once the voice and embedding models have warmed up. Verified on a 4 GB machine; below that is untested. |
+| **~3 GB disk** | The Python virtualenv and native wheels, the Chromium build Playwright downloads, the local voice models, and Deno. |
+| **Port 31025** | The default; `chalie --port=9000` moves it. |
 
 ## How it's built
 
