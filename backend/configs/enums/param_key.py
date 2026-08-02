@@ -65,6 +65,7 @@ class Keys(StrEnum):
     content = "content"
     contents = "contents"
     context_lines = "context_lines"
+    convert_to_markdown = "convert_to_markdown"
     current_path = "current_path"
     date_from = "date_from"
     date_time = "date_time"

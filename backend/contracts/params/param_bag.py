@@ -174,6 +174,31 @@ class ParamBag(ABC):
         return bool(params.get(key))
 
     @staticmethod
+    def bool_default(params: dict[str, object], key: str, *, default: bool) -> bool | ToolResult:
+        """Optional boolean with a default when absent or ``None``.
+
+        A real ``bool`` passes through; the strings ``"true"`` / ``"false"``
+        (case-insensitive, whitespace-stripped) parse to ``True`` / ``False``;
+        anything else → ``invalid-param``. Pure return — never raises.
+        """
+        value = params.get(key)
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            stripped = value.strip().lower()
+            if stripped == "true":
+                return True
+            if stripped == "false":
+                return False
+        return ToolResult.err(
+            f"'{key}' must be a boolean.",
+            code="invalid-param",
+            hint=f"pass '{key}' as true or false.",
+        )
+
+    @staticmethod
     def clamp_int(params: dict[str, object], key: str, *, default: int, lo: int, hi: int) -> int | ToolResult:
         """Optional integer with a default, clamped into ``[lo, hi]``.
 

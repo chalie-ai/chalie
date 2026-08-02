@@ -62,7 +62,7 @@ INTERNAL = frozenset({
     "browser", "calendar", "chalie_docs", "chat_history_compactor", "contacts",
     "email", "find_skills", "find_tools", "mcp_tools", "memory", "news",
     "review_tool_calls", "review_transcript", "run_script", "save_graph",
-    "save_pattern", "search", "skill_manager", "web_download",
+    "save_pattern", "search", "skill_manager", "web_download", "web_fetch",
 })
 
 # Channels with no human at a prompt: an `ask` becomes a `deny` (D2).
