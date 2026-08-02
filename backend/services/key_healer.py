@@ -14,7 +14,7 @@ the ACTION_REQUIRED pre-gate, the policy gate, or ``run()`` ever sees the params
 1. **Key sanitisation (generic, all tools).** An incoming argument key is
    lower-cased and stripped of every character outside ``[a-z0-9_-]``. This alone
    heals the single commonest model defect — a stray escaped quote or a capital,
-   e.g. ``source"`` → ``source`` and ``MAX_CHARS`` → ``max_chars`` — with zero
+   e.g. ``source"`` → ``source`` and ``START_LINE`` → ``start_line`` — with zero
    per-tool knowledge. (This heals a common model defect: a model stores
    ``{"source\"": "https://…"}`` and ``read`` bounces on
    ``missing-params`` because the corrupt KEY never matched.) This layer is
@@ -25,7 +25,7 @@ the ACTION_REQUIRED pre-gate, the policy gate, or ``run()`` ever sees the params
    ladders in :data:`~configs.enums.param_key.VARIANTS`; when it belongs to
    exactly one of *that tool's own* declared parameters it is rewritten to that
    parameter's canonical key. This is what lets ``read({"url": …})`` resolve to
-   ``source`` while ``url`` stays canonical for ``web_download`` — resolution is
+   ``source`` while ``url`` stays canonical for ``web_fetch`` — resolution is
    scoped to the tool's declared keys, never a global rename. This layer is
    :class:`KeyHealer`.
 
@@ -80,7 +80,7 @@ class KeyHealer:
         For each incoming key, in order:
           1. **exact** — if its squeezed form matches a declared parameter, emit
              that parameter's canonical key (heals quotes/case/separators, e.g.
-             ``source"`` → ``source``, ``MAX_CHARS`` → ``max_chars``).
+             ``source"`` → ``source``, ``START_LINE`` → ``start_line``).
           2. **variant** — else if its squeezed form is a variant of exactly one
              declared parameter (via :data:`~configs.enums.param_key.VARIANTS`),
              emit that parameter's key (e.g. ``url`` → ``source`` for ``read``).

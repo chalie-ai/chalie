@@ -65,6 +65,7 @@ class Keys(StrEnum):
     content = "content"
     contents = "contents"
     context_lines = "context_lines"
+    convert_to_markdown = "convert_to_markdown"
     current_path = "current_path"
     date_from = "date_from"
     date_time = "date_time"
@@ -103,7 +104,6 @@ class Keys(StrEnum):
     limit = "limit"
     list = "list"  # noqa: A003 — member name mirrors the wire key (shadows builtin)
     location = "location"
-    max_chars = "max_chars"
     message = "message"
     minute = "minute"
     minutes = "minutes"
@@ -208,7 +208,7 @@ VARIANTS: "dict[str, frozenset[str]]" = {
     Keys.source: frozenset({
         Keys.url, "uri", "link", "href", Keys.path, "file", "filepath", "file_path",
     }),
-    # web_download earns the SAME family on its canonical 'url': the keys a model
+    # web_fetch earns the SAME family on its canonical 'url': the keys a model
     # uses for a fetch target are identical to read's. 'source' is included so a
     # model that learned read's key still lands. Canonical = url.
     Keys.url: frozenset({
@@ -265,7 +265,6 @@ VARIANTS: "dict[str, frozenset[str]]" = {
     Keys.item_id: frozenset({Keys.id, "reminder_id", "schedule_id"}),
     Keys.items: frozenset({"entries", "values"}),
     Keys.keyword: frozenset({"q", Keys.query, "search_query", "search_term", "term"}),
-    Keys.max_chars: frozenset({"max_length"}),
     Keys.message: frozenset({Keys.body, "msg", "note", "text"}),
     Keys.minutes: frozenset({"duration", "mins"}),
     Keys.operation: frozenset({"op", "task"}),

@@ -71,9 +71,9 @@ class WebBrowseAbility(DelegateAbility[DelegateParamsBag]):
 
     def get_follow_up(self, tr: ToolResult) -> str:
         """Pull the full text of a page the agent reached."""
-        from abilities.read import ReadAbility  # noqa: PLC0415
+        from abilities.web_fetch import WebFetchAbility  # noqa: PLC0415
 
-        return f"To get a full textual version of this page call the `{ReadAbility.NAME}` tool."
+        return f"To get a full textual version of this page call the `{WebFetchAbility.NAME}` tool."
 
     _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",

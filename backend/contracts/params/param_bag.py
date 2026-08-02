@@ -127,6 +127,30 @@ class ParamBag(ABC):
         return value
 
     @staticmethod
+    def opt_int(params: dict[str, object], key: str, *, lo: int) -> int | None | ToolResult:
+        """Optional integer with a floor — ``None`` when absent, ``invalid-param``
+        on any non-integer value (booleans included), or when the value sits
+        below ``lo``. Strict: no float-string coercions here — line counters
+        deserve an explicit integer so a stray ``"5"`` produces a useful error
+        hint instead of sneaking in as 5."""
+        value = params.get(key)
+        if value is None:
+            return None
+        if not isinstance(value, int) or isinstance(value, bool):
+            return ToolResult.err(
+                f"'{key}' must be an integer.",
+                code="invalid-param",
+                hint=f"pass '{key}' as an integer ≥ {lo}.",
+            )
+        if value < lo:
+            return ToolResult.err(
+                f"'{key}' must be an integer ≥ {lo}.",
+                code="invalid-param",
+                hint=f"got {value}; pass at least {lo}.",
+            )
+        return value
+
+    @staticmethod
     def str_default(params: dict[str, object], key: str, *, default: str) -> str | ToolResult:
         """Optional string with a default when absent; ``invalid-param`` on any
         other type. An explicit empty string is kept, not defaulted — some
@@ -148,6 +172,31 @@ class ParamBag(ABC):
         (``{"_auto": True}``), never model-facing inputs: a model's mistyped
         boolean deserves ``invalid-param``, a framework marker just needs truth."""
         return bool(params.get(key))
+
+    @staticmethod
+    def bool_default(params: dict[str, object], key: str, *, default: bool) -> bool | ToolResult:
+        """Optional boolean with a default when absent or ``None``.
+
+        A real ``bool`` passes through; the strings ``"true"`` / ``"false"``
+        (case-insensitive, whitespace-stripped) parse to ``True`` / ``False``;
+        anything else → ``invalid-param``. Pure return — never raises.
+        """
+        value = params.get(key)
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            stripped = value.strip().lower()
+            if stripped == "true":
+                return True
+            if stripped == "false":
+                return False
+        return ToolResult.err(
+            f"'{key}' must be a boolean.",
+            code="invalid-param",
+            hint=f"pass '{key}' as true or false.",
+        )
 
     @staticmethod
     def clamp_int(params: dict[str, object], key: str, *, default: int, lo: int, hi: int) -> int | ToolResult:

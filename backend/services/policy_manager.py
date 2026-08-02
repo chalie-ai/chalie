@@ -51,9 +51,9 @@ VALID_SETTINGS = {"internal", "allow", "ask", "deny"}
 # admission grounds: (1) read-only / scratch / infrastructure tools — never
 # user-gated; (2) delegate-exclusive inner tools (DISCOVERABLE=False, pinned on
 # one delegate config) — the user-facing permission is the OUTER delegate tool
-# (``web_search`` covers search/news/web_download, ``web_browse`` covers browser,
+# (``web_search`` covers search/news, ``web_browse`` covers browser,
 # ``pim`` covers email/calendar/contacts, ``code_agent`` covers ``run_script``).
-# The general file primitives (read / write_file / edit_file / move / make_dir /
+# The mutating file primitives (write_file / edit_file / move / make_dir /
 # delete / set_permissions) are NOT here: they carry seeded ``allow`` rows, so
 # the user can tighten them per channel. ANY action on INTERNAL tools runs unconditionally;
 # they never appear in the Brain policy surface, and the reap pass removes any
@@ -61,8 +61,8 @@ VALID_SETTINGS = {"internal", "allow", "ask", "deny"}
 INTERNAL = frozenset({
     "browser", "calendar", "chalie_docs", "chat_history_compactor", "contacts",
     "email", "find_skills", "find_tools", "mcp_tools", "memory", "news",
-    "review_tool_calls", "review_transcript", "run_script", "save_graph",
-    "save_pattern", "search", "skill_manager", "web_download",
+    "read", "review_tool_calls", "review_transcript", "run_script", "save_graph",
+    "save_pattern", "search", "skill_manager", "web_fetch",
 })
 
 # Channels with no human at a prompt: an `ask` becomes a `deny` (D2).

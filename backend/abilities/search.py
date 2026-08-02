@@ -80,9 +80,9 @@ class SearchAbility(Ability[SearchParamsBag]):
 
     def get_follow_up(self, tr: ToolResult) -> str:
         """Nudge to fetch a promising result's full page before quoting it."""
-        from abilities.read import ReadAbility  # noqa: PLC0415
+        from abilities.web_fetch import WebFetchAbility  # noqa: PLC0415
 
-        return f"For the pages that are aligned with your query, use the `{ReadAbility.NAME}(url=…)` tool with that result's url to get the full content of the page before quoting it or stating its claims as fact."
+        return f"For the pages that are aligned with your query, use the `{WebFetchAbility.NAME}(url=…)` tool with that result's url to get the full content of the page before quoting it or stating its claims as fact."
 
     def get_parameters(self) -> dict[str, object]:
         return {

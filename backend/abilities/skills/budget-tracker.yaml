@@ -7,7 +7,7 @@ version: 1
 
 1. Use `memory` to recall any prior budget structure, then ask whether they are starting a new budget or updating an existing one — collect income, fixed costs, and variable budget targets per category.
 2. Use `memory` to recall any previously stored budget structure, categories, or running totals.
-3. Ask the user to paste or describe their transactions for the period to be analysed — use `read` if they provide a file URL or path.
+3. Ask the user to paste or describe their transactions for the period to be analysed — use `read` for a file path or `web_fetch` for a URL.
 4. Use `code_agent` to parse the transactions, categorise them (groceries, dining, transport, utilities, entertainment, etc.), and total each category.
 5. Use `code_agent` to compare actual spending per category against the budget targets — calculate variance (amount and percentage) and flag categories more than 10% over budget.
 6. Use `write_file` to produce a budget summary: income, total spend, net balance, and a table of actuals vs. budget per category with variance column — highlight overspent categories.

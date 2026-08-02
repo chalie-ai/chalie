@@ -529,14 +529,14 @@ class ProgrammingDocsSearchAbility(Ability[ProgrammingDocsSearchParamsBag]):
 
     def get_follow_up(self, tr: ToolResult) -> str:
         """Read the full document behind the capped excerpt."""
-        from abilities.read import ReadAbility  # noqa: PLC0415
+        from abilities.web_fetch import WebFetchAbility  # noqa: PLC0415
 
         rows = tr.body if isinstance(tr.body, list) else []
         first = rows[0] if rows and isinstance(rows[0], dict) else None
         url = first.get("url") if first else None
         if not url:
             return ""
-        return f"The excerpt is capped. Use the `{ReadAbility.NAME}({url})` tool to fetch the full document contents."
+        return f"The excerpt is capped. Use the `{WebFetchAbility.NAME}({url})` tool to fetch the full document contents."
 
     # The enum is DERIVED from the source table, so a schema-obedient model can
     # never name a language the ability then rejects as unknown — the schema and

@@ -23,7 +23,7 @@ Act-trail guard: the shared :func:`abilities._read_guard.read_guard` must clear
 the edit first — the model's most recent ``read`` of the path has to be newer
 than the most recent successful change to it on this turn. A stale anchor
 otherwise returns ``not-found``, which the model reads as "retry" rather than
-"look again", and it loops. Unlike a whole-file overwrite, a truncated read is
+"look again", and it loops. Unlike a whole-file overwrite, a partial read is
 fine here: an anchored edit only touches text the model quoted back verbatim.
 """
 
@@ -143,9 +143,9 @@ class EditFileAbility(Ability[EditFileParamsBag]):
         # A blind edit anchors on text the model never saw — or saw before its own
         # earlier edit moved it — and comes back not-found, which reads to the
         # model as "try again" rather than "look again". Refuse once here instead
-        # of letting it retry into the runaway backstop. ``truncated-read`` is NOT
+        # of letting it retry into the runaway backstop. ``partial-read`` is NOT
         # opted into: an anchored edit only touches text the model quoted back.
-        refusal = read_guard(self.mp, target.resolve(), refuse_truncated=False)
+        refusal = read_guard(self.mp, target.resolve(), refuse_partial=False)
         if refusal is not None:
             return refusal
 

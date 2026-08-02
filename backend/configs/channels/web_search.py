@@ -26,7 +26,7 @@ from abilities.memory import MemoryAbility
 from abilities.news import NewsAbility
 from abilities.read import ReadAbility
 from abilities.search import SearchAbility
-from abilities.web_download import WebDownloadAbility
+from abilities.web_fetch import WebFetchAbility
 
 from configs.enums.channels import Channel
 from services.processor_config import ProcessorConfig
@@ -34,7 +34,12 @@ from services.processor_config import ProcessorConfig
 if TYPE_CHECKING:
     from configs.enums.policy_channel import PolicyChannel
 
-_WEB_SEARCH_TOOLS: tuple[str, ...] = (SearchAbility.NAME, NewsAbility.NAME, ReadAbility.NAME, WebDownloadAbility.NAME)
+_WEB_SEARCH_TOOLS: tuple[str, ...] = (
+    SearchAbility.NAME,
+    NewsAbility.NAME,
+    WebFetchAbility.NAME,
+    ReadAbility.NAME,
+)
 
 
 class WebSearchConfig(ProcessorConfig):

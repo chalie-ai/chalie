@@ -1,5 +1,4 @@
-"""WebDownloadParamsBag — the typed input contract of the ``web_download``
-ability."""
+"""WebFetchParamsBag — the typed input contract of the ``web_fetch`` ability."""
 
 from __future__ import annotations
 
@@ -12,11 +11,13 @@ from contracts.params.param_bag import ParamBag
 
 
 @dataclass(frozen=True, slots=True)
-class WebDownloadParamsBag(ParamBag):
-    """``url`` — URL to download from, required. ``timeout`` — download timeout
-    in minutes (default: 15, clamp: 1-120)."""
+class WebFetchParamsBag(ParamBag):
+    """``url`` — URL to fetch from, required. ``convert_to_markdown`` — convert
+    HTML to markdown (default: True). ``timeout`` — fetch timeout in minutes
+    (default: 15, clamp: 1-120)."""
 
     url: str
+    convert_to_markdown: bool
     timeout: int
 
     @classmethod
@@ -24,7 +25,10 @@ class WebDownloadParamsBag(ParamBag):
         url = cls.require_str(params, Keys.url)
         if isinstance(url, ToolResult):
             return url
+        convert_to_markdown = cls.bool_default(params, Keys.convert_to_markdown, default=True)
+        if isinstance(convert_to_markdown, ToolResult):
+            return convert_to_markdown
         timeout = cls.clamp_int(params, Keys.timeout, default=15, lo=1, hi=120)
         if isinstance(timeout, ToolResult):
             return timeout
-        return cls(url=url, timeout=timeout)
+        return cls(url=url, convert_to_markdown=convert_to_markdown, timeout=timeout)

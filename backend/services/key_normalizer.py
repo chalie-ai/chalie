@@ -12,8 +12,8 @@ The first of the two cooperating layers that make every tool resilient to the
 argument keys a weak model emits (the second, registry-driven layer is
 :class:`~services.key_healer.KeyHealer`). Lower-casing and stripping every
 character outside ``[a-z0-9_-]`` heals the single commonest model defect — a stray
-escaped quote or a capital, e.g. ``source"`` → ``source`` and ``MAX_CHARS`` →
-``max_chars`` — with zero per-tool knowledge.
+escaped quote or a capital, e.g. ``source"`` → ``source`` and ``START_LINE`` →
+``start_line`` — with zero per-tool knowledge.
 """
 
 from __future__ import annotations
@@ -37,8 +37,8 @@ class KeyNormalizer:
         """Lower-case *key* and drop every character outside ``[a-z0-9_-]``.
 
         The generic sanitisation layer: ``source"`` → ``source``, ``"URL"`` →
-        ``url``, ``max chars`` → ``maxchars`` (space dropped). Separators ``-`` /
-        ``_`` are preserved so ``max_chars`` keeps its shape for the exact match;
+        ``url``, ``start line`` → ``startline`` (space dropped). Separators ``-`` /
+        ``_`` are preserved so ``start_line`` keeps its shape for the exact match;
         :meth:`squeeze` removes them for the loose match.
         """
         return self._DROP.sub("", str(key).lower())

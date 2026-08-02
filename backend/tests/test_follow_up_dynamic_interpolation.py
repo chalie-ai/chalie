@@ -9,12 +9,12 @@
 """Feature test — result-aware ``get_follow_up`` interpolates LIVE data into the nudge.
 
 ``get_follow_up(self, tr: ToolResult)`` lets a tool's success nudge carry the
-exact value the model already sees (the downloaded ``path``, the activated tool
-``name``, the window ``date_time``, the top result ``url``) — present-in-context
-data the model can act on directly. This pins the ONE behavioural guarantee a
-contract cannot: that the live value off ``tr`` actually reaches the rendered
-nudge. Regressing any override to ignore ``tr`` (revert to static text) turns the
-matching case RED — verified by reverting ``web_download`` to static text.
+exact value the model already sees (the activated tool ``name``, the window
+``date_time``, the top result ``url``) — present-in-context data the model can
+act on directly. This pins the ONE behavioural guarantee a contract cannot:
+that the live value off ``tr`` actually reaches the rendered nudge. Regressing
+any override to ignore ``tr`` (revert to static text) turns the matching case
+RED.
 
 Everything else about the hook is carried by its signature — ``-> str``, checked
 statically — so there is no separate conformance sweep to drift.
@@ -25,19 +25,12 @@ the real registered ability.
 
 from __future__ import annotations
 
-import os
-import tempfile
-
 import pytest
 
 from abilities._registry import AbilityRegistry
 from abilities._result import ToolResult
 
 pytestmark = pytest.mark.unit
-
-# Mirror web_download's real destination root (tempfile.gettempdir()/chalie_downloads)
-# so the representative path is faithful — not a hardcoded publicly-writable literal.
-_DL_PATH = os.path.join(tempfile.gettempdir(), "chalie_downloads", "x", "file.pdf")
 
 # name → (representative success ToolResult, the live value the nudge must echo).
 _CASES: dict[str, tuple[ToolResult, str]] = {
@@ -49,17 +42,13 @@ _CASES: dict[str, tuple[ToolResult, str]] = {
         ToolResult.ok({"id": "x", "name": "weather", "url": "h", "status": "online"}),
         "`weather` is now available. Call `mcp_tools` with action `list`",
     ),
-    "web_download": (
-        ToolResult.ok({"path": _DL_PATH, "bytes": 1, "content_type": "application/pdf"}),
-        f"`read({_DL_PATH})`",
-    ),
     "review_tool_calls": (
         ToolResult.ok([{"iter": 1}], anchor="2026-04-07T14:30:00+00:00"),
         "`review_transcript(date_time=2026-04-07T14:30:00+00:00)`",
     ),
     "programming_docs_search": (
         ToolResult.ok([{"source": "Py", "title": "t", "url": "https://docs.python.org/x", "excerpt": "e"}]),
-        "`read(https://docs.python.org/x)`",
+        "`web_fetch(https://docs.python.org/x)`",
     ),
 }
 
