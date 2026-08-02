@@ -69,7 +69,15 @@ class WebFetchAbility(Ability[WebFetchParamsBag]):
     # The typed input contract: the dispatch seam builds the bag via
     # WebFetchParamsBag.from_params before run() is called.
     PARAMS: ClassVar[type[ParamBag] | None] = WebFetchParamsBag
-    SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("fetch web page", "url to markdown", "save web page")
+    SEARCHABLE_AS: ClassVar[tuple[str, ...]] = (
+        "fetch web page",
+        "url to markdown",
+        "save web page",
+        "fetch url",
+        "open url",
+        "read page",
+        "fetch",
+    )
     NAME: ClassVar[str] = "web_fetch"
     CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.WEB
 

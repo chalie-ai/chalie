@@ -59,7 +59,7 @@ _CASES: dict[str, tuple[ToolResult, str]] = {
     ),
     "programming_docs_search": (
         ToolResult.ok([{"source": "Py", "title": "t", "url": "https://docs.python.org/x", "excerpt": "e"}]),
-        "`read(https://docs.python.org/x)`",
+        "`web_fetch(https://docs.python.org/x)`",
     ),
 }
 

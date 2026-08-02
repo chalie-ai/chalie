@@ -161,7 +161,8 @@ class BashAbility(Ability[BashParamsBag]):
                 "description": (
                     "Shell command to run via bash -c. "
                     "MUST NOT be used when other tools apply: "
-                    "use read for file/URL reading, search_files for finding files, "
+                    "use read for file reading, web_fetch for URLs, "
+                    "search_files for finding files, "
                     "write_file for writing files, make_dir for directories, "
                     "delete for removals, set_permissions for chmod, "
                     "web_download for downloads, write_file for saving notes."

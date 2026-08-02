@@ -7,7 +7,7 @@ version: 1
 
 1. Use `memory` to recall any prior SEO context, then ask what type of site it is, what the primary SEO goal is, and what keywords or topics matter most.
 2. Use `memory` to recall any stored traffic baselines, then ask about current organic traffic level, any known issues, and whether there have been recent site migrations or redesigns.
-3. Use the `read` tool to fetch and inspect the site's homepage and key landing pages for title tags, meta descriptions, heading structure, and content quality.
+3. Use the `web_fetch` tool to fetch and inspect the site's homepage and key landing pages for title tags, meta descriptions, heading structure, and content quality.
 4. Use the `search` tool to check how the site currently appears in search results for its target keywords.
 5. Use the `search` tool to identify competitor pages that outrank the site on core topics and surface gap opportunities.
 6. Use `write_file` to audit findings across three categories: Technical SEO (indexation, speed signals, mobile), On-Page SEO (title tags, meta descriptions, heading hierarchy, internal links), and Content (thin content, keyword gaps, topical authority).

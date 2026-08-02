@@ -6,7 +6,7 @@ version: 1
 ---
 
 1. Use `memory` to recall any known writing preferences or past style guidance for the user.
-2. Use `read` to load the text if it is at a URL or file path, then identify its purpose and intended audience.
+2. Use `web_fetch` to load the text if it is at a URL, or `read` if it is a file path, then identify its purpose and intended audience.
 3. Apply active voice and positive form throughout: rewrite passive constructions and replace negatives ("not clear") with direct assertions ("unclear") — capture the revised draft via `write_file`.
 4. Use definite, specific, concrete language: replace vague phrases with precise words and cut filler, redundancy, and throat-clearing — update the draft via `write_file` with each pass.
 5. Keep related words together and place emphatic words at sentence endings for maximum impact — note changes inline via `write_file`.

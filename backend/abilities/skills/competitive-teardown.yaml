@@ -7,7 +7,7 @@ version: 1
 
 1. Use `memory` to recall any prior competitive research already stored for this space.
 2. Confirm with the user the 2 to 4 competitors to analyze and which is the primary focus — then use `write_file` to capture the research as it builds.
-3. Use `read` to extract pricing tiers, feature lists, primary messaging, case study logos, and trust signals from each competitor's website.
+3. Use `web_fetch` to extract pricing tiers, feature lists, primary messaging, case study logos, and trust signals from each competitor's website.
 4. Use `search` to find app store reviews and customer feedback, categorizing them as praise, feature requests, bugs, or UX complaints.
 5. Use `search` to analyze job posting signals for each competitor: engineering volume, tech stack mentions, sales-to-CS ratio, and any data or compliance roles indicating upcoming moves.
 6. Use `news` to surface recent funding rounds, partnership announcements, and product launches for each competitor.
