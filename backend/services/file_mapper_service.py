@@ -243,6 +243,18 @@ class FileMapperService:
         return cls._CODE_AGENT_WORKSPACE_DIR.joinpath(*parts) if parts else cls._CODE_AGENT_WORKSPACE_DIR
 
     @classmethod
+    def get_web_pages_path(cls, *parts: str) -> Path:
+        """Return data/web/pages/ joined with any additional path parts."""
+        base = cls._DATA_DIR / "web" / "pages"
+        return base.joinpath(*parts) if parts else base
+
+    @classmethod
+    def get_downloads_path(cls, *parts: str) -> Path:
+        """Return data/downloads/ joined with any additional path parts."""
+        base = cls._DATA_DIR / "downloads"
+        return base.joinpath(*parts) if parts else base
+
+    @classmethod
     def validate_document_path(cls, full_path: str) -> bool:
         """Check if *full_path* resolves inside the documents root."""
         import os
