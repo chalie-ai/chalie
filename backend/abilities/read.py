@@ -1,29 +1,16 @@
 """ReadAbility — thin wrapper around :class:`services.text_reader.TextReader`.
 
 Reads local files only — URLs are rejected with a redirect to ``web_fetch``,
-the single URL-owning tool. The extract/guard logic lives in
-``services/text_reader.py``; this file maps its raises to stable tool codes
-and gates oversized content through either a hard 20000-character cap (no
-window supplied) or a 1-indexed line window (``start_line`` / ``end_line``)
-when the caller supplies one. Content over the 20k limit is never silently
-clipped — the model gets a loud error telling it to select a smaller range.
-
-Security:
-  - URL rejection: this ability rejects URLs outright and tells the model to
-    use ``web_fetch`` instead — that's the dedicated URL-fetching tool.
-  - File guard: reads from system paths (/etc, /proc, /dev, /sys, /var/run)
-    raise :class:`SystemPathBlocked` in the service and are mapped to
-    ``code=system-path-blocked`` here.
-
-Result contract: every return is a :class:`abilities._result.ToolResult` built
-only via ``ok()`` / ``err()``; the dispatcher renders the wire envelope. Errors
-carry a stable kebab-case ``code`` (never the ``code="error"`` placeholder) so a
-weak model can self-correct without re-reading the schema.
+the single URL-owning tool. Extraction and the system-path guard live in
+``services/text_reader.py``; this file maps its raises to stable kebab-case
+``code``\\ s and gates oversized content: no window supplied means a hard
+20 000-character cap (a loud ``too-large`` error, never a silent clip), and a
+``start_line``/``end_line`` window returns exactly those lines with
+``partial=True`` meta when the window is smaller than the file.
 """
 
 from __future__ import annotations
 
-import logging
 from typing import ClassVar
 
 from abilities._ability import Ability
@@ -39,8 +26,6 @@ from exceptions import (
     SystemPathBlocked,
 )
 from services.text_reader import TextReader
-
-logger = logging.getLogger(__name__)
 
 
 class ReadAbility(Ability[ReadParamsBag]):
@@ -82,12 +67,18 @@ class ReadAbility(Ability[ReadParamsBag]):
             Keys.start_line: {
                 "type": "integer",
                 "minimum": 1,
-                "description": "1-indexed first line of the window to return (optional).",
+                "description": (
+                    "First line to read, counting from 1. "
+                    "Leave out to start at the beginning of the file."
+                ),
             },
             Keys.end_line: {
                 "type": "integer",
                 "minimum": 1,
-                "description": "1-indexed last line of the window, inclusive (optional).",
+                "description": (
+                    "Last line to read; this line is included in the result. "
+                    "Leave out to read to the end of the file."
+                ),
             },
         },
         "required": [Keys.source],
@@ -95,12 +86,6 @@ class ReadAbility(Ability[ReadParamsBag]):
 
     def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
-
-    #: Input validation lives in :class:`ReadParamsBag`, constructed by the
-    #: dispatcher before this runs — a missing ``source`` never reaches here.
-    #: (The ``path`` alias a model naturally emits is healed to ``source``
-    #: even earlier, at the dispatch seam, via the shared
-    #: ``configs.enums.param_key.VARIANTS[Keys.source]`` ladder.)
 
     _MAX_RETURN_CHARS: ClassVar[int] = 20_000
 

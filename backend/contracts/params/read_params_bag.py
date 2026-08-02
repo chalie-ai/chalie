@@ -1,11 +1,4 @@
-"""ReadParamsBag — the typed input contract of the ``read`` ability.
-
-Fields: ``source`` (URL or filesystem path, required), ``start_line`` and
-``end_line`` (optional 1-indexed line window into the file — either may be
-given alone; the missing bound defaults to the file edge). With any window the
-reader returns only those lines; with none the file is
-loaded whole under the hard ``_MAX_RETURN_CHARS`` (20 000) cap.
-"""
+"""ReadParamsBag — the typed input contract of the ``read`` ability."""
 
 from __future__ import annotations
 
@@ -19,10 +12,10 @@ from contracts.params.param_bag import ParamBag
 
 @dataclass(frozen=True, slots=True)
 class ReadParamsBag(ParamBag):
-    """``source`` — the read target (URL or filesystem path), required.
-    ``start_line`` / ``end_line`` — optional 1-indexed window into the file;
-    each may be given alone (the other defaults to the file edge), and when
-    both are given ``end_line`` must be ≥ ``start_line``."""
+    """``source`` — the file path to read, required. ``start_line`` /
+    ``end_line`` — optional line window (counted from 1); each may be given
+    alone (the other defaults to the file edge), and when both are given
+    ``end_line`` must be ≥ ``start_line``."""
 
     source: str
     start_line: int | None

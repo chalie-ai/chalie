@@ -1,29 +1,17 @@
 """WebFetchAbility — fetch a URL and persist it under the data directory.
 
-The single URL-owning tool: HTML pages are converted to markdown (default) or
-kept as verbatim HTML under the web-pages directory; every other content type
-streams to the downloads directory. Re-fetching the same URL overwrites in
-place — the on-disk copy is always the latest fetch, never a cache to consult.
+The single URL-owning tool: HTML persists to the web-pages directory as
+markdown (or verbatim HTML on ``convert_to_markdown=False``); every other
+content type streams to the downloads directory, with a per-MIME body telling
+the model which tool reads the saved path. Re-fetching overwrites in place —
+the on-disk copy is the latest fetch, never a cache to consult. Page text over
+the 20 000-character gate returns a pointer for ``read``'s line windows
+instead of the content.
 
-Security:
-  - Scheme check: ``file:`` / ``data:`` URLs are refused inline (network-free)
-    with ``code=blocked-url``, before any socket opens.
-  - SSRF guard: the single gate in ``services.web_fetch`` blocks
-    private/internal hosts; :class:`FetchBlocked` maps to ``code=blocked-url``.
-  - Size cap: ``stream_to_file`` enforces the 100 MB cap during the stream;
-    :class:`DownloadTooLarge` maps to ``code=too-large``.
-
-The 20000-character gate: when the persisted page text fits, it IS the body
-(with ``url``/``path`` meta); when it does not, the body is a one-line pointer
-at the saved path and the model chunks it back in via ``read``'s line windows.
-Non-HTML responses never return file bytes — the body is a per-MIME
-instruction telling the model which tool reads the saved path.
-
-Result contract: every return is a :class:`abilities._result.ToolResult` built
-via ``ok()`` / ``err()``; the dispatcher renders the wire envelope. Errors
-carry a stable kebab-case ``code`` (``blocked-url`` / ``too-large`` /
-``download-failed`` / ``no-readable-content``) so a weak model can
-self-correct without re-reading the schema.
+Security: ``file:``/``data:`` schemes are refused before any socket opens; the
+single SSRF gate lives in ``services.web_fetch`` (:class:`FetchBlocked` maps
+to ``code=blocked-url``); ``stream_to_file`` enforces the 100 MB cap in-stream
+(:class:`DownloadTooLarge` maps to ``code=too-large``).
 """
 
 from __future__ import annotations
@@ -49,24 +37,16 @@ _BLOCKED_SCHEMES = frozenset({"file", "data"})
 
 
 class WebFetchAbility(Ability[WebFetchParamsBag]):
-    #: The fetch size cap (100 MB). Enforced by ``stream_to_file`` during the
-    #: stream; an over-cap pull is a ``too-large`` error with the partial file
-    #: removed.
     _MAX_FETCH_BYTES: ClassVar[int] = 100 * 1024 * 1024
 
-    #: Persisted page text at or under this many characters is returned as the
-    #: body; anything over it returns only the pointer at the saved path — the
-    #: same gate ``read`` applies, so the two tools never disagree about what
-    #: fits in context.
+    #: Same 20k return gate as ``read`` — the two tools never disagree about
+    #: what fits in context.
     _RETURN_CHAR_LIMIT: ClassVar[int] = 20_000
 
-    #: Action-less tool — the ``""`` key drives the dispatcher's ACTION_REQUIRED
-    #: pre-gate to reject a missing/blank url with ``code=missing-params``
-    #: BEFORE run().
+    #: The ``""`` key makes the dispatcher pre-gate reject a missing/blank url
+    #: with ``code=missing-params`` before run().
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.url,)}
 
-    # The typed input contract: the dispatch seam builds the bag via
-    # WebFetchParamsBag.from_params before run() is called.
     PARAMS: ClassVar[type[ParamBag] | None] = WebFetchParamsBag
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = (
         "fetch web page",
@@ -195,8 +175,7 @@ class WebFetchAbility(Ability[WebFetchParamsBag]):
                 source=url,
             )
         finally:
-            # The downloads copy is a fetch buffer for pages, never the home —
-            # remove it on every exit so no temp file outlives the call.
+            # For pages the downloads copy is only a fetch buffer — never keep it.
             dest.unlink(missing_ok=True)
 
         converter = UrlToMarkdownService()
@@ -268,12 +247,9 @@ class WebFetchAbility(Ability[WebFetchParamsBag]):
 
 
 def _filename_from_url(url: str) -> str:
-    """Host-qualified flat name ``<host>--<path-slug>[.<ext>]`` for downloads.
-
-    Same :func:`url_slug` convention as the web-pages directory, keeping the
-    URL's own extension when it has one — so ``/reports/report.pdf`` on two
-    different hosts never collide, while a re-fetch of the same URL still maps
-    to the same name and overwrites in place."""
+    """Download name ``<host>--<path-slug>[.<ext>]`` — the same :func:`url_slug`
+    convention as web pages (two hosts' ``report.pdf`` never collide; a re-fetch
+    overwrites in place), keeping the URL's own extension when it has one."""
     ext = PurePosixPath(urlparse(url.lower()).path).suffix.lstrip(".")
     base = url_slug(url) or "download"
     return f"{base}.{ext}" if ext.isalnum() else base

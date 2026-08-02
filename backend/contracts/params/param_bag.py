@@ -128,11 +128,9 @@ class ParamBag(ABC):
 
     @staticmethod
     def opt_int(params: dict[str, object], key: str, *, lo: int) -> int | None | ToolResult:
-        """Optional integer with a floor — ``None`` when absent, ``invalid-param``
-        on any non-integer value (booleans included), or when the value sits
-        below ``lo``. Strict: no float-string coercions here — line counters
-        deserve an explicit integer so a stray ``"5"`` produces a useful error
-        hint instead of sneaking in as 5."""
+        """Optional integer with a floor — ``None`` when absent; ``invalid-param``
+        below ``lo`` or on any non-integer (booleans and strings included:
+        strict, never coerced)."""
         value = params.get(key)
         if value is None:
             return None
@@ -175,12 +173,9 @@ class ParamBag(ABC):
 
     @staticmethod
     def bool_default(params: dict[str, object], key: str, *, default: bool) -> bool | ToolResult:
-        """Optional boolean with a default when absent or ``None``.
-
-        A real ``bool`` passes through; the strings ``"true"`` / ``"false"``
-        (case-insensitive, whitespace-stripped) parse to ``True`` / ``False``;
-        anything else → ``invalid-param``. Pure return — never raises.
-        """
+        """Optional boolean with a default when absent or ``None``. Real bools
+        pass through; the strings ``"true"``/``"false"`` (case-insensitive)
+        parse; anything else → ``invalid-param``. Pure return — never raises."""
         value = params.get(key)
         if value is None:
             return default
