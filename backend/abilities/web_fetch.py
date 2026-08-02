@@ -77,6 +77,9 @@ class WebFetchAbility(Ability[WebFetchParamsBag]):
         "open url",
         "read page",
         "fetch",
+        "download",
+        "download file",
+        "download url",
     )
     NAME: ClassVar[str] = "web_fetch"
     CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.WEB

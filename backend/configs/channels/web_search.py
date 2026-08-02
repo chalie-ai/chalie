@@ -26,7 +26,6 @@ from abilities.memory import MemoryAbility
 from abilities.news import NewsAbility
 from abilities.read import ReadAbility
 from abilities.search import SearchAbility
-from abilities.web_download import WebDownloadAbility
 from abilities.web_fetch import WebFetchAbility
 
 from configs.enums.channels import Channel
@@ -40,7 +39,6 @@ _WEB_SEARCH_TOOLS: tuple[str, ...] = (
     NewsAbility.NAME,
     WebFetchAbility.NAME,
     ReadAbility.NAME,
-    WebDownloadAbility.NAME,
 )
 
 

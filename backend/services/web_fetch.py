@@ -1,8 +1,9 @@
 """One outbound HTTP stack with named profiles — and one SSRF gate in front.
 
 Three abilities used to each carry their own fetch code: ``read`` (a browser-like
-``requests.Session``), ``web_download`` (a streaming ``requests.get``), and
-``programming_docs_search`` (a ``urllib.request`` opener with a bot UA). They
+``requests.Session``), ``web_download`` (a streaming ``requests.get``) — both
+URL roles since folded into ``web_fetch`` — and ``programming_docs_search``
+(a ``urllib.request`` opener with a bot UA). They
 duplicated headers, timeouts, and — worse — the decision of *whether* to apply
 the SSRF guard.
 

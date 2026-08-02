@@ -16,6 +16,14 @@ if TYPE_CHECKING:
 
 from abilities._ability import Ability
 from abilities._result import ToolResult, truncate
+from abilities.delete import DeleteAbility
+from abilities.edit_file import EditFileAbility
+from abilities.make_dir import MakeDirAbility
+from abilities.read import ReadAbility
+from abilities.search_files import SearchFilesAbility
+from abilities.set_permissions import SetPermissionsAbility
+from abilities.web_fetch import WebFetchAbility
+from abilities.write_file import WriteFileAbility
 from configs.enums.param_key import Keys
 from contracts.params.bash_params_bag import BashParamsBag
 from contracts.params.param_bag import ParamBag
@@ -121,9 +129,10 @@ class BashAbility(Ability[BashParamsBag]):
         "Run a shell command via bash. "
         f"DO USE {NAME} when you need to perform CLI actions which are NOT "
         "possible via any other available tool. "
-        f"DO NOT USE {NAME} for: downloading files (use web_download), "
-        "file operations (use read, write_file, edit_file, make_dir, delete, "
-        "set_permissions, search_files)."
+        f"DO NOT USE {NAME} for: downloading files (use {WebFetchAbility.NAME}), "
+        f"file operations (use {ReadAbility.NAME}, {WriteFileAbility.NAME}, "
+        f"{EditFileAbility.NAME}, {MakeDirAbility.NAME}, {DeleteAbility.NAME}, "
+        f"{SetPermissionsAbility.NAME}, {SearchFilesAbility.NAME})."
     )
 
 
@@ -161,11 +170,15 @@ class BashAbility(Ability[BashParamsBag]):
                 "description": (
                     "Shell command to run via bash -c. "
                     "MUST NOT be used when other tools apply: "
-                    "use read for file reading, web_fetch for URLs, "
-                    "search_files for finding files, "
-                    "write_file for writing files, make_dir for directories, "
-                    "delete for removals, set_permissions for chmod, "
-                    "web_download for downloads, write_file for saving notes."
+                    f"use {ReadAbility.NAME} for file reading, "
+                    f"{WebFetchAbility.NAME} for URLs, "
+                    f"{SearchFilesAbility.NAME} for finding files, "
+                    f"{WriteFileAbility.NAME} for writing files, "
+                    f"{MakeDirAbility.NAME} for directories, "
+                    f"{DeleteAbility.NAME} for removals, "
+                    f"{SetPermissionsAbility.NAME} for chmod, "
+                    f"{WebFetchAbility.NAME} for downloads, "
+                    f"{WriteFileAbility.NAME} for saving notes."
                 ),
             },
             Keys.timeout_s: {

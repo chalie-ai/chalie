@@ -18,7 +18,7 @@ from urllib.parse import urlparse
 
 # SSRF policy lives in ONE place — services.ssrf. The browser layer re-exports
 # the single blocklist and resolver so its request interceptor can never drift
-# from what the read/web_download abilities enforce.
+# from what the read/web_fetch abilities enforce.
 from services.ssrf import BLOCKED_NETS, resolve_and_check
 
 if TYPE_CHECKING:

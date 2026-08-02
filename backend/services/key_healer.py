@@ -25,7 +25,7 @@ the ACTION_REQUIRED pre-gate, the policy gate, or ``run()`` ever sees the params
    ladders in :data:`~configs.enums.param_key.VARIANTS`; when it belongs to
    exactly one of *that tool's own* declared parameters it is rewritten to that
    parameter's canonical key. This is what lets ``read({"url": …})`` resolve to
-   ``source`` while ``url`` stays canonical for ``web_download`` — resolution is
+   ``source`` while ``url`` stays canonical for ``web_fetch`` — resolution is
    scoped to the tool's declared keys, never a global rename. This layer is
    :class:`KeyHealer`.
 

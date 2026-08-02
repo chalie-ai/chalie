@@ -208,7 +208,7 @@ VARIANTS: "dict[str, frozenset[str]]" = {
     Keys.source: frozenset({
         Keys.url, "uri", "link", "href", Keys.path, "file", "filepath", "file_path",
     }),
-    # web_download earns the SAME family on its canonical 'url': the keys a model
+    # web_fetch earns the SAME family on its canonical 'url': the keys a model
     # uses for a fetch target are identical to read's. 'source' is included so a
     # model that learned read's key still lands. Canonical = url.
     Keys.url: frozenset({

@@ -77,12 +77,15 @@ class FindToolsAbility(Ability):
         return f"{self._INTRO}\n\n**Available Tools**\n{menu}"
 
     def get_examples(self) -> list[str]:
+        from abilities.read import ReadAbility  # noqa: PLC0415
+        from abilities.web_fetch import WebFetchAbility  # noqa: PLC0415
+
         return [
             'Check the weather — query ["weather"]',
             'Search the web — query ["web_search"]',
             'Work with files — query ["write_file", "make_dir", "delete"]',
-            'Read a file — query ["read"]',
-            'Fetch a web page — query ["web_fetch"]',
+            f'Read a file — query ["{ReadAbility.NAME}"]',
+            f'Fetch a web page — query ["{WebFetchAbility.NAME}"]',
             'Email or calendar — query ["pim"]',
             'Set a timer — query ["timer"]',
             'Run a shell command — query ["bash"]',

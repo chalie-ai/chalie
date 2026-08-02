@@ -1,6 +1,6 @@
 """Feature tests for the shared outbound fetch stack (services/web_fetch.py).
 
-Two tiers, kept strictly separate (mirrors test_web_download.py):
+Two tiers, kept strictly separate:
 
 * ``@pytest.mark.unit`` — SSRF gate and named-profile contract. Never touch
    the network: a private/internal URL is blocked BEFORE any socket opens.
