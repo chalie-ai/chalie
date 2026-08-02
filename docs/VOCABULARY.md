@@ -21,6 +21,7 @@ Domain-specific terminology used throughout the Chalie system.
 | `act_trail` | The cumulative record of tool_calls rows for one ACT loop. | `[weather] Valletta, MT → 22°C, sunny` |
 | `ToolResult` | The frozen dataclass every `Ability.run` returns. | `ToolResult.ok(body=...)`, `ToolResult.err(code='not-connected')` |
 | `image_search` | Built-in ability that finds images on the web for a text query, then vision-verifies each candidate when a vision provider is configured. | `verified=true` per image, or `degraded=true` with no vision provider configured |
+| `web_fetch` | Built-in ability and the single URL-owning tool: fetches a URL and persists it under the data directory — HTML becomes markdown (or verbatim HTML with `convert_to_markdown=false`) in the web-pages store, overwritten in place on re-fetch; every other content type streams to the downloads folder. Small pages return their content directly; large ones return only the saved path for `read` to load in line-range chunks. `read` itself is file-only and redirects any URL here. | `web_fetch(url='https://example.com/post')` → `data/web/pages/example.com--post.md` |
 | `skill` | A step-by-step YAML playbook discoverable via `find_skills`. | `a3-problem-analysis.yaml` |
 | `delegate` | A tool call opted into async background execution. | `delegate_id="web_search_a3b2c1d4"` |
 | `delegate ability` | An `Ability` that builds its own `ProcessorConfig` and drives a focused `MessageProcessor` loop instead of acting directly, scoped to a pinned tool set. | `web_search`, `web_browse`, `pim`, `code_agent` |
