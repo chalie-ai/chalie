@@ -87,6 +87,19 @@ class TestConvertFidelity:
         markdown = UrlToMarkdownService().convert(html, _URL)
         assert "## Embedded media" not in markdown
 
+    def test_bytes_input_respects_declared_charset(self) -> None:
+        """Raw bytes go to trafilatura verbatim so its charset sniffing runs —
+        a latin-1 page's accents must survive without mojibake."""
+        para = "Un texte suffisamment long pour la taille minimale. " * 30
+        html = (
+            '<html><head><meta charset="iso-8859-1"></head><body><article>'
+            f"<h1>Café Étude</h1><p>naïveté, déjà vu - accents survive. {para}</p>"
+            f"<p>{para}</p></article></body></html>"
+        ).encode("iso-8859-1")
+        markdown = UrlToMarkdownService().convert(html, "https://example.com/cafe")
+        assert "Café Étude" in markdown
+        assert "naïveté, déjà vu" in markdown
+
     def test_empty_html_raises(self) -> None:
         with pytest.raises(ValueError, match="no content"):
             UrlToMarkdownService().convert("", _URL)

@@ -58,11 +58,14 @@ class UrlToMarkdownService:
 
     # ------------------------------------------------------------------ Convert
 
-    def convert(self, html: str, url: str) -> str:
+    def convert(self, html: str | bytes, url: str) -> str:
         """Run trafilatura extraction and append an embedded-media section.
 
         Args:
-            html: Already-fetched HTML body as a string.
+            html: Already-fetched HTML body. Raw ``bytes`` are handed to
+                trafilatura verbatim so it can sniff the document's declared
+                charset; the media scan decodes them as UTF-8 with replacement,
+                which is lossless for the ASCII ``src`` URLs it looks for.
             url: Canonical source URL (used for relative-link resolution and
                  reported on errors).
 
@@ -89,7 +92,7 @@ class UrlToMarkdownService:
             )
 
         collector = _MediaSrcCollector()
-        collector.feed(html)
+        collector.feed(html if isinstance(html, str) else html.decode("utf-8", "replace"))
 
         media_srcs = sorted(collector.media_srcs)
         if not media_srcs:
