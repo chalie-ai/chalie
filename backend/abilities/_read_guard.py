@@ -31,10 +31,12 @@ a processor whose turn has not been allocated yet. The act-trail cannot be
 inspected in either case, and a guard that cannot see the evidence must not
 invent a refusal.
 
-``truncated-read`` is opt-in per caller (``refuse_truncated``). A truncated read
-is fatal to a WHOLE-FILE overwrite — it would destroy the tail the model never
-saw — but harmless to an anchored edit, which only touches text the model quoted
-back verbatim. That asymmetry is the reason this is a parameter and not a rule.
+``partial-read`` is opt-in per caller (``refuse_partial``). A partial read — a
+``start_line``/``end_line`` window smaller than the file, flagged
+``partial=true`` in the read envelope — is fatal to a WHOLE-FILE overwrite: it
+would destroy the lines the model never saw. It is harmless to an anchored
+edit, which only touches text the model quoted back verbatim. That asymmetry is
+the reason this is a parameter and not a rule.
 """
 
 from __future__ import annotations
@@ -59,12 +61,12 @@ _TARGET_KEYS = ("source", "path", "url")
 
 
 def read_guard(
-    mp: "MessageProcessor | None", target: Path, *, refuse_truncated: bool,
+    mp: "MessageProcessor | None", target: Path, *, refuse_partial: bool,
 ) -> ToolResult | None:
     """The refusal to return, or ``None`` when the modification may proceed.
 
     *target* must already be resolved — the caller owns path resolution, this
-    guard only compares. *refuse_truncated* adds the whole-file-overwrite check
+    guard only compares. *refuse_partial* adds the whole-file-overwrite check
     described in the module docstring.
     """
     if mp is None:
@@ -117,16 +119,16 @@ def read_guard(
                  "current content, then retry",
         )
 
-    # Truncation is flagged in the envelope OPEN TAG (its first line) only —
+    # A partial view is flagged in the envelope OPEN TAG (its first line) only —
     # matching the whole result would false-positive on file content that
     # happens to contain the marker.
-    if refuse_truncated and "truncated=true" in (last_read.result or "").split("\n", 1)[0]:
+    if refuse_partial and "partial=true" in (last_read.result or "").split("\n", 1)[0]:
         return ToolResult.err(
-            f"Your last read of {target} was truncated — a full overwrite would "
-            "destroy the unread portion.",
-            code="truncated-read",
-            hint=f"use {EditFileAbility.NAME} for targeted changes, or re-read with a "
-                 "higher max_chars to get the full file first.",
+            f"Your last read of {target} was a partial line window — a full "
+            "overwrite would destroy the lines you never saw.",
+            code="partial-read",
+            hint=f"use {EditFileAbility.NAME} for targeted changes, or re-read the "
+                 "whole file (no start_line/end_line) first.",
         )
     return None
 

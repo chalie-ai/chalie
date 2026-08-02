@@ -4,8 +4,8 @@ Act-trail guard: if the target file already exists, the shared
 :func:`abilities._read_guard.read_guard` must clear the overwrite first — the
 model's most recent ``read`` of the path has to be newer than the most recent
 successful change to it on this turn, so an overwrite is never blind. This tool
-opts into the extra ``truncated-read`` refusal: a full overwrite would drop the
-tail a truncated read never showed the model.
+opts into the extra ``partial-read`` refusal: a full overwrite would drop the
+lines a windowed (``start_line``/``end_line``) read never showed the model.
 
 Returns a sealed :class:`abilities._result.ToolResult` (never a wire envelope):
 
@@ -15,7 +15,7 @@ Returns a sealed :class:`abilities._result.ToolResult` (never a wire envelope):
   ``bytes: 0`` (touch / .gitkeep / truncate).
 * Bad inputs → ``err()`` with a stable kebab ``code`` (``missing-params`` /
   ``invalid-param`` / ``invalid-path`` / ``permission-denied`` /
-  ``read-required`` / ``truncated-read``) — errors never masquerade as success.
+  ``read-required`` / ``partial-read``) — errors never masquerade as success.
 """
 
 from typing import ClassVar
@@ -113,7 +113,7 @@ class WriteFileAbility(Ability[WriteFileParamsBag]):
 
         existed = target.exists()
         if existed:
-            refusal = read_guard(self.mp, target, refuse_truncated=True)
+            refusal = read_guard(self.mp, target, refuse_partial=True)
             if refusal is not None:
                 return refusal
 

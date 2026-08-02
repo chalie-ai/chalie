@@ -103,7 +103,6 @@ class Keys(StrEnum):
     limit = "limit"
     list = "list"  # noqa: A003 — member name mirrors the wire key (shadows builtin)
     location = "location"
-    max_chars = "max_chars"
     message = "message"
     minute = "minute"
     minutes = "minutes"
@@ -265,7 +264,6 @@ VARIANTS: "dict[str, frozenset[str]]" = {
     Keys.item_id: frozenset({Keys.id, "reminder_id", "schedule_id"}),
     Keys.items: frozenset({"entries", "values"}),
     Keys.keyword: frozenset({"q", Keys.query, "search_query", "search_term", "term"}),
-    Keys.max_chars: frozenset({"max_length"}),
     Keys.message: frozenset({Keys.body, "msg", "note", "text"}),
     Keys.minutes: frozenset({"duration", "mins"}),
     Keys.operation: frozenset({"op", "task"}),

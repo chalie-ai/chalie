@@ -1,4 +1,11 @@
-"""ReadParamsBag — the typed input contract of the ``read`` ability."""
+"""ReadParamsBag — the typed input contract of the ``read`` ability.
+
+Fields: ``source`` (URL or filesystem path, required), ``start_line`` and
+``end_line`` (optional 1-indexed line window into the file — either may be
+given alone; the missing bound defaults to the file edge). With any window the
+reader returns only those lines; with none the file is
+loaded whole under the hard ``_MAX_RETURN_CHARS`` (20 000) cap.
+"""
 
 from __future__ import annotations
 
@@ -12,21 +19,30 @@ from contracts.params.param_bag import ParamBag
 
 @dataclass(frozen=True, slots=True)
 class ReadParamsBag(ParamBag):
-    """``source`` — the read target (URL or filesystem path), required; the
-    ``url`` / ``path`` / ``link`` … aliases a model naturally emits are healed
-    to it upstream at the dispatch seam via the shared ``VARIANTS[Keys.source]``
-    ladder, before this bag is built. ``max_chars`` — cap on the returned text:
-    default 20000, clamped to 100–100000."""
+    """``source`` — the read target (URL or filesystem path), required.
+    ``start_line`` / ``end_line`` — optional 1-indexed window into the file;
+    each may be given alone (the other defaults to the file edge), and when
+    both are given ``end_line`` must be ≥ ``start_line``."""
 
     source: str
-    max_chars: int
+    start_line: int | None
+    end_line: int | None
 
     @classmethod
     def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
         source = cls.require_str(params, Keys.source)
         if isinstance(source, ToolResult):
             return source
-        max_chars = cls.clamp_int(params, Keys.max_chars, default=20000, lo=100, hi=100_000)
-        if isinstance(max_chars, ToolResult):
-            return max_chars
-        return cls(source=source, max_chars=max_chars)
+        start_line = cls.opt_int(params, Keys.start_line, lo=1)
+        if isinstance(start_line, ToolResult):
+            return start_line
+        end_line = cls.opt_int(params, Keys.end_line, lo=1)
+        if isinstance(end_line, ToolResult):
+            return end_line
+        if start_line is not None and end_line is not None and end_line < start_line:
+            return ToolResult.err(
+                "'end_line' must be greater than or equal to 'start_line'.",
+                code="invalid-param",
+                hint="swap the two values so end_line ≥ start_line.",
+            )
+        return cls(source=source, start_line=start_line, end_line=end_line)

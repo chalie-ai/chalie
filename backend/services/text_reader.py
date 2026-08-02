@@ -1,8 +1,9 @@
 """TextReader — the single place a URL or filesystem path becomes plain text.
 
 Shared by the ``read`` tool and the file-ingest pipeline. Returns the FULL
-text verbatim: no truncation (the caller truncates to ``max_chars``) and no
-whitespace munging. Every failure is a raise, never an empty string.
+text verbatim: no truncation (the caller gates oversized content behind its
+own line-window contract) and no whitespace munging. Every failure is a
+raise, never an empty string.
 
 The SSRF guard lives in :mod:`services.web_fetch` and its :class:`FetchBlocked`
 propagates untouched — the ``read`` ability maps it to a stable tool code.
