@@ -43,6 +43,10 @@ _INITIAL_DAYS = 7
 _SMTP_TIMEOUT = 15
 
 _IMAP_DATE_FMT = "%d-%b-%Y"
+# Hard cap on search results. Deliberately NOT a param: a model-controlled
+# limit is unbounded mailbox dumping, so the cap is not part of the tool schema.
+_SEARCH_LIMIT = 10
+
 _IMAP_FETCH_HEADER = b"RFC822.HEADER"
 
 
@@ -188,33 +192,42 @@ class ImapHandler:
         try:
             client.select_folder("INBOX", readonly=True)
             criteria: list[object] = []
-            sender  = (cast(str, params.get("sender"))    or "").strip()
-            subject = (cast(str, params.get("subject"))   or "").strip()
-            keyword = (cast(str, params.get("keyword"))   or "").strip()
+            query: dict[str, object] = {}
+            sender  = (cast(str, params.get("sender"))      or "").strip()
+            subject = (cast(str, params.get("subject"))     or "").strip()
+            keyword = (cast(str, params.get("keyword"))     or "").strip()
             date_from = (cast(str, params.get("date_from")) or "").strip()
             date_to   = (cast(str, params.get("date_to"))   or "").strip()
             if sender:
                 criteria.extend(["FROM", sender])
+                query["sender"] = sender
             if subject:
                 criteria.extend(["SUBJECT", subject])
+                query["subject"] = subject
             if keyword:
                 criteria.extend(["TEXT", keyword])
+                query["keyword"] = keyword
             if date_from:
                 criteria.extend(["SINCE", _imap_date(date_from)])
+                query["date_from"] = date_from
             if date_to:
                 criteria.extend(["BEFORE", _imap_date(date_to)])
+                query["date_to"] = date_to
             if params.get("unanswered"):
                 criteria.append("UNANSWERED")
-            if not criteria:
-                since = (utc_now() - timedelta(days=7)).strftime(_IMAP_DATE_FMT)
-                criteria.extend(["SINCE", since])
-            uids = client.search(criteria)
-            limit = int(cast(int, params.get("limit", 20)))
-            uids = uids[-limit:] if len(uids) > limit else uids
-            if not uids:
-                return {"emails": [], "count": 0}
-            raw = client.fetch(uids, [_IMAP_FETCH_HEADER])
+                query["unanswered"] = True
             triage_filter = (cast(str, params.get("triage")) or "").lower()
+            if triage_filter:
+                query["triage"] = triage_filter
+            if not criteria:
+                window_start = utc_now() - timedelta(days=7)
+                criteria.extend(["SINCE", window_start.strftime(_IMAP_DATE_FMT)])
+                query["date_from"] = window_start.strftime("%Y-%m-%d")
+            uids = client.search(criteria)
+            uids = uids[-_SEARCH_LIMIT:] if len(uids) > _SEARCH_LIMIT else uids
+            if not uids:
+                return {"emails": [], "count": 0, "query": query}
+            raw = client.fetch(uids, [_IMAP_FETCH_HEADER])
             results = []
             for u in sorted(raw.keys(), reverse=True):
                 item = parse_headers(u, raw[u][_IMAP_FETCH_HEADER])
@@ -232,7 +245,7 @@ class ImapHandler:
                     "triage": item["triage"],
                     "is_thread": item["is_thread"],
                 })
-            return {"emails": results, "count": len(results)}
+            return {"emails": results, "count": len(results), "query": query}
         except Exception as exc:
             logger.exception("[imap_handler] search: %s", exc)
             return {"error": str(exc)}
@@ -325,6 +338,12 @@ class ImapHandler:
             msg["In-Reply-To"] = in_reply_to
             msg["References"] = in_reply_to
 
+        # Stamp our own Message-ID: the SMTP server mints one only AFTER send
+        # when the client supplies none, so a self-stamped id is the only key
+        # knowable at send time for the emails_sent ledger.
+        stamp = _email_mod.utils.make_msgid()
+        msg["Message-ID"] = stamp
+
         try:
             if creds.tls:
                 with smtplib.SMTP_SSL(creds.host, creds.port, timeout=_SMTP_TIMEOUT) as server:
@@ -343,7 +362,7 @@ class ImapHandler:
                     except smtplib.SMTPNotSupportedError:
                         logger.warning("[imap_handler] AUTH not supported by %s:%s — sending unauthenticated", creds.host, creds.port)
                     server.send_message(msg)
-            return {"success": True, "to": to, "subject": subject}
+            return {"success": True, "to": to, "subject": subject, "message_id": stamp}
         except Exception as exc:
             logger.exception("[imap_handler] send_email: %s", exc)
             return {"error": str(exc)}

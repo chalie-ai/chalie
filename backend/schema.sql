@@ -256,6 +256,23 @@ CREATE INDEX IF NOT EXISTS idx_list_items_active ON list_items(list_id) WHERE re
 -- documents, watched_folders, transcript_docs, documents_fts, documents_vec.
 
 -- ────────────────────────────────────────────────────────────────
+-- EMAILS_SENT — ledger of outgoing messages sent via SMTP
+-- Each row is a Message-ID stamped by ImapHandler.send_email (see
+-- imap_handler.py); the value column holds the send timestamp
+-- (UTC, filled by the column default). Cross-checking this table
+-- against newly-fetched INBOX rows lets Chalie recognise its own
+-- echoed send-backs as its own replies rather than fresh incoming
+-- mail — the connected mailbox IS Chalie's address, so sends ring
+-- back into INBOX untouched. Schema convergence creates this at
+-- boot; no migration required.
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS emails_sent (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    key TEXT UNIQUE NOT NULL,
+    value TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- ────────────────────────────────────────────────────────────────
 -- SCHEMA VERSION
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS schema_version (
