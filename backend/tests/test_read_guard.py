@@ -28,7 +28,7 @@ returns only that slice and stamps ``partial=true`` into the envelope
 ``dispatch_service._render`` writes into the persisted ``tool_calls.result``
 row — the exact field the guard reads back.
 
-Cases 1-7 drive the REAL production entry point end to end: a real
+All cases except case 10 drive the REAL production entry point end to end: a real
 ``MessageProcessor`` turn against the real SQLite DB (``db`` fixture), the real
 ``DispatchService``, the real ``read``/``write_file``/``edit_file`` abilities, and
 real files on disk under ``tmp_path``. The only substitution is the LLM network
@@ -36,7 +36,7 @@ boundary (``services.provider_service.build_client``), scripted to replay one to
 call per step — mirrors ``test_dispatch_repeat_call_steer.py``. All three tools
 carry seeded ``allow`` policy rows on the ``chat`` channel in the real policy seed
 (``abilities/assets/policy_defaults.json``), so no policy seeding is needed here.
-Case 8 asserts the two bypasses directly, since neither is reachable from a turn.
+Case 10 asserts the two bypasses directly, since neither is reachable from a turn.
 """
 
 import sqlite3
@@ -514,3 +514,42 @@ def test_guard_bypasses_when_the_act_trail_cannot_be_inspected(
     inert = MessageProcessor(UserConfig(), raw_input="never begun")  # inert (I2)
     assert inert.turn_id == -1
     assert read_guard(inert, target, refuse_partial=True) is None
+
+
+# ── Case 11: an ERRORED read does not satisfy the guard ───────────────────────
+
+
+def test_too_large_read_error_does_not_satisfy_the_guard(
+    db: sqlite3.Connection, tmp_path: Path,
+) -> None:
+    """An errored read showed the model nothing. A whole-file read of an
+    over-20k file comes back code=too-large with zero content — counting that
+    row as "the model saw the file" would license a blind overwrite, so the
+    write_file behind it is refused code=read-required and the file on disk is
+    left untouched."""
+    assert db is not None
+    target = tmp_path / "big.txt"
+    oversized = "line of filler text to push the file over the read gate\n" * 500
+    target.write_text(oversized, encoding="utf-8")
+
+    provider = _ScriptedProvider(
+        ProviderResponse(
+            text="", model="scripted",
+            tool_calls=[_tool("read", source=str(target))],
+        ),
+        ProviderResponse(
+            text="", model="scripted",
+            tool_calls=[_tool("write_file", path=str(target), contents="blind-overwrite")],
+        ),
+        ProviderResponse(text="I never saw that file.", model="scripted", tool_calls=None),
+    )
+
+    mp = _run(provider, "read the big file then overwrite it")
+
+    reads = _calls(mp, "read")
+    assert len(reads) == 1
+    assert reads[0].state == ToolCall.ERROR
+    assert "code=too-large" in _open_tag(reads[0].result), reads[0].result
+
+    assert _codes(_calls(mp, "write_file")) == ["code=read-required"]
+    assert target.read_text(encoding="utf-8") == oversized

@@ -230,7 +230,7 @@ class TestNonHtml:
         _stub_fetch(monkeypatch, payload=b"\x89PNG-bytes", content_type="image/png")
         result = _run("https://example.com/img/chart.png")
         assert result.status == "success"
-        saved = data_dir / "downloads" / "chart.png"
+        saved = data_dir / "downloads" / "example.com--img-chart-png.png"
         assert saved.read_bytes() == b"\x89PNG-bytes"
         assert isinstance(result.body, str)
         assert "vision" in result.body
@@ -244,7 +244,7 @@ class TestNonHtml:
         assert result.status == "success"
         assert isinstance(result.body, str)
         assert "`read`" in result.body
-        assert (data_dir / "downloads" / "paper.pdf").exists()
+        assert (data_dir / "downloads" / "example.com--paper-pdf.pdf").exists()
 
     def test_unknown_binary_gets_path_only(
         self, data_dir: Path, monkeypatch: pytest.MonkeyPatch
@@ -255,7 +255,48 @@ class TestNonHtml:
         assert isinstance(result.body, str)
         assert "read" not in result.body
         assert "vision" not in result.body
-        assert str(data_dir / "downloads" / "blob.bin") in result.body
+        assert str(data_dir / "downloads" / "example.com--blob-bin.bin") in result.body
+
+
+class TestDownloadNaming:
+    """Downloads carry the same host-qualified slug as web pages — the defect
+    class where two hosts' ``report.pdf`` silently overwrote each other."""
+
+    def test_same_basename_on_two_hosts_saves_two_files(
+        self, data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _stub_fetch(monkeypatch, payload=b"%PDF-A", content_type="application/pdf")
+        first = _run("https://sitea.com/reports/report.pdf")
+        _stub_fetch(monkeypatch, payload=b"%PDF-B", content_type="application/pdf")
+        second = _run("https://siteb.com/downloads/report.pdf")
+
+        assert first.meta["path"] != second.meta["path"]
+        assert Path(str(first.meta["path"])).read_bytes() == b"%PDF-A"
+        assert Path(str(second.meta["path"])).read_bytes() == b"%PDF-B"
+
+    def test_refetch_of_the_same_url_overwrites_in_place(
+        self, data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _stub_fetch(monkeypatch, payload=b"%PDF-old", content_type="application/pdf")
+        first = _run("https://sitea.com/reports/report.pdf")
+        _stub_fetch(monkeypatch, payload=b"%PDF-new", content_type="application/pdf")
+        second = _run("https://sitea.com/reports/report.pdf")
+
+        assert first.meta["path"] == second.meta["path"]
+        assert Path(str(second.meta["path"])).read_bytes() == b"%PDF-new"
+
+    def test_traversal_shaped_url_stays_flat_in_downloads(
+        self, data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A ``..`` path segment must not escape the downloads directory or
+        resolve to a directory name the write would crash on."""
+        _stub_fetch(monkeypatch, payload=b"\x00", content_type="application/octet-stream")
+        result = _run("https://evil.com/foo/..")
+        assert result.status == "success"
+        saved = Path(str(result.meta["path"]))
+        assert saved.parent == data_dir / "downloads"
+        assert saved.name == "evil.com--foo"
+        assert saved.exists()
 
 
 class TestFetchErrors:

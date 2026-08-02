@@ -91,7 +91,10 @@ def read_guard(
     # than the last read" is simply "seen after it": a read clears the staleness,
     # a later change re-arms it. No id arithmetic, no timestamp granularity.
     for row in ToolCall.by_turn(mp.channel, mp.turn_id):
-        is_read = row.tool_name == ReadAbility.NAME
+        # Only a SUCCEEDED read satisfies the guard: an errored read (too-large,
+        # not-found) showed the model nothing, so counting it would license a
+        # blind overwrite of a file the model never saw a line of.
+        is_read = row.tool_name == ReadAbility.NAME and row.state == ToolCall.DONE
         # Only a SUCCEEDED change invalidates a read: a refused or failed edit
         # wrote nothing, so the model's view of the file still holds. The
         # in-flight call is still ``started``, so it can never invalidate itself.

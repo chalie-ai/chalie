@@ -28,8 +28,7 @@ self-correct without re-reading the schema.
 
 from __future__ import annotations
 
-import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import ClassVar
 from urllib.parse import urlparse
 
@@ -43,7 +42,7 @@ from contracts.params.param_bag import ParamBag
 from contracts.params.web_fetch_params_bag import WebFetchParamsBag
 from exceptions import DownloadTooLarge, FetchBlocked
 from services.file_mapper_service import FileMapperService
-from services.url_to_markdown_service import UrlToMarkdownService
+from services.url_to_markdown_service import UrlToMarkdownService, url_slug
 from services.web_fetch import BROWSER, stream_to_file
 
 _BLOCKED_SCHEMES = frozenset({"file", "data"})
@@ -269,7 +268,12 @@ class WebFetchAbility(Ability[WebFetchParamsBag]):
 
 
 def _filename_from_url(url: str) -> str:
-    """Basename of the URL path, falling back to the host — flat in downloads,
-    so a re-fetch of the same URL overwrites in place."""
-    parsed = urlparse(url)
-    return os.path.basename(parsed.path.rstrip("/")) or parsed.hostname or "download"
+    """Host-qualified flat name ``<host>--<path-slug>[.<ext>]`` for downloads.
+
+    Same :func:`url_slug` convention as the web-pages directory, keeping the
+    URL's own extension when it has one — so ``/reports/report.pdf`` on two
+    different hosts never collide, while a re-fetch of the same URL still maps
+    to the same name and overwrites in place."""
+    ext = PurePosixPath(urlparse(url.lower()).path).suffix.lstrip(".")
+    base = url_slug(url) or "download"
+    return f"{base}.{ext}" if ext.isalnum() else base

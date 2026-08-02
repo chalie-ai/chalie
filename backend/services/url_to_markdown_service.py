@@ -26,6 +26,26 @@ from services.file_mapper_service import FileMapperService
 logger = logging.getLogger(__name__)
 
 
+def url_slug(url: str) -> str:
+    """Flat per-URL slug ``<host>--<path-slug>`` (just ``<host>`` on an empty path).
+
+    The one naming convention for every URL-derived filename (web pages AND
+    downloads), so distinct URLs never collide on disk while a re-fetch of the
+    same URL maps to the same name and overwrites in place:
+
+    * Full URL is lowercased; the hostname is preserved with dots intact.
+    * Inside the path portion, every run of non-alphanumeric characters is
+      collapsed to a single ``-`` — no separator or ``..`` can survive into
+      the filename.
+    * Leading / trailing ``-`` are trimmed; the slug is hard-capped at 120
+      characters.
+    """
+    parsed = urlparse(url.lower())
+    host = parsed.hostname or ""
+    slug = re.sub(r"[^a-z0-9]+", "-", (parsed.path or "").lstrip("/")).strip("-")[:120]
+    return f"{host}--{slug}" if slug else host
+
+
 class _MediaSrcCollector(HTMLParser):
     """Collect ``src`` attributes from iframe/video/source elements.
 
@@ -109,26 +129,10 @@ class UrlToMarkdownService:
     def filename_for(self, url: str, extension: str) -> str:
         """Build a flat filename ``<host>--<path-slug>.<extension>``.
 
-        Rules:
-        * Full URL is lowercased; the hostname is preserved with dots intact.
-        * Inside the path portion, every run of non-alphanumeric characters is
-          collapsed to a single ``-``.
-        * Leading / trailing ``-`` are trimmed from the resulting slug.
-        * The slug is hard-capped at 120 characters.
-        * If the path is effectively empty, the result is just ``<host>.<ext>``.
+        Naming rules live in :func:`url_slug` — the single convention shared
+        with the downloads directory.
         """
-        parsed = urlparse(url.lower())
-        host = parsed.hostname or ""
-
-        path = parsed.path or ""
-        if path in ("", "/"):
-            return f"{host}.{extension}"
-
-        # Drop leading slashes, normalize, trim residual dashes, cap length.
-        slug = re.sub(r"[^a-z0-9]+", "-", path.lstrip("/")).strip("-")[:120]
-        if slug:
-            return f"{host}--{slug}.{extension}"
-        return f"{host}.{extension}"
+        return f"{url_slug(url)}.{extension}"
 
     # ---------------------------------------------------------------- Persist
 
