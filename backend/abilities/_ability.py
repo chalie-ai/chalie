@@ -131,19 +131,25 @@ class Ability(ABC, Generic[B]):
     # scrubbed unless it opts out.
     VERBATIM: ClassVar[tuple[str, ...]] = ()
 
-    # True when this tool's SUCCESS body can carry prose written outside this
-    # conversation — a web page, a file, an email, an image's text, another
-    # agent's output. The dispatcher appends the untrusted-content notice to the
-    # follow-up block of every such result (dispatch_service._UNTRUSTED_CONTENT),
-    # so the rule travels WITH the payload instead of sitting far away in the
-    # system prompt where a long result pushes it out of mind. One declaration
-    # per tool, one copy of the text — the same gate-a-shared-block idiom
-    # ``EMITS_HTML`` / ``SUPPORTS_ASYNC`` use on ProcessorConfig.
+    # Per-action steer for actions whose SUCCESS body can carry prose written
+    # OUTSIDE this conversation — a web page, a file, an email, an image's text,
+    # another agent's synthesis. Keyed exactly like ACTION_REQUIRED: on the
+    # resolved action, or on "" for a tool that has none. The dispatcher appends
+    # the matching entry to that result's follow-up block, so the warning travels
+    # WITH the payload instead of sitting far away in the system prompt where a
+    # long result pushes it out of mind.
     #
-    # Set it on tools whose JOB is to bring outside content in. Leave it False on
-    # tools that report Chalie's own state: a notice on every result is a notice
-    # the model stops reading.
-    RETURNS_UNTRUSTED_CONTENT: ClassVar[bool] = False
+    # Write the steer for THIS action: name what the content actually is, who
+    # controls it, and what an attack through this particular channel looks like.
+    # A generic paragraph repeated across every tool is the thing a model learns
+    # to skip — and a page title reads differently from an inbox message, so the
+    # warning that earns its place says which one this is.
+    #
+    # An action absent from the map gets NOTHING. That is the common case and it
+    # is deliberate: `email.send` returns Chalie's own confirmation, `browser.fill`
+    # returns mechanical state. Warning about those trains the model to ignore the
+    # warning on `email.read`, which is where it matters.
+    UNTRUSTED_CONTENT: ClassVar[dict[str, str]] = {}
 
     # The ability's typed input contract: every first-party ability sets its
     # ParamBag class here and run() receives an instance the dispatcher builds
