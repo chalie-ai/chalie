@@ -1,11 +1,10 @@
-"""One outbound HTTP stack with named profiles — and one SSRF gate in front.
+"""One outbound HTTP stack with named profiles.
 
 Three abilities used to each carry their own fetch code: ``read`` (a browser-like
 ``requests.Session``), ``web_download`` (a streaming ``requests.get``) — both
 URL roles since folded into ``web_fetch`` — and ``programming_docs_search``
-(a ``urllib.request`` opener with a bot UA). They
-duplicated headers, timeouts, and — worse — the decision of *whether* to apply
-the SSRF guard.
+(a ``urllib.request`` opener with a bot UA). They duplicated headers and
+timeouts.
 
 This module is the single place those concerns live:
 
@@ -13,13 +12,11 @@ This module is the single place those concerns live:
   ship by default: ``BROWSER`` (impersonates Chrome, for article/page reads),
   ``API`` (a polite identified bot, for JSON/HTML doc APIs), and ``DOWNLOAD``
   (minimal headers for binary file pulls).
-* :func:`fetch_text` — GET a URL behind the SSRF guard and return decoded text.
-* :func:`stream_to_file` — GET a URL behind the SSRF guard and stream the body to
-  a path in fixed-size chunks (never buffering the whole file in memory).
+* :func:`fetch_text` — GET a URL and return the decoded text.
+* :func:`stream_to_file` — GET a URL and stream the body to a path in fixed-size
+  chunks (never buffering the whole file in memory).
 
-Every entry point resolves the destination host through :mod:`services.ssrf`
-*before* the socket opens, so there is exactly one SSRF decision for all
-outbound fetches — it cannot be forgotten per-call.
+Any host is reachable — public, private, or on the local network.
 """
 
 from __future__ import annotations
@@ -29,8 +26,7 @@ from dataclasses import dataclass
 
 import requests
 
-from exceptions import DownloadTooLarge, FetchBlocked
-from services.ssrf import is_private_url
+from exceptions import DownloadTooLarge
 
 # Default chunk size for streamed downloads (bytes).
 DEFAULT_CHUNK_SIZE = 8192
@@ -95,11 +91,6 @@ DOWNLOAD = FetchProfile(
 )
 
 
-def _guard(url: str) -> None:
-    if is_private_url(url):
-        raise FetchBlocked(f"private or internal URL blocked: {url}")
-
-
 def fetch_text(
     url: str,
     *,
@@ -108,11 +99,10 @@ def fetch_text(
     verify: bool = False,
     allow_redirects: bool = True,
 ) -> str:
-    """GET *url* behind the SSRF guard and return the decoded response text.
+    """GET *url* and return the decoded response text.
 
-    Raises :class:`FetchBlocked` for a private/internal host and
-    :class:`requests.RequestException` (incl. ``raise_for_status``) on any HTTP
-    failure — errors bubble so callers surface them, never swallow.
+    Raises :class:`requests.RequestException` (incl. ``raise_for_status``) on any
+    HTTP failure — errors bubble so callers surface them, never swallow.
     """
     text, _ = fetch_page(
         url,
@@ -132,7 +122,7 @@ def fetch_page(
     verify: bool = False,
     allow_redirects: bool = True,
 ) -> tuple[str, str]:
-    """GET *url* behind the SSRF guard; return ``(text, content_type)``.
+    """GET *url*; return ``(text, content_type)``.
 
     The bare ``Content-Type`` header — lower-cased, charset suffix stripped (the
     part before any ``;``) — is returned alongside the decoded body so a caller
@@ -140,11 +130,9 @@ def fetch_page(
     verbatim (the ``read`` ability's ``.diff`` / ``.patch`` case). An empty string
     is returned when the server sends no ``Content-Type``.
 
-    Raises :class:`FetchBlocked` for a private/internal host and
-    :class:`requests.RequestException` (incl. ``raise_for_status``) on any HTTP
-    failure — errors bubble so callers surface them, never swallow.
+    Raises :class:`requests.RequestException` (incl. ``raise_for_status``) on any
+    HTTP failure — errors bubble so callers surface them, never swallow.
     """
-    _guard(url)
     with requests.Session() as session:
         session.headers.update(profile.headers)
         response = session.get(
@@ -164,7 +152,7 @@ def stream_to_file(
     chunk_size: int = DEFAULT_CHUNK_SIZE,
     max_bytes: int | None = None,
 ) -> tuple[int, str]:
-    """GET *url* behind the SSRF guard and stream the body to *dest_path*.
+    """GET *url* and stream the body to *dest_path*.
 
     When *max_bytes* is set: the ``Content-Length`` header is checked upfront so
     an obviously-oversized download is aborted before the body is pulled, and the
@@ -173,11 +161,9 @@ def stream_to_file(
     partial file is removed and :class:`DownloadTooLarge` is raised — never a
     silent truncation.
 
-    Raises :class:`FetchBlocked` for a private/internal host,
-    :class:`DownloadTooLarge` when the cap is exceeded, and
+    Raises :class:`DownloadTooLarge` when the cap is exceeded and
     :class:`requests.RequestException` on any HTTP failure.
     """
-    _guard(url)
     os.makedirs(os.path.dirname(dest_path), exist_ok=True)
 
     response = requests.get(

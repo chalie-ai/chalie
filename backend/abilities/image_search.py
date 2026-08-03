@@ -26,7 +26,7 @@ from abilities._result import ToolResult
 from configs.enums.param_key import Keys
 from contracts.params.image_search_params_bag import ImageSearchParamsBag
 from contracts.params.param_bag import ParamBag
-from exceptions import DownloadTooLarge, FetchBlocked
+from exceptions import DownloadTooLarge
 from tools.image_search import fetcher
 from configs.enums.ability_category import AbilityCategory
 
@@ -189,9 +189,9 @@ class ImageSearchAbility(Ability[ImageSearchParamsBag]):
                     if reason is not None:
                         skipped.append(reason)
 
-        # Skips are expected/handled (SSRF block, size cap, non-image); surface
-        # them server-side so a systemic issue (e.g. the guard blocking a legit
-        # CDN) is greppable, not just visible in scattered chat transcripts.
+        # Skips are expected/handled (size cap, non-image, download failure);
+        # surface them server-side so a systemic issue (e.g. a CDN refusing every
+        # image) is greppable, not just visible in scattered chat transcripts.
         if skipped:
             logger.info(
                 "[IMAGE_SEARCH] %d candidate(s) skipped during verification: %s",
@@ -216,8 +216,6 @@ class ImageSearchAbility(Ability[ImageSearchParamsBag]):
                 )
             except DownloadTooLarge:
                 return None, f"{result['url']}: exceeds 32 MB cap"
-            except FetchBlocked:
-                return None, f"{result['url']}: blocked by SSRF guard"
             except Exception as exc:  # noqa: BLE001 — infra skip, not a provider failure
                 return None, f"{result['url']}: download failed ({exc})"
 

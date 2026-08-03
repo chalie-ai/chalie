@@ -13,8 +13,8 @@ the model can route around — not invented page text presented as the answer. A
 real-but-imprecise result (e.g. a documentation search-results page instead of
 the exact symbol page) succeeds with ``meta degraded=true``.
 
-All HTTP goes through :mod:`services.web_fetch` (one SSRF gate, the ``API``
-profile's identified bot UA) and all HTML extraction through
+All HTTP goes through :mod:`services.web_fetch` (the ``API`` profile's
+identified bot UA) and all HTML extraction through
 :func:`services.text_extractor.extract_html` — no local fetch or parser plumbing.
 """
 
@@ -36,7 +36,6 @@ from contracts.params.param_bag import ParamBag
 from contracts.params.programming_docs_search_params_bag import ProgrammingDocsSearchParamsBag
 from services.text_extractor import extract_html
 from services.web_fetch import API, fetch_text
-from exceptions import FetchBlocked
 from configs.enums.ability_category import AbilityCategory
 
 # ── Tunables ──────────────────────────────────────────────────────────────────
@@ -445,7 +444,7 @@ def lookup(language: str, query: str) -> ToolResult:
 
     try:
         candidates = source.resolve(query)
-    except (requests.RequestException, FetchBlocked, ValueError):
+    except (requests.RequestException, ValueError):
         # A search-API/HTML-search resolver failed to reach its endpoint; we still
         # try the source's real base page below before giving up — never invent.
         candidates = []
@@ -461,7 +460,7 @@ def lookup(language: str, query: str) -> ToolResult:
     for index, candidate in enumerate(ordered):
         try:
             html = _fetch(cast(str, candidate["url"]))
-        except (requests.RequestException, FetchBlocked):
+        except requests.RequestException:
             continue
         excerpt = extract_html(html, url=cast(str, candidate["url"]))
         if not excerpt:

@@ -8,10 +8,10 @@ the on-disk copy is the latest fetch, never a cache to consult. Page text over
 the 20 000-character gate returns a pointer for ``read``'s line windows
 instead of the content.
 
-Security: ``file:``/``data:`` schemes are refused before any socket opens; the
-single SSRF gate lives in ``services.web_fetch`` (:class:`FetchBlocked` maps
-to ``code=blocked-url``); ``stream_to_file`` enforces the 100 MB cap in-stream
-(:class:`DownloadTooLarge` maps to ``code=too-large``).
+Nothing is refused by policy: any host is reachable — public, private, or on
+the local network — and an unreachable URL comes back as the real error.
+``stream_to_file`` enforces the 100 MB cap in-stream (:class:`DownloadTooLarge`
+maps to ``code=too-large``).
 """
 
 from __future__ import annotations
@@ -28,12 +28,10 @@ from configs.enums.ability_category import AbilityCategory
 from configs.enums.param_key import Keys
 from contracts.params.param_bag import ParamBag
 from contracts.params.web_fetch_params_bag import WebFetchParamsBag
-from exceptions import DownloadTooLarge, FetchBlocked
+from exceptions import DownloadTooLarge
 from services.file_mapper_service import FileMapperService
 from services.url_to_markdown_service import UrlToMarkdownService, url_slug
 from services.web_fetch import BROWSER, stream_to_file
-
-_BLOCKED_SCHEMES = frozenset({"file", "data"})
 
 
 class WebFetchAbility(Ability[WebFetchParamsBag]):
@@ -114,16 +112,6 @@ class WebFetchAbility(Ability[WebFetchParamsBag]):
 
     def run(self, params: WebFetchParamsBag) -> ToolResult:
         url = params.url
-
-        scheme = urlparse(url).scheme
-        if scheme in _BLOCKED_SCHEMES:
-            return ToolResult.err(
-                f"The '{scheme}:' URL scheme cannot be fetched.",
-                code="blocked-url",
-                hint="provide an http(s) URL",
-                source=url,
-            )
-
         dest = FileMapperService.get_downloads_path(_filename_from_url(url))
         try:
             bytes_written, content_type = stream_to_file(
@@ -132,13 +120,6 @@ class WebFetchAbility(Ability[WebFetchParamsBag]):
                 profile=BROWSER,
                 timeout=params.timeout * 60.0,
                 max_bytes=self._MAX_FETCH_BYTES,
-            )
-        except FetchBlocked:
-            # The single SSRF gate in services.web_fetch refused this host.
-            return ToolResult.err(
-                "This URL resolves to a private or internal address and was blocked.",
-                code="blocked-url",
-                source=url,
             )
         except DownloadTooLarge as e:
             return ToolResult.err(

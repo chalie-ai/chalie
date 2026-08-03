@@ -189,15 +189,6 @@ class BrowserAbility(Ability[BrowserParamsBag]):
         return self._do_style(params)
 
     def _do_open(self, params: BrowserOpenParams) -> ToolResult:
-        from tools.browser.security import validate_url  # noqa: PLC0415
-        ok, reason = validate_url(params.url)
-        if not ok:
-            return ToolResult.err(
-                f"URL blocked: {reason}",
-                code="url-blocked",
-                hint="Only public http(s) URLs are reachable; private, "
-                     "loopback, link-local and non-http(s) URLs are refused.",
-            )
         envelope = self._run_verb("open", {"url": params.url})
         return self._reply(envelope)
 

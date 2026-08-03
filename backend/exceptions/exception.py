@@ -234,10 +234,6 @@ class McpServerUnreachable(ChalieException):
 # ── Web fetch layer ───────────────────────────────────────────────────────────
 
 
-class FetchBlocked(ChalieException):
-    """Raised when the SSRF guard refuses a destination (private/internal host)."""
-
-
 class DownloadTooLarge(ChalieException):
     """Raised by :func:`stream_to_file` when a download exceeds its byte cap.
 

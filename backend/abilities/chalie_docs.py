@@ -2,7 +2,7 @@
 
 Resolves a fixed query (``basics`` / ``tools`` / ``releases`` / ``code-base``) to
 its documentation URL(s), reads each one through :class:`services.text_reader.TextReader`
-— the same path the ``read`` tool takes, SSRF guard and prose extraction included —
+— the same path the ``read`` tool takes, prose extraction included —
 and returns the documentation text directly.
 
 A url that is refused, fails, or holds no readable prose is collected as a failed
@@ -44,7 +44,7 @@ from contracts.params.chalie_docs_params_bag import ChalieDocsParamsBag
 from contracts.params.param_bag import ParamBag
 from services.file_mapper_service import FileMapperService
 from services.text_reader import TextReader
-from exceptions import FetchBlocked, NoReadableContent
+from exceptions import NoReadableContent
 from configs.enums.ability_category import AbilityCategory
 
 _VERSION_FILE = FileMapperService.get_version_path()
@@ -154,7 +154,7 @@ class ChalieDocsAbility(Ability[ChalieDocsParamsBag]):
         for url in urls:
             try:
                 text = TextReader(url).get_value()
-            except (FetchBlocked, NoReadableContent, requests.RequestException):
+            except (NoReadableContent, requests.RequestException):
                 # NoReadableContent covers a page that fetched but held no prose —
                 # the same "this url gave us nothing" outcome as an outright
                 # failure, so it lands in the same bucket.

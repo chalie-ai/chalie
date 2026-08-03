@@ -5,9 +5,6 @@ ability rejects URLs before constructing a reader) and the docs pipeline (URL
 branch). Returns the FULL text verbatim: no truncation (the caller gates
 oversized content behind its own line-window contract) and no whitespace
 munging. Every failure is a raise, never an empty string.
-
-The SSRF guard lives in :mod:`services.web_fetch` and its :class:`FetchBlocked`
-propagates untouched — URL-branch callers handle it themselves.
 """
 
 from __future__ import annotations
@@ -29,9 +26,8 @@ from services.web_fetch import BROWSER, fetch_page
 class TextReader:
     _URL_FETCH_TIMEOUT: ClassVar[int] = 15
 
-    #: Filesystem prefixes a read never descends into. Unrelated to the SSRF guard
-    #: (that one lives in web_fetch and covers network destinations) — this blocks
-    #: local system paths on the FILE branch.
+    #: Filesystem prefixes a read never descends into — the FILE branch only;
+    #: network destinations are never refused.
     _BLOCKED_PATH_PREFIXES: ClassVar[tuple[str, ...]] = ("/etc", "/proc", "/dev", "/sys", "/var/run")
 
     #: Path suffixes whose bytes are plain text, not markup. A URL/file ending in

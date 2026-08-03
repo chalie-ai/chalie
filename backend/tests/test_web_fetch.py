@@ -15,7 +15,7 @@ import requests
 from abilities._result import ToolResult
 from abilities.web_fetch import WebFetchAbility
 from contracts.params.web_fetch_params_bag import WebFetchParamsBag
-from exceptions import DownloadTooLarge, FetchBlocked
+from exceptions import DownloadTooLarge
 from services.file_mapper_service import FileMapperService
 from tests._tool_result_harness import built
 
@@ -105,18 +105,9 @@ def test_defaults_clamp_and_timeout_reaches_fetch_in_seconds(
     assert calls[0]["timeout"] == 120.0
 
 
-@pytest.mark.parametrize("url", ["file:///etc/passwd", "data:text/html,<p>x</p>"])
-def test_blocked_scheme_never_touches_network(url: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[dict[str, object]] = []
-    _stub_fetch(monkeypatch, calls=calls)
-    result = _run(url)
-    assert (result.status, result.code, calls) == ("error", "blocked-url", [])
-
-
 @pytest.mark.parametrize(
     ("raising", "code"),
     [
-        (FetchBlocked("private host"), "blocked-url"),
         (DownloadTooLarge(100 * 1024 * 1024), "too-large"),
         (requests.ConnectionError("boom"), "download-failed"),
     ],

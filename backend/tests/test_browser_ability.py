@@ -3,11 +3,9 @@
 Drives the REAL production hot path — ``ToolDispatcher.dispatch()`` on a real
 ``MessageProcessor`` bound to ``WebBrowseConfig`` (where ``browser`` is
 always-available; ``browser`` is in ``PolicyManager.INTERNAL`` so no policy rows
-are needed) — with zero mocks. The SSRF guard blocks every local/private address
-(security.py) WITHOUT a network call, so anything requiring real navigation
-lives in tests/e2e/test_browser_live.py (marker: e2e) and the end-to-end
-scenarios; these tests cover the full no-network surface: schema, the SSRF guard
-itself, and the no-open-page guard, all asserted on the dispatcher WIRE envelope.
+are needed) — with zero mocks. These cover the surface reachable without
+launching a browser — the schema and the no-open-page guard — asserted on the
+dispatcher WIRE envelope; real navigation is exercised end to end instead.
 
 The parameter contract (unknown-action / missing-params / per-verb field
 validation) is enforced by ``BrowserParamsBag`` at the dispatch seam and needs
@@ -48,12 +46,6 @@ def test_schema_is_ten_flat_verbs() -> None:
         "action", "url", "target", "value", "query", "section", "direction", "act_summary",
     }
     assert cast("list[str]", params["required"]) == ["action", "act_summary"]
-
-
-def test_ssrf_guard_blocks_private_urls_before_any_browser_work(db: sqlite3.Connection) -> None:
-    rendered = _dispatch({"action": "open", "url": "http://127.0.0.1:9/admin"})
-    assert rendered.startswith("[browser(status=error, code=url-blocked"), rendered
-    assert "URL blocked" in rendered, rendered
 
 
 def test_verbs_demand_an_open_page_first(db: sqlite3.Connection) -> None:
