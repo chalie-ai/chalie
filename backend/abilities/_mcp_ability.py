@@ -102,6 +102,7 @@ class _MCPAbility(Ability):
     """
 
     _SYNTHETIC: ClassVar[bool] = True
+    RETURNS_UNTRUSTED_CONTENT: ClassVar[bool] = True  # whatever the remote server chooses to return
 
     def __init__(self, tool_name: str, mp: "MessageProcessor | None" = None) -> None:
         super().__init__(mp)

@@ -59,6 +59,7 @@ class WebFetchAbility(Ability[WebFetchParamsBag]):
         "download url",
     )
     NAME: ClassVar[str] = "web_fetch"
+    RETURNS_UNTRUSTED_CONTENT: ClassVar[bool] = True  # the fetched page or file
     CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.WEB
 
     def get_summary(self) -> str:

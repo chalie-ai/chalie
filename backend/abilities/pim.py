@@ -79,6 +79,7 @@ class PimAbility(DelegateAbility[DelegateParamsBag]):
 
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("email", "calendar", "contacts", "reminders", "mail")
     NAME: ClassVar[str] = "pim"
+    RETURNS_UNTRUSTED_CONTENT: ClassVar[bool] = True  # a delegate's synthesis of mail and calendar text
     CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.DELEGATE
 
     def get_parameters(self) -> dict[str, object]:

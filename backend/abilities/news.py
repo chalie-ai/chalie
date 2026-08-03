@@ -49,6 +49,7 @@ class NewsAbility(Ability[NewsParamsBag]):
     # NewsParamsBag.from_params before run() is called.
     PARAMS: ClassVar[type[ParamBag] | None] = NewsParamsBag
     NAME: ClassVar[str] = "news"
+    RETURNS_UNTRUSTED_CONTENT: ClassVar[bool] = True  # third-party feed text
 
     def get_summary(self) -> str:
         return "Search news articles across global sources by query, with optional category filtering for broad topic browsing."

@@ -40,6 +40,7 @@ from configs.enums.ability_category import AbilityCategory
 class WebBrowseAbility(DelegateAbility[DelegateParamsBag]):
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("browse web", "browser", "visit website", "interactive browsing")
     NAME: ClassVar[str] = "web_browse"
+    RETURNS_UNTRUSTED_CONTENT: ClassVar[bool] = True  # a delegate's synthesis of live pages
     CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.DELEGATE
 
     def get_summary(self) -> str:

@@ -44,6 +44,7 @@ class ImageSearchAbility(Ability[ImageSearchParamsBag]):
     # bag's from_params rejects the whitespace-only residue.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.query,)}
     NAME: ClassVar[str] = "image_search"
+    RETURNS_UNTRUSTED_CONTENT: ClassVar[bool] = True  # third-party result metadata
     CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.WEB
 
     # The typed input contract: the dispatch seam builds the bag via

@@ -32,6 +32,7 @@ class ReadAbility(Ability[ReadParamsBag]):
     PARAMS: ClassVar[type[ParamBag] | None] = ReadParamsBag
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("read file",)
     NAME: ClassVar[str] = "read"
+    RETURNS_UNTRUSTED_CONTENT: ClassVar[bool] = True  # file contents — including whatever web_fetch just saved
     CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.FILE_OPERATIONS
 
     def get_summary(self) -> str:

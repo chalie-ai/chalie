@@ -50,6 +50,7 @@ logger = logging.getLogger(__name__)
 class BrowserAbility(Ability[BrowserParamsBag]):
     DISCOVERABLE: ClassVar[bool] = False  # delegate-exclusive; pinned on WebBrowseConfig only
     NAME: ClassVar[str] = "browser"
+    RETURNS_UNTRUSTED_CONTENT: ClassVar[bool] = True  # live page text
 
 
     def get_summary(self) -> str:
@@ -93,7 +94,8 @@ class BrowserAbility(Ability[BrowserParamsBag]):
             },
             Keys.url: {
                 "type": "string",
-                "description": "Absolute http(s) URL. Only used by 'open'.",
+                "description": "Absolute URL — any scheme the browser can open "
+                               "(http, https, file). Only used by 'open'.",
             },
             Keys.target: {
                 "type": "string",

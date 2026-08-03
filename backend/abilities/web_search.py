@@ -52,6 +52,7 @@ from configs.enums.ability_category import AbilityCategory
 class WebSearchAbility(DelegateAbility[DelegateParamsBag]):
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("search web", "search the web", "internet search", "google")
     NAME: ClassVar[str] = "web_search"
+    RETURNS_UNTRUSTED_CONTENT: ClassVar[bool] = True  # a delegate's synthesis of third-party results
     CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.DELEGATE
 
     def get_summary(self) -> str:

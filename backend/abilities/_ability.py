@@ -131,6 +131,20 @@ class Ability(ABC, Generic[B]):
     # scrubbed unless it opts out.
     VERBATIM: ClassVar[tuple[str, ...]] = ()
 
+    # True when this tool's SUCCESS body can carry prose written outside this
+    # conversation — a web page, a file, an email, an image's text, another
+    # agent's output. The dispatcher appends the untrusted-content notice to the
+    # follow-up block of every such result (dispatch_service._UNTRUSTED_CONTENT),
+    # so the rule travels WITH the payload instead of sitting far away in the
+    # system prompt where a long result pushes it out of mind. One declaration
+    # per tool, one copy of the text — the same gate-a-shared-block idiom
+    # ``EMITS_HTML`` / ``SUPPORTS_ASYNC`` use on ProcessorConfig.
+    #
+    # Set it on tools whose JOB is to bring outside content in. Leave it False on
+    # tools that report Chalie's own state: a notice on every result is a notice
+    # the model stops reading.
+    RETURNS_UNTRUSTED_CONTENT: ClassVar[bool] = False
+
     # The ability's typed input contract: every first-party ability sets its
     # ParamBag class here and run() receives an instance the dispatcher builds
     # via the bag's from_params factory — a bad input comes back from the bag

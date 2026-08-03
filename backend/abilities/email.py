@@ -63,6 +63,7 @@ _REAL_SENDER_NOTE = "Chalie - This email was sent by you Chalie on behalf of the
 class EmailAbility(CapabilityAbility):
     DISCOVERABLE: ClassVar[bool] = False  # pim-delegate-exclusive; pinned on PimConfig only
     NAME: ClassVar[str] = "email"
+    RETURNS_UNTRUSTED_CONTENT: ClassVar[bool] = True  # message bodies written by anyone who can reach the inbox
     CAPABILITY_KEY: ClassVar[str] = "mail"
     DEFAULT_ACTION: ClassVar[str] = "search"
     NOT_CONNECTED_HINT: ClassVar[str] = (

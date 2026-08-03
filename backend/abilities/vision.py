@@ -67,6 +67,7 @@ class VisionAbility(DelegateAbility[VisionParamsBag]):
     # VisionParamsBag.from_params before run() is called.
     PARAMS: ClassVar[type[ParamBag] | None] = VisionParamsBag
     NAME: ClassVar[str] = "vision"
+    RETURNS_UNTRUSTED_CONTENT: ClassVar[bool] = True  # text drawn inside an image reaches the model as prose
     CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.DELEGATE
 
     _PARAMETERS: ClassVar[dict[str, object]] = {

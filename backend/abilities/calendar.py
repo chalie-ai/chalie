@@ -68,6 +68,7 @@ _TARGET_ADDRESSED_WRITES = ("update_event", "delete_event")
 class CalendarAbility(CapabilityAbility):
     DISCOVERABLE: ClassVar[bool] = False  # pim-delegate-exclusive; pinned on PimConfig only
     NAME: ClassVar[str] = "calendar"
+    RETURNS_UNTRUSTED_CONTENT: ClassVar[bool] = True  # invite and event text written by third parties
     CAPABILITY_KEY: ClassVar[str] = "mail"
     DEFAULT_ACTION: ClassVar[str] = "list_events"
     NOT_CONNECTED_HINT: ClassVar[str] = (

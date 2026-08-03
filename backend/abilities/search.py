@@ -59,6 +59,7 @@ class SearchAbility(Ability[SearchParamsBag]):
     # SearchParamsBag.from_params before run() is called.
     PARAMS: ClassVar[type[ParamBag] | None] = SearchParamsBag
     NAME: ClassVar[str] = "search"
+    RETURNS_UNTRUSTED_CONTENT: ClassVar[bool] = True  # third-party titles and snippets
 
     def get_summary(self) -> str:
         return "Search Wikipedia, GitHub, Reddit, arXiv, news, and more with automatic provider routing from a plain language query."

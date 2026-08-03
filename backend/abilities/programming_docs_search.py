@@ -506,6 +506,7 @@ class ProgrammingDocsSearchAbility(Ability[ProgrammingDocsSearchParamsBag]):
     PARAMS: ClassVar[type[ParamBag] | None] = ProgrammingDocsSearchParamsBag
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("programming docs", "api docs", "library documentation", "dev docs")
     NAME: ClassVar[str] = "programming_docs_search"
+    RETURNS_UNTRUSTED_CONTENT: ClassVar[bool] = True  # scraped documentation excerpts
     CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.INFORMATION
 
     def get_summary(self) -> str:
