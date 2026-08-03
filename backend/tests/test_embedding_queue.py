@@ -57,7 +57,7 @@ class TestConcurrentCallsSerializeViaQueue:
         texts = [f"concurrent-serialization-probe-{uuid.uuid4()}" for _ in range(N)]
 
         # Single-call baseline: measure 3 calls and take the median to smooth
-        # out first-call CoreML JIT warmup, which inflates the first timing.
+        # out first-call warmup cost, which inflates the first timing.
         baseline_times = []
         for _ in range(3):
             bt = f"baseline-{uuid.uuid4()}"
@@ -99,7 +99,7 @@ class TestConcurrentCallsSerializeViaQueue:
         # complete in ~1–1.5 × single call (all overlap on multiple cores).
         # Serialized through the queue, 8 calls take ~8 × single call.
         # A 2.5 × threshold cleanly separates the two regimes while tolerating
-        # per-call speedup from EP (CoreML/CUDA) warm caching across calls.
+        # per-call speedup from warm caching across calls.
         threshold = 2.5 * single_call_time
         assert wall_clock >= threshold, (
             f"Wall-clock {wall_clock:.2f}s < threshold {threshold:.2f}s "

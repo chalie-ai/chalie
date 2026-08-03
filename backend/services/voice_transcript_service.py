@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import io
 import logging
-import os
 import re
 import threading
 from typing import TYPE_CHECKING, cast
@@ -150,22 +149,16 @@ class VoiceTranscriptService:
         the longest reply ever spoken — and holds it for the process lifetime.
         Measured over an alternating short/long synthesis workload: +816 MiB of
         held scratch with the arena on, and none with it off.
-
-        Provider selection mirrors ``kokoro_onnx``'s own (CPU unless
-        ``ONNX_PROVIDER`` overrides it) so this changes memory behaviour only,
-        never which execution provider runs.
         """
         import onnxruntime as ort
 
-        from services.onnx_session import CPU_PROVIDER, build_session
+        from services.onnx_session import build_session
 
         opts = ort.SessionOptions()
         opts.enable_cpu_mem_arena = False
-        provider = os.getenv("ONNX_PROVIDER")
         return build_session(
             cls.KOKORO_MODEL,
             sess_options=opts,
-            providers=[provider] if provider else [CPU_PROVIDER],
             log_prefix="[VoiceTranscript]",
         )
 
