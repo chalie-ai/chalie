@@ -102,7 +102,7 @@ def test_scheduled_channel_markdown_is_converted_to_html(db: sqlite3.Connection)
         result = mp.result()
 
     # The real request this turn actually sent to the provider carries the HTML
-    # contract — proof EMITS_HTML reaches the schedule channel's real system
+    # contract — proof RENDERS_HTML reaches the schedule channel's real system
     # prompt on the live request-assembly path, not just a directly-built one.
     # A fresh schedule thread also fires a sibling ThreadGistConfig delegate call
     # (channel-labeling) through this same patched transport, so the schedule

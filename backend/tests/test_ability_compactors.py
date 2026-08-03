@@ -182,8 +182,8 @@ def test_run_completes_and_writes_a_checkpoint_without_crashing(db: sqlite3.Conn
 
 def test_compaction_config_never_broadcasts_to_user() -> None:
     """Pins existing contract: the shared CompactionConfig (and both concrete
-    subclasses) carry ``broadcast_to=None`` — never 'user'. The dispatcher only
-    assigns a rich-media ordinal when broadcast_to == 'user' AND tr.rich, so a
+    subclasses) leave ``RENDERS_HTML`` False. The dispatcher only assigns a
+    rich-media ordinal when the channel renders to a human AND tr.rich, so a
     compactor result can never be paired to a user-facing card."""
-    assert CompactionConfig().broadcast_to is None
-    assert ChatHistoryCompactionConfig().broadcast_to is None
+    assert CompactionConfig().RENDERS_HTML is False
+    assert ChatHistoryCompactionConfig().RENDERS_HTML is False

@@ -39,7 +39,7 @@ class ScheduledConfig(ProcessorConfig):
     # The schedule thread is a rendered surface (its output is converted and
     # sanitized as HTML at persist time), so it carries the same HTML output
     # contract as the user channel.
-    EMITS_HTML: ClassVar[bool] = True
+    RENDERS_HTML: ClassVar[bool] = True
 
     def __init__(self) -> None:
         super().__init__(
@@ -56,7 +56,6 @@ class ScheduledConfig(ProcessorConfig):
             skip_transcript=False,
             skip_input_row=False,
             suppress_history=False,
-            broadcast_to="schedule",
             memory_seed=True,
             external_turn_id=True,
         )

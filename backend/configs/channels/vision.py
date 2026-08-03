@@ -41,7 +41,6 @@ class VisionConfig(ProcessorConfig):
             skip_transcript=True,
             skip_input_row=True,
             suppress_history=True,
-            broadcast_to=None,
             memory_seed=False,
         )
 

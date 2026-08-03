@@ -7,18 +7,18 @@
 #     http://www.apache.org/licenses/LICENSE-2.0
 
 """Feature test — the shared HTML output-format contract lands in the system
-prompt of every channel that renders to a human (``ProcessorConfig.EMITS_HTML``),
+prompt of every channel that renders to a human (``ProcessorConfig.RENDERS_HTML``),
 and only those channels.
 
 Before this change the contract was baked as literal text at the tail of
 ``UserConfig.system_prompt``. The ``schedule`` channel is exactly as much a
 rendered, user-visible surface as ``user`` — its assistant output is converted
 and sanitized as HTML at persist time (``MessageProcessor._format``, gated on
-``broadcast_to is not None``, and ``ScheduledConfig.broadcast_to == "schedule"``)
+``RENDERS_HTML``)
 — but it never got the matching prompt guidance, so a fired schedule's response
 came back as raw markdown on an HTML surface. The fix hoists the contract into
 ``PromptService._RESPONSE_FORMAT`` and appends it in
-``PromptService.system_prompt()`` whenever ``config.EMITS_HTML`` is set;
+``PromptService.system_prompt()`` whenever ``config.RENDERS_HTML`` is set;
 ``UserConfig`` and ``ScheduledConfig`` both now set it.
 
 Driven on the real assembly path with real SQLite (``db``), the real
@@ -49,7 +49,7 @@ def _assembled_system(config: ProcessorConfig) -> str:
 def test_response_format_present_on_schedule_channel(db: sqlite3.Connection) -> None:
     """The bug this change fixes: a fired schedule previously got no
     response-format guidance at all, even though its output is rendered as HTML
-    just like the user channel's. ``ScheduledConfig.EMITS_HTML`` now gates the
+    just like the user channel's. ``ScheduledConfig.RENDERS_HTML`` now gates the
     same contract onto the schedule channel's system prompt."""
     system = _assembled_system(ScheduledConfig())
 
@@ -76,8 +76,8 @@ def test_response_format_still_precedes_async_guidance_on_user_channel(db: sqlit
 
 
 def test_response_format_absent_on_silent_non_html_channel(db: sqlite3.Connection) -> None:
-    """DMN is a genuinely silent background channel (``broadcast_to=None``) whose
-    output is never rendered to a human and which never sets ``EMITS_HTML`` — it
+    """DMN is a genuinely silent background channel (``RENDERS_HTML`` False) whose
+    output is never rendered to a human and which never sets ``RENDERS_HTML`` — it
     must never be told to emit HTML."""
     system = _assembled_system(DmnConfig())
 

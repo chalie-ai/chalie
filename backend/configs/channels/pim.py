@@ -50,7 +50,6 @@ class PimConfig(ProcessorConfig):
             skip_transcript=False,  # write a delegate-channel transcript row so
             skip_input_row=False,   # _setup assigns the uid the act-trail needs
             suppress_history=True,
-            broadcast_to=None,
             memory_seed=False,
         )
 

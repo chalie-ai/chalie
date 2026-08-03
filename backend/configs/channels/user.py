@@ -18,7 +18,7 @@ class UserConfig(ProcessorConfig):
     ``read`` for everything else."""
 
     SUPPORTS_ASYNC = True
-    EMITS_HTML: ClassVar[bool] = True
+    RENDERS_HTML: ClassVar[bool] = True
     BROADCASTS_STATE = True
     USAGE_TYPE = "foreground"
 
@@ -32,7 +32,6 @@ class UserConfig(ProcessorConfig):
             skip_transcript=False,
             skip_input_row=bool(_metadata.get("hidden_input")),
             suppress_history=False,
-            broadcast_to="user",
             memory_seed=True,
         )
 

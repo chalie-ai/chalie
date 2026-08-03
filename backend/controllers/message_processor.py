@@ -464,10 +464,10 @@ class MessageProcessor:
 
     def _format(self, text: str) -> str:
         """Render markdown to HTML for surface-broadcasting channels; pass raw
-        text through for background/silent channels (``broadcast_to`` is None).
+        text through for background/silent channels (``RENDERS_HTML`` False).
         HTML branch is sanitized at the persist-time boundary so both the live
         WS send and the GET/refresh read paths inherit it."""
-        if self.config.broadcast_to is not None:
+        if self.config.RENDERS_HTML:
             from services.markup import markdown_to_html, sanitize  # noqa: PLC0415
             return sanitize(markdown_to_html(text))
         return text or ""
@@ -563,7 +563,7 @@ class MessageProcessor:
         requires the genuine ``user`` channel: DiscoveryConfig and
         ScheduledConfig also carry ``role='user'`` but write to their own
         channels, and neither takes the proactive-suggestion path (discovery is
-        a silent loop — ``broadcast_to`` is ``None``, so a suggestion would have
+        a silent loop — ``RENDERS_HTML`` is False, so a suggestion would have
         nowhere to surface; scheduled self-surfaces in its own thread and the
         scheduler dock, with no user-channel relay, §13.9). Every handler is
         isolated — a failure is logged, never propagated, so post-turn work can

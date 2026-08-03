@@ -31,7 +31,6 @@ class StubProcessorConfig(ProcessorConfig):
         skip_transcript: bool,
         skip_input_row: bool,
         suppress_history: bool,
-        broadcast_to: str | None,
         memory_seed: bool,
     ) -> None:
         super().__init__(
@@ -42,7 +41,6 @@ class StubProcessorConfig(ProcessorConfig):
             skip_transcript=skip_transcript,
             skip_input_row=skip_input_row,
             suppress_history=suppress_history,
-            broadcast_to=broadcast_to,
             memory_seed=memory_seed,
         )
 
@@ -62,7 +60,6 @@ def make_stub_config(
         skip_transcript=False,
         skip_input_row=False,
         suppress_history=False,
-        broadcast_to=None,
         memory_seed=False,
     )
 

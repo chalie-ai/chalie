@@ -24,7 +24,6 @@ class EpisodeEncoderConfig(ProcessorConfig):
             skip_transcript=True,
             skip_input_row=False,
             suppress_history=True,
-            broadcast_to=None,
             memory_seed=False,
         )
 

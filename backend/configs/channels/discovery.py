@@ -41,6 +41,7 @@ class DiscoveryConfig(UserConfig):
 
     SUPPORTS_ASYNC = False
     BROADCASTS_STATE = False
+    RENDERS_HTML = False
     # Re-declared, NOT inherited. Subclassing UserConfig would otherwise bill this
     # loop's spend as "foreground" — but the user never asked for it and never sees it;
     # Chalie runs it on its own initiative, so it is background spend. Every override
@@ -53,7 +54,6 @@ class DiscoveryConfig(UserConfig):
         super().__init__()
         object.__setattr__(self, "channel", Channel.DISCOVERY.value)
         object.__setattr__(self, "read_channel", Channel.USER.value)
-        object.__setattr__(self, "broadcast_to", None)
         object.__setattr__(self, "prompt_channel", Channel.USER.value)
 
     def type(self) -> ConfigTypeEnum:

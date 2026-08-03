@@ -25,7 +25,6 @@ class GeoConfig(ProcessorConfig):
             skip_transcript=True,
             skip_input_row=False,
             suppress_history=True,
-            broadcast_to=None,
             memory_seed=False,
         )
         object.__setattr__(self, "_window_start", window_start)

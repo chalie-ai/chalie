@@ -51,6 +51,7 @@ from models.fact import FactRow
 from models.tool_call import ToolCall
 from models.transcript import Transcript
 from services.locale_service import CHAT_TIMESTAMP_FMT, format_date
+from services.markup import PROMPT_TAGS
 from services.personality.personality_service import personality_service
 from services.time_formatter_service import TimeFormatterService
 from services.user_synthesis import UserSynthesis
@@ -101,20 +102,32 @@ _USER_DEFINITION_FALLBACK = (
 _CONTENT_FIELD_PLACEHOLDER = "{{provider_content_field_name}}"
 _MISSING_TS_PLACEHOLDER = "????-??-?? ??:??"
 
+#: The tag list the model is given, rendered from the sanitiser's own authority
+#: (``markup.PROMPT_TAGS``) so widening or narrowing the contract rewrites this
+#: instruction in the same edit. Built separately rather than inlined into an
+#: f-string: the literal below carries ``{{provider_content_field_name}}``, which
+#: an f-string would collapse to single braces before ``_substitute_content_field``
+#: ever sees it.
+_TAG_LIST = ", ".join(f"<{tag}>" for tag in PROMPT_TAGS)
+
 #: The single source of the HTML output contract, shared by every channel whose
-#: output is rendered to a human, and gated by ``ProcessorConfig.EMITS_HTML``.
-_RESPONSE_FORMAT = """
+#: output is rendered to a human, and gated by ``ProcessorConfig.RENDERS_HTML``.
+_RESPONSE_FORMAT = (
+    """
 
 ────────────────────────────────
 
 ## Response format
 
 In the {{provider_content_field_name}} field (what the user sees) format your response as HTML.
-Specifically only use the following tags: <p>, <h1>, <b>, <i>, <u>, <code>, <ul>, <li>, <table>, <thead>, <tbody>, <tfoot>, <tr>, <th>, <td>
+Specifically only use the following tags: """
+    + _TAG_LIST
+    + """
 NEVER use markdown syntax. Use <b> not **, use <i> not _, use <h1> not #, use <ul><li> not - or *. No backtick fences. HTML tags only.
 Avoid using table structures to represent data. If you do need to use tables, output in html only NEVER as markdown and keep column count under 4.
 
 ────────────────────────────────"""
+)
 
 #: Appended to the system prompt on any channel whose config sets
 #: ``SUPPORTS_ASYNC`` — the SAME gate that exposes the ``async`` tool parameter —
@@ -146,11 +159,11 @@ class PromptService:
     def system_prompt(self) -> str:
         """The turn's system instruction block: the per-channel body, plus the
         shared response-format contract on any channel that renders to a human
-        (``EMITS_HTML``) and the background-tasks guidance on any channel that
+        (``RENDERS_HTML``) and the background-tasks guidance on any channel that
         exposes the ``async`` tool flag (``SUPPORTS_ASYNC``) — the one place all
         system-prompt assembly and placeholder substitution lands."""
         base = self._system_prompt_body()
-        if self.mp.config.EMITS_HTML:
+        if self.mp.config.RENDERS_HTML:
             base += _RESPONSE_FORMAT
         if self.mp.config.SUPPORTS_ASYNC:
             base += _ASYNC_GUIDANCE

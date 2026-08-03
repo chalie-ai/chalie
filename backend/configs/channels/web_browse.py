@@ -55,7 +55,6 @@ class WebBrowseConfig(ProcessorConfig):
             skip_transcript=False,  # uid + own transcript row, or the
             skip_input_row=False,   # act-trail dies and the loop runs blind
             suppress_history=True,
-            broadcast_to=None,
             memory_seed=False,
         )
 

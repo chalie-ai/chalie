@@ -33,7 +33,6 @@ class EAMPConfig(ProcessorConfig):
             skip_transcript=False,
             skip_input_row=False,
             suppress_history=False,
-            broadcast_to=None,
             memory_seed=True,
         )
         object.__setattr__(self, "_agent_name", agent_name)
