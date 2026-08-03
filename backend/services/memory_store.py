@@ -16,6 +16,7 @@ Note: pub/sub (publish/subscribe/pubsub/_channels) has been removed.
 Websocket.broadcast() is the authoritative push path.
 """
 
+import fnmatch
 import logging
 import re
 import threading
@@ -388,9 +389,7 @@ class MemoryStore:
         return -2
 
     def keys(self, pattern: str = "*") -> List[str]:
-        regex = re.compile(
-            pattern.replace("*", ".*").replace("?", ".").replace("[", "[")
-        )
+        regex = re.compile(fnmatch.translate(pattern))
         result: Set[str] = set()
         now = time.time()
         for store, lock in [
