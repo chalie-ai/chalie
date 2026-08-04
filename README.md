@@ -57,7 +57,7 @@ We ran ten models — frontier and open-weight — through the same battery of r
 **Fastest start** — the wizard picks your provider on first boot:
 ```bash
 curl -fsSL https://chalie.ai/install | bash
-chalie     # → http://localhost:31025 · choose OpenAI, Anthropic, Gemini, or Ollama
+chalie     # → http://localhost:31025 · Anthropic, Gemini, OpenAI, +17 more, or any OpenAI-compatible host
 ```
 
 **Fully local with Ollama** — nothing leaves your network:
