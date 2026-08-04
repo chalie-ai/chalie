@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import ClassVar, Optional, cast
 
 from contracts.provider_client import ProviderClient
-from services.llm_clients.context_window import default_window_for_model
+from services.llm_clients.context_window import DEFAULT_WINDOW
 from services.llm_clients.thinking_map import CODEX_REASONING_EFFORTS
 from exceptions import (
     ContextLimit,
@@ -228,6 +228,21 @@ def _parse_jsonl(stdout: str) -> tuple[str, dict[str, Optional[int]], list[str]]
 class CodexCliClient(ProviderClient):
     CONTENT_FIELD_LABEL: ClassVar[str] = "item.completed.text"
 
+    PLATFORM: ClassVar[str] = 'codex_cli'
+    LABEL: ClassVar[str] = 'Codex CLI (OpenAI)'
+    # A local binary, already signed in: nothing for the user to supply.
+    DEFAULT_BASE_URL: ClassVar[str] = ''
+    REQUIRES_KEY: ClassVar[bool] = False
+    REQUIRES_HOST: ClassVar[bool] = False
+
+    @classmethod
+    def fetch_models(
+        cls, host: str, api_key: str,
+    ) -> tuple[list[dict[str, str | None]] | None, str | None]:
+        """Asks the local binary — no network call, no credential."""
+        from services.provider_probe import fetch_codex_models  # noqa: PLC0415
+        return fetch_codex_models()
+
     def __init__(self, config: dict[str, object]) -> None:
         self._config = config
         self.model: Optional[str] = cast(Optional[str], config.get('model'))
@@ -376,10 +391,10 @@ class CodexCliClient(ProviderClient):
         cached = codex_model_context_window(self.model)
         if cached is not None:
             return cached
-        window = default_window_for_model(self.model)
+        window = DEFAULT_WINDOW
         logger.info(
             "[CodexCliClient] No cached context window for model=%s — using the "
-            "family default %d", self.model, window,
+            "DEFAULT_WINDOW %d", self.model, window,
         )
         return window
 

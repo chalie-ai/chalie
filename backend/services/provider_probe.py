@@ -28,19 +28,35 @@ import requests as req
 
 from configs.enums.provider_type import ProviderType
 from configs.enums.thinking_level import ThinkingLevel
-from services.provider_db_service import PROVIDER_IN_USE_MSG
+from services.provider_db_service import (
+    PROVIDER_IN_USE_MSG,
+    missing_host_msg,
+    missing_key_msg,
+)
 
 logger = logging.getLogger(__name__)
 
 DUPLICATE_NAME_MSG = "A provider with that name already exists"
 
-SAFE_VALIDATION_MESSAGES = {
-    "'model' is required",
-    "openai_compatible provider requires 'host' field "
-    "(base URL, e.g. 'https://api.minimax.io/v1')",
-    "openai_compatible provider requires 'api_key' field",
-    PROVIDER_IN_USE_MSG,
-}
+
+def _build_safe_validation_messages() -> set[str]:
+    """Every validation message that may be shown to the admin verbatim.
+
+    Built from the registry so each platform's own rejection text is covered.
+    Everything outside this set is replaced with a generic string, so a message
+    that goes missing here does not leak — it just stops being useful. Deriving
+    it means a new provider module is understood the moment it exists.
+    """
+    from services.llm_clients.registry import PROVIDERS_BY_PLATFORM  # noqa: PLC0415
+
+    messages = {"'model' is required", PROVIDER_IN_USE_MSG}
+    for platform in PROVIDERS_BY_PLATFORM:
+        messages.add(missing_host_msg(platform))
+        messages.add(missing_key_msg(platform))
+    return messages
+
+
+SAFE_VALIDATION_MESSAGES = _build_safe_validation_messages()
 
 
 def safe_validation_msg(exc: ValueError) -> str:
@@ -280,16 +296,20 @@ def fetch_openai_compatible_models(
 ) -> tuple[list[dict[str, str | None]] | None, str | None]:
     if not host:
         return None, "Host URL is required"
-    if not api_key:
-        return None, "API key is required"
     safe_host, err = validate_ollama_host(host)
     if err is not None:
         return None, err
     url = cast(str, safe_host).rstrip('/') + '/models'
+    # The key is sent when there is one and omitted when there is not: a
+    # self-hosted server started without --api-key serves this endpoint openly,
+    # and refusing to ask on the client's side would make every keyless host
+    # unlistable. A server that does want a key answers 401, which is mapped
+    # below — the server's rule, applied by the server.
+    headers = {'Authorization': f'Bearer {api_key}'} if api_key else {}
     try:
         r = req.get(
             url,
-            headers={'Authorization': f'Bearer {api_key}'},
+            headers=headers,
             timeout=_LIST_MODELS_TIMEOUT,
         )
         if r.status_code in (401, 403):
@@ -396,7 +416,15 @@ def test_ollama_provider(host: str, model: str, start: float) -> ProviderTestOut
 
 def test_api_provider(api_key: str | None, host: str | None, platform: str, model: str, start: float) -> ProviderTestOutcome:
     import time
-    if not api_key:
+
+    from services.llm_clients.registry import platform_requires_key
+
+    # Only refuse when the platform genuinely cannot be reached without a key.
+    # A self-hosted server (vLLM, llama.cpp) serves openly unless its operator
+    # opted in to a token, so demanding one here would make Test Connection the
+    # single button that fails on a provider whose models list and whose chat
+    # both work — a contradiction the user has no way to resolve.
+    if not api_key and platform_requires_key(platform):
         return ProviderTestOutcome(
             success=False,
             error="API key is required to test this provider",

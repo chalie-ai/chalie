@@ -36,6 +36,7 @@ class ProviderCatalog(Action):
                 platform=cast(str, entry["platform"]),
                 host=cast(str, entry["host"]),
                 needs_key=cast(bool, entry["needs_key"]),
+                needs_host=cast(bool, entry["needs_host"]),
             )
             for entry in get_catalog()
         ]

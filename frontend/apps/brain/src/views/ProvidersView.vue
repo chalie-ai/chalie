@@ -30,14 +30,6 @@ const catalogLoaded = ref(false);
 
 const mode = ref<'list' | 'picker' | 'form'>('list');
 
-const CUSTOM_PRESET: CatalogEntry = {
-  id: 'custom',
-  name: 'Custom (OpenAI-compatible)',
-  platform: 'openai_compatible',
-  host: '',
-  needs_key: true,
-};
-
 const preset = ref<CatalogEntry | null>(null);
 const editingId = ref<number | null>(null);
 const editModel = ref('');
@@ -59,9 +51,7 @@ const MODEL_FETCH_DEBOUNCE_MS = 600;
 
 const testing = ref(false);
 
-const needsHost = computed(
-  () => preset.value?.platform === 'ollama' || preset.value?.platform === 'openai_compatible',
-);
+const needsHost = computed(() => !!preset.value?.needs_host);
 
 const needsKey = computed(() => !!preset.value?.needs_key);
 
@@ -79,7 +69,7 @@ const saveDisabled = computed(() => !formModel.value);
 
 const isEditing = computed(() => editingId.value !== null);
 
-const catalogTiles = computed(() => [...catalog.value, CUSTOM_PRESET]);
+const catalogTiles = computed(() => catalog.value);
 
 function avatar(name: string): string {
   const s = (name || '').trim();
@@ -87,9 +77,7 @@ function avatar(name: string): string {
 }
 
 function platformLabel(platform: string): string {
-  if (platform === 'openai_compatible') return 'OpenAI-compatible';
-  if (platform === 'codex_cli') return 'Codex CLI';
-  return platform;
+  return catalog.value.find((c) => c.platform === platform)?.name || platform;
 }
 
 onMounted(async () => {
@@ -252,16 +240,17 @@ async function openWizard(id: number | null): Promise<void> {
 }
 
 function presetFor(provider: Provider): CatalogEntry {
-  const match = catalog.value.find(
-    (c) => c.platform === provider.platform && (c.host || '') === (provider.host || ''),
-  );
+  const match = catalog.value.find((c) => c.platform === provider.platform);
   if (match) return match;
+  // A row whose platform the running build no longer offers: keep it editable,
+  // and ask for whatever it already carries rather than guessing its rules.
   return {
     id: 'edit',
     name: provider.name,
     platform: provider.platform,
     host: provider.host || '',
-    needs_key: provider.platform !== 'ollama' && provider.platform !== 'codex_cli',
+    needs_key: true,
+    needs_host: !!provider.host,
   };
 }
 

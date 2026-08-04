@@ -102,7 +102,7 @@ from exceptions import (
     ProviderTimeoutError,
     RateLimitError,
 )
-from services.llm_clients.context_window import default_window_for_model
+from services.llm_clients.context_window import DEFAULT_WINDOW
 from services.llm_clients.thinking_map import GEMINI_NONE_FALLBACK_BUDGET, GEMINI_THINKING_BUDGETS
 from services.provider_api import (
     ProviderApiRequest,
@@ -177,6 +177,20 @@ class GeminiClient(ProviderClient):
     """Google Gemini API thin client."""
 
     CONTENT_FIELD_LABEL: ClassVar[str] = "candidates[].content.parts[].text"
+
+    PLATFORM: ClassVar[str] = 'gemini'
+    LABEL: ClassVar[str] = 'Google Gemini'
+    DEFAULT_BASE_URL: ClassVar[str] = ''   # the SDK already points at Google
+    REQUIRES_KEY: ClassVar[bool] = True
+    REQUIRES_HOST: ClassVar[bool] = False
+
+    @classmethod
+    def fetch_models(
+        cls, host: str, api_key: str,
+    ) -> tuple[list[dict[str, str | None]] | None, str | None]:
+        """Google publishes the list against the key; there is no host to give."""
+        from services.provider_probe import fetch_gemini_models  # noqa: PLC0415
+        return fetch_gemini_models(api_key)
 
     def __init__(self, config: dict[str, object]) -> None:
         self._config = config
@@ -435,10 +449,10 @@ class GeminiClient(ProviderClient):
         if isinstance(reported, int) and reported > 0:
             self._cached_context_limit = reported
         else:
-            self._cached_context_limit = default_window_for_model(self.model)
+            self._cached_context_limit = DEFAULT_WINDOW
             logger.info(
                 "[GeminiClient] No input_token_limit reported for model=%s — "
-                "using the family default %d", self.model, self._cached_context_limit,
+                "using DEFAULT_WINDOW %d", self.model, self._cached_context_limit,
             )
         return self._cached_context_limit
 

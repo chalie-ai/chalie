@@ -5,12 +5,17 @@ Replaces the create_llm_service / _build_service pair from llm_service.py.
 No FallbackLLMService, no LoggingLLMService — those concerns live in
 ProviderService (telemetry) and have been deleted (fallback is dead code).
 
+Dispatch and validation are both derived from the registry: the platform names
+a class, and that class states whether a key and a host are required. There is
+no per-platform branch here, and adding a provider never touches this file.
+
 Consumed by: services.provider_service (send / _resolve).
 """
 
 from __future__ import annotations
 
 from contracts.provider_client import ProviderClient
+from services.llm_clients.registry import client_class_for
 
 
 def build_client(config: dict[str, object]) -> ProviderClient:
@@ -28,39 +33,17 @@ def build_client(config: dict[str, object]) -> ProviderClient:
             "LLM config missing 'model'. Configure it via the providers API"
         )
 
-    if platform == 'ollama':
-        if not config.get('host'):
-            raise ValueError(
-                "Ollama provider requires 'host' field (e.g., 'http://localhost:11434')"
-            )
-        from services.llm_clients.ollama import OllamaClient  # noqa: PLC0415
-        return OllamaClient(config)
+    client_class = client_class_for(str(platform))
+    if client_class is None:
+        raise ValueError(f"Unknown platform: {platform}")
 
-    if platform == 'anthropic':
-        if not config.get('api_key'):
-            raise ValueError("Anthropic provider requires 'api_key' field")
-        from services.llm_clients.anthropic import AnthropicClient  # noqa: PLC0415
-        return AnthropicClient(config)
+    if client_class.REQUIRES_KEY and not config.get('api_key'):
+        raise ValueError(f"{platform} provider requires 'api_key' field")
 
-    if platform in ('openai', 'openai_compatible'):
-        if not config.get('api_key'):
-            raise ValueError(f"{platform} provider requires 'api_key' field")
-        if platform == 'openai_compatible' and not config.get('host'):
-            raise ValueError(
-                "openai_compatible provider requires 'host' field "
-                "(base URL, e.g. 'https://api.minimax.io/v1')"
-            )
-        from services.llm_clients.openai import OpenAIClient  # noqa: PLC0415
-        return OpenAIClient(config)
+    if client_class.REQUIRES_HOST and not config.get('host'):
+        raise ValueError(
+            f"{platform} provider requires 'host' field "
+            f"(e.g. '{client_class.DEFAULT_BASE_URL}')"
+        )
 
-    if platform == 'gemini':
-        if not config.get('api_key'):
-            raise ValueError("Gemini provider requires 'api_key' field")
-        from services.llm_clients.gemini import GeminiClient  # noqa: PLC0415
-        return GeminiClient(config)
-
-    if platform == 'codex_cli':
-        from services.llm_clients.codex_cli import CodexCliClient  # noqa: PLC0415
-        return CodexCliClient(config)
-
-    raise ValueError(f"Unknown platform: {platform}")
+    return client_class(config)

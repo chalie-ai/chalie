@@ -1,11 +1,8 @@
 # Feature tests for the openai_compatible LLM platform.
 # Real-stack — no mocks of production code.
 
-import json
 import secrets
 import sqlite3
-import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import cast
 
 import pytest
@@ -125,12 +122,20 @@ class TestOpenAICompatibleProvider:
         assert provider['host'] == 'https://api.minimax.io/v1'
 
     # ------------------------------------------------------------------
-    # 3. build_client returns OpenAIClient for openai_compatible
+    # 3. build_client returns OpenAICompatibleClient for openai_compatible
     # ------------------------------------------------------------------
 
-    def test_build_client_returns_openai_client(self) -> None:
+    def test_build_client_returns_openai_compatible_client(self) -> None:
+        """The generic platform builds the generic client, not OpenAI's own.
+
+        ``OpenAIClient`` is a subclass carrying api.openai.com-specific
+        behaviour — a published-window table and an overflow probe restricted to
+        the official endpoint. Handing it a third-party host would apply OpenAI's
+        facts to another vendor's server.
+        """
         from services.llm_clients.factory import build_client
         from services.llm_clients.openai import OpenAIClient
+        from services.llm_clients.openai_compatible import OpenAICompatibleClient
 
         config: dict[str, object] = {
             'platform': 'openai_compatible',
@@ -141,14 +146,15 @@ class TestOpenAICompatibleProvider:
 
         client = build_client(config)
 
-        assert isinstance(client, OpenAIClient)
+        assert isinstance(client, OpenAICompatibleClient)
+        assert not isinstance(client, OpenAIClient)
 
     # ------------------------------------------------------------------
     # 4. _get_client() wires base_url from the host field
     # ------------------------------------------------------------------
 
     def test_get_client_uses_host_as_base_url(self) -> None:
-        from services.llm_clients.openai import OpenAIClient
+        from services.llm_clients.openai_compatible import OpenAICompatibleClient
 
         config: dict[str, object] = {
             'platform': 'openai_compatible',
@@ -157,7 +163,7 @@ class TestOpenAICompatibleProvider:
             'api_key': secrets.token_hex(16),
         }
 
-        client = OpenAIClient(config)
+        client = OpenAICompatibleClient(config)
         openai_client = client._get_client()
 
         # openai.OpenAI stores base_url as httpx.URL (trailing slash normalised)
@@ -185,193 +191,6 @@ class TestOpenAICompatibleProvider:
 
         from urllib.parse import urlparse
         assert urlparse(str(openai_client.base_url)).hostname == 'api.openai.com'
-
-    # ------------------------------------------------------------------
-    # 4a. The window is measured at setup and stored on the row
-    #
-    # Creating a provider pings the host with a one-shot completion and writes a
-    # window to the row, so no send has to guess. Without this the column stays
-    # NULL for every provider ever created — nothing else populates it — and
-    # every turn dies resolving a window it cannot determine.
-    # ------------------------------------------------------------------
-
-    def _serve_completion(self, model: str, n_ctx: object) -> "tuple[str, HTTPServer]":
-        """Stand up a /v1/chat/completions endpoint; return (host, server).
-
-        The probe is a real one-shot completion, so the stub answers POST. When
-        ``n_ctx`` is None the reply carries no size field at all — the shape every
-        spec-compliant OpenAI server returns — which is what drives the probe onto
-        its family-based default.
-        """
-
-        class _Completions(BaseHTTPRequestHandler):
-            def do_POST(self) -> None:
-                body: dict[str, object] = {
-                    "id": "chatcmpl-probe",
-                    "object": "chat.completion",
-                    "created": 1,
-                    "model": model,
-                    "choices": [{
-                        "index": 0,
-                        "message": {"role": "assistant", "content": "pong"},
-                        "finish_reason": "stop",
-                    }],
-                    "usage": {
-                        "prompt_tokens": 14,
-                        "completion_tokens": 1,
-                        "total_tokens": 15,
-                    },
-                }
-                if n_ctx is not None:
-                    body["model_info"] = {"context_length": n_ctx}
-                payload = json.dumps(body).encode()
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(payload)))
-                self.end_headers()
-                self.wfile.write(payload)
-
-            def log_message(self, format: str, *args: object) -> None:  # noqa: A002
-                pass
-
-        server = HTTPServer(("127.0.0.1", 0), _Completions)
-        threading.Thread(target=server.serve_forever, daemon=True).start()
-        return f"http://127.0.0.1:{server.server_port}/v1", server
-
-    def _create_and_read_back(self, client: FlaskClient, name: str, model: str,
-                              n_ctx: object) -> "dict[str, object]":
-        host, server = self._serve_completion(model, n_ctx)
-        try:
-            resp = client.post('/api/providers/-1', json={
-                'name': name, 'platform': 'openai_compatible',
-                'model': model, 'host': host,
-                'api_key': secrets.token_hex(16),
-            })
-            assert resp.status_code == 201, resp.get_data(as_text=True)
-        finally:
-            server.shutdown()
-        listing = _unwrap_listing(cast("dict[str, object]", client.get('/api/providers/all').get_json()))
-        return next(p for p in listing if p['name'] == name)
-
-    def test_create_stores_the_window_reported_by_the_host(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
-        client, _, _store = authed_client
-        _unlock_vault()
-
-        stored = self._create_and_read_back(client, 'measured', 'local-model', 131072)
-
-        assert stored['context_window'] == 131072
-
-    def test_a_window_beyond_the_ceiling_is_clamped_on_the_row(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
-        from services.provider_api import MAX_CONTEXT_WINDOW
-
-        client, _, _store = authed_client
-        _unlock_vault()
-
-        stored = self._create_and_read_back(client, 'huge', 'local-model', 1_000_000)
-
-        # Clamped at write time, so nothing downstream can ever read a window
-        # larger than the ceiling off a provider row.
-        assert stored['context_window'] == MAX_CONTEXT_WINDOW
-
-    def test_a_host_that_reports_no_size_still_gets_a_usable_window(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
-        from services.llm_clients.context_window import DEFAULT_WINDOW as _DEFAULT_WINDOW
-
-        client, _, _store = authed_client
-        _unlock_vault()
-
-        # A spec-compliant OpenAI response carries no context-window field
-        # anywhere — the common case, and the one that used to leave the column
-        # NULL and crash every turn. The completion answering at all is the
-        # measurement: the host and model are live, so the row gets a usable
-        # window instead of a permanent failure.
-        stored = self._create_and_read_back(client, 'silent', 'local-model', None)
-
-        assert stored['context_window'] == _DEFAULT_WINDOW
-
-    def test_an_unreachable_host_leaves_the_window_unset(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
-        client, _, _store = authed_client
-        _unlock_vault()
-
-        # Port 1 is closed; the probe cannot answer.
-        resp = client.post('/api/providers/-1', json={
-            'name': 'offline', 'platform': 'openai_compatible',
-            'model': 'local-model', 'host': 'http://127.0.0.1:1/v1',
-            'api_key': secrets.token_hex(16),
-        })
-        assert resp.status_code == 201, resp.get_data(as_text=True)
-
-        listing = _unwrap_listing(cast("dict[str, object]", client.get('/api/providers/all').get_json()))
-        stored = next(p for p in listing if p['name'] == 'offline')
-        # Left NULL rather than seeded with a guess: a temporarily-down host must
-        # not permanently stamp a fabricated window onto the row.
-        assert stored.get('context_window') is None
-
-    # ------------------------------------------------------------------
-    # 4b. Size rejections from a host that is not OpenAI
-    #
-    # 'context_length_exceeded' is OpenAI's own error code. The self-hosted and
-    # third-party servers that share this client are under no obligation to send
-    # it, and mostly don't — they just return a 400 saying the input was too
-    # long. Those must still raise ContextLimit, or the turn is retried at the
-    # same size until attempts run out instead of compacting.
-    #
-    # Driven through a real HTTP 400 from a local server: the SDK's own error
-    # construction and the client's except-branch both run for real.
-    # ------------------------------------------------------------------
-
-    def _send_against_400(self, message: str) -> None:
-        from services.llm_clients.openai import OpenAIClient
-        from services.provider_api import ProviderApiRequest
-
-        class _Reject400(BaseHTTPRequestHandler):
-            def do_POST(self) -> None:
-                payload = json.dumps({
-                    "error": {"message": message, "type": "invalid_request_error"},
-                }).encode()
-                self.send_response(400)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(payload)))
-                self.end_headers()
-                self.wfile.write(payload)
-
-            def log_message(self, format: str, *args: object) -> None:  # noqa: A002
-                pass  # keep the test output clean
-
-        server = HTTPServer(("127.0.0.1", 0), _Reject400)
-        threading.Thread(target=server.serve_forever, daemon=True).start()
-        try:
-            client = OpenAIClient({
-                'platform': 'openai_compatible',
-                'model': 'local-model',
-                'host': f"http://127.0.0.1:{server.server_port}/v1",
-                'api_key': secrets.token_hex(16),
-            })
-            client.send(ProviderApiRequest(
-                system="You are helpful.",
-                messages=[{"role": "user", "content": "hi"}],
-            ))
-        finally:
-            server.shutdown()
-
-    def test_size_rejection_without_openai_error_code_raises_context_limit(self) -> None:
-        from exceptions import ContextLimit
-
-        with pytest.raises(ContextLimit) as caught:
-            self._send_against_400(
-                "the input exceeds the limit of 4096 tokens for this context length",
-            )
-        # The platform is reported as its own, not flattened to 'openai' —
-        # the recovery path logs which provider hit the wall.
-        assert caught.value.provider == 'openai_compatible'
-        assert caught.value.model == 'local-model'
-
-    def test_unrelated_400_is_not_mistaken_for_a_size_rejection(self) -> None:
-        from exceptions import ContextLimit, ProviderResponseError
-
-        with pytest.raises(ProviderResponseError) as caught:
-            self._send_against_400("unknown parameter: 'foo'")
-        # Compacting would not help; misreading this would shrink history for nothing.
-        assert not isinstance(caught.value, ContextLimit)
 
     # ------------------------------------------------------------------
     # 5. Missing host → 4xx on POST

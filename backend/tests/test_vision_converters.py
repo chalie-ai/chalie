@@ -39,7 +39,7 @@ def test_anthropic_text_only_unchanged() -> None:
 
 
 def test_openai_emits_image_url_block() -> None:
-    from services.llm_clients.openai import _openai_convert_messages
+    from services.llm_clients.openai_compatible import _openai_convert_messages
     out = _openai_convert_messages(
         [{"role": "user", "content": "describe", "image": _IMG}]
     )
@@ -54,7 +54,7 @@ def test_openai_emits_image_url_block() -> None:
 
 
 def test_openai_image_only_no_text() -> None:
-    from services.llm_clients.openai import _openai_convert_messages
+    from services.llm_clients.openai_compatible import _openai_convert_messages
     out = _openai_convert_messages([{"role": "user", "content": "", "image": _IMG}])
     assert out[0]["content"] == [
         {"type": "image_url",
@@ -63,7 +63,7 @@ def test_openai_image_only_no_text() -> None:
 
 
 def test_openai_text_only_unchanged() -> None:
-    from services.llm_clients.openai import _openai_convert_messages
+    from services.llm_clients.openai_compatible import _openai_convert_messages
     msg: dict[str, object] = {"role": "user", "content": "plain"}
     assert _openai_convert_messages([msg]) == [msg]
 
@@ -72,7 +72,7 @@ def test_openai_assistant_tool_calls_unchanged() -> None:
     # Guards the image branch staying in the FINAL else, after the
     # assistant+tool_calls and tool branches — an image-less assistant
     # tool-call message must pass through its dedicated branch untouched.
-    from services.llm_clients.openai import _openai_convert_messages
+    from services.llm_clients.openai_compatible import _openai_convert_messages
     msg: dict[str, object] = {
         "role": "assistant",
         "content": "",

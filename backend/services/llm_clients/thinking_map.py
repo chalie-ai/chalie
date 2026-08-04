@@ -48,8 +48,10 @@ Notes:
   - Anthropic MAX budget = the request's max_tokens (client-side special
     case, documented in AnthropicClient._thinking_native).
   - OpenAI has no 'max' reasoning_effort; MAX maps to 'high'.
-  - OpenAI compatible extra_body is sent ONLY on the openai_compatible
-    platform and ONLY for NONE (see OpenAIClient.send).
+  - OpenAI compatible extra_body is sent ONLY for NONE, and only by clients
+    declaring SENDS_THINKING_EXTRA_BODY (see OpenAICompatibleClient.send).
+    OpenAIClient opts out: api.openai.com validates the body strictly and
+    rejects the unknown top-level key.
   - Gemini 2.5 Pro cannot disable thinking; when budget 0 is rejected the
     client falls back to GEMINI_NONE_FALLBACK_BUDGET (128).
   - Codex CLI accepts minimal|low|medium|high|xhigh; 'none' does not exist
@@ -82,8 +84,9 @@ OPENAI_REASONING_EFFORTS: dict[ThinkingLevel, str] = {
 # When a model rejects 'none' on OpenAI, retry with this effort.
 OPENAI_NONE_FALLBACK_EFFORT = 'minimal'
 
-# Vendor-extension body param sent via OpenAI SDK's extra_body for
-# openai_compatible platforms (Z.ai GLM, DeepSeek v4).  Sent ONLY for NONE.
+# Vendor-extension body param sent via OpenAI SDK's extra_body by every
+# OpenAI-protocol client that declares SENDS_THINKING_EXTRA_BODY — the vendors
+# reading it include Z.ai GLM and DeepSeek.  Sent ONLY for NONE.
 OPENAI_COMPATIBLE_NONE_BODY: dict[str, object] = {
     'thinking': {'type': 'disabled'},
 }

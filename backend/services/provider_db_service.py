@@ -21,6 +21,27 @@ PROVIDER_IN_USE_MSG = (
 )
 
 
+def missing_host_msg(platform: str) -> str:
+    """Rejection text for a row that supplied no base URL.
+
+    A function rather than a literal because the wording is also allowlisted in
+    provider_probe.SAFE_VALIDATION_MESSAGES, which echoes only messages it
+    recognises. Two copies of a per-platform string cannot be kept in step by
+    hand: the copies match today for the one platform that can trip this, and
+    would silently stop matching for the next one — turning a precise, fixable
+    complaint into the generic "invalid configuration".
+    """
+    return (
+        f"{platform} provider requires 'host' field "
+        "(base URL, e.g. 'https://api.minimax.io/v1')"
+    )
+
+
+def missing_key_msg(platform: str) -> str:
+    """Rejection text for a row that supplied no credential. See missing_host_msg."""
+    return f"{platform} provider requires 'api_key' field"
+
+
 class ProviderDbService:
 
     @staticmethod
@@ -89,22 +110,43 @@ class ProviderDbService:
             return None
         return self._provider_to_dict(provider)
 
+    @staticmethod
+    def _reject_unconfigurable(platform: str, data: Dict[str, object]) -> None:
+        """Reject a row that names no server it could ever reach.
+
+        Deliberately narrower than the factory's validation, which demands
+        every credential a send needs. A row is allowed to be incomplete — a
+        key is routinely supplied after the fact, and cannot be read back at
+        all while the vault is locked — so a missing credential is a problem
+        for send time, not for create time.
+
+        A platform that requires a host and publishes no default endpoint is
+        the exception: there is nothing to fall back on, so a row without a
+        host points at no server, and no later edit short of supplying the host
+        can make it mean anything.
+        """
+        from services.llm_clients.registry import client_class_for  # noqa: PLC0415
+
+        client = client_class_for(platform)
+        if client is None or not client.REQUIRES_HOST or client.DEFAULT_BASE_URL:
+            return
+
+        if not data.get("host"):
+            raise ValueError(missing_host_msg(platform))
+        if client.REQUIRES_KEY and not data.get("api_key"):
+            raise ValueError(missing_key_msg(platform))
+
     def create_provider(self, data: Dict[str, object]) -> Optional[Dict[str, object]]:
         default_model = data.get("model")
         if not isinstance(default_model, str) or not default_model:
             raise ValueError("'model' is required")
 
-        platform = data.get("platform", "")
-        if platform == "openai_compatible":
-            if not data.get("host"):
-                raise ValueError(
-                    "openai_compatible provider requires 'host' field "
-                    "(base URL, e.g. 'https://api.minimax.io/v1')"
-                )
-            if not data.get("api_key"):
-                raise ValueError(
-                    "openai_compatible provider requires 'api_key' field"
-                )
+        # Narrowed once, here, because every guard below dispatches on it: the
+        # registry lookup, the configurability check, and the vision-probe skip
+        # all need a real string, and a payload carrying something else must not
+        # reach them as an untyped object.
+        platform = str(data.get("platform") or "")
+        self._reject_unconfigurable(platform, data)
 
         api_key_val = cast(Optional[str], data.get("api_key"))
         encrypted_key = self._seal_api_key(api_key_val) if api_key_val else None
@@ -115,7 +157,7 @@ class ProviderDbService:
         # (guaranteed-to-fail) network call and default to 0; a later key edit
         # re-probes. Mirrors the update-path guard for create/update symmetry.
         # codex_cli is chat-only and has no api_key — never probe it.
-        if platform == 'codex_cli' or (platform in self._KEY_REQUIRING and not api_key_val):
+        if platform == 'codex_cli' or (self._requires_key(platform) and not api_key_val):
             logger.warning(
                 "[Provider] Skipping vision probe on create for '%s' — "
                 "%s",
@@ -191,7 +233,7 @@ class ProviderDbService:
         _probe_fields = {'platform', 'model', 'host', 'api_key'}
         if _probe_fields & set(data.keys()):
             current = self.get_provider_by_id(provider_id) or {}
-            eff_platform = data.get('platform', current.get('platform', ''))
+            eff_platform = str(data.get('platform', current.get('platform', '')) or '')
             eff_model = data.get('model', current.get('model', ''))
             eff_host = data.get('host', current.get('host'))
             # explicit new api_key wins; else reuse current (decrypted) value
@@ -199,7 +241,7 @@ class ProviderDbService:
             if eff_platform == 'codex_cli':
                 # codex_cli is chat-only — no vision probe, no api_key needed
                 updates["supports_vision"] = 0
-            elif eff_platform in self._KEY_REQUIRING and not eff_api_key:
+            elif self._requires_key(eff_platform) and not eff_api_key:
                 # vault locked / no credential — cannot probe, leave column as-is
                 logger.warning(
                     "[Provider] Skipping vision re-probe for id=%s — no api_key available",
@@ -219,7 +261,7 @@ class ProviderDbService:
             # too. An explicit value in this payload still wins.
             if "context_window" not in data:
                 probed = self._probe_context_window(
-                    cast(str, eff_platform), cast(str, eff_model),
+                    eff_platform, cast(str, eff_model),
                     cast(Optional[str], eff_host), cast(Optional[str], eff_api_key),
                 )
                 if probed is not None:
@@ -425,7 +467,18 @@ class ProviderDbService:
 
     # ── Vision Provider ────────────────────────────────────────────
 
-    _KEY_REQUIRING = ('anthropic', 'openai', 'gemini', 'openai_compatible')
+    @staticmethod
+    def _requires_key(platform: str) -> bool:
+        """Whether this platform cannot be probed without a credential.
+
+        The rule itself lives on the client class — see
+        ``registry.platform_requires_key``, which the connectivity test reads
+        too. Skipping the vision probe and refusing a connectivity test are the
+        same question, and answering it in two places is how they drift.
+        """
+        from services.llm_clients.registry import platform_requires_key  # noqa: PLC0415
+
+        return platform_requires_key(platform)
 
     def _resolve_vision_provider(self) -> tuple[Optional[Dict[str, object]], str]:
         value = Setting.get_value('vision_provider_id')

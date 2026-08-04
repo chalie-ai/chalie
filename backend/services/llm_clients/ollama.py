@@ -28,7 +28,7 @@ import requests
 
 from configs.enums.thinking_level import ThinkingLevel
 from contracts.provider_client import ProviderClient
-from services.llm_clients.context_window import default_window_for_model
+from services.llm_clients.context_window import DEFAULT_WINDOW
 from services.llm_clients.thinking_map import OLLAMA_THINK
 from exceptions import (
     ContextLimit,
@@ -145,6 +145,20 @@ def _parse_chat_response(data: dict[str, object], default_model: str) -> Provide
 
 class OllamaClient(ProviderClient):
     CONTENT_FIELD_LABEL: ClassVar[str] = "message.content"
+
+    PLATFORM: ClassVar[str] = 'ollama'
+    LABEL: ClassVar[str] = 'Ollama (local)'
+    DEFAULT_BASE_URL: ClassVar[str] = 'http://localhost:11434'
+    REQUIRES_KEY: ClassVar[bool] = False
+    REQUIRES_HOST: ClassVar[bool] = True
+
+    @classmethod
+    def fetch_models(
+        cls, host: str, api_key: str,
+    ) -> tuple[list[dict[str, str | None]] | None, str | None]:
+        """Ollama lists what is pulled locally; it takes no credential."""
+        from services.provider_probe import fetch_ollama_models  # noqa: PLC0415
+        return fetch_ollama_models(host or cls.DEFAULT_BASE_URL)
 
     def __init__(self, config: dict[str, object]) -> None:
         self._config = config
@@ -288,10 +302,10 @@ class OllamaClient(ProviderClient):
                         raw_limit = int(val)
                         break
                 if raw_limit is None:
-                    raw_limit = default_window_for_model(self.model)
+                    raw_limit = DEFAULT_WINDOW
                     logger.info(
                         "[OllamaClient] /api/show reported no context_length for model=%s "
-                        "— using the family default %d",
+                        "— using DEFAULT_WINDOW=%d",
                         self.model, raw_limit,
                     )
             else:

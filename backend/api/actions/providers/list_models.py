@@ -21,14 +21,7 @@ from exceptions import EndpointError, NotFoundError
 from api.request import Request
 from api.request.provider_models import ListModelsRequest
 from api.response.provider_models import ListModelsResult, ModelInfo
-from services.provider_probe import (
-    fetch_anthropic_models,
-    fetch_codex_models,
-    fetch_gemini_models,
-    fetch_ollama_models,
-    fetch_openai_compatible_models,
-    fetch_openai_models,
-)
+from services.llm_clients.registry import client_class_for
 
 
 class ProviderListModels(Action):
@@ -44,22 +37,16 @@ class ProviderListModels(Action):
         dto = cast(ListModelsRequest, data)
         platform = dto.platform.strip().lower()
 
-        models: list[dict[str, str | None]] | None
-        err: str | None
-        if platform == 'ollama':
-            models, err = fetch_ollama_models(dto.host or '')
-        elif platform == 'openai':
-            models, err = fetch_openai_models((dto.api_key or '').strip())
-        elif platform == 'anthropic':
-            models, err = fetch_anthropic_models((dto.api_key or '').strip())
-        elif platform == 'gemini':
-            models, err = fetch_gemini_models((dto.api_key or '').strip())
-        elif platform == 'openai_compatible':
-            models, err = fetch_openai_compatible_models(dto.host or '', (dto.api_key or '').strip())
-        elif platform == 'codex_cli':
-            models, err = fetch_codex_models()
-        else:
+        # Each client knows how its own vendor lists models, so a new provider
+        # is listable the moment its module exists — there is no branch here to
+        # forget to extend.
+        client_class = client_class_for(platform)
+        if client_class is None:
             raise EndpointError(f"Unsupported platform '{platform}'")
+
+        models, err = client_class.fetch_models(
+            dto.host or '', (dto.api_key or '').strip(),
+        )
 
         if err is not None:
             return ListModelsResult(models=[], error=err).single()

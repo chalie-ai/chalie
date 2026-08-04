@@ -41,6 +41,7 @@ export interface CatalogEntry {
   platform: string;
   host: string;
   needs_key: boolean;
+  needs_host: boolean;
 }
 
 export interface ProviderRole {
