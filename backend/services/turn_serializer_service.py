@@ -201,10 +201,10 @@ def _rows_to_messages(rows: list[dict[str, object]]) -> list[dict[str, object]]:
     # Rich-media spans resolve PER ACT CYCLE, not per turn. A turn_id spans the
     # whole thread — many user requests — and each request runs its own ACT loop
     # with its own rich-media ordinal counter that restarts at 1 (DispatchService
-    # is constructed per request). So two image_search calls in the same turn
-    # both carry ``image_search_1``; resolving an assistant row's span against
+    # is constructed per request). So two image_preview calls in the same turn
+    # both carry ``image_preview_1``; resolving an assistant row's span against
     # the FLAT turn scope returns the turn's FIRST such call for every card
-    # (every image card rendered the first query's images). Scope each assistant
+    # (every image card rendered the first image). Scope each assistant
     # row to its cycle instead: reset at every user row (the cycle boundary),
     # accumulate any assistant-anchored calls, and resolve the span within that
     # window — the one scope where the per-request ordinal is unique.

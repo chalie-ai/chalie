@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import ClassVar
 
 from abilities.find_tools import FindToolsAbility
+from abilities.image_preview import ImagePreviewAbility
 from abilities.memory import MemoryAbility
 from configs.channels._common import DEFAULT_ALWAYS_AVAILABLE
 from configs.enums.channels import Channel
@@ -77,6 +78,8 @@ Guiding framework for all interactions (internalize, do not recite):
 ## Output
 
 `{FindToolsAbility.NAME}` provides you with a toolbox of different abilities, use these tools to ensure that your responses are accurate
+
+To show images to the user call `{FindToolsAbility.NAME}` and load the `{ImagePreviewAbility.NAME}` tool
 """
             """
 When all tool calls are complete, your final response must be a comprehensive factual synthesis of everything found. Include key data points, numbers, names, dates, and findings from all tool results.

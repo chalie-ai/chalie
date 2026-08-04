@@ -60,7 +60,7 @@ VALID_SETTINGS = {"internal", "allow", "ask", "deny"}
 # stale rows for them so this frozenset stays the single source of truth.
 INTERNAL = frozenset({
     "browser", "calendar", "chalie_docs", "chat_history_compactor", "contacts",
-    "email", "find_skills", "find_tools", "mcp_tools", "memory", "news",
+    "email", "find_skills", "find_tools", "image_preview", "mcp_tools", "memory", "news",
     "read", "review_tool_calls", "review_transcript", "run_script", "save_graph",
     "save_pattern", "search", "skill_manager", "web_fetch",
 })

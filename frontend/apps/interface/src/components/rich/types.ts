@@ -8,3 +8,4 @@ export type { ListPayload } from './ListCard.vue';
 export type { TimerPayload } from './TimerCard.vue';
 export type { CalendarPayload } from './CalendarCard.vue';
 export type { ContactsPayload } from './ContactsCard.vue';
+export type { ImagePreviewPayload } from './ImagePreviewCard.vue';

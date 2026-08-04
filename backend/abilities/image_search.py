@@ -23,6 +23,7 @@ from typing import ClassVar, cast
 
 from abilities._ability import Ability
 from abilities._result import ToolResult
+from abilities.image_preview import ImagePreviewAbility
 from configs.enums.param_key import Keys
 from contracts.params.image_search_params_bag import ImageSearchParamsBag
 from contracts.params.param_bag import ParamBag
@@ -144,21 +145,17 @@ class ImageSearchAbility(Ability[ImageSearchParamsBag]):
 
         body = "\n".join(lines)
         if checked:
-            rich: dict[str, object] = {
-                "query": query,
-                "images": [
-                    {
-                        "url": r.get("url", ""),
-                        "thumb_url": r.get("thumb_url", ""),
-                        "title": r.get("title", ""),
-                        "source": r.get("source", ""),
-                        "verified": bool(r.get("verified")),
-                    }
-                    for r in checked
-                ],
-            }
-            return ToolResult.ok(body, rich=rich, count=len(checked), degraded=degraded)
+            return ToolResult.ok(body, count=len(checked), degraded=degraded)
         return ToolResult.no_results(hint=body, degraded=degraded)
+
+    def get_follow_up(self, tr: "ToolResult") -> str:
+        """image_search no longer renders its own card; nudge the LLM to render
+        results via :attr:`ImagePreviewAbility.NAME` instead."""
+        return (
+            f"ESSENTIAL: Select one or more of the returned images and present it "
+            f"to the user by using the `{ImagePreviewAbility.NAME}` tool. Do NOT "
+            f"skip this step, else the user may not see the images you're seeing"
+        )
 
     def _verify(
         self, query: str, results: list[dict[str, str]]

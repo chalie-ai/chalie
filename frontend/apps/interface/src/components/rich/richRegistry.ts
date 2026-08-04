@@ -2,10 +2,11 @@ import type { Component } from 'vue';
 import { defineAsyncComponent } from 'vue';
 
 /**
- * Maps a tag PREFIX (before the first underscore, e.g. "weather" in "weather_1")
- * to the card component that renders it. news/search are text-only, so there is
- * no ArticleCard. Cards are async so each + its scoped styles code-split into
- * their own chunk, keeping the chat spine light until that card type appears.
+ * Maps a tag base name (full slug stripped of a trailing `_<digits>` ordinal,
+ * e.g. "image_preview" from "image_preview_2") to the card component that
+ * renders it. news/search are text-only, so there is no ArticleCard. Cards are
+ * async so each + its scoped styles code-split into their own chunk, keeping
+ * the chat spine light until that card type appears.
  */
 export interface RichCardEntry {
   component: Component;
@@ -18,13 +19,18 @@ const richRegistry: Record<string, RichCardEntry> = {
   timer: { component: defineAsyncComponent(() => import('./TimerCard.vue')) },
   calendar: { component: defineAsyncComponent(() => import('./CalendarCard.vue')) },
   contacts: { component: defineAsyncComponent(() => import('./ContactsCard.vue')) },
-  image: { component: defineAsyncComponent(() => import('./ImageSearchCard.vue')) },
+  image_preview: {
+    component: defineAsyncComponent(() => import('./ImagePreviewCard.vue')),
+  },
 };
 
 /**
- * Resolve a card for a full tag (e.g. "weather_1" → WeatherCard) by its prefix.
- * Returns undefined for unknown prefixes so the caller falls back to synthesis text.
+ * Resolve a card for a full tag (e.g. "image_preview_2" → ImagePreviewCard,
+ * "weather_1" → WeatherCard) by stripping the trailing `_<digits>` ordinal.
+ * Returns undefined for unknown bases so the caller falls back to synthesis
+ * text.
  */
 export function resolveRichCard(tag: string): RichCardEntry | undefined {
-  return richRegistry[tag.split('_')[0] ?? ''];
+  const base = tag.replace(/_\d+$/, '');
+  return richRegistry[base];
 }

@@ -21,6 +21,8 @@ from __future__ import annotations
 
 from typing import ClassVar
 
+from abilities.find_tools import FindToolsAbility
+from abilities.image_preview import ImagePreviewAbility
 from configs.channels._common import DEFAULT_ALWAYS_AVAILABLE
 from configs.enums.channels import Channel
 from configs.enums.config_type import ConfigTypeEnum
@@ -65,8 +67,10 @@ class ScheduledConfig(ProcessorConfig):
 
     @property
     def system_prompt(self) -> str:
-        return """You are carrying out a scheduled task on the user's behalf, given below. It was queued earlier to run at this time.
+        return f"""You are carrying out a scheduled task on the user's behalf, given below. It was queued earlier to run at this time.
 
 Do the work the task asks for — use your tools to gather whatever you need (search, read, recall the user's memory, check the calendar, and so on). Work only from the task and what your tools return; never invent facts, URLs, or results.
 
-STOP RULE: the moment the task is done — or you know it cannot be — stop calling tools and write a concise, self-contained result. Phrase it as the finished outcome of the task, not as a status update about yourself."""
+STOP RULE: the moment the task is done — or you know it cannot be — stop calling tools and write a concise, self-contained result. Phrase it as the finished outcome of the task, not as a status update about yourself.
+
+To show images to the user call `{FindToolsAbility.NAME}` and load the `{ImagePreviewAbility.NAME}` tool"""
