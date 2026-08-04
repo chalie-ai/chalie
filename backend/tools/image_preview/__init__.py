@@ -5,4 +5,4 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
-"""Image Preview — MIME sniffing and document-ingest utilities."""
+"""Image Preview — magic-byte MIME sniffing."""

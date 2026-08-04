@@ -40,15 +40,31 @@ if TYPE_CHECKING:
 _SCALAR = (str, int, float, bool)
 
 
-def truncate(text: str, limit: int) -> tuple[str, bool]:
+def truncate(
+    text: str, limit: int, *, words: bool = False, suffix: str = ""
+) -> tuple[str, bool]:
     """The single sanctioned truncation primitive so every tool reports truncation
     the same way (``meta truncated=true``) instead of silently dropping output.
+
+    Args:
+        text: The text to clamp.
+        limit: Maximum length — characters, or WORDS when ``words`` is set.
+        words: Clamp by whitespace-separated words instead of characters. The
+            returned text is re-joined on single spaces either way.
+        suffix: Appended only to a text that was actually cut (``"…"``), so an
+            untouched text never grows a marker it did not earn.
+
+    Returns:
+        ``(text, was_truncated)`` — the caller reports the flag; it never drops
+        it, which is the whole point of having one primitive.
     """
     if limit < 0:
         raise ValueError("truncate limit must be >= 0")
-    if len(text) <= limit:
-        return text, False
-    return text[:limit], True
+    units: "str | list[str]" = text.split() if words else text
+    if len(units) <= limit:
+        return (" ".join(units) if words else text), False
+    kept = " ".join(units[:limit]) if words else text[:limit]
+    return kept + suffix, True
 
 
 @dataclass(frozen=True, slots=True)

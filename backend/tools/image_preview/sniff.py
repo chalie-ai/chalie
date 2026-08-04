@@ -6,7 +6,7 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Ingestion primitives for ``image_preview`` — content sniffing and landing.
+"""Content sniffing for ``image_preview`` — is this file really an image?
 
 ``sniff_image`` is a SECURITY BOUNDARY, not a convenience. ``image_preview`` is
 an INTERNAL tool: it bypasses the policy gate on every channel, so this byte
@@ -19,12 +19,7 @@ permissive fallback: anything unrecognised is ``None``, and ``None`` means stop.
 from __future__ import annotations
 
 import re
-import shutil
-import uuid
-from pathlib import Path
 from typing import Final
-
-from services.file_mapper_service import FileMapperService
 
 # (signature, mime) — checked in order, so the weakest (2-byte BMP) comes last.
 _SIGNATURES: Final[tuple[tuple[bytes, str], ...]] = (
@@ -50,9 +45,6 @@ _XML_NOISE: Final[re.Pattern[str]] = re.compile(
     r"<\?xml.*?\?>|<!--.*?-->|<!DOCTYPE[^>]*>", re.DOTALL | re.IGNORECASE
 )
 _SVG_ROOT: Final[re.Pattern[str]] = re.compile(r"<svg\b", re.IGNORECASE)
-
-_SAFE_CHARS: Final[re.Pattern[str]] = re.compile(r"[^A-Za-z0-9._-]")
-_PREVIEWS_DIR: Final[str] = "previews"
 
 
 def sniff_image(head: bytes) -> str | None:
@@ -87,28 +79,3 @@ def sniff_image(head: bytes) -> str | None:
         return "image/svg+xml"
 
     return None
-
-
-def land_image(src_path: str, original_name: str) -> str:
-    """Copy ``src_path`` into the served previews directory under a unique name.
-
-    Args:
-        src_path: Absolute path of the already-verified image to copy.
-        original_name: Name the image arrived as; only its basename survives,
-            stripped to ``[A-Za-z0-9._-]``.
-
-    Returns:
-        The destination path RELATIVE to the documents root, forward-slashed —
-        ready to append to ``/api/files/preview/``.
-    """
-    previews = FileMapperService.get_documents_path(_PREVIEWS_DIR)
-    previews.mkdir(parents=True, exist_ok=True)
-
-    # Sanitise first, THEN fall back: a name that is entirely non-ASCII strips to
-    # empty, and the uuid prefix keeps a dot-only basename ("..") from ever
-    # forming a traversal.
-    safe = _SAFE_CHARS.sub("", Path(original_name).name) or "image"
-    dest = previews / f"{uuid.uuid4().hex[:8]}_{safe}"
-
-    shutil.copyfile(src_path, dest)
-    return dest.relative_to(FileMapperService.get_documents_path()).as_posix()

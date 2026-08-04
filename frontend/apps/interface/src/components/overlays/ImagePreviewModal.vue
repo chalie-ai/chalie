@@ -64,7 +64,14 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKey));
       >
         ×
       </button>
-      <img class="img-modal__img" :src="src" :alt="alt" :style="fitStyle" @load="onLoad" />
+      <img
+        class="img-modal__img"
+        :src="src"
+        :alt="alt"
+        :style="fitStyle"
+        referrerpolicy="no-referrer"
+        @load="onLoad"
+      />
     </div>
   </Teleport>
 </template>

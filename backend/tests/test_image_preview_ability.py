@@ -6,13 +6,14 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Feature tests: ``ImagePreviewAbility`` and ``ingest.sniff_image``.
+"""Feature tests: ``ImagePreviewAbility`` and ``sniff.sniff_image``.
 
-Covers the four branches exercised by ``ImagePreviewAbility.run()``:
-(local file outside docs root -> landed under previews/, local file inside docs
-root -> served in place, non-image bytes -> error, subtitle trimming logic).
+Covers every branch of ``ImagePreviewAbility.run()``: a remote URL rendered
+as-is with nothing fetched, a local file outside the documents root copied in,
+a local file inside it served in place, non-image bytes refused, and the two
+halves of the caption clamp.
 
-Also exercises ``tools/image_preview/ingest.sniff_image`` directly with four
+Also exercises ``tools/image_preview/sniff.sniff_image`` directly with four
 different magic signatures (plus a None-return case).
 """
 
@@ -26,7 +27,7 @@ import pytest
 from abilities.image_preview import ImagePreviewAbility
 from contracts.params.image_preview_params_bag import ImagePreviewParamsBag
 from services.file_mapper_service import FileMapperService
-from tools.image_preview.ingest import sniff_image
+from tools.image_preview.sniff import sniff_image
 
 MINIMAL_PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
 
@@ -43,10 +44,38 @@ def _setup(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(FileMapperService, "_DOCUMENTS_DIR", tmp_path / "docs")
 
 
-class TestLocalPngOutsideDocsRoot:
-    """File lands under ``previews/`` and survives a byte-identical disk copy."""
+def _stored_files() -> list[Path]:
+    docs = FileMapperService.get_documents_path()
+    return sorted(p for p in docs.rglob("*") if p.is_file()) if docs.exists() else []
 
-    def test_lands_under_previews_with_matching_bytes(
+
+class TestRemoteUrl:
+    """A URL is handed to the browser untouched — nothing is fetched or stored."""
+
+    def test_url_rendered_as_is_with_no_download(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _setup(monkeypatch, tmp_path)
+        # .invalid can never resolve (RFC 2606): a run that still downloaded
+        # would fail here instead of succeeding.
+        url = "https://pictures.invalid/some%20photo.png"
+
+        tr = ImagePreviewAbility().run(
+            ImagePreviewParamsBag(file_path=url, subtitle=None)
+        )
+
+        assert tr.status == "success"
+        rich = tr.rich
+        assert rich is not None
+        assert rich["url"] == url
+        assert rich["alt"] == "some photo.png"
+        assert _stored_files() == []
+
+
+class TestLocalPngOutsideDocsRoot:
+    """The file is copied into the served store, byte for byte."""
+
+    def test_copied_into_store_with_matching_bytes(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         _setup(monkeypatch, tmp_path)
@@ -60,19 +89,19 @@ class TestLocalPngOutsideDocsRoot:
         rich = tr.rich
         assert rich is not None
         url = cast("str", rich["url"])
-        assert url.startswith("/api/files/preview/previews/")
+        assert url.startswith("/api/files/preview/")
         dest = FileMapperService.get_documents_path() / url.replace(
             "/api/files/preview/", ""
         )
         assert dest.exists()
         assert dest.read_bytes() == MINIMAL_PNG
+        assert dest.parent == FileMapperService.get_documents_path()
 
     def test_inside_docs_root_served_in_place_no_copy_made(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         _setup(monkeypatch, tmp_path)
         docs = FileMapperService.get_documents_path()
-        docs.mkdir(parents=True, exist_ok=True)
         internal = docs / "photos" / "vacation.png"
         internal.parent.mkdir(parents=True, exist_ok=True)
         internal.write_bytes(MINIMAL_PNG)
@@ -86,8 +115,7 @@ class TestLocalPngOutsideDocsRoot:
         assert rich is not None
         rel = str(internal.relative_to(docs)).replace("\\", "/")
         assert rich["url"] == f"/api/files/preview/{rel}"
-        previews = FileMapperService.get_documents_path("previews")
-        assert not previews.exists()
+        assert _stored_files() == [internal]
 
 
 class TestNonImageNamedPng:
@@ -106,8 +134,7 @@ class TestNonImageNamedPng:
 
         assert tr.status == "error"
         assert tr.code == "not-an-image"
-        previews = FileMapperService.get_documents_path("previews")
-        assert not previews.exists()
+        assert _stored_files() == []
 
 
 class TestSubtitleTruncation:
@@ -138,7 +165,7 @@ class TestSubtitleTruncation:
         rich_a = tr_a.rich
         assert rich_a is not None
         expected_trimmed = (
-            " ".join(self._OVER_LIMIT.split()[:8]) + "\u2026"
+            " ".join(self._OVER_LIMIT.split()[:8]) + "…"
         )
         assert rich_a["subtitle"] == expected_trimmed
         assert tr_a.meta["subtitle_truncated"] is True
@@ -158,7 +185,7 @@ class TestSubtitleTruncation:
 
 
 class TestSniffImageDirectly:
-    """``ingest.sniff_image`` recognizes PNG, SVG, WEBP, and refuses junk."""
+    """``sniff.sniff_image`` recognizes PNG, SVG, WEBP, and refuses junk."""
 
     def test_returns_mime_for_known_formats_and_none_for_junk(self) -> None:
         png_head = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16

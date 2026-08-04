@@ -56,11 +56,14 @@ function close(): void {
 
 <template>
   <div class="rich-card image-preview-card">
+    <!-- The url may point off-machine (a remote image is shown from its own
+         source, never copied here), so send no referrer with the request. -->
     <img
       class="image-preview-card__img"
       :src="payload.url"
       :alt="payload.alt || 'preview'"
       :style="thumbStyle"
+      referrerpolicy="no-referrer"
       @load="onLoad"
       @click="open"
     />
