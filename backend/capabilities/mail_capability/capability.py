@@ -18,6 +18,8 @@ from services.file_mapper_service import FileMapperService
 from utils.data_utils import parse_json_column
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from capabilities.mail_capability.caldav_handler import _CalDAVClient  # noqa: PLC2701
     from capabilities.mail_capability.imap_handler import _ImapClient  # noqa: PLC2701
     from capabilities.mail_capability.carddav_handler import _CaldavClientProto  # noqa: PLC2701
@@ -502,7 +504,9 @@ class MailCapability(AbstractCapability):
     # Tools — IMAP handler methods
     # ------------------------------------------------------------------
 
-    def _th_search_email(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
+    def _run_imap(
+        self, fn: Callable[[_ImapClient], dict[str, object]],
+    ) -> dict[str, object]:
         if not self._imap_ok:
             return {"error": _ERR_IMAP_NOT_CONNECTED}
         try:
@@ -510,7 +514,7 @@ class MailCapability(AbstractCapability):
             if client is None:
                 return {"error": "Failed to open IMAP connection."}
             try:
-                return self._imap_handler.search(client, params)
+                return fn(client)
             finally:
                 try:
                     client.logout()
@@ -518,60 +522,20 @@ class MailCapability(AbstractCapability):
                     pass
         except Exception as exc:
             return {"error": str(exc)}
+
+    def _th_search_email(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
+        return self._run_imap(lambda client: self._imap_handler.search(client, params))
 
     def _th_read_email(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
-        if not self._imap_ok:
-            return {"error": _ERR_IMAP_NOT_CONNECTED}
-        try:
-            client = self._open_imap_client()
-            if client is None:
-                return {"error": "Failed to open IMAP connection."}
-            try:
-                return self._imap_handler.read_email(client, params)
-            finally:
-                try:
-                    client.logout()
-                except Exception:
-                    pass
-        except Exception as exc:
-            return {"error": str(exc)}
+        return self._run_imap(lambda client: self._imap_handler.read_email(client, params))
 
     def _th_draft_email(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
-        if not self._imap_ok:
-            return {"error": _ERR_IMAP_NOT_CONNECTED}
-        try:
-            _email = self.load_credential(_K_EMAIL)
-            client = self._open_imap_client()
-            if client is None:
-                return {"error": "Failed to open IMAP connection."}
-            try:
-                return self._imap_handler.draft_email(
-                    client, from_addr=cast(str, _email), params=params,
-                )
-            finally:
-                try:
-                    client.logout()
-                except Exception:
-                    pass
-        except Exception as exc:
-            return {"error": str(exc)}
+        return self._run_imap(lambda client: self._imap_handler.draft_email(
+            client, from_addr=cast(str, self.load_credential(_K_EMAIL)), params=params,
+        ))
 
     def _th_manage_email(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
-        if not self._imap_ok:
-            return {"error": _ERR_IMAP_NOT_CONNECTED}
-        try:
-            client = self._open_imap_client()
-            if client is None:
-                return {"error": "Failed to open IMAP connection."}
-            try:
-                return self._imap_handler.manage_email(client, params)
-            finally:
-                try:
-                    client.logout()
-                except Exception:
-                    pass
-        except Exception as exc:
-            return {"error": str(exc)}
+        return self._run_imap(lambda client: self._imap_handler.manage_email(client, params))
 
     # ------------------------------------------------------------------
     # Tools — SMTP handler methods
@@ -680,60 +644,33 @@ class MailCapability(AbstractCapability):
     # Tools — CalDAV handler methods
     # ------------------------------------------------------------------
 
-    def _th_create_event(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
+    def _run_caldav(
+        self, fn: Callable[[_CalDAVClient], dict[str, object]],
+    ) -> dict[str, object]:
         if not self._caldav_ok:
             return {"error": _ERR_CALDAV_NOT_CONNECTED}
         try:
             client = self._open_caldav_client()
             if client is None:
                 return {"error": _ERR_CALDAV_OPEN_FAILED}
-            return self._caldav_handler.create_event(client, params)
+            return fn(client)
         except Exception as exc:
             return {"error": str(exc)}
+
+    def _th_create_event(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
+        return self._run_caldav(lambda client: self._caldav_handler.create_event(client, params))
 
     def _th_update_event(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
-        if not self._caldav_ok:
-            return {"error": _ERR_CALDAV_NOT_CONNECTED}
-        try:
-            client = self._open_caldav_client()
-            if client is None:
-                return {"error": _ERR_CALDAV_OPEN_FAILED}
-            return self._caldav_handler.update_event(client, params)
-        except Exception as exc:
-            return {"error": str(exc)}
+        return self._run_caldav(lambda client: self._caldav_handler.update_event(client, params))
 
     def _th_delete_event(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
-        if not self._caldav_ok:
-            return {"error": _ERR_CALDAV_NOT_CONNECTED}
-        try:
-            client = self._open_caldav_client()
-            if client is None:
-                return {"error": _ERR_CALDAV_OPEN_FAILED}
-            return self._caldav_handler.delete_event(client, params)
-        except Exception as exc:
-            return {"error": str(exc)}
+        return self._run_caldav(lambda client: self._caldav_handler.delete_event(client, params))
 
     def _th_list_events(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
-        if not self._caldav_ok:
-            return {"error": _ERR_CALDAV_NOT_CONNECTED}
-        try:
-            client = self._open_caldav_client()
-            if client is None:
-                return {"error": _ERR_CALDAV_OPEN_FAILED}
-            return self._caldav_handler.list_events(client, params)
-        except Exception as exc:
-            return {"error": str(exc)}
+        return self._run_caldav(lambda client: self._caldav_handler.list_events(client, params))
 
     def _th_get_event(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
-        if not self._caldav_ok:
-            return {"error": _ERR_CALDAV_NOT_CONNECTED}
-        try:
-            client = self._open_caldav_client()
-            if client is None:
-                return {"error": _ERR_CALDAV_OPEN_FAILED}
-            return self._caldav_handler.get_event(client, params)
-        except Exception as exc:
-            return {"error": str(exc)}
+        return self._run_caldav(lambda client: self._caldav_handler.get_event(client, params))
 
     def _th_find_free_slots(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
         if not self._caldav_ok:
