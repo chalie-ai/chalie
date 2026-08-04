@@ -1,13 +1,18 @@
 """Feature tests: the chat-attachment filepath pipeline, end to end.
 
-Drives the REAL ``MessageProcessor._seed_turn_zero`` (the same production
-method the ACT loop fires once before iteration 0) against a real test DB and
-real files, then follows the attachment through the real read paths a client
-actually uses: the ``transcript_files`` link row, the turn serializer's attachment
-projection, ``FileIndexService`` search, and the real ``/api/files/preview``
-HTTP endpoint via ``authed_client``. ZERO mocks — the ``_DOCUMENTS_DIR`` /
-``get_file_index_db_path`` patches are the same conftest-blessed path
-redirection every docs-dir test uses (both must land BEFORE any ingest runs).
+Drives the REAL two-stage production path — ``MessageProcessor._land_attachments``
+(synchronous inside ``begin``: copy into the store + write the link row) then
+``_seed_turn_zero`` (on the drive thread: index + dispatch by MIME) — against a
+real test DB and real files, then follows the attachment through the real read
+paths a client actually uses: the ``transcript_files`` link row, the turn
+serializer's attachment projection, ``FileIndexService`` search, and the real
+``/api/files/preview`` HTTP endpoint via ``authed_client``. ZERO mocks — the
+``_DOCUMENTS_DIR`` / ``get_file_index_db_path`` patches are the same
+conftest-blessed path redirection every docs-dir test uses (both must land
+BEFORE any ingest runs).
+
+The ordering between those two stages is itself load-bearing and has its own
+test: see ``test_link_rows_exist_before_the_working_frame_is_broadcast``.
 """
 
 from __future__ import annotations
@@ -17,6 +22,7 @@ import sqlite3
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
+from unittest.mock import patch
 
 import pytest
 
@@ -33,6 +39,7 @@ from services.tmp_storage import new_tmp_path
 if TYPE_CHECKING:
     from flask.testing import FlaskClient
 
+    from contracts.json_serializable import JsonSerializable
     from services.memory_store import MemoryStore
 
     AuthedClient = tuple[FlaskClient, sqlite3.Connection, MemoryStore]
@@ -84,12 +91,12 @@ def _stage_attachment(name: str, content: bytes) -> str:
 
 def _seed_attachment_turn(attachments: list[str]) -> tuple[MessageProcessor, int]:
     """Build the REAL MessageProcessor via its actual public constructor, then
-    run the exact turn-id/input-row sequence ``begin()`` runs synchronously
-    (turn allocation + anchoring input row, the real production methods) so
-    ``mp.uid`` is a real transcript row id before driving the REAL
-    ``_seed_turn_zero``. Stops short of spawning the drive thread / the ACT
-    loop itself (no provider is configured in this test DB) — everything up
-    to and including the attachment pipeline is the genuine production path.
+    run the exact sequence ``begin()`` runs synchronously — turn allocation +
+    anchoring input row inside one transaction, then ``_land_attachments``
+    once it has committed — before driving the REAL ``_seed_turn_zero`` the
+    way the drive thread does. Every method here is the production one, in
+    production order. Stops short of spawning the drive thread / the ACT loop
+    itself (no provider is configured in this test DB).
     Returns the transcript id as a plain ``int`` (narrowed from ``mp.uid``'s
     ``int | None`` type) since every caller needs it as a definite id."""
     mp = MessageProcessor(UserConfig(), -1, "Here's a file.", {"attachments": attachments})
@@ -99,6 +106,7 @@ def _seed_attachment_turn(attachments: list[str]) -> tuple[MessageProcessor, int
         mp.current_transcript_id = mp.uid
     assert mp.uid is not None
     uid = mp.uid
+    mp._land_attachments()
     mp._seed_turn_zero()
     return mp, uid
 
@@ -197,24 +205,83 @@ def test_preview_endpoint_rejects_traversal_and_missing_and_idless_requests(
     assert real.data == b"inside the root"
 
 
-def test_unparseable_attachment_falls_back_and_still_dispatches_read(
+def test_unparseable_attachment_is_still_stored_linked_and_dispatched(
     db: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An empty file fails FileParserService's extraction (ValueError); the
-    turn must not crash — the file still lands in uploads/ via the manual
-    fallback move, and ``read`` is still dispatched so the failure surfaces
-    loudly on the act trail instead of being silently dropped."""
+    """An empty file fails FileParserService's extraction (ValueError) at index
+    time — on the drive thread, long after the file was placed and linked. The
+    turn must not crash, the pill must still render (file on disk AND link row
+    present), and ``read`` is still dispatched so the failure surfaces loudly
+    on the act trail instead of being silently dropped."""
     docs_dir = _redirect_docs_and_index(tmp_path, monkeypatch)
 
     staged = _stage_attachment("empty.txt", b"")
-    mp, _uid = _seed_attachment_turn([staged])  # must not raise
+    mp, uid = _seed_attachment_turn([staged])  # must not raise
 
     saved = docs_dir / "uploads" / "empty.txt"
     assert saved.is_file()
     assert saved.read_bytes() == b""
 
+    # Placement and linking do not depend on extraction succeeding.
+    rows = db.execute(
+        "SELECT path FROM transcript_files WHERE transcript_id = ?", (uid,)
+    ).fetchall()
+    assert [r[0] for r in rows] == ["uploads/empty.txt"]
+
     calls = ToolCall.by_turn(mp.channel, mp.turn_id)
     assert any(c.tool_name == "read" for c in calls), [c.tool_name for c in calls]
+
+
+@pytest.mark.usefixtures("chat_provider")
+def test_link_rows_exist_before_the_working_frame_is_broadcast(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The ordering guarantee the whole split exists for.
+
+    ``working`` is the cue a client refetches the turn on, and turn-zero
+    seeding is WS-silent — so a ``working`` frame emitted before the
+    ``transcript_files`` rows land renders a permanently attachment-less user
+    bubble, with nothing to signal the correction. This drives the REAL
+    ``begin()`` (the only substitution is the LLM network boundary) and
+    observes the live DB at the instant the frame is pushed.
+
+    Fails on the pre-split ordering, where the rows were written on the drive
+    thread after an ingest that takes ~9s for an image."""
+    from services.database import Database
+    from models.turn_execution import TurnExecution
+    from models.provider_response import ProviderResponse
+    from tests.test_message_processor_empty_completion import (
+        _ScriptedProvider,
+        _drain_background_turns,
+    )
+
+    _redirect_docs_and_index(tmp_path, monkeypatch)
+    staged = _stage_attachment("agenda.txt", b"Board agenda: three items.")
+
+    rows_at_working: list[list[str]] = []
+    real_push = MessageProcessor.push_websocket
+
+    def _observe(self: MessageProcessor, instance: "JsonSerializable | None") -> None:
+        """Pass-through observer — records the committed link rows at the
+        moment the working frame goes out, then delegates to the real emit."""
+        if isinstance(instance, TurnExecution) and instance.state == TurnExecution.WORKING:
+            rows_at_working.append([
+                r[0] for r in Database.conn().execute(
+                    "SELECT path FROM transcript_files WHERE transcript_id = ?", (self.uid,)
+                ).fetchall()
+            ])
+        real_push(self, instance)
+
+    monkeypatch.setattr(MessageProcessor, "push_websocket", _observe)
+
+    mp = MessageProcessor(UserConfig(), -1, "Here's a file.", {"attachments": [staged]})
+    provider = _ScriptedProvider(ProviderResponse(text="Noted.", model="scripted", tool_calls=None))
+    with patch("services.provider_service.build_client", return_value=provider):
+        mp.begin()
+        mp.result()
+        _drain_background_turns()
+
+    assert rows_at_working == [["uploads/agenda.txt"]], rows_at_working
 
 
 def test_image_attachment_dispatches_vision_not_read(

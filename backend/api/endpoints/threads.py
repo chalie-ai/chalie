@@ -213,10 +213,17 @@ class ThreadsEndpoint(Endpoint):
         ]
 
     def _stage_uploads(self, files: Sequence[object]) -> list[object]:
-        """Save chat attachments to tmp-storage and return the paths turn-zero
-        seeding feeds to FileParserService.ingest (extract, copy flat into the
-        documents root, index). No file blob ever reaches the act-trail — only
-        the extracted text or vision description does."""
+        """Stage each uploaded chat file into tmp-storage and return the tmp
+        paths. They are consumed inside
+        :meth:`~controllers.message_processor.MessageProcessor._land_attachments`
+        (synchronously inside ``begin``, before the ``working`` frame is
+        emitted): each file is saved via
+        :class:`~services.file_parser_service.FileParserService.place` into
+        ``data/documents/uploads/``, the ``transcript_files`` link row is
+        written, and the tmp file is removed. Then on turn zero each stored
+        path is indexed and dispatched as ``vision`` (images) or ``read``
+        (everything else). No file blob ever reaches the act-trail — only the
+        extracted text or vision description does."""
         from services.filename_utils import safe_filename  # noqa: PLC0415
         from services.tmp_storage import new_tmp_path  # noqa: PLC0415
 

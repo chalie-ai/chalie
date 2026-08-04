@@ -57,7 +57,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-import shutil
 from collections import Counter
 from threading import Thread
 from typing import TYPE_CHECKING, Protocol, cast
@@ -174,6 +173,7 @@ class MessageProcessor:
         self.thinking_override: str | None = None
         self.post_compaction_continuation: bool = False
         self.seeding_turn_zero: bool = False
+        self._placed_attachments: list[str] = []
         self._trigger_channel: str | None = cast("str | None", self.metadata.get("trigger_channel"))
         self._trigger_turn_id: int | None = cast("int | None", self.metadata.get("trigger_turn_id"))
         self._thread: Thread | None = None
@@ -251,9 +251,16 @@ class MessageProcessor:
     def begin(self) -> None:
         """Synchronous turn setup, then hand off to the drive thread. The
         turn-id allocation, fork guard and input row land in one single-writer
-        transaction (§6.8); the execution row opens right after so
-        ``mp.execution`` is set before the thread starts. ``begin()`` never
-        joins — it returns the instant the daemon is running."""
+        transaction (§6.8). Attachments land *after* that transaction commits
+        and *before* the execution row opens: after, because copying a file of
+        arbitrary size inside ``BEGIN IMMEDIATE`` would hold SQLite's write
+        lock for the length of the copy; before, because the ``working`` frame
+        ``open()`` emits is the cue clients refetch on — a turn announced
+        before its ``transcript_files`` rows exist renders without its
+        attachments and nothing signals them again (turn-zero seeding is WS-
+        silent). Then the execution row opens so ``mp.execution`` is set before
+        the thread starts. ``begin()`` never joins — it returns the instant the
+        daemon is running."""
         with self.db.transaction():
             self.turn_id = self.transcript_service.allocate_turn()
             if self.config.external_turn_id:
@@ -265,6 +272,7 @@ class MessageProcessor:
                 raise ValueError("Invalid turn_id specified")
             self.uid = self._open_input_row()
             self.current_transcript_id = self.uid
+        self._land_attachments()
         self.turn_execution_service.open()
         self.metadata["turn_id"] = self.turn_id
         self._thread = Thread(target=self._drive, daemon=True, name=f"turn-{self.turn_id}")
@@ -711,7 +719,7 @@ class MessageProcessor:
                 self.dispatch_service.dispatch(
                     "memory", {"action": "recall", "query": self.raw_input, "_auto": True}
                 )
-            attachments = list(cast("list[str]", self.metadata.get("attachments") or []))
+            attachments = list(self._placed_attachments)
             if attachments:
                 from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
                 with ThreadPoolExecutor(max_workers=min(len(attachments), 8)) as pool:
@@ -719,27 +727,23 @@ class MessageProcessor:
         finally:
             self.seeding_turn_zero = False
 
-    def _seed_upload_attachment(self, path: str) -> None:
-        """Ingest an attachment via FileParserService and dispatch by type.
+    def _land_attachments(self) -> None:
+        """For each pending attachment: copy into uploads/, write the
+        transcript_files link row, and remove the tmp staging file.
 
-        Only files inside the tmp-upload sandbox are accepted; anything else is
-        refused loudly. The file is ingested (extracted, copied flat to
-        data/documents/uploads/, indexed), so its content appears on the
-        turn-zero act trail as a ``read`` or ``vision`` tool call — the model
-        sees exactly what it would if a human had handed it the file.
+        Runs synchronously inside ``begin`` — after its write transaction has
+        committed (a file copy must never hold ``BEGIN IMMEDIATE``'s write
+        lock) and before ``turn_execution_service.open()`` emits ``working``,
+        so a client refetching on that cue already sees the linked rows. Each
+        ``link()`` commits on its own; the connection autocommits outside a
+        transaction. Extraction and the MIME dispatch stay on the drive thread
+        via ``_seed_upload_attachment`` — a per-image vision call would
+        otherwise block the request for seconds.
 
-        On ingest ValueError (extraction failure), falls back to the manual
-        move into uploads/ with a warning, then still dispatches ``read`` so
-        the failure surfaces loudly on the act trail.
-
-        Records the transcript link (transcript_files row) keyed on the
-        transcript row id (self.uid) and the stored path relative to the
-        documents root. Skipped for skip_input_row configs (uid is None).
-
-        Dispatches ``vision`` for image MIME, ``read`` for everything else,
-        both on the SAVED absolute path.
+        Sandbox-checked: only real paths inside ``TMP_PATH_PREFIX`` that
+        exist on disk are accepted; everything else is refused with a warn.
+        Links are skipped for ``skip_input_row`` configs (uid is None).
         """
-        import mimetypes
         import os
 
         from services.tmp_storage import TMP_PATH_PREFIX
@@ -747,43 +751,49 @@ class MessageProcessor:
         from services.file_parser_service import FileParserService
         from models.transcript_file import TranscriptFile
 
-        real = os.path.realpath(path)
-        if not real.startswith(TMP_PATH_PREFIX) or not os.path.isfile(real):
-            logger.warning("[MessageProcessor] refusing attachment outside tmp sandbox: %s", path)
-            return
-
-        basename = re.sub(r"^chalie_([0-9a-f]{8}_)?", "", os.path.basename(real)) or os.path.basename(real)
-
-        try:
-            saved_path, _text = FileParserService().ingest(real, name=basename, subdir="uploads")
-            # Ingest succeeded: file is now flat in data/documents/uploads/<basename>.
-            # Delete the tmp file (it was copied, not moved, by FileParserService).
+        raw_paths = cast("list[str]", self.metadata.get("attachments") or [])
+        for path in raw_paths:
+            real = os.path.realpath(path)
+            if not real.startswith(TMP_PATH_PREFIX) or not os.path.isfile(real):
+                logger.warning("[MessageProcessor] refusing attachment outside tmp sandbox: %s", path)
+                continue
+            basename = re.sub(r"^chalie_([0-9a-f]{8}_)?", "", os.path.basename(real)) or os.path.basename(real)
+            saved_path = FileParserService().place(real, name=basename, subdir="uploads")
+            # Copy succeeded (FileParserService.place copies the file, never moves it).
+            # Remove the tmp staging file.
             try:
                 os.unlink(real)
             except OSError:
                 logger.warning("[MessageProcessor] staged attachment not cleaned up: %s", real)
-        except ValueError as exc:
-            # Extraction failed: fall back to manual move into uploads/ so the
-            # dispatched read still lands (it will surface the error loudly).
-            logger.warning(
-                "[MessageProcessor] ingest failed for %s — falling back to manual move: %s",
-                path, exc,
-            )
-            uploads_dir = FileMapperService.get_documents_path("uploads")
-            uploads_dir.mkdir(parents=True, exist_ok=True)
-            stem, ext = os.path.splitext(basename)
-            dest = uploads_dir / basename
-            counter = 1
-            while dest.exists():
-                dest = uploads_dir / f"{stem}_{counter}{ext}"
-                counter += 1
-            shutil.move(real, dest)
-            saved_path = str(dest)
+            self._placed_attachments.append(saved_path)
+            if self.uid is not None:
+                relpath = os.path.relpath(saved_path, FileMapperService.get_documents_path())
+                TranscriptFile(transcript_id=self.uid, path=relpath).link()
 
-        # Record the transcript link (if uid is set — skip for skip_input_row configs).
-        if self.uid is not None:
-            relpath = os.path.relpath(saved_path, FileMapperService.get_documents_path())
-            TranscriptFile(transcript_id=self.uid, path=relpath).link()
+    def _seed_upload_attachment(self, saved_path: str) -> None:
+        """Index the previously-placed attachment and dispatch by MIME.
+
+        The file is assumed to already live in the documents store and the
+        transcript_files link row is already written (performed synchronously
+        in ``_land_attachments`` before the execution row opens). This method
+        only extracts content and dispatches ``vision`` (images) or ``read``
+        (anything else) on the SAVED absolute path.
+
+        An extraction failure raises ``ValueError`` from ``FileParserService.index``
+        and logs a warning — the dispatched ``read`` below still surfaces the
+        failure loudly on the act trail.
+        """
+        import mimetypes
+
+        from services.file_parser_service import FileParserService
+
+        try:
+            FileParserService().index(saved_path)
+        except ValueError as exc:
+            logger.warning(
+                "[MessageProcessor] indexing %s failed for turn-zero dispatch: %s",
+                saved_path, exc,
+            )
 
         mime = mimetypes.guess_type(saved_path)[0] or ""
         if mime.startswith("image/"):

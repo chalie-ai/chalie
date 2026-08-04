@@ -12,10 +12,11 @@ from services.processor_config import ProcessorConfig
 
 
 class UserConfig(ProcessorConfig):
-    """The user-chat channel. Attachments are ingested at turn zero: each
-    staged upload is saved through FileParserService, linked to the turn via
-    ``transcript_files``, and dispatched by MIME — ``vision`` for images,
-    ``read`` for everything else."""
+    """The user-chat channel. Attachment paths are copied into the documents
+    store and linked to the turn synchronously inside ``MessageProcessor.begin``
+    (before the ``working`` frame is emitted); then on turn zero each is
+    indexed and dispatched as ``vision`` (images) or ``read`` (everything
+    else) on the drive thread."""
 
     SUPPORTS_ASYNC = True
     RENDERS_HTML: ClassVar[bool] = True

@@ -133,9 +133,10 @@ class ProcessorConfig(ABC):
 
     memory_seed: bool
     """True → fire the memory recall tool (action='recall') once on turn 0.
-    Attachments are NOT a flag: presence of metadata['attachments'] auto-ingests
-    each file on turn 0 (saved via FileParserService, linked in
-    ``transcript_files``, dispatched ``vision`` for images, ``read`` otherwise)."""
+    Attachments are saved and linked synchronously inside ``MessageProcessor.begin``
+    (before the turn opens, so the ``working`` frame lands on an attached row);
+    then on turn zero each is indexed and dispatched as ``vision`` (images)
+    or ``read`` (everything else)."""
 
     # ── Split-channel routing (cross-turn history read channel) ───────────────
 
