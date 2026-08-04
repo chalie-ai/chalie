@@ -127,7 +127,12 @@ import sys
 hard_ok = True
 try:
     import onnxruntime as ort
-    print("onnxruntime", ort.__version__, ort.get_available_providers())
+    # Audit the one provider we actually run on. The wheel bundles others
+    # (CoreML on macOS) that nothing selects — listing them here would
+    # advertise acceleration the runtime never uses.
+    if "CPUExecutionProvider" not in ort.get_available_providers():
+        print("ONNXRUNTIME-NO-CPU-PROVIDER"); hard_ok = False
+    print("onnxruntime", ort.__version__, "CPUExecutionProvider")
 except Exception as e:
     print("ONNXRUNTIME-IMPORT-FAIL:", repr(e)); hard_ok = False
 for m in ("onnx", "numpy", "transformers", "soundfile", "playwright",
