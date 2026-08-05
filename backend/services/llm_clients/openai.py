@@ -6,6 +6,10 @@ The one OpenAI-protocol provider that publishes no size field anywhere: not on
 probe cannot read a number off a listing, and the only one carrying a table of
 documented figures.
 
+Reasoning traces: the chat-completions API returns no reasoning text for
+o-series/reasoning models (only ``reasoning_tokens`` counts), so no thinking
+trace can be captured here — a platform limit, not a gap in the client.
+
 Consumed by: services.llm_clients.registry (platform dispatch).
 """
 

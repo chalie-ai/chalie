@@ -28,6 +28,7 @@ from services.rich_media_parser import parse as _parse_rich_media
 from configs.channels import config_for
 from models.tool_call import ToolCall
 from models.transcript import Transcript
+from models.transcript_thinking import TranscriptThinking
 from models.turn_execution import TurnExecution
 from models.voice_transcript import VoiceTranscript
 
@@ -174,6 +175,30 @@ def _voice_states(rows: list[dict[str, object]]) -> dict[int, str]:
     }
 
 
+def _thinking_states(rows: list[dict[str, object]]) -> dict[int, list[dict[str, object]]]:
+    """Thinking traces per transcript row, in one batch query.
+
+    Traces anchor to WHATEVER row drove the tools — the user input row for
+    step-1 tool-only calls, or an assistant row for later steps — so the id
+    list includes ALL rows, not just assistant rows. Returns a map from
+    transcript_id to a list of trace dicts (traces in row order); rows with no
+    thinking rows are absent from the map so the serializer can omit the
+    field entirely.
+    """
+    all_ids = [cast("int", r["id"]) for r in rows]
+    if not all_ids:
+        return {}
+    rows_data = TranscriptThinking.for_transcripts(all_ids)
+    by_id: dict[int, list[dict[str, object]]] = {}
+    for row in rows_data:
+        by_id.setdefault(row.transcript_id, []).append({
+            "thinking_trace": row.thinking_trace,
+            "duration_ms": row.duration_ms,
+            "tokens": row.tokens,
+        })
+    return by_id
+
+
 def _rows_to_messages(rows: list[dict[str, object]]) -> list[dict[str, object]]:
     """Project raw transcript rows (oldest-first) into the conversation message
     shape — attachments for user rows, rich-media segments for assistant rows,
@@ -209,6 +234,7 @@ def _rows_to_messages(rows: list[dict[str, object]]) -> list[dict[str, object]]:
     # accumulate any assistant-anchored calls, and resolve the span within that
     # window — the one scope where the per-request ordinal is unique.
     voice_states = _voice_states(rows)
+    thinking_states = _thinking_states(rows)
     cycle_calls: list[dict[str, object]] = []
     for r in rows:
         msg = _base_message(r)
@@ -216,6 +242,13 @@ def _rows_to_messages(rows: list[dict[str, object]]) -> list[dict[str, object]]:
         chips = _tool_call_chips(own)
         if chips:
             msg["tool_calls"] = chips
+        own_thinking = thinking_states.get(cast("int", r['id']))
+        if own_thinking is not None:
+            msg["thinking"] = {
+                "traces": [t["thinking_trace"] for t in own_thinking],
+                "duration_ms": sum(cast("int", t["duration_ms"]) for t in own_thinking),
+                "tokens": sum(cast("int", t["tokens"]) for t in own_thinking),
+            }
         if r['role'] == 'user':
             cycle_calls = list(own)
             _apply_user_fields(msg, r, attachments_by_id)

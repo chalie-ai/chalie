@@ -50,6 +50,7 @@ from models.behavioral_pattern import BehavioralPattern
 from models.fact import FactRow
 from models.tool_call import ToolCall
 from models.transcript import Transcript
+from models.transcript_thinking import TranscriptThinking
 from services.locale_service import CHAT_TIMESTAMP_FMT, format_date
 from services.markup import PROMPT_TAGS
 from services.personality.personality_service import personality_service
@@ -301,7 +302,18 @@ class PromptService:
         A chat-history compaction anchors to one assistant row and becomes the
         interim cutoff: that row's interim prose AND its ordinary calls are
         dropped (``call.id <= last_compaction``), while rows written after the
-        compactor marker still render with their interim prose."""
+        compactor marker still render with their interim prose.
+
+        Thinking-trace interleave: before the first surviving call (or interim
+        prose) anchored to each transcript id of the current exchange,
+        ``act_trail`` emits that anchor's stored thinking traces (in row order),
+        each wrapped ``[thinking]{trace}[end_thinking]``. Generation order was
+        think → prose → tools, so the trail reads that way. Traces anchored to
+        a row with no surviving call (an empty-completion steer at the exchange
+        input row, or a trace-only exchange) are emitted before the call trail —
+        chronologically they precede every call-bearing anchor — so no step's
+        trace is dropped and the prompt-level guard still renders a trace-only
+        trail."""
         calls = self.mp.tool_call_service.by_exchange()
         last_compaction = max(
             (cast("int", call.id) for call in calls if call.tool_name == "chat_history_compactor"),
@@ -318,15 +330,37 @@ class PromptService:
             if not content or not content.strip():
                 continue
             interim[cast("int", row.id)] = content.replace("\n", " ").strip()
+        thinking_rows = TranscriptThinking.by_exchange(self.mp.channel, self.mp.turn_id, self.mp.uid)
+        thinking: dict[int, list[str]] = {}
+        for think_row in thinking_rows:
+            tid = think_row.transcript_id
+            if tid <= cutoff:
+                continue
+            trace = think_row.thinking_trace
+            if not trace or not trace.strip():
+                continue
+            thinking.setdefault(tid, []).append(trace)
         emitted: set[int] = set()
         parts: list[str] = []
+        # Traces anchored to rows that never got a call (an empty-completion
+        # steer at the exchange input row) precede every call-bearing anchor
+        # chronologically — emit them first so no step's trace is dropped.
+        called_tids = {call.transcript_id for call in calls}
+        for tid in sorted(t for t in thinking if t not in called_tids):
+            for trace in thinking[tid]:
+                parts.append(f"[thinking]{trace}[end_thinking]")
+            emitted.add(tid)
         for call in calls:
             if call.tool_name == "chat_history_compactor" or cast("int", call.id) <= last_compaction:
                 continue
             result = call.result
             tid = call.transcript_id
-            if tid in interim and tid > cutoff and tid not in emitted:
-                parts.append(f"[interim_response] {interim[tid]}")
+            if tid not in emitted and tid > cutoff:
+                if tid in thinking:
+                    for trace in thinking[tid]:
+                        parts.append(f"[thinking]{trace}[end_thinking]")
+                if tid in interim:
+                    parts.append(f"[interim_response] {interim[tid]}")
                 emitted.add(tid)
             if call.tool_name == MemoryAbility.NAME and '"_auto": true' in call.params:
                 body = result.split("\n", 1)[1] if "\n" in result else result

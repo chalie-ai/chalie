@@ -72,6 +72,14 @@ export interface ConversationMessage {
    * frames instead (see stores/voiceTranscripts.ts).
    */
   voice_state?: 'pending' | 'ready' | 'failed' | null;
+  /**
+   * Chain-of-thought traces stored for this row, as of this fetch. Present
+   * only when one or more ``transcript_thinking`` rows anchor to this
+   * transcript — absent/null on rows with no thinking rows. Traces are in
+   * row order; ``duration_ms`` and ``tokens`` are the sums across all traces
+   * anchored to the row.
+   */
+  thinking?: { traces: string[]; duration_ms: number; tokens: number };
 }
 
 /** Collapsed thread metadata returned by /api/threads/all. */

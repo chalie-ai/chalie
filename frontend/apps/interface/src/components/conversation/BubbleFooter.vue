@@ -11,11 +11,13 @@ const props = withDefaults(defineProps<{
   message: ConversationMessage;
   canReply?: boolean;
   toolCalls?: NonNullable<ConversationMessage['tool_calls']>;
+  thinking?: { traces: string[]; duration_ms: number; tokens: number };
   threadPill?: { status: 'working' | 'done' | 'thread' | 'idle'; label: string } | null;
 }>(), {
   canReply: false,
   toolCalls: () => [],
   threadPill: null,
+  thinking: undefined,
 });
 
 const emit = defineEmits<{ reply: []; openThread: [] }>();
@@ -101,6 +103,18 @@ function onCopy(): void {
         {{ toolCalls.length }} tool{{ toolCalls.length === 1 ? '' : 's' }} used
       </button>
 
+      <a
+        v-if="thinking"
+        class="thinking-link"
+        :class="{ 'thinking-link--open': expanded }"
+        href="#"
+        role="button"
+        :aria-expanded="expanded"
+        @click.prevent="expanded = !expanded"
+      >
+        thought for {{ Math.round(thinking.duration_ms / 1000) }} second{{ Math.round(thinking.duration_ms / 1000) === 1 ? '' : 's' }} – {{ thinking.tokens }} tokens
+      </a>
+
       <button
         v-if="threadPill"
         class="thread-pill"
@@ -152,12 +166,12 @@ function onCopy(): void {
     </div>
 
     <div
-      v-if="toolCalls.length > 0"
+      v-if="toolCalls.length > 0 || thinking"
       class="trace-body"
       :class="{ 'trace-body--open': expanded }"
     >
       <div class="trace-body__inner">
-        <div class="calls">
+        <div v-if="toolCalls.length > 0" class="calls">
           <div
             v-for="(c, i) in toolCalls"
             :key="i"
@@ -166,6 +180,15 @@ function onCopy(): void {
           >
             <span class="call__fn">{{ c.tool_name }}</span>
             <span class="call__summary">{{ c.summary }}</span>
+          </div>
+        </div>
+        <div v-if="thinking" class="thinking-traces">
+          <div
+            v-for="(trace, i) in thinking.traces"
+            :key="i"
+            class="thinking-trace"
+          >
+            <pre>{{ trace }}</pre>
           </div>
         </div>
       </div>
