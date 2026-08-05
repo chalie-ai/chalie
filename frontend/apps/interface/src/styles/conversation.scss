@@ -423,6 +423,8 @@
   font-size: 0.72rem;
   color: var(--text-tertiary);
   opacity: 0.85;
+  // It renders as an <a>, so the UA underline applies unless explicitly killed.
+  text-decoration: none;
   cursor: pointer;
   flex-shrink: 0;
   transition: opacity var(--duration-fast);

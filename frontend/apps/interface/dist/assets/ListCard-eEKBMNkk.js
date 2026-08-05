@@ -1,4 +1,4 @@
-import{a as v}from"./auth-D-NiMTj3.js";import{d as y,y as k,b as d,c as r,f as e,t as l,h as m,s as g,F as b,B as C,n as x,H as w,D as B,l as _,_ as L}from"./BaseTooltip.vue_vue_type_style_index_0_scoped_a6775339_lang-B1SW46V9.js";import{c as N}from"./main-CxGxOgHB.js";async function D(n,c,t){await v.post(`/api/lists/items/${n}:${c}`,{checked:t})}/**
+import{a as v}from"./auth-D-NiMTj3.js";import{d as y,y as k,b as d,c as r,f as e,t as l,h as m,s as g,F as b,B as C,n as x,H as w,D as B,l as _,_ as L}from"./BaseTooltip.vue_vue_type_style_index_0_scoped_a6775339_lang-B1SW46V9.js";import{c as N}from"./main-BWjq4B1W.js";async function D(n,c,t){await v.post(`/api/lists/items/${n}:${c}`,{checked:t})}/**
  * @license @lucide/vue v1.21.0 - ISC
  *
  * This source code is licensed under the ISC license.

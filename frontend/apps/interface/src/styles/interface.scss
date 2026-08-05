@@ -34,6 +34,10 @@ html {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overflow-x: hidden;
+  // Classic (non-overlay) scrollbars steal viewport width when the page grows
+  // past the fold — e.g. expanding a footer trace body — reflowing every row.
+  // Reserving the gutter keeps content width constant either way.
+  scrollbar-gutter: stable;
 }
 
 body {
