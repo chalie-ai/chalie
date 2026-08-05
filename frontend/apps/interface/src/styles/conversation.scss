@@ -424,8 +424,6 @@
   color: var(--text-tertiary);
   opacity: 0.85;
   cursor: pointer;
-  text-decoration: underline;
-  text-underline-offset: 2px;
   flex-shrink: 0;
   transition: opacity var(--duration-fast);
   background: none;
@@ -440,23 +438,11 @@
 }
 
 .thinking-traces {
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--bg-surface-2);
-  padding: 5px;
-  max-width: 100%;
   font-family: var(--font-mono);
   font-size: 0.72rem;
-  line-height: 1.5;
   color: var(--text-tertiary);
-}
-
-.thinking-trace {
-  padding: 8px 10px;
-}
-
-.thinking-trace + .thinking-trace {
-  border-top: 1px solid var(--border);
+  opacity: 0.85;
+  line-height: 1.5;
 }
 
 .thinking-trace pre {

@@ -24,6 +24,7 @@ const emit = defineEmits<{ reply: []; openThread: [] }>();
 
 const rootRef = ref<HTMLElement | null>(null);
 const expanded = ref(false);
+const thinkingExpanded = ref(false);
 
 const voiceStore = useVoiceTranscriptsStore();
 
@@ -31,6 +32,16 @@ const voiceStore = useVoiceTranscriptsStore();
 // mid-turn "let me check…" rows have no audio and never will.
 const transcriptId = computed(() => Number(props.message.id));
 const canSpeak = computed(() => !!props.message.settled && Number.isFinite(transcriptId.value));
+
+// Format the thinking duration as "thought for {S}s" or "thought for {M}m {S}s".
+const thinkingLabel = computed(() => {
+  if (!props.thinking) return '';
+  const seconds = Math.round(props.thinking.duration_ms / 1000);
+  const mins = Math.floor(seconds / 60);
+  const rem = seconds % 60;
+  if (mins === 0) return `thought for ${seconds}s`;
+  return `thought for ${mins}m ${rem}s`;
+});
 
 // Live state wins over the snapshot this message was fetched with; null means
 // nothing has been attempted, which is normal for history that predates
@@ -106,13 +117,13 @@ function onCopy(): void {
       <a
         v-if="thinking"
         class="thinking-link"
-        :class="{ 'thinking-link--open': expanded }"
+        :class="{ 'thinking-link--open': thinkingExpanded }"
         href="#"
         role="button"
-        :aria-expanded="expanded"
-        @click.prevent="expanded = !expanded"
+        :aria-expanded="thinkingExpanded"
+        @click.prevent="thinkingExpanded = !thinkingExpanded"
       >
-        thought for {{ Math.round(thinking.duration_ms / 1000) }} second{{ Math.round(thinking.duration_ms / 1000) === 1 ? '' : 's' }} – {{ thinking.tokens }} tokens
+        {{ thinkingLabel }}
       </a>
 
       <button
@@ -166,12 +177,12 @@ function onCopy(): void {
     </div>
 
     <div
-      v-if="toolCalls.length > 0 || thinking"
+      v-if="toolCalls.length > 0"
       class="trace-body"
       :class="{ 'trace-body--open': expanded }"
     >
       <div class="trace-body__inner">
-        <div v-if="toolCalls.length > 0" class="calls">
+        <div class="calls">
           <div
             v-for="(c, i) in toolCalls"
             :key="i"
@@ -182,7 +193,15 @@ function onCopy(): void {
             <span class="call__summary">{{ c.summary }}</span>
           </div>
         </div>
-        <div v-if="thinking" class="thinking-traces">
+      </div>
+    </div>
+    <div
+      v-if="thinking"
+      class="trace-body"
+      :class="{ 'trace-body--open': thinkingExpanded }"
+    >
+      <div class="trace-body__inner">
+        <div class="thinking-traces">
           <div
             v-for="(trace, i) in thinking.traces"
             :key="i"
