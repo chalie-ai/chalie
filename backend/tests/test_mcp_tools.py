@@ -42,7 +42,8 @@ def _seed_online_server_with_tool(db: sqlite3.Connection) -> str:
     """Seed one enabled+online server and one synced tool row via the real
     production writers. Returns the prefixed tool name. Callers MUST have
     redirected ``_DATA_DIR`` first so mcp_tools.sqlite lands in tmp."""
-    from services.mcp_client_service import _open_tools_db, _sanitize_name
+    from services.mcp_tools_db import get_tools_connection
+    from services.mcp_client_service import _sanitize_name
 
     server = McpClientService().add_server(
         name="test-server", host="https://mcp.example.com/mcp", headers={}, enabled=True,
@@ -52,7 +53,7 @@ def _seed_online_server_with_tool(db: sqlite3.Connection) -> str:
     db.commit()
 
     tool_name = f"_mcp_{_sanitize_name('test-server')}_fetch"
-    conn_tools = _open_tools_db()
+    conn_tools = get_tools_connection()
     conn_tools.execute(
         "INSERT OR REPLACE INTO mcp_tools (server_id, tool_name, summary, raw_schema) "
         "VALUES (?, ?, ?, ?)",

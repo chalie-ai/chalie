@@ -13,8 +13,6 @@ import asyncio
 import json
 import logging
 import re
-import sqlite3
-from pathlib import Path
 from typing import cast
 from urllib.parse import urlsplit, urlunsplit
 
@@ -23,6 +21,7 @@ from models.mcp_client_server import McpClientServer
 from models.mcp_tool import McpTool
 from services.database import Database
 from services.file_mapper_service import FileMapperService
+from services.mcp_tools_db import get_tools_connection
 from services.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
@@ -107,30 +106,6 @@ def _normalize_host(host: str) -> str:
         netloc = f"{userinfo}@{netloc}"
     path = parts.path.rstrip("/")
     return urlunsplit((scheme, netloc, path, parts.query, ""))
-
-
-# ── mcp_tools.sqlite schema helpers ─────────────────────────────────────────
-
-_TOOLS_SCHEMA = """
-CREATE TABLE IF NOT EXISTS mcp_tools (
-    id          INTEGER PRIMARY KEY,
-    server_id   TEXT NOT NULL,
-    tool_name   TEXT NOT NULL UNIQUE,
-    summary     TEXT NOT NULL DEFAULT '',
-    raw_schema  TEXT NOT NULL DEFAULT '{}'
-);
-CREATE INDEX IF NOT EXISTS idx_mcp_tools_server
-    ON mcp_tools(server_id);
-"""
-
-
-def _open_tools_db() -> sqlite3.Connection:
-    """Open (and initialize if necessary) the mcp_tools.sqlite runtime DB."""
-    db_path: Path = FileMapperService.get_mcp_tools_db_path()
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = Database.conn(str(db_path))
-    conn.executescript(_TOOLS_SCHEMA)
-    return conn
 
 
 # ── Async MCP helpers ────────────────────────────────────────────────────────
@@ -551,7 +526,7 @@ class McpClientService:
 
     def _write_tools(self, server_id: str, server_name: str, tools: list[dict[str, object]]) -> None:
         """Replace the tool index for one server in mcp_tools.sqlite."""
-        _open_tools_db()
+        get_tools_connection()
         with Database.transaction(str(FileMapperService.get_mcp_tools_db_path())):
             McpTool.filter("server_id", server_id).delete()
             for t in tools:
@@ -573,7 +548,7 @@ class McpClientService:
         _upsert_existing name-change path — neither needs to repeat the purge
         logic.
         """
-        _open_tools_db()
+        get_tools_connection()
         with Database.transaction(str(FileMapperService.get_mcp_tools_db_path())):
             McpTool.filter("server_id", server_id).delete()
 
