@@ -16,7 +16,7 @@ from typing import cast
 
 logger = logging.getLogger(__name__)
 
-_THINK_BLOCK_RE = re.compile(r"<think>(?:(?!</think>).)*(?:</think>\s*)?", re.DOTALL | re.IGNORECASE)
+_THINK_BLOCK_RE = re.compile(r"<think>((?:(?!</think>).)*)(?:</think>\s*)?", re.DOTALL | re.IGNORECASE)
 
 _APP_URL = "https://chalie.ai"
 _APP_TITLE = "Chalie"
@@ -34,17 +34,24 @@ def _app_user_agent() -> str:
     return f"Chalie/{_read_version()}"
 
 
-def _strip_think_blocks(text: str) -> str:
+def _strip_think_blocks(text: str) -> tuple[str, str | None]:
     """Remove <think> chain-of-thought blocks emitted by reasoning models.
 
     An unclosed block is stripped to the end of the text: some providers omit
     the closing tag and glue the answer straight onto the reasoning with no
     delimiter, so nothing after the opener is mechanically separable. Callers
     must treat an empty result as "no response", never as an empty answer.
+
+    Returns (cleaned_text, reasoning_trace).  *reasoning_trace* is the content
+    of every <think>…</think> block found in *text*, joined in order, or None
+    when no block carried content.  The cleaned text is identical to the
+    previous behaviour.
     """
     if not text or "<think>" not in text.lower():
-        return text
-    return _THINK_BLOCK_RE.sub("", text).strip()
+        return text, None
+    traces = [t for t in (m.group(1).strip() for m in _THINK_BLOCK_RE.finditer(text)) if t]
+    stripped = _THINK_BLOCK_RE.sub("", text).strip()
+    return stripped, "\n\n".join(traces) or None
 
 
 def estimate_tokens(text: str) -> int:

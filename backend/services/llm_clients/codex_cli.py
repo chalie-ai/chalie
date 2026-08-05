@@ -158,14 +158,16 @@ def _flatten_prompt(system: str, messages: list[dict[str, object]]) -> str:
 # ── JSONL parser ─────────────────────────────────────────────────────────────
 
 
-def _parse_jsonl(stdout: str) -> tuple[str, dict[str, Optional[int]], list[str]]:
+def _parse_jsonl(stdout: str) -> tuple[str, dict[str, Optional[int]], list[str], Optional[str]]:
     """Parse codex JSONL stdout.
 
-    Returns (agent_text, usage, errors) where:
+    Returns (agent_text, usage, errors, thinking_block) where:
       - agent_text: concatenated agent_message text (or empty string)
       - usage: dict with keys tokens_input, tokens_output, tokens_thinking,
         tokens_cache_read (values may be None)
       - errors: list of error messages found (type==error or turn.failed)
+      - thinking_block: concatenated reasoning text from reasoning items
+        (or None when absent/empty)
     """
     agent_text = ""
     usage: dict[str, Optional[int]] = {
@@ -175,6 +177,7 @@ def _parse_jsonl(stdout: str) -> tuple[str, dict[str, Optional[int]], list[str]]
         "tokens_cache_read": None,
     }
     errors: list[str] = []
+    thinking_parts: list[str] = []
 
     for line in stdout.splitlines():
         line = line.strip()
@@ -197,6 +200,10 @@ def _parse_jsonl(stdout: str) -> tuple[str, dict[str, Optional[int]], list[str]]
                 text = item.get("text", "")
                 if isinstance(text, str) and text:
                     agent_text += text
+            elif isinstance(item, dict) and item.get("type") == "reasoning":
+                text = item.get("text", "")
+                if isinstance(text, str) and text:
+                    thinking_parts.append(text)
 
         # Turn completion → token usage (usage sits at the top level of the event)
         elif obj_type == "turn.completed":
@@ -219,7 +226,8 @@ def _parse_jsonl(stdout: str) -> tuple[str, dict[str, Optional[int]], list[str]]
                 if isinstance(msg, str) and msg:
                     errors.append(msg)
 
-    return agent_text, usage, errors
+    thinking_block = '\n'.join(thinking_parts) or None
+    return agent_text, usage, errors, thinking_block
 
 
 # ── Client ───────────────────────────────────────────────────────────────────
@@ -324,7 +332,7 @@ class CodexCliClient(ProviderClient):
             )
 
         # Always parse the JSONL stream for token usage (j) and upstream errors (i).
-        jsonl_text, usage, errors = _parse_jsonl(stdout or "")
+        jsonl_text, usage, errors, thinking_block = _parse_jsonl(stdout or "")
 
         # (h) Prefer the -o output file for the agent text; fall back to JSONL.
         agent_text = ""
@@ -377,6 +385,7 @@ class CodexCliClient(ProviderClient):
             tool_calls=None,
             stop_reason='stop',
             latency_ms=latency_ms,
+            thinking_block=thinking_block,
             response_code=200,
         )
 

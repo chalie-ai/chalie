@@ -111,6 +111,7 @@ def _parse_chat_response(data: dict[str, object], default_model: str) -> Provide
     """Build a ProviderApiResponse from a raw Ollama /api/chat response dict."""
     msg = cast(dict[str, object], data.get('message', {}))
     text = cast(str, msg.get('content', ''))
+    thinking_block = cast(str, msg.get('thinking', '')) or None
     tool_calls = None
     raw_tool_calls = msg.get('tool_calls')
     if raw_tool_calls:
@@ -139,6 +140,7 @@ def _parse_chat_response(data: dict[str, object], default_model: str) -> Provide
         decode_ms=decode_ms,
         tool_calls=tool_calls,
         stop_reason='tool_use' if tool_calls else 'end_turn',
+        thinking_block=thinking_block,
         response_code=200,
     )
 

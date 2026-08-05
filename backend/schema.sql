@@ -539,6 +539,20 @@ CREATE TABLE IF NOT EXISTS voice_transcript (
 );
 
 -- ────────────────────────────────────────────────────────────────
+-- TRANSCRIPT THINKING — chain-of-thought traces per transcript anchor
+-- Multiple rows per transcript_id are expected (one per thinking pass).
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS transcript_thinking (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    transcript_id INTEGER NOT NULL REFERENCES transcript(id) ON DELETE CASCADE,
+    thinking_trace TEXT NOT NULL,
+    duration_ms   INTEGER NOT NULL,
+    tokens        INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_transcript_thinking_transcript ON transcript_thinking(transcript_id);
+
+-- ────────────────────────────────────────────────────────────────
 -- TURN EXECUTIONS — DB-backed lifecycle of one MessageProcessor turn.
 -- Opened (state='working') the instant a turn's constructor resolves its
 -- turn_id, before any LLM call, so DELETE /api/thread/<turn_id> can flip

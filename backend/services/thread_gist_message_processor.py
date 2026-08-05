@@ -73,7 +73,7 @@ def _persist_gist(trigger_channel: str, trigger_turn_id: int, raw_gist: str) -> 
     everything after its opener) is dropped loudly, never stored."""
     from controllers.message_processor import MessageProcessor
 
-    label = _strip_think_blocks(raw_gist)
+    label = _strip_think_blocks(raw_gist)[0]
     if not label:
         logger.warning(
             "%s gist for %s turn=%s dropped — think-stripping emptied it: %r",

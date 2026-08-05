@@ -75,12 +75,14 @@ from exceptions import (
 from models.provider_request import ProviderRequest
 from models.turn_execution import TurnExecution
 from models.transcript import Transcript
+from models.transcript_thinking import TranscriptThinking
 from services.behavioral_pattern_service import BehavioralPatternService
 from services.compaction_service import CompactionService
 from services.database import Database
 from services.dispatch_service import DispatchService
 from services.gist_service import GistService
 from services.llm_log_service import LlmLogService
+from services.llm_service import estimate_tokens
 from services.prompt_service import PromptService
 from services.provider_service import ProviderService
 from services.tool_call_service import ToolCallService
@@ -358,6 +360,10 @@ class MessageProcessor:
                 # an empty assistant row and render silence as an answered
                 # turn. A turn that DID run tools may still finish silently —
                 # background channels end that way by design.
+                # A thinking-only response still carries evidence: persist its
+                # trace (before the loop guard can raise) so the steered retry
+                # re-reads it via the act trail instead of re-deriving blind.
+                self._capture_thinking_trace(response)
                 self._empty_completions += 1
                 if self._empty_completions > _EMPTY_COMPLETION_STEER_LIMIT:
                     raise EmptyCompletionLoop(
@@ -372,11 +378,13 @@ class MessageProcessor:
                 self._empty_completion_steer = True
                 return self._step()
             formatted = self._store(response.text)
+            self._capture_thinking_trace(response)
             self._end(response.text)
             return formatted
         self._guard_runaway(response.text, tool_calls)
         if response.text:
             self._store(response.text)
+        self._capture_thinking_trace(response)
         self._dispatch_tools(tool_calls)
         return self._step()
 
@@ -469,6 +477,36 @@ class MessageProcessor:
             return formatted
         self.current_transcript_id = self.transcript_service.append_assistant(formatted)
         return formatted
+
+    def _capture_thinking_trace(self, response: "ProviderResponse") -> None:
+        """Persist one ``transcript_thinking`` row when the provider returned a
+        non-empty ``thinking_block``. Skips entirely when ``skip_transcript`` is
+        set (same gate as ``_store`` — those channels have no transcript anchor).
+        The trace is captured after the cancel checkpoint and after any prose
+        storage for this response, so the anchor is fresh:
+        ``current_transcript_id if set else uid`` — exactly the rule
+        ``ToolCallService._transcript_id`` uses. A settled response anchors to
+        its own stored row; a tool-calls-only response (no prose) anchors to the
+        prior anchor, same as its tool calls."""
+        if self.config.skip_transcript:
+            return
+        trace = response.thinking_block
+        if not trace:
+            return
+        transcript_id = (
+            self.current_transcript_id
+            if self.current_transcript_id is not None
+            else self.uid
+        )
+        if transcript_id is None:
+            return
+        duration_ms = response.latency_ms or 0
+        tokens = (
+            response.tokens_thinking
+            if response.tokens_thinking
+            else estimate_tokens(trace)
+        )
+        TranscriptThinking.insert(transcript_id, trace, duration_ms, tokens)
 
     def _format(self, text: str) -> str:
         """Render markdown to HTML for surface-broadcasting channels; pass raw

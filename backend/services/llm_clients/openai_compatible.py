@@ -415,7 +415,18 @@ class OpenAICompatibleClient(ProviderClient):
         latency_ms = int((time.time() - start) * 1000)
 
         msg = response.choices[0].message
-        text = _strip_think_blocks(msg.content or "")
+        text, think_trace = _strip_think_blocks(msg.content or "")
+        # Priority: explicit reasoning field on the message, else the extracted
+        # <think> content.  Leave thinking_block None when neither source is
+        # present.
+        thinking_block: str | None = None
+        for _field in ('reasoning', 'reasoning_content'):
+            _val = getattr(msg, _field, None)
+            if _val and isinstance(_val, str) and _val.strip():
+                thinking_block = _val.strip()
+                break
+        if thinking_block is None and think_trace:
+            thinking_block = think_trace
         finish_reason = response.choices[0].finish_reason
         tool_calls = self._parse_tool_calls(cast("_ChatMessage", msg))
 
@@ -466,6 +477,7 @@ class OpenAICompatibleClient(ProviderClient):
             decode_ms=decode_ms,
             tool_calls=tool_calls,
             stop_reason=finish_reason,
+            thinking_block=thinking_block,
             response_code=200,
         )
 
