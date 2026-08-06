@@ -27,7 +27,7 @@ import os
 import sqlite3
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, TypedDict
+from typing import TypedDict
 
 # Add backend/ to sys.path so services.* imports resolve when invoked standalone.
 _BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -40,8 +40,19 @@ from services.file_mapper_service import FileMapperService  # noqa: E402
 logger = logging.getLogger(__name__)
 
 
-def _resolve_db(cli_arg: str | None) -> str:
-    return cli_arg if cli_arg else str(FileMapperService.get_db_path())
+# ── Types ───────────────────────────────────────────────────────────────────
+
+class _Stats(TypedDict):
+    channel: str
+    rows_read: int
+    skipped_role: int
+    skipped_unrecoverable_user: int
+    skipped_empty_assistant: int
+    skipped_unpaired: int
+    skipped_dedup: int
+    pairs_inserted: int
+    orphaned_tool_calls_deleted: int
+    unrecoverable_details: list[str]
 
 
 # ── Content extraction ──────────────────────────────────────────────────────
@@ -72,369 +83,357 @@ _PLAIN_TEXT_MAX = 10_000
 # Roles that are background/internal — skip entirely
 _SKIP_ROLES = {"proactive_thought", "subagent", "subagent_return", "scheduled", "tool"}
 
-if TYPE_CHECKING:
-    class _Stats(TypedDict):
-        channel: str
-        rows_read: int
-        skipped_role: int
-        skipped_unrecoverable_user: int
-        skipped_empty_assistant: int
-        skipped_unpaired: int
-        skipped_dedup: int
-        pairs_inserted: int
-        orphaned_tool_calls_deleted: int
-        unrecoverable_details: list[str]
 
+class TranscriptRebuildMigration:
+    """Pure-relocation OOP fold of migrate_transcript_rebuild module functions."""
 
-def extract_user_message(content: str) -> str | None:
-    """Returns the raw message, or None if unrecoverable.
+    # ── DB resolution ───────────────────────────────────────────────────
 
-    Three cases:
-    1. Has '## User Message\\n' marker → extract everything after it. If the
-       extracted text still contains assembly headers, the entry is a
-       recursive blob (world-state injected into the prior turn's content,
-       then re-assembled) — skip it.
-    2. No assembly headers, short enough, no injection prefix → treat as
-       raw user text (old pre-UserPromptAssemblyService format).
-    3. Anything else: unrecoverable.
-    """
-    if not content:
+    @staticmethod
+    def _resolve_db(cli_arg: str | None) -> str:
+        return cli_arg if cli_arg else str(FileMapperService.get_db_path())
+
+    # ── Content extraction ──────────────────────────────────────────────
+
+    @staticmethod
+    def extract_user_message(content: str) -> str | None:
+        """Returns the raw message, or None if unrecoverable.
+
+        Three cases:
+        1. Has '## User Message\\n' marker → extract everything after it. If the
+           extracted text still contains assembly headers, the entry is a
+           recursive blob (world-state injected into the prior turn's content,
+           then re-assembled) — skip it.
+        2. No assembly headers, short enough, no injection prefix → treat as
+           raw user text (old pre-UserPromptAssemblyService format).
+        3. Anything else: unrecoverable.
+        """
+        if not content:
+            return None
+
+        # Case 1: Has the assembly marker — extract after it
+        if _USER_MSG_MARKER in content:
+            idx = content.index(_USER_MSG_MARKER) + len(_USER_MSG_MARKER)
+            raw = content[idx:].strip()
+            if len(raw) < 3:
+                return None
+            # Recursive blob check: after extraction the text still contains
+            # assembly structure from the previous turn embedded inside it
+            if any(m in raw for m in _ASSEMBLY_MARKERS):
+                return None
+            return raw
+
+        # Case 2: No assembly markers — old plain-text format
+        if not any(m in content for m in _ASSEMBLY_MARKERS):
+            stripped = content.strip()
+            if len(stripped) < 3:
+                return None
+            # Skip known system/scheduled injection patterns
+            if any(stripped.startswith(p) for p in _INJECTION_PREFIXES):
+                return None
+            # Skip bulk dumps that are too long to be a real user message
+            if len(stripped) > _PLAIN_TEXT_MAX:
+                return None
+            return stripped
+
+        # Case 3: Has assembly headers but no ## User Message marker
         return None
 
-    # Case 1: Has the assembly marker — extract after it
-    if _USER_MSG_MARKER in content:
-        idx = content.index(_USER_MSG_MARKER) + len(_USER_MSG_MARKER)
-        raw = content[idx:].strip()
-        if len(raw) < 3:
-            return None
-        # Recursive blob check: after extraction the text still contains
-        # assembly structure from the previous turn embedded inside it
-        if any(m in raw for m in _ASSEMBLY_MARKERS):
-            return None
-        return raw
+    @staticmethod
+    def _pair_key(user_content: str, assistant_content: str) -> str:
+        h = hashlib.sha256((user_content + "\x00" + assistant_content).encode()).hexdigest()
+        return h[:24]
 
-    # Case 2: No assembly markers — old plain-text format
-    if not any(m in content for m in _ASSEMBLY_MARKERS):
-        stripped = content.strip()
-        if len(stripped) < 3:
-            return None
-        # Skip known system/scheduled injection patterns
-        if any(stripped.startswith(p) for p in _INJECTION_PREFIXES):
-            return None
-        # Skip bulk dumps that are too long to be a real user message
-        if len(stripped) > _PLAIN_TEXT_MAX:
-            return None
-        return stripped
+    # ── Core migration ──────────────────────────────────────────────────
 
-    # Case 3: Has assembly headers but no ## User Message marker
-    return None
+    def run_migration(self, db_path: str, channel: str, limit: int, dry_run: bool) -> _Stats:
 
+        if not Path(db_path).exists():
+            print(f"  ERROR: DB not found at {db_path}", file=sys.stderr)
+            sys.exit(1)
 
-def _pair_key(user_content: str, assistant_content: str) -> str:
-    h = hashlib.sha256((user_content + "\x00" + assistant_content).encode()).hexdigest()
-    return h[:24]
+        conn = sqlite3.connect(db_path, timeout=30)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA foreign_keys=OFF")  # we handle referential cleanup manually
 
+        try:
+            return self._do_migration(conn, channel, limit, dry_run)
+        finally:
+            conn.close()
 
-# ── Core migration ──────────────────────────────────────────────────────────
+    def _build_pairs(self, rows: list[sqlite3.Row], stats: _Stats) -> list[tuple[sqlite3.Row, sqlite3.Row]]:
+        """Walk rows chronologically and build (user, assistant) exchange pairs."""
+        pairs = []
+        pending_user: sqlite3.Row | None = None
 
-def run_migration(db_path: str, channel: str, limit: int, dry_run: bool) -> "_Stats":
+        for row in rows:
+            role = row["role"]
 
-    if not Path(db_path).exists():
-        print(f"  ERROR: DB not found at {db_path}", file=sys.stderr)
-        sys.exit(1)
-
-    conn = sqlite3.connect(db_path, timeout=30)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=OFF")  # we handle referential cleanup manually
-
-    try:
-        return _do_migration(conn, channel, limit, dry_run)
-    finally:
-        conn.close()
-
-
-def _build_pairs(rows: list[sqlite3.Row], stats: "_Stats") -> list[tuple[sqlite3.Row, sqlite3.Row]]:
-    """Walk rows chronologically and build (user, assistant) exchange pairs."""
-    pairs = []
-    pending_user = None
-
-    for row in rows:
-        role = row["role"]
-
-        if role in _SKIP_ROLES:
-            stats["skipped_role"] += 1
-            continue
-
-        if role == "user":
-            pending_user = row
-            continue
-
-        if role == "assistant":
-            if pending_user is None:
-                stats["skipped_unpaired"] += 1
+            if role in _SKIP_ROLES:
+                stats["skipped_role"] += 1
                 continue
-            pairs.append((pending_user, row))
-            pending_user = None
-            continue
 
-        stats["skipped_role"] += 1
+            if role == "user":
+                pending_user = row
+                continue
 
-    if pending_user is not None:
-        stats["skipped_unpaired"] += 1
+            if role == "assistant":
+                if pending_user is None:
+                    stats["skipped_unpaired"] += 1
+                    continue
+                pairs.append((pending_user, row))
+                pending_user = None
+                continue
 
-    return pairs
+            stats["skipped_role"] += 1
 
+        if pending_user is not None:
+            stats["skipped_unpaired"] += 1
 
-def _clean_and_dedup(pairs: list[tuple[sqlite3.Row, sqlite3.Row]], stats: "_Stats") -> list[dict[str, str]]:
-    """Extract raw user messages, validate assistant content, and deduplicate."""
-    clean_pairs = []
-    seen_keys: set[str] = set()
+        return pairs
 
-    for user_row, asst_row in pairs:
-        raw_user = extract_user_message(user_row["content"])
-        if raw_user is None:
-            stats["skipped_unrecoverable_user"] += 1
-            stats["unrecoverable_details"].append(
-                f"  id={user_row['id']} created_at={user_row['created_at']} "
-                f"  preview={user_row['content'][:80]!r}"
-            )
-            continue
+    def _clean_and_dedup(self, pairs: list[tuple[sqlite3.Row, sqlite3.Row]], stats: _Stats) -> list[dict[str, str]]:
+        """Extract raw user messages, validate assistant content, and deduplicate."""
+        clean_pairs: list[dict[str, str]] = []
+        seen_keys: set[str] = set()
 
-        raw_asst = (asst_row["content"] or "").strip()
-        if not raw_asst:
-            stats["skipped_empty_assistant"] += 1
-            continue
+        for user_row, asst_row in pairs:
+            raw_user = self.extract_user_message(user_row["content"])
+            if raw_user is None:
+                stats["skipped_unrecoverable_user"] += 1
+                stats["unrecoverable_details"].append(
+                    f"  id={user_row['id']} created_at={user_row['created_at']} "
+                    f"  preview={user_row['content'][:80]!r}"
+                )
+                continue
 
-        key = _pair_key(raw_user, raw_asst)
-        if key in seen_keys:
-            stats["skipped_dedup"] += 1
-            continue
-        seen_keys.add(key)
+            raw_asst = (asst_row["content"] or "").strip()
+            if not raw_asst:
+                stats["skipped_empty_assistant"] += 1
+                continue
 
-        clean_pairs.append({
-            "user_content": raw_user,
-            "user_created_at": user_row["created_at"],
-            "asst_content": raw_asst,
-            "asst_created_at": asst_row["created_at"],
-        })
+            key = self._pair_key(raw_user, raw_asst)
+            if key in seen_keys:
+                stats["skipped_dedup"] += 1
+                continue
+            seen_keys.add(key)
 
-    return clean_pairs
+            clean_pairs.append({
+                "user_content": raw_user,
+                "user_created_at": user_row["created_at"],
+                "asst_content": raw_asst,
+                "asst_created_at": asst_row["created_at"],
+            })
 
+        return clean_pairs
 
-def _print_stats(stats: "_Stats", clean_count: int) -> None:
-    """Print migration statistics."""
-    print(f"\n  Channel: {stats['channel']!r}")
-    print(f"  Rows read            : {stats['rows_read']}")
-    print(f"  Skipped (role)       : {stats['skipped_role']}  "
-          f"(tool, proactive_thought, subagent, scheduled)")
-    print(f"  Skipped (unpaired)   : {stats['skipped_unpaired']}  "
-          f"(user with no following assistant, or assistant with no preceding user)")
-    print(f"  Skipped (bad user)   : {stats['skipped_unrecoverable_user']}  "
-          f"(cannot extract raw message from assembled prompt)")
-    print(f"  Skipped (empty asst) : {stats['skipped_empty_assistant']}")
-    print(f"  Skipped (dedup)      : {stats['skipped_dedup']}")
-    print(f"  Clean pairs to write : {clean_count}")
+    def _print_stats(self, stats: _Stats, clean_count: int) -> None:
+        """Print migration statistics."""
+        print(f"\n  Channel: {stats['channel']!r}")
+        print(f"  Rows read            : {stats['rows_read']}")
+        print(f"  Skipped (role)       : {stats['skipped_role']}  "
+              f"(tool, proactive_thought, subagent, scheduled)")
+        print(f"  Skipped (unpaired)   : {stats['skipped_unpaired']}  "
+              f"(user with no following assistant, or assistant with no preceding user)")
+        print(f"  Skipped (bad user)   : {stats['skipped_unrecoverable_user']}  "
+              f"(cannot extract raw message from assembled prompt)")
+        print(f"  Skipped (empty asst) : {stats['skipped_empty_assistant']}")
+        print(f"  Skipped (dedup)      : {stats['skipped_dedup']}")
+        print(f"  Clean pairs to write : {clean_count}")
 
-    if stats["unrecoverable_details"]:
-        print("\n  Unrecoverable user rows (skipped):")
-        for d in stats["unrecoverable_details"]:
-            print(d)
+        if stats["unrecoverable_details"]:
+            print("\n  Unrecoverable user rows (skipped):")
+            for d in stats["unrecoverable_details"]:
+                print(d)
 
+    def _write_pairs(self, conn: sqlite3.Connection, channel: str, rows: list[sqlite3.Row],
+                     clean_pairs: list[dict[str, str]], stats: _Stats) -> None:
+        """Delete old transcript data and re-insert clean pairs."""
+        old_ids = [r["id"] for r in rows]
 
-def _write_pairs(conn: sqlite3.Connection, channel: str, rows: list[sqlite3.Row],
-                 clean_pairs: list[dict[str, str]], stats: "_Stats") -> None:
-    """Delete old transcript data and re-insert clean pairs."""
-    old_ids = [r["id"] for r in rows]
+        with conn:
+            if old_ids:
+                placeholders = ",".join("?" * len(old_ids))
+                cur = conn.execute(
+                    f"DELETE FROM tool_calls WHERE transcript_id IN ({placeholders})",
+                    old_ids,
+                )
+                stats["orphaned_tool_calls_deleted"] = cur.rowcount
+                conn.execute(
+                    f"DELETE FROM transcript WHERE id IN ({placeholders})",
+                    old_ids,
+                )
 
-    with conn:
-        if old_ids:
-            placeholders = ",".join("?" * len(old_ids))
-            cur = conn.execute(
-                f"DELETE FROM tool_calls WHERE transcript_id IN ({placeholders})",
-                old_ids,
-            )
-            stats["orphaned_tool_calls_deleted"] = cur.rowcount
-            conn.execute(
-                f"DELETE FROM transcript WHERE id IN ({placeholders})",
-                old_ids,
-            )
+            for pair in clean_pairs:
+                conn.execute(
+                    """
+                    INSERT INTO transcript (channel, role, content, internal, created_at, xml_migrated)
+                    VALUES (?, 'user', ?, 0, ?, 1)
+                    """,
+                    (channel, pair["user_content"], pair["user_created_at"]),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO transcript (channel, role, content, internal, created_at, xml_migrated)
+                    VALUES (?, 'assistant', ?, 0, ?, 1)
+                    """,
+                    (channel, pair["asst_content"], pair["asst_created_at"]),
+                )
 
-        for pair in clean_pairs:
-            conn.execute(
-                """
-                INSERT INTO transcript (channel, role, content, internal, created_at, xml_migrated)
-                VALUES (?, 'user', ?, 0, ?, 1)
-                """,
-                (channel, pair["user_content"], pair["user_created_at"]),
-            )
-            conn.execute(
-                """
-                INSERT INTO transcript (channel, role, content, internal, created_at, xml_migrated)
-                VALUES (?, 'assistant', ?, 0, ?, 1)
-                """,
-                (channel, pair["asst_content"], pair["asst_created_at"]),
-            )
-
-    stats["pairs_inserted"] = len(clean_pairs)
-    print(f"\n  Written {len(clean_pairs)} exchange pairs "
-          f"({len(clean_pairs) * 2} transcript rows)")
-    print(f"  Deleted {stats['orphaned_tool_calls_deleted']} orphaned tool_calls rows")
-    print("  Compaction audit rows preserved (orphaned IDs are invisible to canonical lookup)")
-    print()
-    print("  NOTE: build_messages() is unaffected — it reads by ID range.")
-
-
-def _do_migration(conn: sqlite3.Connection, channel: str, limit: int, dry_run: bool) -> "_Stats":
-    stats: "_Stats" = {
-        "channel": channel,
-        "rows_read": 0,
-        "skipped_role": 0,
-        "skipped_unrecoverable_user": 0,
-        "skipped_empty_assistant": 0,
-        "skipped_unpaired": 0,
-        "skipped_dedup": 0,
-        "pairs_inserted": 0,
-        "orphaned_tool_calls_deleted": 0,
-        "unrecoverable_details": [],
-    }
-
-    rows = conn.execute(
-        """
-        SELECT id, role, content, tool_call_id, tool_name, created_at
-        FROM transcript
-        WHERE channel = ?
-        ORDER BY id DESC
-        LIMIT ?
-        """,
-        (channel, limit),
-    ).fetchall()
-
-    if not rows:
-        print(f"  No transcript rows found for channel={channel!r}")
-        return stats
-
-    rows = list(reversed(rows))
-    stats["rows_read"] = len(rows)
-
-    pairs = _build_pairs(rows, stats)
-    clean_pairs = _clean_and_dedup(pairs, stats)
-    _print_stats(stats, len(clean_pairs))
-
-    if not clean_pairs:
-        print("\n  Nothing to write.")
-        return stats
-
-    if dry_run:
-        print("\n  [DRY RUN] No changes made.")
-        _print_pair_preview(clean_pairs[:3])
-        return stats
-
-    _write_pairs(conn, channel, rows, clean_pairs, stats)
-    return stats
-
-
-def _print_pair_preview(pairs: list[dict[str, str]]) -> None:
-    print("\n  Preview (first 3 pairs):")
-    for i, pair in enumerate(pairs):
-        u_preview = pair["user_content"][:120].replace("\n", " ")
-        a_preview = pair["asst_content"][:120].replace("\n", " ")
-        print(f"    [{i + 1}] user     {pair['user_created_at']}  {u_preview!r}")
-        print(f"         assistant {pair['asst_created_at']}  {a_preview!r}")
+        stats["pairs_inserted"] = len(clean_pairs)
+        print(f"\n  Written {len(clean_pairs)} exchange pairs "
+              f"({len(clean_pairs) * 2} transcript rows)")
+        print(f"  Deleted {stats['orphaned_tool_calls_deleted']} orphaned tool_calls rows")
+        print("  Compaction audit rows preserved (orphaned IDs are invisible to canonical lookup)")
         print()
+        print("  NOTE: build_messages() is unaffected — it reads by ID range.")
 
+    def _do_migration(self, conn: sqlite3.Connection, channel: str, limit: int, dry_run: bool) -> _Stats:
+        stats: _Stats = {
+            "channel": channel,
+            "rows_read": 0,
+            "skipped_role": 0,
+            "skipped_unrecoverable_user": 0,
+            "skipped_empty_assistant": 0,
+            "skipped_unpaired": 0,
+            "skipped_dedup": 0,
+            "pairs_inserted": 0,
+            "orphaned_tool_calls_deleted": 0,
+            "unrecoverable_details": [],
+        }
 
-# ── Boot-time auto-run ──────────────────────────────────────────────────────
+        rows = conn.execute(
+            """
+            SELECT id, role, content, tool_call_id, tool_name, created_at
+            FROM transcript
+            WHERE channel = ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (channel, limit),
+        ).fetchall()
 
-# Sentinel file written after the migration completes.  Its presence prevents
-# re-running on subsequent boots.
-_MIGRATION_ID = "transcript-rebuild-v1"
+        if not rows:
+            print(f"  No transcript rows found for channel={channel!r}")
+            return stats
 
-# Channel prefixes that belong to background/system flows — skip during auto-run.
-# prompt:  — old scheduled-prompt delivery channels (contain [SCHEDULED TASK] text)
-# web:     — old web interface channels (also contained scheduled prompts)
-# scheduled: — new ScheduledMessageProcessor channels
-_BACKGROUND_PREFIXES = ("subagent:", "scheduled:", "dmn:", "cron_tool:", "prompt:", "web:")
+        rows = list(reversed(rows))
+        stats["rows_read"] = len(rows)
 
+        pairs = self._build_pairs(rows, stats)
+        clean_pairs = self._clean_and_dedup(pairs, stats)
+        self._print_stats(stats, len(clean_pairs))
 
-def _flag_path(db_path: str) -> Path:
-    """Return the path of the done-flag file for this migration."""
-    data_dir = Path(db_path).parent
-    return data_dir / f".{_MIGRATION_ID}.done"
+        if not clean_pairs:
+            print("\n  Nothing to write.")
+            return stats
 
+        if dry_run:
+            print("\n  [DRY RUN] No changes made.")
+            self._print_pair_preview(clean_pairs[:3])
+            return stats
 
-def run_once_on_boot(db_path: str | None = None, limit: int = 100) -> None:
-    """Sentinel-file gated — runs once on boot then no-ops.
+        self._write_pairs(conn, channel, rows, clean_pairs, stats)
+        return stats
 
-    Safe to call on an empty DB (per-channel loop exits early with
-    'Nothing to write.'). Never raises — logs and carries on so a failed
-    migration cannot block startup.
-    """
-    db_path = _resolve_db(db_path)
-    flag = _flag_path(db_path)
+    def _print_pair_preview(self, pairs: list[dict[str, str]]) -> None:
+        print("\n  Preview (first 3 pairs):")
+        for i, pair in enumerate(pairs):
+            u_preview = pair["user_content"][:120].replace("\n", " ")
+            a_preview = pair["asst_content"][:120].replace("\n", " ")
+            print(f"    [{i + 1}] user     {pair['user_created_at']}  {u_preview!r}")
+            print(f"         assistant {pair['asst_created_at']}  {a_preview!r}")
+            print()
 
-    if flag.exists():
-        logger.debug(f"[TranscriptMigration] Already done (sentinel {flag})")
-        return
+    # ── Boot-time auto-run ──────────────────────────────────────────────
 
-    if not Path(db_path).exists():
-        logger.warning(
-            f"[TranscriptMigration] DB not found at {db_path} — skipping"
-        )
-        return
+    # Sentinel file written after the migration completes.  Its presence prevents
+    # re-running on subsequent boots.
+    _MIGRATION_ID = "transcript-rebuild-v1"
 
-    logger.info("[TranscriptMigration] Running one-time transcript rebuild …")
+    # Channel prefixes that belong to background/system flows — skip during auto-run.
+    # prompt:  — old scheduled-prompt delivery channels (contain [SCHEDULED TASK] text)
+    # web:     — old web interface channels (also contained scheduled prompts)
+    # scheduled: — new ScheduledMessageProcessor channels
+    _BACKGROUND_PREFIXES = ("subagent:", "scheduled:", "dmn:", "cron_tool:", "prompt:", "web:")
 
-    try:
-        # Discover all channels that have transcript rows
-        all_channels = Transcript.distinct_channels()
+    def _flag_path(self, db_path: str) -> Path:
+        """Return the path of the done-flag file for this migration."""
+        data_dir = Path(db_path).parent
+        return data_dir / f".{self._MIGRATION_ID}.done"
 
-        # Skip background/system channels
-        channels = [
-            ch for ch in all_channels
-            if not any(ch.startswith(p) for p in _BACKGROUND_PREFIXES)
-        ]
+    def run_once_on_boot(self, db_path: str | None = None, limit: int = 100) -> None:
+        """Sentinel-file gated — runs once on boot then no-ops.
 
-        if not channels:
-            logger.info("[TranscriptMigration] No user-facing channels found — nothing to do")
-            _write_flag(flag)
+        Safe to call on an empty DB (per-channel loop exits early with
+        'Nothing to write.'). Never raises — logs and carries on so a failed
+        migration cannot block startup.
+        """
+        resolved_db = self._resolve_db(db_path)
+        flag = self._flag_path(resolved_db)
+
+        if flag.exists():
+            logger.debug(f"[TranscriptMigration] Already done (sentinel {flag})")
             return
 
-        logger.info(f"[TranscriptMigration] Channels to migrate: {channels}")
+        if not Path(resolved_db).exists():
+            logger.warning(
+                f"[TranscriptMigration] DB not found at {resolved_db} — skipping"
+            )
+            return
 
-        total_pairs = 0
-        total_skipped = 0
-        for ch in channels:
-            result = run_migration(db_path, ch, limit, dry_run=False)
-            total_pairs += result.get("pairs_inserted", 0)
-            total_skipped += (
-                result.get("skipped_unrecoverable_user", 0)
-                + result.get("skipped_empty_assistant", 0)
-                + result.get("skipped_unpaired", 0)
-                + result.get("skipped_dedup", 0)
+        logger.info("[TranscriptMigration] Running one-time transcript rebuild …")
+
+        try:
+            # Discover all channels that have transcript rows
+            all_channels = Transcript.distinct_channels()
+
+            # Skip background/system channels
+            channels = [
+                ch for ch in all_channels
+                if not any(ch.startswith(p) for p in self._BACKGROUND_PREFIXES)
+            ]
+
+            if not channels:
+                logger.info("[TranscriptMigration] No user-facing channels found — nothing to do")
+                self._write_flag(flag)
+                return
+
+            logger.info(f"[TranscriptMigration] Channels to migrate: {channels}")
+
+            total_pairs = 0
+            total_skipped = 0
+            for ch in channels:
+                result = self.run_migration(resolved_db, ch, limit, dry_run=False)
+                total_pairs += result.get("pairs_inserted", 0)
+                total_skipped += (
+                    result.get("skipped_unrecoverable_user", 0)
+                    + result.get("skipped_empty_assistant", 0)
+                    + result.get("skipped_unpaired", 0)
+                    + result.get("skipped_dedup", 0)
+                )
+
+            logger.info(
+                f"[TranscriptMigration] Complete — "
+                f"{total_pairs} pair(s) written, {total_skipped} skipped"
+            )
+            self._write_flag(flag)
+
+        except Exception as e:
+            # Never crash boot — log and carry on
+            logger.error(
+                f"[TranscriptMigration] Failed: {e}",
+                exc_info=True,
             )
 
-        logger.info(
-            f"[TranscriptMigration] Complete — "
-            f"{total_pairs} pair(s) written, {total_skipped} skipped"
-        )
-        _write_flag(flag)
-
-    except Exception as e:
-        # Never crash boot — log and carry on
-        logger.error(
-            f"[TranscriptMigration] Failed: {e}",
-            exc_info=True,
-        )
-
-
-def _write_flag(flag: Path) -> None:
-    try:
-        flag.parent.mkdir(parents=True, exist_ok=True)
-        flag.write_text(_MIGRATION_ID)
-        logger.debug(f"[TranscriptMigration] Sentinel written: {flag}")
-    except Exception as e:
-        logger.warning(f"[TranscriptMigration] Could not write sentinel: {e}")
+    def _write_flag(self, flag: Path) -> None:
+        try:
+            flag.parent.mkdir(parents=True, exist_ok=True)
+            flag.write_text(self._MIGRATION_ID)
+            logger.debug(f"[TranscriptMigration] Sentinel written: {flag}")
+        except Exception as e:
+            logger.warning(f"[TranscriptMigration] Could not write sentinel: {e}")
 
 
 # ── CLI ─────────────────────────────────────────────────────────────────────
@@ -467,7 +466,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    db_path = _resolve_db(args.db)
+    db_path = TranscriptRebuildMigration._resolve_db(args.db)
     print(f"DB path  : {db_path}")
     print(f"Mode     : {'DRY RUN — no changes will be made' if args.dry_run else 'LIVE — database will be modified'}")
     print(f"Limit    : last {args.limit} rows per channel")
@@ -494,9 +493,10 @@ def main() -> None:
     else:
         channels = [args.channel]
 
+    migration = TranscriptRebuildMigration()
     total_pairs = 0
     for ch in channels:
-        result = run_migration(db_path, ch, args.limit, args.dry_run)
+        result = migration.run_migration(db_path, ch, args.limit, args.dry_run)
         total_pairs += result.get("pairs_inserted", 0)
 
     print(f"\n{'=' * 60}")

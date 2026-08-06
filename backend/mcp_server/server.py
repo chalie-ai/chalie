@@ -175,57 +175,61 @@ def _build_app(mcp: MCPServer) -> Starlette:
     return app
 
 
-def run_mcp_server() -> None:
-    """Run the MCP server (blocking). Intended as a WorkerManager service."""
-    from models.setting import Setting
+class McpServer:
+    """MCP server bootstrap and configuration."""
 
-    enabled = Setting.get_value("mcp_server_enabled")
-    if enabled is not None and str(enabled).lower() in ("false", "0", "no"):
-        logger.info("[MCP] Server disabled via settings (mcp_server_enabled=false)")
-        return
+    @staticmethod
+    def run() -> None:
+        """Run the MCP server (blocking). Intended as a WorkerManager service."""
+        from models.setting import Setting
 
-    port_setting = Setting.get_value("mcp_server_port")
-    try:
-        port = int(port_setting) if port_setting else _DEFAULT_PORT
-    except (ValueError, TypeError):
-        port = _DEFAULT_PORT
-
-    _ensure_mcp_token()
-
-    logger.info("[MCP] Starting MCP server on port %d", port)
-    mcp = create_mcp_server()
-    app = _build_app(mcp)
-
-    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
-
-
-def _ensure_mcp_token() -> None:
-    """Generate an MCP auth token on first boot if none exists."""
-    from services.wrapper_auth_service import WrapperAuthService
-    from models.setting import Setting
-
-    existing = Setting.get_value("mcp_server_token_wrapper_id")
-    if existing:
-        auth_svc = WrapperAuthService()
-        wrapper = auth_svc.get_wrapper(existing)
-        if wrapper:
+        enabled = Setting.get_value("mcp_server_enabled")
+        if enabled is not None and str(enabled).lower() in ("false", "0", "no"):
+            logger.info("[MCP] Server disabled via settings (mcp_server_enabled=false)")
             return
 
-    auth_svc = WrapperAuthService()
-    try:
-        raw_token, wrapper_id = auth_svc.create_token(
-            name="MCP Server (External Agents)",
-            wrapper_id_override="__mcp_server__",
+        port_setting = Setting.get_value("mcp_server_port")
+        try:
+            port = int(port_setting) if port_setting else _DEFAULT_PORT
+        except (ValueError, TypeError):
+            port = _DEFAULT_PORT
+
+        McpServer._ensure_token()
+
+        logger.info("[MCP] Starting MCP server on port %d", port)
+        mcp = create_mcp_server()
+        app = _build_app(mcp)
+
+        uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
+
+    @staticmethod
+    def _ensure_token() -> None:
+        """Generate an MCP auth token on first boot if none exists."""
+        from services.wrapper_auth_service import WrapperAuthService
+        from models.setting import Setting
+
+        existing = Setting.get_value("mcp_server_token_wrapper_id")
+        if existing:
+            auth_svc = WrapperAuthService()
+            wrapper = auth_svc.get_wrapper(existing)
+            if wrapper:
+                return
+
+        auth_svc = WrapperAuthService()
+        try:
+            raw_token, wrapper_id = auth_svc.create_token(
+                name="MCP Server (External Agents)",
+                wrapper_id_override="__mcp_server__",
+            )
+        except sqlite3.IntegrityError:
+            logger.info("[MCP] Token already exists (concurrent boot); skipping")
+            return
+
+        Setting.set("mcp_server_token_wrapper_id", wrapper_id)
+
+        logger.info(
+            "[MCP] Generated MCP auth token (wrapper_id=%s). "
+            "Retrieve via: Settings > MCP Server in the brain dashboard.",
+            wrapper_id,
         )
-    except sqlite3.IntegrityError:
-        logger.info("[MCP] Token already exists (concurrent boot); skipping")
-        return
-
-    Setting.set("mcp_server_token_wrapper_id", wrapper_id)
-
-    logger.info(
-        "[MCP] Generated MCP auth token (wrapper_id=%s). "
-        "Retrieve via: Settings > MCP Server in the brain dashboard.",
-        wrapper_id,
-    )
-    logger.info("[MCP] Token (shown once): %s", raw_token)
+        logger.info("[MCP] Token (shown once): %s", raw_token)

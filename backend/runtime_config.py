@@ -7,9 +7,13 @@ host) import this instead of reading env vars.
 _config: dict[str, object] = {}
 
 
-def set(cfg: dict[str, object]) -> None:
-    _config.update(cfg)
+class RuntimeConfig:
+    """Process-local key-value runtime configuration store."""
 
+    @staticmethod
+    def set(cfg: dict[str, object]) -> None:
+        _config.update(cfg)
 
-def get(key: str, default: object = None) -> object:
-    return _config.get(key, default)
+    @classmethod
+    def get(cls, key: str, default: object = None) -> object:
+        return _config.get(key, default)

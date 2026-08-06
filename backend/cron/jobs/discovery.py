@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 from datetime import timedelta
 
-from cron.base import IdleGatedJob, llm_provider_configured
+from cron.base import CronBase, IdleGatedJob
 from configs.channels import DiscoveryConfig
 from configs.channels.discovery import DISCOVERY_PROMPT
 from services.durable_timestamp import DurableTimestamp
@@ -63,7 +63,7 @@ class DiscoveryJob(IdleGatedJob):
         """
         if not super().should_run():
             return False
-        if not llm_provider_configured():
+        if not CronBase.llm_provider_configured():
             logger.info("[CRON] Skipping discovery — no LLM provider configured")
             return False
         last = _DISCOVERY_TIMESTAMP.load()

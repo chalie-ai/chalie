@@ -43,8 +43,6 @@ from services.time_utils import PARSE_SENTINEL, parse_utc, utc_now
 from configs.channels import (
     EpisodeEncoderConfig,
     SuperEpisodeConfig,
-    _collect_transcript_ids,
-    _safe_json_load_object,
 )
 
 if TYPE_CHECKING:
@@ -972,7 +970,7 @@ def consolidate_cluster(
         if len(sources) < SEED_CLUSTER_MIN_SIZE:
             return False
 
-        all_t_ids = _collect_transcript_ids(cast(list[object], sources))
+        all_t_ids = SuperEpisodeConfig.collect_transcript_ids(cast(list[object], sources))
 
         config = SuperEpisodeConfig(channel, cast(list[object], sources))
         response = MessageProcessor.process(config).result()
@@ -984,7 +982,7 @@ def consolidate_cluster(
             )
             return False
 
-        super_ep = _safe_json_load_object(response)
+        super_ep = SuperEpisodeConfig.safe_json_load_object(response)
         if not super_ep or not super_ep.get("gist"):
             logger.warning(
                 f"{LOG_PREFIX} SuperEpisodeEncoder returned unparseable/empty "

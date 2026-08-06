@@ -31,12 +31,12 @@ from unittest.mock import patch
 
 import pytest
 
-from cron.base import llm_provider_configured
+from cron.base import CronBase
 from cron.jobs.discovery import DiscoveryJob
 
 pytestmark = pytest.mark.unit
 
-_PROVIDER_CACHE = "cron.jobs.discovery.llm_provider_configured"
+_PROVIDER_CACHE = "cron.jobs.discovery.CronBase.llm_provider_configured"
 _BASE_SHOULD_RUN = "cron.base.IdleGatedJob.should_run"
 
 
@@ -49,7 +49,7 @@ def test_llm_provider_configured_returns_false_when_no_provider() -> None:
         "services.provider_cache_service.ProviderCacheService.get_providers",
         return_value={},
     ):
-        assert llm_provider_configured() is False
+        assert CronBase.llm_provider_configured() is False
 
 
 def test_llm_provider_configured_returns_true_when_selected_provider_exists() -> None:
@@ -62,7 +62,7 @@ def test_llm_provider_configured_returns_true_when_selected_provider_exists() ->
         "services.provider_cache_service.ProviderCacheService.get_providers",
         return_value={},
     ):
-        assert llm_provider_configured() is True
+        assert CronBase.llm_provider_configured() is True
 
 
 def test_llm_provider_configured_returns_true_when_any_provider_exists() -> None:
@@ -75,7 +75,7 @@ def test_llm_provider_configured_returns_true_when_any_provider_exists() -> None
         "services.provider_cache_service.ProviderCacheService.get_providers",
         return_value=fake_providers,
     ):
-        assert llm_provider_configured() is True
+        assert CronBase.llm_provider_configured() is True
 
 
 def test_should_run_returns_false_when_no_provider_even_when_other_gates_pass() -> None:

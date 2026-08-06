@@ -8,7 +8,7 @@ import logging
 import sys
 from typing import cast
 
-import runtime_config
+from runtime_config import RuntimeConfig
 from utils.logger import Logger
 
 Logger.start()
@@ -26,8 +26,8 @@ class RestApiWorker:
     def run(cls) -> None:
         logger.info("[REST API] Starting REST API worker...")
 
-        host = cast("str", runtime_config.get("host", "0.0.0.0"))
-        port = cast("int", runtime_config.get("port", 31025))
+        host = cast("str", RuntimeConfig.get("host", "0.0.0.0"))
+        port = cast("int", RuntimeConfig.get("port", 31025))
 
         logger.info(f"[REST API] Starting Flask server on {host}:{port}")
 

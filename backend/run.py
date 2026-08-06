@@ -12,7 +12,7 @@ import os
 import sys
 from typing import TYPE_CHECKING, cast
 
-from configs.channels import config_for
+from configs.channels import ChannelConfig
 from configs.enums.config_type import ConfigTypeEnum
 from services.database import Database
 from utils.logger import Logger
@@ -219,9 +219,9 @@ def _run_startup_migrations() -> None:
 def _run_transcript_rebuild() -> None:
     """One-time transcript rebuild."""
     try:
-        from migrate_transcript_rebuild import run_once_on_boot
+        from migrate_transcript_rebuild import TranscriptRebuildMigration
         from services.file_mapper_service import FileMapperService
-        run_once_on_boot(db_path=str(FileMapperService.get_db_path()))
+        TranscriptRebuildMigration().run_once_on_boot(db_path=str(FileMapperService.get_db_path()))
     except Exception as _mig_err:
         logger.warning(f"[Startup] Transcript migration skipped: {_mig_err}")
 
@@ -285,14 +285,15 @@ def _register_workers(manager: "_WorkerManager", host: str, port: int) -> None:
     from workers.tmp_cleanup_worker import TmpCleanupWorker
     manager.register_service("tmp-cleanup-service", TmpCleanupWorker.run)
 
-    from cron.runner import cron_runner
-    manager.register_service("cron-runner", cron_runner)
+    from cron.runner import CronRunner
+    manager.register_service("cron-runner", CronRunner.cron_runner)
     _bootstrap_capability_sync()
     _try_register(manager, "search-expander-service",
                   "services.search_expander_service", "search_expander_worker")
     from workers.file_index_worker import FileIndexWorker
     manager.register_service("file-index-service", FileIndexWorker.run)
-    _try_register(manager, "mcp-server", "mcp_server.server", "run_mcp_server")
+    from mcp_server.server import McpServer
+    manager.register_service("mcp-server", McpServer.run)
     from workers.mcp_client_worker import McpClientWorker
     manager.register_service("mcp-client-heartbeat", McpClientWorker.run)
 
@@ -409,8 +410,8 @@ def main() -> None:
     port = args.port
     host = args.host
 
-    import runtime_config
-    runtime_config.set({"port": port, "host": host})
+    from runtime_config import RuntimeConfig
+    RuntimeConfig.set({"port": port, "host": host})
 
     # Apply any staged whole-instance restore BEFORE the DB is opened. The first
     # chalie.db open happens inside _init_database() → converge() below, so the
@@ -439,7 +440,7 @@ def main() -> None:
     # a real one for) so the sweep runs through the same
     # TurnExecutionService.sweep_orphaned() every in-process turn would.
     from controllers.message_processor import MessageProcessor
-    _boot_mp = MessageProcessor(config_for(ConfigTypeEnum.USER))
+    _boot_mp = MessageProcessor(ChannelConfig.config_for(ConfigTypeEnum.USER))
     _closed = _boot_mp.turn_execution_service.sweep_orphaned()
     if _closed:
         logger.info("[Startup] Closed %d orphaned turn_executions row(s)", _closed)

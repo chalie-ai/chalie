@@ -25,7 +25,7 @@ from services.database import Database
 from services.file_mapper_service import FileMapperService
 from services.locale_service import CHAT_DAY_FMT, CHAT_TIMESTAMP_FMT, format_date
 from services.rich_media_parser import parse as _parse_rich_media
-from configs.channels import config_for
+from configs.channels import ChannelConfig
 from models.tool_call import ToolCall
 from models.transcript import Transcript
 from models.transcript_thinking import TranscriptThinking
@@ -269,7 +269,7 @@ def _bulk_gists(channel: str, turn_ids: list[int]) -> dict[int, str]:
     config satisfies construction — zero side-effects, I2)."""
     from controllers.message_processor import MessageProcessor
 
-    mp = MessageProcessor(config_for(_TYPE))
+    mp = MessageProcessor(ChannelConfig.config_for(_TYPE))
     return mp.gist_service.bulk_get(channel, turn_ids)
 
 

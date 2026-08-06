@@ -35,7 +35,7 @@ from unittest.mock import patch
 import pytest
 
 from cron.base import ScheduledJob
-from cron.runner import _poll_and_dispatch
+from cron.runner import CronRunner
 
 pytestmark = pytest.mark.unit
 
@@ -89,7 +89,7 @@ def test_runnable_job_fires_and_non_runnable_is_skipped() -> None:
     skipped = _RecordingJob("skipped", runnable=False)
 
     with patch(_JOBS_REGISTRY, (runnable, skipped)):
-        _poll_and_dispatch()
+        CronRunner._poll_and_dispatch()
 
     assert runnable.fired.wait(_FIRED_TIMEOUT), "a job whose gate says yes must fire"
     assert not skipped.fired.wait(_NOT_FIRED_TIMEOUT), "a job whose gate says no must never fire"
@@ -103,7 +103,7 @@ def test_raising_should_run_does_not_starve_later_jobs() -> None:
     # bad_gate is first in the registry: if its raising gate broke the loop, the
     # job after it would never be reached.
     with patch(_JOBS_REGISTRY, (bad_gate, after)):
-        _poll_and_dispatch()
+        CronRunner._poll_and_dispatch()
 
     assert after.fired.wait(_FIRED_TIMEOUT), (
         "a job raising in should_run must not stop the runner reaching later jobs"
@@ -116,7 +116,7 @@ def test_raising_execute_is_isolated_and_releases_lock() -> None:
     after = _RecordingJob("after", runnable=True)
 
     with patch(_JOBS_REGISTRY, (bad_run, after)):
-        _poll_and_dispatch()
+        CronRunner._poll_and_dispatch()
 
     assert bad_run.fired.wait(_FIRED_TIMEOUT), "the job entered its work before raising"
     assert after.fired.wait(_FIRED_TIMEOUT), "a raising execute must not starve later jobs"
@@ -140,7 +140,7 @@ def test_already_running_job_is_skipped_this_tick() -> None:
 
     try:
         with patch(_JOBS_REGISTRY, (busy,)):
-            _poll_and_dispatch()
+            CronRunner._poll_and_dispatch()
         assert not busy.fired.wait(_NOT_FIRED_TIMEOUT), (
             "a job whose lock is already held must be skipped, never run re-entrantly"
         )

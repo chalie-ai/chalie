@@ -15,17 +15,13 @@ from configs.channels.discovery import DiscoveryConfig
 from configs.channels.dmn import DmnConfig
 from configs.channels.episode_encoder import EpisodeEncoderConfig
 from configs.channels.external_agent import EAMPConfig
-from configs.channels.fact_extraction import FactExtractionConfig, parse_fact_ops
+from configs.channels.fact_extraction import FactExtractionConfig
 from configs.channels.geo_pattern import GeoConfig
 from configs.channels.pattern import PatternConfig
 from configs.channels.scheduled import ScheduledConfig
 from configs.channels.skill_association import SkillAssociationConfig
 from configs.channels.skill_suggestion import SkillSuggestionConfig
-from configs.channels.super_episode import (
-    SuperEpisodeConfig,
-    _collect_transcript_ids,
-    _safe_json_load_object,
-)
+from configs.channels.super_episode import SuperEpisodeConfig
 from configs.channels.thread_gist import ThreadGistConfig
 from configs.channels.user import UserConfig
 from configs.channels.user_summary import UserSummaryConfig
@@ -36,20 +32,24 @@ from configs.enums.config_type import ConfigTypeEnum
 from services.processor_config import ProcessorConfig
 
 
-def config_for(config_type: "ConfigTypeEnum | str") -> ProcessorConfig:
-    """Map a routing type to its ProcessorConfig.
+class ChannelConfig:
+    """Factory for routing ``ConfigTypeEnum`` / wire strings to ``ProcessorConfig`` instances."""
 
-    The single factory used by the thread API and turn-execution services to
-    resolve a ``ConfigTypeEnum`` (or its wire string) into the concrete config
-    subclass that drives that channel.
-    """
-    if config_type == ConfigTypeEnum.USER:
-        return UserConfig()
-    if config_type == ConfigTypeEnum.SCHEDULED:
-        return ScheduledConfig()
-    if config_type == ConfigTypeEnum.DISCOVERY:
-        return DiscoveryConfig()
-    raise ValueError("Invalid type provided")
+    @staticmethod
+    def config_for(config_type: "ConfigTypeEnum | str") -> ProcessorConfig:
+        """Map a routing type to its ProcessorConfig.
+
+        The single factory used by the thread API and turn-execution services to
+        resolve a ``ConfigTypeEnum`` (or its wire string) into the concrete config
+        subclass that drives that channel.
+        """
+        if config_type == ConfigTypeEnum.USER:
+            return UserConfig()
+        if config_type == ConfigTypeEnum.SCHEDULED:
+            return ScheduledConfig()
+        if config_type == ConfigTypeEnum.DISCOVERY:
+            return DiscoveryConfig()
+        raise ValueError("Invalid type provided")
 
 
 __all__ = [
@@ -72,8 +72,5 @@ __all__ = [
     "VisionConfig",
     "WebBrowseConfig",
     "WebSearchConfig",
-    "_collect_transcript_ids",
-    "_safe_json_load_object",
-    "parse_fact_ops",
-    "config_for",
+    "ChannelConfig",
 ]
