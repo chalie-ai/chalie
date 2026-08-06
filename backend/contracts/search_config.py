@@ -150,5 +150,34 @@ def searchable_tables() -> tuple[str, ...]:
     return tuple(_TABLE_REGISTRY)
 
 
+#: Memory graph search footprint. Graph rows are keyed by ``subject``
+#: (unique); FTS5 indexes the subject column so recall can do exact-key
+#: text lookups over living facts. No vector lane — graph rows are
+#: surfaced purely by subject-match.
+GRAPH_SEARCH = SearchConfig(
+    base_table="memory_graph",
+    fts_table="memory_graph_fts",
+    fts_columns=("subject",),
+    vec_lanes=(),
+    text_columns=("subject", "contents"),
+    heal_where="1=1",
+)
+
+#: Memory map search footprint. Map rows carry episodic lineage; their
+#: contents are embedded into a single vector lane. No FTS — map recall
+#: is purely semantic (vector KNN), with ``iteration`` acting as the
+#: salience dimension on the base table.
+MAP_SEARCH = SearchConfig(
+    base_table="memory_map",
+    fts_table="",
+    fts_columns=(),
+    vec_lanes=(VecLane("memory_map_contents_vec", "contents"),),
+    text_columns=("contents",),
+    heal_where="1=1",
+)
+
+
 register_table(DATA_GRAPH_SEARCH)
 register_table(EPISODE_SEARCH)
+register_table(GRAPH_SEARCH)
+register_table(MAP_SEARCH)
