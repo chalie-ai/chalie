@@ -10,7 +10,7 @@ write-back to ``data/skills/user/``:
 - DELETE /api/skills/<id>  → delete
 
 The embedding search index (``skill_search_entries``/``skill_search_vec``/
-``skill_search_fts``) is written through ``utils.build_skills_db.index_skill``
+``skill_search_fts``) is written through ``utils.build_skills_db.SkillsDbBuilder.index_skill``
 / ``utils.skills_io.remove_search_entries`` on the same raw connection the
 model write lands on, inside one ``Database.transaction`` block, so a skill
 row and its index entries commit atomically.
@@ -32,13 +32,7 @@ from api.response.skills import SkillResponse
 from models.skill import Skill as SkillModel
 from services.database import Database
 from services.file_mapper_service import FileMapperService
-from utils.skills_io import (
-    DEFAULT_VERSION,
-    ensure_user_skills_dir,
-    remove_search_entries,
-    skill_yaml_path,
-    write_skill_file,
-)
+from utils.skills_io import DEFAULT_VERSION, SkillsIO
 
 logger = logging.getLogger(__name__)
 
@@ -46,9 +40,9 @@ logger = logging.getLogger(__name__)
 def _index_new_skill(conn: sqlite3.Connection, skill_id: int, title: str, use_for: str, tags: str) -> None:
     try:
         from services.embedding_service import EmbeddingService
-        from utils.build_skills_db import index_skill
+        from utils.build_skills_db import SkillsDbBuilder
         emb_service = EmbeddingService()
-        index_skill(conn, emb_service, skill_id, title, use_for, tags)
+        SkillsDbBuilder().index_skill(conn, emb_service, skill_id, title, use_for, tags)
     except Exception as exc:
         logger.exception("[SKILLS API] Failed to index skill %d: %s", skill_id, exc)
         raise
@@ -99,10 +93,10 @@ class Skills(Endpoint):
             raise ForbiddenError("Only user-created skills can be deleted")
 
         title = skill.title
-        path = skill_yaml_path(title)
+        path = SkillsIO.skill_yaml_path(title)
 
         with Database.transaction(str(FileMapperService.get_skills_db_path())) as conn:
-            remove_search_entries(conn, skill_id)
+            SkillsIO.remove_search_entries(conn, skill_id)
             skill.delete()
 
         if path.exists() and path.resolve().is_relative_to(FileMapperService.get_user_skills_path().resolve()):
@@ -143,9 +137,9 @@ class Skills(Endpoint):
 
             _index_new_skill(conn, skill_id, title, use_for, tags)
 
-        ensure_user_skills_dir()
-        write_skill_file(
-            skill_yaml_path(title),
+        SkillsIO.ensure_user_skills_dir()
+        SkillsIO.write_skill_file(
+            SkillsIO.skill_yaml_path(title),
             {
                 "title": title,
                 "use_for": use_for,
@@ -181,12 +175,12 @@ class Skills(Endpoint):
             skill.version = version
             skill.save()
 
-            remove_search_entries(conn, skill_id)
+            SkillsIO.remove_search_entries(conn, skill_id)
             _index_new_skill(conn, skill_id, title, use_for, tags)
 
-        ensure_user_skills_dir()
-        write_skill_file(
-            skill_yaml_path(title),
+        SkillsIO.ensure_user_skills_dir()
+        SkillsIO.write_skill_file(
+            SkillsIO.skill_yaml_path(title),
             {
                 "title": title,
                 "use_for": use_for,

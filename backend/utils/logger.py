@@ -3,22 +3,15 @@ import logging
 import traceback
 from contextvars import ContextVar
 from datetime import datetime, timezone
-from typing import Optional, Union
+from typing import Union
 
 
 # ---------------------------------------------------------------------------
 # Correlation-ID context variable
 # ---------------------------------------------------------------------------
 
-_correlation_id: ContextVar[Optional[str]] = ContextVar("_correlation_id", default=None)
+_correlation_id: ContextVar[str | None] = ContextVar("_correlation_id", default=None)
 
-
-def get_correlation_id() -> Optional[str]:
-    return _correlation_id.get()
-
-
-def set_correlation_id(value: str) -> None:
-    _correlation_id.set(value)
 
 
 # ---------------------------------------------------------------------------
@@ -109,6 +102,14 @@ class _CountCappedFileHandler(logging.FileHandler):
 
 
 class Logger:
+    @staticmethod
+    def get_correlation_id() -> str | None:
+        return _correlation_id.get()
+
+    @staticmethod
+    def set_correlation_id(value: str) -> None:
+        _correlation_id.set(value)
+
     @staticmethod
     def start() -> None:
         root = logging.getLogger()

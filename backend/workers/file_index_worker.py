@@ -95,26 +95,22 @@ def _start_observer(service: FileIndexService) -> BaseObserver | None:
     return observer
 
 
-def file_index_worker() -> None:
-    """Daemon thread entry point.
+class FileIndexWorker:
+    """Daemon thread entry point for the file index watchdog service."""
 
-    Starts a watchdog Observer on the scan root for live file events, then
-    runs reconcile() immediately as the startup catch-up and hourly
-    thereafter as the truth path. The observer starts first so events fired
-    during the initial scan are not lost. If the observer cannot start, the
-    reconcile loop alone keeps the index converging.
-    """
-    logger.info("[FILE INDEX] Starting (initial delay %ds)", INITIAL_DELAY)
-    time.sleep(INITIAL_DELAY)
+    @classmethod
+    def run(cls) -> None:
+        logger.info("[FILE INDEX] Starting (initial delay %ds)", INITIAL_DELAY)
+        time.sleep(INITIAL_DELAY)
 
-    service = FileIndexService()
-    observer = _start_observer(service)
+        service = FileIndexService()
+        observer = _start_observer(service)
 
-    try:
-        while True:
-            service.reconcile()
-            time.sleep(RECONCILE_INTERVAL)
-    finally:
-        if observer is not None and observer.is_alive():
-            observer.stop()
-            observer.join(timeout=5)
+        try:
+            while True:
+                service.reconcile()
+                time.sleep(RECONCILE_INTERVAL)
+        finally:
+            if observer is not None and observer.is_alive():
+                observer.stop()
+                observer.join(timeout=5)

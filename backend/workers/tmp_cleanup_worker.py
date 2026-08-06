@@ -1,6 +1,5 @@
 import logging
 import os
-import threading
 import time
 
 from services.tmp_storage import TMP_DIR as _TMP_DIR
@@ -36,16 +35,15 @@ def _sweep_once() -> int:
     return deleted
 
 
-def tmp_cleanup_worker(stop_event: threading.Event | None = None) -> None:
-    logger.info('[TMP CLEANUP] Worker started (interval=%ds, max_age=%ds)',
-                _SWEEP_INTERVAL_SECONDS, _MAX_AGE_SECONDS)
-    while True:
-        count = _sweep_once()
-        if count:
-            logger.info('[TMP CLEANUP] Swept %d stale tmp file(s)', count)
-        # Wait for the next sweep interval or until stop is requested.
-        if stop_event is not None:
-            if stop_event.wait(timeout=_SWEEP_INTERVAL_SECONDS):
-                break
-        else:
+class TmpCleanupWorker:
+    """Daemon thread entry point for the temporary file cleanup service."""
+
+    @classmethod
+    def run(cls) -> None:
+        logger.info('[TMP CLEANUP] Worker started (interval=%ds, max_age=%ds)',
+                    _SWEEP_INTERVAL_SECONDS, _MAX_AGE_SECONDS)
+        while True:
+            count = _sweep_once()
+            if count:
+                logger.info('[TMP CLEANUP] Swept %d stale tmp file(s)', count)
             time.sleep(_SWEEP_INTERVAL_SECONDS)

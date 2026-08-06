@@ -7,12 +7,7 @@ import sqlite3
 import threading
 from typing import Optional, cast
 
-from contracts.search_config import (
-    SearchConfig,
-    config_for_table,
-    is_searchable,
-    searchable_tables,
-)
+from contracts.search_config import SearchConfig
 from services.database import Database
 from services.embedding_utils import pack_embedding
 
@@ -52,7 +47,7 @@ def _get_service() -> "SearchExpanderService":
 
 
 def enqueue(table: str, rowid: int) -> None:
-    if config_for_table(table) is None:
+    if SearchConfig.config_for_table(table) is None:
         logger.warning("[SES] enqueue: unknown table '%s', ignoring", table)
         return
     _get_service().enqueue(table, rowid)
@@ -114,8 +109,8 @@ class SearchExpanderService:
         try:
             conn = Database.conn()
             total = 0
-            for table in searchable_tables():
-                config = config_for_table(table)
+            for table in SearchConfig.searchable_tables():
+                config = SearchConfig.config_for_table(table)
                 if config is None:
                     continue
                 select = "rowid" + (f", {config.kind_column}" if config.kind_column else "")
@@ -131,7 +126,7 @@ class SearchExpanderService:
                 ).fetchall()
                 enqueued = 0
                 for r in rows:
-                    if config.kind_column and not is_searchable(r[1]):
+                    if config.kind_column and not SearchConfig.is_searchable(r[1]):
                         continue
                     self._store.rpush(_QUEUE_KEY, json.dumps({"table": table, "rowid": r[0]}))
                     enqueued += 1
@@ -149,7 +144,7 @@ class SearchExpanderService:
         table = item.get("table")
         rowid = item.get("rowid")
 
-        config = config_for_table(table) if isinstance(table, str) else None
+        config = SearchConfig.config_for_table(table) if isinstance(table, str) else None
         if config is None or not isinstance(table, str) or rowid is None:
             logger.warning("[SES] Invalid item — skipping: %r", item)
             return
@@ -180,7 +175,7 @@ class SearchExpanderService:
             return
         vals = dict(zip(needed, row))
 
-        if config.kind_column and not is_searchable(vals[config.kind_column]):
+        if config.kind_column and not SearchConfig.is_searchable(vals[config.kind_column]):
             logger.warning(
                 "[SES] no search config for kind=%s rowid=%s — skipping",
                 vals[config.kind_column], rowid,

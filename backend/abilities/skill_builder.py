@@ -36,13 +36,7 @@ from contracts.params.skill_builder_params_bag import (
 from models.skill import Skill
 from services.database import Database
 from services.file_mapper_service import FileMapperService
-from utils.skills_io import (
-    DEFAULT_VERSION,
-    ensure_user_skills_dir,
-    remove_search_entries,
-    skill_yaml_path,
-    write_skill_file,
-)
+from utils.skills_io import DEFAULT_VERSION, SkillsIO
 from configs.enums.ability_category import AbilityCategory
 
 logger = logging.getLogger(__name__)
@@ -259,15 +253,15 @@ def _handle_create(params: SkillBuilderCreateParams) -> ToolResult:
 
     conn = Database.conn(str(FileMapperService.get_skills_db_path()))
     from services.embedding_service import EmbeddingService
-    from utils.build_skills_db import index_skill
+    from utils.build_skills_db import SkillsDbBuilder
     emb_service = EmbeddingService()
-    index_skill(conn, emb_service, skill_id, title, use_for, params.tags)
+    SkillsDbBuilder().index_skill(conn, emb_service, skill_id, title, use_for, params.tags)
 
     conn.commit()
 
-    ensure_user_skills_dir()
-    path = skill_yaml_path(title)
-    write_skill_file(path, cast("dict[str, str | int]", meta))
+    SkillsIO.ensure_user_skills_dir()
+    path = SkillsIO.skill_yaml_path(title)
+    SkillsIO.write_skill_file(path, cast("dict[str, str | int]", meta))
 
     logger.info("%s Created skill '%s' (id=%d, file=%s)", _LOG_PREFIX, title, skill_id, path.name)
     return ToolResult.ok(
@@ -313,17 +307,17 @@ def _handle_edit(params: SkillBuilderEditParams) -> ToolResult:
     )
 
     conn = Database.conn(str(FileMapperService.get_skills_db_path()))
-    remove_search_entries(conn, skill_id)
+    SkillsIO.remove_search_entries(conn, skill_id)
 
     from services.embedding_service import EmbeddingService
-    from utils.build_skills_db import index_skill
+    from utils.build_skills_db import SkillsDbBuilder
     emb_service = EmbeddingService()
-    index_skill(conn, emb_service, skill_id, title, cast("str", updated_meta["use_for"]), cast("str", updated_meta["tags"]))
+    SkillsDbBuilder().index_skill(conn, emb_service, skill_id, title, cast("str", updated_meta["use_for"]), cast("str", updated_meta["tags"]))
 
     conn.commit()
 
-    ensure_user_skills_dir()
-    write_skill_file(skill_yaml_path(title), cast("dict[str, str | int]", updated_meta))
+    SkillsIO.ensure_user_skills_dir()
+    SkillsIO.write_skill_file(SkillsIO.skill_yaml_path(title), cast("dict[str, str | int]", updated_meta))
 
     logger.info("%s Updated skill '%s' (id=%d, version=%d)", _LOG_PREFIX, title, skill_id, updated_meta["version"])
     return ToolResult.ok(
@@ -353,10 +347,10 @@ def _handle_delete(params: SkillBuilderDeleteParams) -> ToolResult:
         )
 
     skill_id: int = cast("int", existing.id)
-    path = skill_yaml_path(title)
+    path = SkillsIO.skill_yaml_path(title)
 
     conn = Database.conn(str(FileMapperService.get_skills_db_path()))
-    remove_search_entries(conn, skill_id)
+    SkillsIO.remove_search_entries(conn, skill_id)
     Skill.filter("id", skill_id).delete()
     conn.commit()
 

@@ -19,7 +19,7 @@ import json
 
 import pytest
 
-from tools.search.transformers import transform
+from tools.search.transformers import SearchTransformer
 
 pytestmark = pytest.mark.unit
 
@@ -70,7 +70,7 @@ _REDDIT_FIXTURE = {
 
 def test_transform_reddit_output_has_no_image_key() -> None:
     """After the redesign, transform() output dicts must not contain 'image'."""
-    results = transform("reddit", "json", _REDDIT_FIXTURE, limit=10)
+    results = SearchTransformer.transform("reddit", "json", _REDDIT_FIXTURE, limit=10)
 
     assert results, "Expected at least one result from the reddit fixture"
 

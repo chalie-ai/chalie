@@ -7,7 +7,7 @@ from simple_websocket import Server as _WS
 
 from models.ws_message import WsMessage
 from services.websocket import Websocket, _WebSocket
-from utils.logger import set_correlation_id
+from utils.logger import Logger
 
 if TYPE_CHECKING:
     from flask_sock import Sock
@@ -67,7 +67,7 @@ def _ws_handler(ws: object) -> None:
             return
 
     connection_id = str(uuid.uuid4())
-    set_correlation_id(connection_id)
+    Logger.set_correlation_id(connection_id)
     logger.debug("[WS] Connection established", extra={"connection_id": connection_id})
 
     socket = cast(_WebSocket, ws)

@@ -28,7 +28,7 @@ from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 from services.database import Database
 from services.file_mapper_service import FileMapperService
-from tools.search.fetcher import fetch_ddg_fallback, fetch_providers
+from tools.search.fetcher import SearchFetcher
 from contracts.params.param_bag import ParamBag
 from contracts.params.search_params_bag import SearchParamsBag
 from exceptions import RateLimitException
@@ -116,7 +116,7 @@ class SearchAbility(Ability[SearchParamsBag]):
 
             fell_back = False
             if not results and _DDG not in used:
-                ddg = fetch_ddg_fallback(query, _PER_PROVIDER)
+                ddg = SearchFetcher.fetch_ddg_fallback(query, _PER_PROVIDER)
                 if ddg:
                     results, fell_back = ddg, True
                     used.append(_DDG)
@@ -189,13 +189,13 @@ class SearchAbility(Ability[SearchParamsBag]):
             if ranked:
                 providers = self._load_providers()
                 provider_dicts = [cast("dict[str, object]", providers[p["name"]]) for p in ranked if p["name"] in providers]
-                results = fetch_providers(provider_dicts, query, _PER_PROVIDER)
+                results = SearchFetcher.fetch_providers(provider_dicts, query, _PER_PROVIDER)
                 used = [cast("str", p["name"]) for p in provider_dicts]
                 meta: dict[str, object] = {"routing_method": "auto"}
 
                 top_score = cast("float", ranked[0]["score"])
                 if top_score < _WEAK_SCORE:
-                    ddg_results = fetch_ddg_fallback(query, _PER_PROVIDER)
+                    ddg_results = SearchFetcher.fetch_ddg_fallback(query, _PER_PROVIDER)
                     if ddg_results:
                         results = results + ddg_results
                         used.append(_DDG)
@@ -211,4 +211,4 @@ class SearchAbility(Ability[SearchParamsBag]):
         except Exception as e:
             logger.warning("[SEARCH] router error, falling back to DDG: %s", e)
 
-        return fetch_ddg_fallback(query, _PER_PROVIDER), [_DDG], {"routing_method": "fallback"}
+        return SearchFetcher.fetch_ddg_fallback(query, _PER_PROVIDER), [_DDG], {"routing_method": "fallback"}

@@ -52,9 +52,9 @@ _requires_geopy = pytest.mark.skipif(
 class TestDistanceKm:
     @_requires_geopy
     def test_valletta_to_sliema_approx_2km(self) -> None:
-        from services.geo_utils import distance_km
+        from services.geo_utils import GeoUtils
 
-        dist = distance_km(35.8989, 14.5146, 35.9121, 14.5013)
+        dist = GeoUtils.distance_km(35.8989, 14.5146, 35.9121, 14.5013)
 
         assert 1.5 <= dist <= 3.0, (
             f"Expected Valletta→Sliema distance between 1.5 and 3.0 km, got {dist:.4f} km"
@@ -62,9 +62,9 @@ class TestDistanceKm:
 
     @_requires_geopy
     def test_same_point_is_zero(self) -> None:
-        from services.geo_utils import distance_km
+        from services.geo_utils import GeoUtils
 
-        dist = distance_km(35.8989, 14.5146, 35.8989, 14.5146)
+        dist = GeoUtils.distance_km(35.8989, 14.5146, 35.8989, 14.5146)
 
         assert dist == 0.0
 
@@ -77,9 +77,9 @@ class TestEstimateTravelMinutes:
     @_requires_geopy
     def test_zero_speed_returns_zero(self) -> None:
         """Zero speed guard returns 0.0 rather than raising ZeroDivisionError."""
-        from services.geo_utils import estimate_travel_minutes
+        from services.geo_utils import GeoUtils
 
-        minutes = estimate_travel_minutes(10.0, speed_kmh=0.0)
+        minutes = GeoUtils.estimate_travel_minutes(10.0, speed_kmh=0.0)
 
         assert minutes == 0.0
 
@@ -95,12 +95,12 @@ class TestEstimateSpeedFromHistory:
 
     @_requires_geopy
     def test_valid_entries_return_plausible_speed(self) -> None:
-        from services.geo_utils import estimate_speed_from_history
+        from services.geo_utils import GeoUtils
 
         t0 = datetime(2026, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
         t1 = t0 + timedelta(minutes=4)
 
-        speed = estimate_speed_from_history(cast(list[object], [
+        speed = GeoUtils.estimate_speed_from_history(cast(list[object], [
             self._entry(35.8989, 14.5146, t0),
             self._entry(35.9121, 14.5013, t1),
         ]))
@@ -123,9 +123,9 @@ class TestEstimateSpeedFromHistory:
         entries_fn: Callable[["TestEstimateSpeedFromHistory"], list[dict[str, object]]],
         reason: str,
     ) -> None:
-        from services.geo_utils import estimate_speed_from_history
+        from services.geo_utils import GeoUtils
 
-        result = estimate_speed_from_history(cast(list[object], entries_fn(self)))
+        result = GeoUtils.estimate_speed_from_history(cast(list[object], entries_fn(self)))
         assert result is None, f"Expected None for {reason}, got {result}"
 
 

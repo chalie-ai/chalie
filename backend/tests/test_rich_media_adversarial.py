@@ -12,7 +12,7 @@ from typing import cast
 
 import pytest
 
-from services.markup import sanitize
+from services.markup import Markup
 from services.rich_media_parser import parse
 
 pytestmark = pytest.mark.unit
@@ -25,14 +25,14 @@ def _tc(result: str) -> dict[str, object]:
 class TestAdversarialSanitiser:
     def test_onclick_plus_id_onclick_stripped_id_kept(self) -> None:
         raw = "<span id='weather_1' onclick='alert(1)'>Sunny.</span>"
-        out = sanitize(raw)
+        out = Markup.sanitize(raw)
         assert "onclick" not in out
         assert "weather_1" in out
         assert "Sunny." in out
 
     def test_script_nested_inside_span_stripped(self) -> None:
         raw = "<span id='weather_1'><script>evil()</script>Partly cloudy.</span>"
-        out = sanitize(raw)
+        out = Markup.sanitize(raw)
         assert "<script>" not in out
         assert "evil" not in out
         # Inner text outside the script tag must survive
@@ -40,14 +40,14 @@ class TestAdversarialSanitiser:
 
     def test_style_injection_via_span_stripped(self) -> None:
         raw = "<span id='weather_1' style='position:fixed;top:0'>hi</span>"
-        out = sanitize(raw)
+        out = Markup.sanitize(raw)
         assert "style=" not in out
         assert "weather_1" in out
         assert "hi" in out
 
     def test_data_attribute_stripped(self) -> None:
         raw = "<span id='weather_1' data-xss='payload'>text</span>"
-        out = sanitize(raw)
+        out = Markup.sanitize(raw)
         assert "data-xss" not in out
         assert "weather_1" in out
 
@@ -69,7 +69,7 @@ class TestAdversarialParser:
     def test_script_inside_span_synthesis_stripped_before_parse(self) -> None:
         # After sanitize(), the <script> is gone; parser sees clean synthesis.
         raw_content = "<span id='weather_1'><script>evil()</script>Partly cloudy.</span>"
-        sanitised = sanitize(raw_content)
+        sanitised = Markup.sanitize(raw_content)
         tc = _tc('{"temperature_c":12}\n\n<span id=\'weather_1\'>')
         segs = parse(sanitised, [tc])
         # Should produce exactly one rich segment (script stripped, text remains)
@@ -81,7 +81,7 @@ class TestAdversarialParser:
     def test_onclick_span_after_sanitise_still_pairs_correctly(self) -> None:
         # onclick is stripped by sanitize(); the span+id survives; parser pairs.
         raw_content = "<span id='weather_1' onclick='alert(1)'>Sunny.</span>"
-        sanitised = sanitize(raw_content)
+        sanitised = Markup.sanitize(raw_content)
         tc = _tc('{"temperature_c":22}\n\n<span id=\'weather_1\'>')
         segs = parse(sanitised, [tc])
         rich = [s for s in segs if s["type"] == "rich"]

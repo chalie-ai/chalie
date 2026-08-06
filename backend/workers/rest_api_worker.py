@@ -15,10 +15,15 @@ Logger.start()
 logger = logging.getLogger(__name__)
 
 
-def rest_api_worker() -> None:
-    # Can be run standalone: python -m workers.rest_api_worker
-    # Or integrated into run.py as a daemon thread.
-    try:
+class RestApiWorker:
+    """Flask server entry point.
+
+    Can be run standalone: python -m workers.rest_api_worker
+    Or integrated into run.py as a daemon thread.
+    """
+
+    @classmethod
+    def run(cls) -> None:
         logger.info("[REST API] Starting REST API worker...")
 
         host = cast("str", runtime_config.get("host", "0.0.0.0"))
@@ -33,12 +38,12 @@ def rest_api_worker() -> None:
         # Run Flask app
         app.run(host=host, port=port, debug=False, threaded=True)
 
-    except KeyboardInterrupt:
-        logger.info("[REST API] Shutting down...")
-    except Exception as e:
-        logger.exception(f"[REST API] Fatal error: {e}")
-        sys.exit(1)
-
-
-if __name__ == "__main__":
-    rest_api_worker()
+    @staticmethod
+    def main() -> None:
+        try:
+            RestApiWorker.run()
+        except KeyboardInterrupt:
+            logger.info("[REST API] Shutting down...")
+        except Exception as e:
+            logger.exception(f"[REST API] Fatal error: {e}")
+            sys.exit(1)

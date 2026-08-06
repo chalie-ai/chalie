@@ -282,19 +282,19 @@ def _register_workers(manager: "_WorkerManager", host: str, port: int) -> None:
     schedule (``ScheduledItemsDispatcherJob`` folds in the schedule poller; the
     nine idle-gated cognition jobs fold in the subconscious tick).
     """
-    from workers.tmp_cleanup_worker import tmp_cleanup_worker
-    manager.register_service("tmp-cleanup-service", tmp_cleanup_worker)
+    from workers.tmp_cleanup_worker import TmpCleanupWorker
+    manager.register_service("tmp-cleanup-service", TmpCleanupWorker.run)
 
     from cron.runner import cron_runner
     manager.register_service("cron-runner", cron_runner)
     _bootstrap_capability_sync()
     _try_register(manager, "search-expander-service",
                   "services.search_expander_service", "search_expander_worker")
-    _try_register(manager, "file-index-service",
-                  "workers.file_index_worker", "file_index_worker")
+    from workers.file_index_worker import FileIndexWorker
+    manager.register_service("file-index-service", FileIndexWorker.run)
     _try_register(manager, "mcp-server", "mcp_server.server", "run_mcp_server")
-    _try_register(manager, "mcp-client-heartbeat",
-                  "workers.mcp_client_worker", "mcp_client_worker")
+    from workers.mcp_client_worker import McpClientWorker
+    manager.register_service("mcp-client-heartbeat", McpClientWorker.run)
 
     def _flask_worker() -> None:
         from api import create_app

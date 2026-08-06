@@ -31,7 +31,7 @@ import re
 import sqlite3
 from typing import ClassVar, Self, cast
 
-from contracts.search_config import DATA_GRAPH_SEARCH, SearchConfig, register_kind
+from contracts.search_config import DATA_GRAPH_SEARCH, SearchConfig
 from contracts.tuples.recall_signals import RecallSignals
 from models.model import Model
 from models.query import Query
@@ -106,7 +106,7 @@ class DataGraphRow(Model):
         super().__init_subclass__(**kwargs)
         kind = cls.__dict__.get("KIND")
         if kind is not None:
-            register_kind(kind, cls.__search__)
+            SearchConfig.register_kind(kind, cls.__search__)
 
     # ── persistence + write-sync ─────────────────────────────────────────
 

@@ -31,7 +31,7 @@ from models.transcript import Transcript
 from models.voice_signal import VoiceSignal
 from models.voice_transcript import VoiceTranscript
 from services.file_mapper_service import FileMapperService
-from services.markup import extract_plaintext, markdown_to_html
+from services.markup import Markup
 from services.websocket import Websocket
 
 if TYPE_CHECKING:
@@ -247,9 +247,9 @@ class VoiceTranscriptService:
         text = cls._HEADING_RE.sub("", text)
         text = cls._BLOCKQUOTE_RE.sub("", text)
         text = cls._LIST_ITEM_RE.sub(r"<li>\1</li>", text)
-        text = markdown_to_html(text)
+        text = Markup.markdown_to_html(text)
         text = cls._LI_NEEDS_TERMINATOR_RE.sub(r"\1.</li>", text)
-        plain = extract_plaintext(text)
+        plain = Markup.extract_plaintext(text)
         plain = cls._URL_RE.sub(cls._spoken_url, plain)
         return cls._WS_RE.sub(" ", plain).strip()
 
