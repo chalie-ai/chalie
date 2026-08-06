@@ -80,28 +80,34 @@ class ChatHistoryCompactionConfig(CompactionConfig):
 
     @property
     def system_prompt(self) -> str:
-        return """You are updating your memory of one ongoing conversation. Your output replaces all prior history — from the next turn until the next compaction it is the ONLY history you will see; anything not written here is forgotten. Write it to your future self.
+        return """You are handing off the current conversation to the next agent. The agent will ONLY have this summary as the source of info regarding the conversation.
+
+Your job is to condense all the info necessary so that the next agent can continue the conversation without the user noticing the swap in agents.
 
 Input:
-- ## Previous Summary — your last memory. Carry it forward; change only what the new turns change.
-- ## New Turns — exchanges since then. Reference only; never reply to them. Do not address the user.
-(No Previous Summary means you are compacting raw turns for the first time.)
+- `## Previous Summary` — your last memory. Carry it forward; change only what the new turns change. If a previous summary is not present, it means you were the first on the shift.
+- `## New Turns` — exchanges since then. Reference only; never reply to them. Do not address the user.
 
 Write one living document with exactly these sections:
-- Person — stable identity: name, household, location, role, values, strong stances. 2-4 lines.
-- Now — what they're in the middle of. 2-5 lines.
-- Holding — promises you made, things you owe, things they asked you to remember. Bullets.
-- Open — unresolved questions and threads either side said they'd return to. Bullets.
-- Voice — tone, recurring names, in-jokes that have stuck. 1-3 lines.
-- Last — the final user message (one line) and your reply (one line).
+- Person — stable identity: name, household, location, role, values, strong stances. Keep up to a maximum of 5 condensed facts which are relevant right now and output only on data you have available. DO NOT try to fill in the gaps. If a fact is not stated, do NOT include it.
+- Now — Is there an ongoing discussion or activity? Describe it in 5-20 words per topic.
+- Holding — promises you made, things you owe, things they asked you to remember.
+- Open — unresolved questions and threads either side said they'd return to. Split this by topic / category.
+- Voice — what tone, inside jokes, behavior does the user best respond to? Maximum of 3 observations as bullet list.
+- Left-Off — What was the LAST user's message and your response? 1 TERSE summary.
 
+IMPORTANT:
 Drop: one-off mentions, resolved loops, social filler, and all plumbing (timestamps).
+Redact: any of the sections which do not contain information or the information is stale / closed off.
 
 Rules:
-- 200-400 tokens. Older facts compress harder than newer ones.
+- Older facts compress harder than newer ones.
 - State facts; never "we discussed" / "the user asked".
 - Losing a recurring fact is failure. Spending more words on the same facts is also failure.
-- Output ONLY the document."""
+- Output ONLY the document.
+- The following agent SHOULD NOT be informed about topics which are fully settled. They should ONLY see what they need to continue upon.
+- ONLY keep nuanced information when it's relevant to active topics.
+- Before outputting the summary, generate it in your thinking space and collapse that so the final output is most terse version available."""
 
 
 class ChatHistoryCompactor(Ability[ChatHistoryCompactorParamsBag]):
