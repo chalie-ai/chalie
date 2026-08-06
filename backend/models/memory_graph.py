@@ -68,6 +68,8 @@ class MemoryGraphRow(Model):
         need no resync. A queue-push failure never breaks the write;
         ``_self_heal`` re-indexes any row left with a NULL ``indexed_at``.
         """
+        if not getattr(self, "sourced_from", ""):
+            self.sourced_from = "[]"
         conn = self._bound_connection()
         now = utc_now().isoformat()
 
@@ -124,6 +126,30 @@ class MemoryGraphRow(Model):
     def by_subject(cls, subject: str) -> Self | None:
         """The single live row for an exact ``subject`` (the store lookup)."""
         return cls.filter("subject", subject).first()
+
+    @classmethod
+    def fts_subject_search(cls, terms: str, k: int) -> list[Self]:
+        """FTS5 recall over ``subject``. ``terms`` is an FTS5 query string
+        (callers build it from extracted keywords). Returns the top ``k`` rows
+        by BM25 rank (FTS5 ``rank`` — lower is better). Non-fatal on FTS
+        errors -> empty list."""
+        if not terms or k <= 0:
+            return []
+        try:
+            cursor = cls._bound_connection().execute(
+                "SELECT m.* FROM memory_graph_fts f "
+                "JOIN memory_graph m ON m.rowid = f.rowid "
+                "WHERE memory_graph_fts MATCH ? "
+                "ORDER BY f.rank LIMIT ?",
+                (terms, k),
+            )
+            return [cls.hydrate(row) for row in cursor.fetchall()]
+        except Exception:
+            logger.debug(
+                "[MEMORY GRAPH] FTS subject search failed (non-fatal)",
+                exc_info=True,
+            )
+            return []
 
     @classmethod
     def records_page(

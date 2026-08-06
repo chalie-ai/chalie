@@ -25,6 +25,7 @@ from typing import ClassVar, Self, cast
 from contracts.search_config import MAP_SEARCH, SearchConfig
 from models.model import Model
 from models.query import Query
+from services.embedding_utils import pack_embedding
 from services.search_expander_service import enqueue
 from services.time_utils import utc_now
 
@@ -69,15 +70,15 @@ class MemoryMapRow(Model):
         never breaks the write; ``_self_heal`` re-indexes any row left with a
         NULL ``indexed_at``."""
         is_insert = self.id is None
+        if not getattr(self, "derived_from", ""):
+            self.derived_from = "[]"
+        if not getattr(self, "sourced_from", ""):
+            self.sourced_from = "[]"
+        if not getattr(self, "iteration", 0):
+            self.iteration = 1
         if is_insert:
             self.created_at = utc_now().isoformat()
             self.generated_at = self.created_at
-            if self.derived_from == "":
-                self.derived_from = "[]"
-            if self.sourced_from == "":
-                self.sourced_from = "[]"
-            if self.iteration == 0:
-                self.iteration = 1
         super().save()
         if is_insert and self.id is not None:
             self._sync_search_index()
@@ -162,6 +163,31 @@ class MemoryMapRow(Model):
             " ORDER BY generated_at DESC"
         ).fetchall()
         return [cls.hydrate(row) for row in rows]
+
+    @classmethod
+    def vec_knn(cls, query_embedding: list[float] | None, k: int) -> dict[int, float]:
+        """Vec0 KNN over ``memory_map_contents_vec`` for recall. Returns
+        ``{rowid: distance}`` for the top-``k`` nearest contents embeddings.
+        Callers restrict to the searchable pool (:meth:`searchable_pool`) and
+        rank by ``iteration`` then distance. Non-fatal -> empty dict."""
+        if k <= 0:
+            return {}
+        blob = pack_embedding(query_embedding) if query_embedding else None
+        if not blob:
+            return {}
+        try:
+            cursor = cls._bound_connection().execute(
+                "SELECT v.rowid, v.distance FROM memory_map_contents_vec v "
+                "WHERE v.embedding MATCH ? AND k = ? "
+                "ORDER BY v.distance",
+                (blob, k),
+            )
+            return {int(rowid): float(dist) for rowid, dist in cursor.fetchall()}
+        except Exception:
+            logger.debug(
+                "[MEMORY MAP] vec KNN failed (non-fatal)", exc_info=True,
+            )
+            return {}
 
     # ── Projection ────────────────────────────────────────────────────────
 
