@@ -791,7 +791,7 @@ class SchemaConvergenceService:
                     source            TEXT,
                     deleted_at        TEXT,
                     active            INTEGER NOT NULL DEFAULT 1,
-                    search_queries    TEXT DEFAULT NULL,
+                    indexed_at        TEXT DEFAULT NULL,
                     valid_from        TEXT,
                     valid_to          TEXT
                 )

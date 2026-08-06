@@ -11,11 +11,10 @@ from typing import NamedTuple
 
 class RecallSignals(NamedTuple):
     """Raw per-lane recall signals for one candidate row: the key/value-vector
-    cosines, the doc2query variant cosine, and the FTS bonus. All default to 0.0
-    so a lane that produced no signal (or a supersession predecessor with none)
-    is simply zero across the board."""
+    cosines and the FTS bonus. All default to 0.0 so a lane that produced no
+    signal (or a supersession predecessor with none) is simply zero across the
+    board."""
 
     key_cos: float = 0.0
     value_cos: float = 0.0
     fts_bonus: float = 0.0
-    variant_cos: float = 0.0

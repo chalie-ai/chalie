@@ -7,8 +7,8 @@ does this continuously; under pytest no worker runs, so a test drains it
 explicitly). They prove:
 
 * ``Episode.save`` no longer writes ``episodes_fts`` inline — the posting is
-  deferred to the engine (``search_queries`` stays NULL until drained).
-* Draining indexes the row: ``search_queries`` becomes non-NULL and the gist is
+  deferred to the engine (``indexed_at`` stays NULL until drained).
+* Draining indexes the row: ``indexed_at`` becomes non-NULL and the gist is
   FTS-searchable.
 * The invariant holds — a second drain does not double-post (self-heal skips
   already-indexed rows; a forced re-process deletes before re-inserting).
@@ -68,15 +68,15 @@ def _fts_rowids(db: sqlite3.Connection, term: str) -> list[int]:
 
 class TestSaveDefersFtsToEngine:
 
-    def test_save_leaves_search_queries_null_and_no_inline_posting(
+    def test_save_leaves_indexed_at_null_and_no_inline_posting(
         self, db: sqlite3.Connection
     ) -> None:
-        """A freshly stored episode is not yet indexed: search_queries is NULL
+        """A freshly stored episode is not yet indexed: indexed_at is NULL
         and no episodes_fts posting exists until the engine drains it."""
         episode_id = _store_episode(gist="quantum widgets and flux capacitors")
 
         row = db.execute(
-            "SELECT search_queries FROM episodes WHERE id = ?", (episode_id,)
+            "SELECT indexed_at FROM episodes WHERE id = ?", (episode_id,)
         ).fetchone()
         assert row[0] is None
 
@@ -86,20 +86,20 @@ class TestSaveDefersFtsToEngine:
 
 class TestDrainIndexesEpisode:
 
-    def test_drain_indexes_gist_and_stamps_search_queries(
+    def test_drain_indexes_gist_and_stamps_indexed_at(
         self, db: sqlite3.Connection
     ) -> None:
         """Draining the engine writes the FTS posting and marks the row indexed
-        (search_queries non-NULL) so self-heal won't re-enqueue it."""
+        (indexed_at non-NULL) so self-heal won't re-enqueue it."""
         episode_id = _store_episode(gist="the aardvark reviewed the schema")
 
         _drain_search_index()
 
         row = db.execute(
-            "SELECT rowid, search_queries FROM episodes WHERE id = ?", (episode_id,)
+            "SELECT rowid, indexed_at FROM episodes WHERE id = ?", (episode_id,)
         ).fetchone()
-        rowid, search_queries = row[0], row[1]
-        assert search_queries is not None  # '[]' when doc2query is unavailable
+        rowid, indexed_at = row[0], row[1]
+        assert indexed_at is not None
 
         assert rowid in _fts_rowids(db, "aardvark")
         hits = Episode.fts_search("aardvark", None, 10)
@@ -109,7 +109,7 @@ class TestDrainIndexesEpisode:
 class TestNoDoublePosting:
 
     def test_second_drain_is_idempotent(self, db: sqlite3.Connection) -> None:
-        """A second drain skips the already-indexed row (search_queries non-NULL),
+        """A second drain skips the already-indexed row (indexed_at non-NULL),
         so the gist keeps exactly one posting — no duplicate."""
         episode_id = _store_episode(gist="the pangolin optimized a query")
         _drain_search_index()
@@ -123,7 +123,7 @@ class TestNoDoublePosting:
     def test_forced_reprocess_deletes_before_reinserting(
         self, db: sqlite3.Connection
     ) -> None:
-        """Re-enqueuing an already-indexed row (prior search_queries non-NULL)
+        """Re-enqueuing an already-indexed row (prior indexed_at non-NULL)
         exercises the delete-before-insert guard: the posting is replaced, never
         duplicated."""
         from services.search_expander_service import SearchExpanderService
@@ -191,5 +191,5 @@ class TestDataGraphUnchanged:
         ).fetchall()
         assert len(rows) == 1
         assert db.execute(
-            "SELECT search_queries FROM data_graph WHERE id = ?", (rows[0][0],)
+            "SELECT indexed_at FROM data_graph WHERE id = ?", (rows[0][0],)
         ).fetchone()[0] is not None

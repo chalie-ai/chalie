@@ -12,7 +12,7 @@ supersede machinery (``store``/``demote``/``_SUPERSEDING_KINDS``) and the
 Pure CRUD (Rule-3 depth): holds no ``mp``, never emits WS, never reaches
 upstream. The single sanctioned ``services`` seam is the module-level
 :func:`services.search_expander_service.enqueue` — a lightweight queue push, not
-a stateful service object — that drives the async FTS + key/value-vec + doc2query
+a stateful service object — that drives the async FTS + key/value-vec
 resync (the model owns the sync *trigger*, mirroring ``Episode.save``'s inline
 FTS write). These models are the SOLE home of ``data_graph`` SQL (I6); the
 services read and write exclusively through them.
@@ -54,7 +54,7 @@ class DataGraphRow(Model):
     __columns__: ClassVar[tuple[str, ...]] = (
         "id", "kind", "key", "value", "storage_strength", "retrieval_weight",
         "salience_score", "evidence_count", "first_seen_at", "last_confirmed_at",
-        "last_accessed_at", "source", "deleted_at", "active", "search_queries",
+        "last_accessed_at", "source", "deleted_at", "active", "indexed_at",
         "valid_from", "valid_to",
     )
 
@@ -77,7 +77,7 @@ class DataGraphRow(Model):
     source: str | None
     deleted_at: str | None
     active: int
-    search_queries: str | None
+    indexed_at: str | None
     valid_from: str | None
     valid_to: str | None
 
@@ -113,8 +113,8 @@ class DataGraphRow(Model):
     def save(self) -> Self:
         """INSERT a new row or UPDATE the existing one, then — only on a
         content-creating insert (a fresh ``id`` assigned, including a
-        superseding successor) — enqueue the async FTS + key/value-vec +
-        doc2query resync.
+        superseding successor) — enqueue the async FTS + key/value-vec
+        resync.
 
         A pure :meth:`reinforce` of an identical value keeps the existing ``id``
         and unchanged FTS content, so it skips the sync — mirroring the way
@@ -127,10 +127,9 @@ class DataGraphRow(Model):
 
     def _sync_search_index(self) -> None:
         """Enqueue this freshly-inserted row for the async FTS + key/value-vec
-        backfill + doc2query variants (the resync the old
-        ``DataGraphService.store`` fired after commit — regression R2). The
-        model owns only the trigger; a queue-push failure never breaks the
-        write.
+        backfill (the resync the old ``DataGraphService.store`` fired after
+        commit — regression R2). The model owns only the trigger; a queue-push
+        failure never breaks the write.
 
         Enablement is the ``Searchable`` trait: a kind with ``__search__ = None``
         (behavioural patterns, ``machine_state``) declares no search footprint
@@ -153,9 +152,7 @@ class DataGraphRow(Model):
         """Tear down one row's search-index footprint before its base
         ``data_graph`` row is deleted: the external-content FTS posting (FTS5
         must be told the indexed values *before* the source row disappears) and
-        every declared key/value-vec shadow. The doc2query variants are left to
-        the base table's AFTER-DELETE trigger, which cascades
-        ``expanded_semantic`` / ``expanded_semantic_vec`` on its own.
+        every declared key/value-vec shadow.
 
         Config-driven via the ``Searchable`` trait (``cls.__search__``) — the
         same declaration the save path gates on — so teardown reads the fts
@@ -291,40 +288,6 @@ class DataGraphRow(Model):
         return candidates
 
     @classmethod
-    def variant_candidates(cls, query_embedding: list[float] | None, k: int) -> dict[int, float]:
-        """Kind-scoped ``expanded_semantic_vec`` (doc2query variant) KNN
-        candidates (ported from ``_recall_variant_search``,
-        f035ebc0:services/data_graph_service.py): joins the variant vec table
-        through ``expanded_semantic`` back to ``data_graph``, filtered to this
-        kind under the RECALL-STRICT live predicate. Returns
-        ``{rowid: variant_cos}``."""
-        blob = pack_embedding(query_embedding) if query_embedding else None
-        if not blob:
-            return {}
-        try:
-            cursor = cls._bound_connection().execute(
-                "SELECT CAST(es.related_to_id AS INTEGER) AS source_id, v.distance "
-                "FROM expanded_semantic_vec v "
-                "JOIN expanded_semantic es ON es.id = v.rowid "
-                "JOIN data_graph d ON d.id = CAST(es.related_to_id AS INTEGER) "
-                "WHERE v.embedding MATCH ? AND k = ? "
-                "AND es.relates_to_table = 'data_graph' "
-                "AND d.kind = ? AND d.active = 1 AND d.deleted_at IS NULL AND d.valid_to IS NULL "
-                "ORDER BY v.distance",
-                (blob, k, cls.KIND),
-            )
-            candidates: dict[int, float] = {}
-            for rowid, dist in cursor.fetchall():
-                cos = max(0.0, 1.0 - (dist ** 2 / 2.0))
-                candidates[rowid] = max(candidates.get(rowid, 0.0), cos)
-            return candidates
-        except Exception:
-            logger.debug(
-                "[DATA GRAPH] variant vec KNN failed (non-fatal) for kind=%s", cls.KIND, exc_info=True
-            )
-            return {}
-
-    @classmethod
     def superseded_predecessors(cls, key: str, limit: int = 5) -> list[Self]:
         """Historical predecessor rows for this kind's exact ``key`` — the
         supersession-neighbour walk (ruling 3) that REPLACES the deleted
@@ -355,7 +318,6 @@ class DataGraphRow(Model):
                     key_cos=sig.get("key_cos", 0.0),
                     value_cos=sig.get("value_cos", 0.0),
                     fts_bonus=sig.get("fts_bonus", 0.0),
-                    variant_cos=sig.get("variant_cos", 0.0),
                 ),
             )
             for rowid, sig in signals.items()
@@ -367,8 +329,8 @@ class DataGraphRow(Model):
         cls, query: str, query_embedding: list[float] | None, k: int
     ) -> dict[int, tuple[Self, RecallSignals]]:
         """This vertical's raw per-lane recall signals — vec (key/value) +
-        doc2query variant + FTS bonus — composed from the primitives above
-        (ruling 1, layer 2). Shared here since every searchable vertical composes
+        FTS bonus — composed from the primitives above (ruling 1, layer 2).
+        Shared here since every searchable vertical composes
         the identical set of lanes. Non-searchable kinds (behavioural patterns,
         ``machine_state``) declare the ``Searchable`` trait off (``__search__ =
         None``) and sit outside the recall span entirely, so this never runs for
@@ -376,9 +338,6 @@ class DataGraphRow(Model):
         alongside its raw per-lane signals; fusing these into one composite score
         is the recall service's job (ruling 2), not this layer's."""
         signals = cls.vec_candidates(query_embedding, k)
-        for rowid, variant_cos in cls.variant_candidates(query_embedding, k).items():
-            row_sig = signals.setdefault(rowid, {"key_cos": 0.0, "value_cos": 0.0})
-            row_sig["variant_cos"] = max(row_sig.get("variant_cos", 0.0), variant_cos)
         for hit in cls.search(query, 30) if query else []:
             # search() filters active=1/deleted_at only (no valid_to) — guard
             # here so a superseded row's FTS posting can never surface as a

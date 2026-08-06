@@ -103,19 +103,18 @@ class DecayEngine:
         cutoff = (utc_now() - timedelta(days=_SUPERSEDED_DELETE_AFTER_DAYS)).isoformat()
         with Database.transaction() as conn:
             dead = conn.execute(
-                "SELECT rowid, key, value, kind, search_queries FROM data_graph "
+                "SELECT rowid, key, value, kind FROM data_graph "
                 "WHERE active = 0 AND deleted_at IS NULL "
                 "  AND julianday(COALESCE(valid_to, last_confirmed_at)) < julianday(?)",
                 (cutoff,),
             ).fetchall()
-            for rowid, key, value, kind, search_queries in dead:
+            for rowid, key, value, kind in dead:
                 # FTS is external-content: purge its posting with the indexed
                 # values BEFORE the base row goes, in the schema's column order
-                # (key, value, kind, search_queries).
+                # (key, value, kind).
                 fts5_external_delete(
                     conn, "data_graph_fts", rowid,
-                    {"key": key, "value": value, "kind": kind,
-                     "search_queries": search_queries or ""},
+                    {"key": key, "value": value, "kind": kind},
                 )
                 conn.execute("DELETE FROM data_graph WHERE rowid = ?", (rowid,))
                 conn.execute("DELETE FROM data_graph_key_vec WHERE rowid = ?", (rowid,))

@@ -106,8 +106,9 @@ class SearchExpanderService:
 
     def _self_heal(self) -> None:
         """Re-enqueue every searchable row missing its index — a row whose
-        ``queries_column`` is still NULL (never indexed) and still live under the
-        table's ``heal_where`` predicate. Scans each registered base table; for a
+        ``indexed_column`` is still NULL (never FTS-posted) or that is missing
+        one or more declared vec lanes, and that is still live under the table's
+        ``heal_where`` predicate. Scans each registered base table; for a
         table with a ``kind_column`` (``data_graph``), each row is further gated
         through ``is_searchable(kind)`` so non-searchable kinds are skipped."""
         try:
@@ -118,9 +119,15 @@ class SearchExpanderService:
                 if config is None:
                     continue
                 select = "rowid" + (f", {config.kind_column}" if config.kind_column else "")
+                heal_pred_parts = [f"{config.indexed_column} IS NULL"]
+                for lane in config.vec_lanes:
+                    heal_pred_parts.append(
+                        f"NOT EXISTS (SELECT 1 FROM {lane.table} v WHERE v.rowid = {config.base_table}.rowid)"
+                    )
+                heal_pred = " OR ".join(heal_pred_parts)
                 rows = conn.execute(
                     f"SELECT {select} FROM {config.base_table} "
-                    f"WHERE {config.queries_column} IS NULL AND {config.heal_where}"
+                    f"WHERE ({heal_pred}) AND {config.heal_where}"
                 ).fetchall()
                 enqueued = 0
                 for r in rows:
@@ -154,11 +161,11 @@ class SearchExpanderService:
 
     def _process_row(self, table: str, rowid: int, config: SearchConfig) -> None:
         """Index one base-table row through its declared config: backfill the vec
-        lanes, write the doc2query variants, and resync the FTS posting — all
-        addressed by ``rowid``, all names read off ``config``."""
+        lanes, and resync the FTS posting — all addressed by ``rowid``, all names
+        read off ``config``."""
         conn = Database.conn()
 
-        # The columns the write path reads: doc2query/embedding source text, the
+        # The columns the write path reads: embedding source text, the
         # vec-lane sources, and the kind discriminator when the table gates on one.
         needed = list(dict.fromkeys(
             [*config.text_columns, *(lane.source for lane in config.vec_lanes)]
@@ -180,96 +187,10 @@ class SearchExpanderService:
             )
             return
 
-        variants = self._generate_variants(self._source_text(vals, config))
-
         with Database.transaction() as conn:
             # Absorbs _schedule_embeddings: populate the declared vec lanes if missing.
             self._backfill_vec(conn, rowid, vals, config)
-            self._write_variants(conn, table, rowid, variants, config)
-            self._update_search_queries(conn, rowid, variants, config)
-
-    @staticmethod
-    def _source_text(vals: dict[str, object], config: SearchConfig) -> str:
-        """The doc2query / embedding seed text: the first ``text_columns`` value
-        verbatim, then each later column appended as ``": {value}"`` only when
-        non-empty. Reproduces data_graph's ``f"{key}: {value}" if value else
-        key`` for ``("key", "value")`` and yields the bare column for a single
-        text column (episodes' ``gist``)."""
-        cols = config.text_columns
-        text = str(vals.get(cols[0]) or "")
-        for col in cols[1:]:
-            v = vals.get(col)
-            if v:
-                text = f"{text}: {v}"
-        return text
-
-    def _generate_variants(self, text: str) -> list[str]:
-        """Empty return means skip variant writes but still mark search_queries so self-heal doesn't re-enqueue the row."""
-        try:
-            from services.doc2query_service import get_doc2query_service
-            d2q = get_doc2query_service()
-            if not d2q.is_available():
-                return []
-            return d2q.generate_queries(text) or []
-        except Exception as e:
-            logger.warning("[SES] doc2query failed for text='%s': %s", text[:60], e)
-            return []
-
-    def _write_variants(
-        self, conn: sqlite3.Connection, table: str, rowid: int,
-        variants: list[str], config: SearchConfig,
-    ) -> None:
-        """Write each variant string + embedding into the declared variant tables
-        (``config.variant_table`` / ``config.variant_vec_table``).
-
-        Clears existing variants for this (table, rowid) first so re-processing
-        is idempotent. The cascade trigger on the variant table handles vec
-        cleanup. ``table`` is the ``relates_to_table`` value (the base table the
-        variant points back at), distinct from the variant storage table.
-
-        No-op when the model declares no semantic-variant lane
-        (``variant_table is None``) — e.g. episodes, whose recall never reads the
-        variant table, so the doc2query expansions live only in the FTS
-        ``search_queries`` column."""
-        if config.variant_table is None:
-            return
-        conn.execute(
-            f"DELETE FROM {config.variant_table} "
-            "WHERE relates_to_table = ? AND related_to_id = ?",
-            (table, rowid)
-        )
-
-        if not variants:
-            return
-
-        try:
-            from services.embedding_service import get_embedding_service
-            emb_svc = get_embedding_service()
-        except Exception as e:
-            logger.warning("[SES] EmbeddingService unavailable — skipping variant vecs: %s", e)
-            return
-
-        for variant_text in variants:
-            try:
-                cursor = conn.cursor()
-                cursor.execute(
-                    f"INSERT INTO {config.variant_table} (relates_to_table, related_to_id, str) "
-                    "VALUES (?, ?, ?)",
-                    (table, rowid, variant_text)
-                )
-                new_id = cursor.lastrowid
-                cursor.close()
-
-                emb = emb_svc.generate_embedding(variant_text)
-                blob = pack_embedding(emb)
-                if blob:
-                    conn.execute(
-                        f"INSERT OR REPLACE INTO {config.variant_vec_table} (rowid, embedding) "
-                        "VALUES (?, ?)",
-                        (new_id, blob)
-                    )
-            except Exception as e:
-                logger.warning("[SES] Failed to write variant '%s': %s", variant_text[:60], e)
+            self._mark_indexed(conn, rowid, config)
 
     def _backfill_vec(
         self, conn: sqlite3.Connection, rowid: int, vals: dict[str, object],
@@ -311,50 +232,42 @@ class SearchExpanderService:
         except Exception as e:
             logger.warning("[SES] backfill_key_value_vec failed for rowid=%s: %s", rowid, e)
 
-    def _update_search_queries(
-        self, conn: sqlite3.Connection, rowid: int, variants: list[str],
-        config: SearchConfig,
+    def _mark_indexed(
+        self, conn: sqlite3.Connection, rowid: int, config: SearchConfig,
     ) -> None:
-        """Persist variant texts in the declared queries column and resync the
-        declared FTS table. Table + column names come from ``config`` so the same
-        path serves any searchable model; data_graph's behaviour is unchanged."""
-        base_cols = [c for c in config.fts_columns if c != config.queries_column]
-        old = conn.execute(
-            f"SELECT {', '.join(base_cols)}, {config.queries_column} "
-            f"FROM {config.base_table} WHERE rowid = ?",
+        """Stamp the FTS-posting timestamp and resync the declared FTS table.
+        Table + column names come from ``config`` so the same path serves any
+        searchable model; data_graph's behaviour is unchanged."""
+        cols = list(config.fts_columns) + [config.indexed_column]
+        row = conn.execute(
+            f"SELECT {', '.join(cols)} FROM {config.base_table} WHERE rowid = ?",
             (rowid,)
         ).fetchone()
-        if old is None:
+        if row is None:
             return
-        row_vals = dict(zip(base_cols, old))
-        prior_queries = old[len(base_cols)]
-        queries_json = json.dumps(variants)
+        fts_vals = dict(zip(config.fts_columns, row[:-1]))
+        prior_indexed = row[-1]
 
         # The external-content FTS index is populated ONLY here, in lock-step
-        # with the queries column: this method sets it non-NULL exactly when it
-        # inserts the posting, and no trigger writes the index. So the queries
-        # column IS NULL <=> the row was never indexed, and issuing the FTS5
-        # 'delete' command for a posting that was never inserted corrupts the
-        # index (delete-before-first-insert). Only remove a prior posting when
-        # one exists; a first index goes straight to INSERT.
-        if prior_queries is not None:
-            self._delete_fts(
-                conn, rowid, {**row_vals, config.queries_column: prior_queries}, config
-            )
+        # with the indexed_at timestamp: this method stamps it non-NULL exactly
+        # when it inserts the posting, and no trigger writes the index. So the
+        # indexed_at column IS NULL <=> the row was never indexed, and issuing
+        # the FTS5 'delete' command for a posting that was never inserted
+        # corrupts the index (delete-before-first-insert). Only remove a prior
+        # posting when one exists; a first index goes straight to INSERT.
+        if prior_indexed is not None:
+            self._delete_fts(conn, rowid, fts_vals, config)
 
         conn.execute(
-            f"UPDATE {config.base_table} SET {config.queries_column} = ? WHERE rowid = ?",
-            (queries_json, rowid)
+            f"UPDATE {config.base_table} SET {config.indexed_column} = datetime('now') WHERE rowid = ?",
+            (rowid,)
         )
-        cols = ", ".join(config.fts_columns)
+        fts_cols = ", ".join(config.fts_columns)
         placeholders = ", ".join(["?"] * (len(config.fts_columns) + 1))
-        fts_values = [
-            queries_json if col == config.queries_column else (row_vals.get(col) or '')
-            for col in config.fts_columns
-        ]
+        fts_values = [fts_vals.get(col) or '' for col in config.fts_columns]
         try:
             conn.execute(
-                f"INSERT INTO {config.fts_table}(rowid, {cols}) VALUES ({placeholders})",
+                f"INSERT INTO {config.fts_table}(rowid, {fts_cols}) VALUES ({placeholders})",
                 (rowid, *fts_values)
             )
         except Exception as e:
@@ -390,11 +303,8 @@ class SearchExpanderService:
 # ── Worker entry point ────────────────────────────────────────────────────────
 
 def search_expander_worker() -> None:
-    """Entry point registered in run.py via _try_register.
-
-    Creates the singleton and enters the blocking run loop. Registered with
-    _try_register so boot continues gracefully when doc2query models are absent.
-    """
+    """Entry point registered in run.py: creates the singleton and enters the
+    blocking run loop."""
     service = SearchExpanderService()
     # Share the singleton so module-level enqueue() calls reach the same instance.
     global _service_instance

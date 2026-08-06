@@ -98,8 +98,8 @@ class TestLegacyShapeUpgrade:
             "VALUES ('system', 'user_summary', 'prose', 'user_summary')"
         )
         db.execute(
-            "INSERT INTO episodes (id, gist, salience, channel, search_queries) "
-            "VALUES ('ep-legacy', 'old episode', 5, 'general', NULL)"
+            "INSERT INTO episodes (id, gist, salience, channel) "
+            "VALUES ('ep-legacy', 'old episode', 5, 'general')"
         )
         db.commit()
 
@@ -109,7 +109,7 @@ class TestLegacyShapeUpgrade:
         assert ledger["compactions-table-migration-v1"] == "applied"
         assert ledger["tool-calls-drop-invoked-by-v1"] == "applied"
         assert ledger["system-kind-split-migration-v1"] == "applied"
-        assert ledger["episode-search-queries-migration-v1"] == "applied"
+        assert ledger["search-indexed-at-backfill-v1"] == "applied"
 
         cols = {row[1] for row in db.execute("PRAGMA table_info(tool_calls)")}
         assert "invoked_by" not in cols
@@ -127,9 +127,15 @@ class TestLegacyShapeUpgrade:
         )
         assert (
             db.execute(
-                "SELECT search_queries FROM episodes WHERE id = 'ep-legacy'"
+                "SELECT indexed_at FROM episodes WHERE id = 'ep-legacy'"
             ).fetchone()[0]
-            == ""
+            is not None
+        )
+        assert (
+            db.execute(
+                "SELECT indexed_at FROM data_graph WHERE key = 'user_summary'"
+            ).fetchone()[0]
+            is not None
         )
 
     def test_applied_step_never_reruns(self, db: sqlite3.Connection) -> None:

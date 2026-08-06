@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS episodes (
     last_relevant_at TEXT,                     -- timestamp of the last write-relevant event; drives absolute decay (backfilled on boot)
     tombstoned_at TEXT,                        -- set when an episode is tombstoned ahead of hard deletion (NULL = live)
     facts_extracted_at TEXT,                   -- fact-extraction backlog cursor; NULL = not yet processed by the worker
-    search_queries    TEXT DEFAULT NULL        -- doc2query keyword variants (JSON); NULL = not yet indexed by SearchExpanderService
+    indexed_at        TEXT DEFAULT NULL        -- when SearchExpanderService posted this row into episodes_fts; NULL = never indexed
 );
 
 CREATE INDEX IF NOT EXISTS idx_episodes_channel ON episodes(channel) WHERE deleted_at IS NULL;
@@ -50,7 +50,7 @@ CREATE INDEX IF NOT EXISTS idx_episodes_apex ON episodes(retrieval_weight DESC, 
 -- all fts5 tables — each table binds to its own source table by name. Not a
 -- copy-paste error; SQLite FTS5 requires these per-table parameters.
 CREATE VIRTUAL TABLE IF NOT EXISTS episodes_fts USING fts5(
-    gist, search_queries, content='episodes', content_rowid='rowid'
+    gist, content='episodes', content_rowid='rowid'
 );
 
 -- cortex_iterations removed — CortexIterationService not wired into runtime.
@@ -603,7 +603,7 @@ CREATE TABLE IF NOT EXISTS data_graph (
     source            TEXT,
     deleted_at        TEXT,
     active            INTEGER NOT NULL DEFAULT 1,
-    search_queries    TEXT DEFAULT NULL,
+    indexed_at        TEXT DEFAULT NULL,       -- when SearchExpanderService posted this row into data_graph_fts; NULL = never indexed
     valid_from        TEXT,                    -- bi-temporal start: when the fact became true (backfilled on boot)
     valid_to          TEXT                     -- bi-temporal end: when the fact was superseded (NULL = live fact)
 );
@@ -619,7 +619,7 @@ CREATE INDEX IF NOT EXISTS idx_data_graph_live         ON data_graph(kind) WHERE
 -- better recall on natural-language queries. content_rowid='rowid' is
 -- intentionally the same literal as in episodes_fts.
 CREATE VIRTUAL TABLE IF NOT EXISTS data_graph_fts USING fts5(
-    key, value, kind, search_queries,
+    key, value, kind,
     content='data_graph', content_rowid='rowid',
     tokenize='porter unicode61'
 );
@@ -643,40 +643,6 @@ CREATE TABLE IF NOT EXISTS data_graph_edges (
 
 CREATE INDEX IF NOT EXISTS idx_data_graph_edges_from ON data_graph_edges(from_id, edge_type);
 CREATE INDEX IF NOT EXISTS idx_data_graph_edges_to   ON data_graph_edges(to_id, edge_type);
-
--- ────────────────────────────────────────────────────────────────
--- EXPANDED SEMANTIC — variant query strings + embeddings for KNN recall
--- Populated by SearchExpanderService (search_expander_service.py) after
--- every knowledge / data_graph write. Each row is one doc2query variant
--- whose embedding lives in the companion vec0 table, keyed by this row's id.
--- Callers: data_graph_service.recall() joins
---          expanded_semantic_vec → expanded_semantic to surface variant hits.
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS expanded_semantic (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    relates_to_table TEXT NOT NULL,   -- 'data_graph'
-    related_to_id   INTEGER NOT NULL, -- rowid of the source row
-    str             TEXT NOT NULL     -- the variant query string
-);
-
-CREATE INDEX IF NOT EXISTS idx_expanded_semantic_lookup
-    ON expanded_semantic(relates_to_table, related_to_id);
-
--- One vec row per expanded_semantic row; rowid matches expanded_semantic.id.
-CREATE VIRTUAL TABLE IF NOT EXISTS expanded_semantic_vec USING vec0(embedding float[768]);
-
--- Cascade: DELETE data_graph row → purge its expanded_semantic rows.
-CREATE TRIGGER IF NOT EXISTS expanded_semantic_cascade_data_graph
-    AFTER DELETE ON data_graph BEGIN
-    DELETE FROM expanded_semantic
-        WHERE relates_to_table = 'data_graph' AND related_to_id = OLD.id;
-END;
-
--- Cascade: DELETE expanded_semantic row → purge its vec row.
-CREATE TRIGGER IF NOT EXISTS expanded_semantic_vec_sync
-    AFTER DELETE ON expanded_semantic BEGIN
-    DELETE FROM expanded_semantic_vec WHERE rowid = OLD.id;
-END;
 
 -- ============================================================================
 -- POLICY — per-action permission control (allow / ask / deny).

@@ -52,7 +52,7 @@ class Episode(Model):
         "transcript_id_start", "transcript_id_end", "consolidated_from",
         "consolidated_into", "retrieval_weight", "location_lat", "location_lon",
         "location_name", "level", "last_relevant_at", "tombstoned_at",
-        "facts_extracted_at", "search_queries",
+        "facts_extracted_at", "indexed_at",
     )
 
     @classmethod
@@ -62,9 +62,9 @@ class Episode(Model):
     #: The declared search-index footprint (the ``Searchable`` trait). Episodes
     #: carry their vectors synchronously (``EpisodicService`` writes
     #: ``episodes_vec`` on the store path); this config drives only the async FTS
-    #: posting + doc2query keyword variants through ``SearchExpanderService``.
-    #: Presence of a config IS the enablement signal (Rule 5: one authority, no
-    #: flags) — the save path gates on it and the write-side engine reads it.
+    #: posting through ``SearchExpanderService``. Presence of a config IS the
+    #: enablement signal (Rule 5: one authority, no flags) — the save path gates
+    #: on it and the write-side engine reads it.
     __search__: ClassVar[SearchConfig | None] = EPISODE_SEARCH
 
     # Real columns (annotation-only; populated by Model.__init__ from kwargs /
@@ -90,7 +90,7 @@ class Episode(Model):
     last_relevant_at: str | None
     tombstoned_at: str | None
     facts_extracted_at: str | None
-    search_queries: str | None
+    indexed_at: str | None
 
     # Transient retrieval overlays (NOT columns) — the lanes set these on the
     # hit and the service reranks on them; they never persist or project.
@@ -124,15 +124,15 @@ class Episode(Model):
         """INSERT a new episode (TEXT-UUID PK generated here), or UPDATE the
         existing row.
 
-        On insert, enqueue the freshly-inserted rowid for the async FTS +
-        doc2query resync through ``SearchExpanderService`` — the same
-        declaration-driven engine ``data_graph`` rows flow through — instead of
-        an inline ``episodes_fts`` write. The vector lane is unaffected:
+        On insert, enqueue the freshly-inserted rowid for the async FTS + vec
+        resync through ``SearchExpanderService`` — the same declaration-driven
+        engine ``data_graph`` rows flow through — instead of an inline
+        ``episodes_fts`` write. The vector lane is unaffected:
         ``EpisodicService`` still writes ``episodes_vec`` synchronously on the
         store path, so vector recall finds a new episode immediately while the
         FTS posting catches up on the worker. A queue-push failure never breaks
         the write; ``_self_heal`` re-indexes any row left with a NULL
-        ``search_queries``."""
+        ``indexed_at``."""
         if self.id is not None:
             return super().save()
         self.id = str(uuid.uuid4())
@@ -443,20 +443,21 @@ class Episode(Model):
     @classmethod
     def hard_delete(cls, episode_id: str) -> None:
         """Physically remove an episode and its FTS + vec index rows. The FTS
-        table is external-content over both indexed columns (``gist`` and the
-        doc2query ``search_queries``), so its posting must be deleted with the
-        indexed values — in FTS column order — via the shared external-delete
-        idiom (a NULL ``search_queries`` coerces to '' inside the helper)."""
+        table is external-content over the ``gist`` column, so its posting must
+        be deleted with the indexed value — in FTS column order — via the shared
+        external-delete idiom (a NULL ``gist`` coerces to '' inside the
+        helper)."""
         connection = cls._bound_connection()
         row = connection.execute(
-            "SELECT rowid, gist, search_queries FROM episodes WHERE id = ?", (episode_id,)
+            "SELECT rowid, gist, indexed_at FROM episodes WHERE id = ?", (episode_id,)
         ).fetchone()
         if row is not None:
-            rowid, gist, search_queries = row[0], row[1], row[2]
-            fts5_external_delete(
-                connection, "episodes_fts", rowid,
-                {"gist": gist, "search_queries": search_queries},
-            )
+            rowid, gist, indexed_at = row[0], row[1], row[2]
+            if indexed_at is not None:
+                fts5_external_delete(
+                    connection, "episodes_fts", rowid,
+                    {"gist": gist},
+                )
             connection.execute("DELETE FROM episodes_vec WHERE rowid = ?", (rowid,))
         connection.execute("DELETE FROM episodes WHERE id = ?", (episode_id,))
 

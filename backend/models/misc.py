@@ -116,21 +116,21 @@ class MiscRow(DataGraphRow):
         """Hard-delete MISC rows not reconfirmed within ``_PURGE_TTL_DAYS``,
         purging each row's FTS + key/value vector shadow rows before the base
         row goes (external-content FTS5 must be told the indexed values before
-        the source row disappears). The ``DELETE FROM data_graph`` fires an
-        AFTER-DELETE trigger that cascades ``expanded_semantic``/
-        ``expanded_semantic_vec`` on its own."""
+        the source row disappears). The ``_purge_search_index`` call is what
+        removes the FTS posting and the vec shadows, which is exactly why it
+        must run before the base row is deleted."""
         conn = cls._bound_connection()
         cutoff = (utc_now() - timedelta(days=cls._PURGE_TTL_DAYS)).isoformat()
         dead = conn.execute(
-            "SELECT rowid, key, value, kind, search_queries FROM data_graph "
+            "SELECT rowid, key, value, kind FROM data_graph "
             "WHERE kind = ? AND deleted_at IS NULL "
             "  AND julianday(last_confirmed_at) < julianday(?)",
             (cls.KIND, cutoff),
         ).fetchall()
-        for rowid, key, value, kind, search_queries in dead:
+        for rowid, key, value, kind in dead:
             cls._purge_search_index(
                 conn, rowid,
-                {"key": key, "value": value, "kind": kind, "search_queries": search_queries},
+                {"key": key, "value": value, "kind": kind},
             )
             conn.execute("DELETE FROM data_graph WHERE rowid = ?", (rowid,))
         return len(dead)

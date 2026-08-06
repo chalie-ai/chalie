@@ -69,7 +69,6 @@ _VERTICALS: tuple[type[DataGraphRow], ...] = (
 _KEY_COS_WEIGHT = 2.0
 _VALUE_COS_WEIGHT = 1.0
 _FTS_BONUS_WEIGHT = 0.3
-_VARIANT_COS_WEIGHT = 0.8
 _ACTR_SIGMOID_WEIGHT = 0.3
 
 # Historical-edge multiplier for a supersession predecessor (ruling 3 — the
@@ -97,7 +96,6 @@ def _composite_score(row: DataGraphRow, signals: RecallSignals) -> float:
         _KEY_COS_WEIGHT * signals.key_cos
         + _VALUE_COS_WEIGHT * signals.value_cos
         + _FTS_BONUS_WEIGHT * signals.fts_bonus
-        + _VARIANT_COS_WEIGHT * signals.variant_cos
     )
     now_ts = utc_now().timestamp()
     ref_ts_str = row.last_accessed_at or row.last_confirmed_at
