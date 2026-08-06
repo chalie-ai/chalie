@@ -352,6 +352,7 @@ CREATE TABLE IF NOT EXISTS llm_call_log (
     type TEXT NOT NULL DEFAULT 'background',
     provider TEXT NOT NULL,
     model TEXT NOT NULL,
+    channel TEXT,
     tokens_input INTEGER NOT NULL DEFAULT 0,
     tokens_output INTEGER NOT NULL DEFAULT 0,
     tokens_cache_read INTEGER NOT NULL DEFAULT 0,
@@ -369,6 +370,8 @@ CREATE TABLE IF NOT EXISTS llm_call_log (
 -- unconstrained. One index on the always-present predicate covers both.
 CREATE INDEX IF NOT EXISTS idx_llm_call_log_created
     ON llm_call_log (created_at);
+CREATE INDEX IF NOT EXISTS idx_llm_call_log_channel
+    ON llm_call_log (channel, id);
 
 -- ────────────────────────────────────────────────────────────────
 -- MEMORY RECALL LOG — telemetry for the per-lane retrieval pipeline

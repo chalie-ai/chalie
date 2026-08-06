@@ -31,7 +31,7 @@ Drives the real production entry point (construct inertly, ``begin()``,
 ``TurnExecution`` state machine all running. The only substitution is the LLM
 network boundary — ``services.provider_service.build_client``, the same seam
 ``test_context_limit_recovery.py`` uses — because the whole point is to script
-what the provider says about size.
+when the provider refuses a request for length.
 """
 
 import sqlite3
@@ -47,6 +47,7 @@ from abilities.chat_history_compactor import ChatHistoryCompactionConfig, ChatHi
 from configs.channels.scheduled import ScheduledConfig
 from configs.channels.user import UserConfig
 from controllers.message_processor import MessageProcessor
+from exceptions import ContextLimit
 from models.provider_response import ProviderResponse
 from models.tool_call import ToolCall
 from models.transcript import Transcript
@@ -59,14 +60,11 @@ _BUILD_CLIENT = "services.provider_service.build_client"
 #: Deliberately below MAX_CONTEXT_WINDOW so an asserted window can only have come
 #: from the source under test, never from a silently-substituted ceiling.
 _CLIENT_WINDOW = 120_000
-#: 90% of _CLIENT_WINDOW is 108_000 — one token past the line is a refusal.
-_OVER_CAP = 108_000
-_UNDER_CAP = 1_000
 
 #: How the double tells the three passes apart: each sub-pass is identified by the
 #: opening line of its OWN system prompt, read off the config rather than copied.
 #: A reworded prompt would otherwise stop matching in silence, and the sub-pass
-#: would fall through to the main-turn branch and be sized as the main turn.
+#: would fall through to the main-turn branch and be refused as the main turn.
 _HANDOVER_MARK = TurnHandoverConfig().system_prompt.splitlines()[0]
 _COMPACTION_MARK = ChatHistoryCompactionConfig().system_prompt.splitlines()[0]
 
@@ -97,14 +95,18 @@ def _body_of(dto: object) -> str:
 
 class _HandoverProvider:
     """A real functional double at the network boundary: implements the thin
-    client protocol and scripts what the provider says about *size*.
+    client protocol and scripts when the provider refuses a request for length.
 
-    Sizing is addressed by CONTENT, not by call index: a sub-pass (the hand-over
-    or the compactor) always fits, and the main turn measures over the cap for
-    its first ``main_over_cap`` measurements. Expressing it this way is what
-    makes "two compactions happen" a statement about the turn rather than a
-    hand-counted list of measurement slots that shifts whenever an inner pass
-    adds one.
+    The refusal is addressed by CONTENT, not by call index: a sub-pass (the
+    hand-over or the compactor) is always served, and the main turn is refused
+    for its first ``main_rejections`` sends. Expressing it this way is what makes
+    "two compactions happen" a statement about the turn rather than a
+    hand-counted list of call slots that shifts whenever an inner pass adds one.
+
+    Refusal comes from ``send`` rather than from anything measured before it,
+    because that is the only shape a real one has: the provider is the sole
+    authority on whether a request fit, and it can only say so once it has the
+    request. Nothing in this path — production or double — sizes a payload.
 
     Records every hand-over body, and — at each hand-over send — how many
     ``chat_history_compactor`` markers already exist. That count is the only
@@ -113,25 +115,16 @@ class _HandoverProvider:
     ``tool_calls.id`` come from independent AUTOINCREMENT sequences.
     """
 
-    def __init__(self, main_over_cap: int = 1, handover_text: str = "I was mid-task.") -> None:
-        self._main_over_cap = main_over_cap
+    def __init__(self, main_rejections: int = 1, handover_text: str = "I was mid-task.") -> None:
+        self._main_rejections = main_rejections
         self._handover_text = handover_text
-        self.measurements = 0
-        self.main_measurements = 0
         self.sends = 0
+        self.main_sends = 0
         self.handover_bodies: list[str] = []
         self.markers_at_handover_send: list[int] = []
 
     def get_context_limit(self) -> int:
         return _CLIENT_WINDOW
-
-    def estimate_request_tokens(self, dto: object) -> int:
-        self.measurements += 1
-        system = _system_of(dto)
-        if _HANDOVER_MARK in system or _COMPACTION_MARK in system:
-            return _UNDER_CAP
-        self.main_measurements += 1
-        return _OVER_CAP if self.main_measurements <= self._main_over_cap else _UNDER_CAP
 
     def send(self, dto: object) -> ProviderResponse:
         self.sends += 1
@@ -148,6 +141,11 @@ class _HandoverProvider:
                 text="## Now\nthe compacted checkpoint", model="scripted-compaction",
                 tool_calls=None, tokens_input=None,
             )
+        self.main_sends += 1
+        if self.main_sends <= self._main_rejections:
+            # No MessageProcessor: a client has no turn. ProviderService attaches
+            # one before the handler sees it.
+            raise ContextLimit("payload exceeds the model's maximum context length")
         return ProviderResponse(
             text="answered after making room", model="scripted-main",
             tool_calls=None, tokens_input=None,
@@ -326,7 +324,7 @@ def test_second_compaction_carries_the_first_handover_forward(db: sqlite3.Connec
     """
     assert db is not None
     first = "First hand-over: I was mid-migration."
-    provider = _HandoverProvider(main_over_cap=2, handover_text=first)
+    provider = _HandoverProvider(main_rejections=2, handover_text=first)
 
     mp = _run(provider, "a very long conversation")
 

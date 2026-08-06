@@ -82,7 +82,6 @@ from services.database import Database
 from services.dispatch_service import DispatchService
 from services.gist_service import GistService
 from services.llm_log_service import LlmLogService
-from services.llm_service import estimate_tokens
 from services.prompt_service import PromptService
 from services.provider_service import ProviderService
 from services.tool_call_service import ToolCallService
@@ -500,11 +499,7 @@ class MessageProcessor:
         if transcript_id is None:
             return
         duration_ms = response.latency_ms or 0
-        tokens = (
-            response.tokens_thinking
-            if response.tokens_thinking
-            else estimate_tokens(trace)
-        )
+        tokens = response.tokens_thinking or 0
         TranscriptThinking.insert(transcript_id, trace, duration_ms, tokens)
 
     def _format(self, text: str) -> str:

@@ -21,8 +21,8 @@ Native size-rejection signal:
   as well (``is_token_limit_message``) — otherwise a size rejection from a
   self-hosted server would surface as a generic 400 and never compact.
 
-Depends on: services.provider_api (contract), services.llm_service (estimate_tokens,
-_app_user_agent, _resolve_api_key, _strip_think_blocks — utilities).
+Depends on: services.provider_api (contract), services.llm_service
+(_app_user_agent, _resolve_api_key, _strip_think_blocks — utilities).
 Consumed by: services.llm_clients.registry (platform dispatch), and by every
 OpenAI-protocol subclass in this package.
 """
@@ -642,31 +642,3 @@ class OpenAICompatibleClient(ProviderClient):
             if isinstance(val, int) and val > 0:
                 return val
         return None
-
-    def estimate_request_tokens(self, dto: ProviderApiRequest) -> int:
-        """Estimate tokens using tiktoken if available, else heuristic."""
-        from services.llm_service import estimate_tokens  # noqa: PLC0415
-        try:
-            import tiktoken  # noqa: PLC0415
-            try:
-                enc = tiktoken.encoding_for_model(self.model)
-            except KeyError:
-                enc = tiktoken.get_encoding('cl100k_base')
-            parts: list[str] = []
-            if dto.system:
-                parts.append(dto.system)
-            for msg in dto.messages:
-                parts.append(cast(str, msg.get('content', '') or ''))
-                if msg.get('tool_calls'):
-                    parts.append(json.dumps(msg['tool_calls'], default=str))
-            if dto.tools:
-                parts.append(json.dumps(dto.tools, default=str))
-            text = '\n'.join(parts)
-            overhead = (len(dto.messages) + 1) * 4
-            return len(enc.encode(text)) + overhead
-        except ImportError:
-            logger.debug("[%s] tiktoken not installed; falling back to token estimate", type(self).__name__)
-        except Exception as exc:
-            logger.debug("[%s] tiktoken counting failed: %s", type(self).__name__, exc)
-        parts = [dto.system] + [cast(str, m.get('content', '') or '') for m in dto.messages]
-        return estimate_tokens(' '.join(parts))

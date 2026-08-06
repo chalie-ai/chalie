@@ -13,14 +13,13 @@ it.  Confirmed via:
                     issubclass(e.RequestTooLargeError, anthropic.APIError))"
   → 413 True
 
-Depends on: services.provider_api (contract), services.llm_service (estimate_tokens,
-_app_user_agent, _resolve_api_key — utilities kept in llm_service during migration).
+Depends on: services.provider_api (contract), services.llm_service
+(_app_user_agent, _resolve_api_key — utilities kept in llm_service during migration).
 Consumed by: services.llm_clients.factory (platform dispatch).
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from collections.abc import Sequence
@@ -329,26 +328,3 @@ class AnthropicClient(ProviderClient):
 
         self._cached_context_limit: int | None = window
         return self._cached_context_limit
-
-    def estimate_request_tokens(self, dto: ProviderApiRequest) -> int:
-        """Estimate the token cost of a request using a local heuristic.
-
-        Uses the same strategy as the pre-refactor _over_cap path: serialise
-        the request body and apply estimate_tokens() (no live API call).  This
-        matches the old behaviour — the old providers._over_cap called
-        build_request_body() + estimate_tokens(), never count_tokens().
-
-        The Anthropic count_tokens API (exact but a live round-trip) is NOT
-        called here.  That would double the number of API calls per ACT
-        iteration and introduce a new failure mode (rate-limit on count_tokens
-        before the main send).  Pre-flight over-cap checks only need a safe
-        heuristic, not an exact count.
-        """
-        from services.llm_service import estimate_tokens  # noqa: PLC0415
-        body = json.dumps({
-            'model': self.model,
-            'system': dto.system,
-            'messages': _anthropic_convert_messages(dto.messages),
-            **({'tools': dto.tools} if dto.tools else {}),
-        }, default=str)
-        return estimate_tokens(body)

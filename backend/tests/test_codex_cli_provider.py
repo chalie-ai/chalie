@@ -335,19 +335,6 @@ class TestCodexCliProvider:
             )
         assert not isinstance(caught.value, ContextLimit)
 
-    def test_estimate_request_tokens_includes_overhead(self) -> None:
-        from services.llm_clients.codex_cli import CodexCliClient
-        from services.provider_api import ProviderApiRequest
-
-        client = CodexCliClient({'platform': 'codex_cli', 'model': 'gpt-5.5'})
-        dto = ProviderApiRequest(
-            system="", messages=[{"role": "user", "content": "hi"}],
-            type=ProviderType.CHAT, thinking_mode=ThinkingLevel.LOW,
-            cache_prefix=False, max_tokens=1,
-        )
-        # codex injects ~8.7k base-instruction tokens — the estimate must account for it.
-        assert client.estimate_request_tokens(dto) >= 8000
-
     # ------------------------------------------------------------------
     # Connectivity test — presence check only, ZERO inference tokens.
     # ------------------------------------------------------------------

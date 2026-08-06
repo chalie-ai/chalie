@@ -80,14 +80,6 @@ dependencies = [
     # watchdog provides FSEvents (macOS) and inotify (Linux) file-change events
     # for the FileIndexService daemon (backend/workers/file_index_worker.py).
     "watchdog>=4.0.0",
-    # tiktoken backs the pre-flight request measurement that gates compaction
-    # (llm_clients/openai.py::estimate_request_tokens). It was imported but never
-    # declared, so every deployment silently fell through to the word-count
-    # heuristic and under-measured the request — the compaction gate never fired
-    # and context ran past the window. The boot dependency preflight now refuses
-    # to start when a declared dependency is absent, so this cannot regress
-    # silently again.
-    "tiktoken>=0.7.0",
 ]
 
 [tool.mypy]

@@ -104,13 +104,3 @@ class ProviderClient(Protocol):
         does not re-probe.
         """
         ...
-
-    def estimate_request_tokens(self, dto: ProviderApiRequest) -> int:
-        """Estimate the token cost of dto without sending.
-
-        Folds in the same serialisation as send() so the estimate and the
-        actual wire body use identical encoding. Used by ProviderService.send() for
-        the pre-flight over-cap check and by ProviderService.measure() for the
-        compactor's candidate-fit sizing.
-        """
-        ...

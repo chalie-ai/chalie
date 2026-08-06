@@ -9,14 +9,13 @@ Known quirk (preserved): the `think` flag is gated on model capability
 for the on/off decision; only MEDIUM/HIGH/MAX enable the think flag at all,
 but whether it actually appears in the payload depends on the model.
 
-Depends on: services.provider_api (contract), services.llm_service (estimate_tokens,
-_app_user_agent).
+Depends on: services.provider_api (contract), services.llm_service
+(_app_user_agent).
 Consumed by: services.llm_clients.factory (platform dispatch).
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 import time
@@ -324,10 +323,3 @@ class OllamaClient(ProviderClient):
 
         self._cached_context_limit: int | None = raw_limit
         return self._cached_context_limit
-
-    def estimate_request_tokens(self, dto: ProviderApiRequest) -> int:
-        """Heuristic estimate — Ollama models vary too much for a fixed tokeniser."""
-        from services.llm_service import estimate_tokens  # noqa: PLC0415
-        api_messages = _ollama_convert_messages(dto.messages)
-        payload = self._build_payload(dto.system, api_messages, dto.tools, ThinkingLevel.LOW)
-        return estimate_tokens(json.dumps(payload))

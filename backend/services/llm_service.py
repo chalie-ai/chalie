@@ -1,6 +1,6 @@
 """LLM service utilities — shared helpers used by the thin provider clients.
 
-This module retains shared utilities (estimate_tokens, _app_user_agent,
+This module retains shared utilities (_app_user_agent,
 _resolve_api_key, _strip_think_blocks, _is_thinking_rejection) after the
 main client classes — and the message converters — were moved to
 ``services/llm_clients/*``.
@@ -52,17 +52,6 @@ def _strip_think_blocks(text: str) -> tuple[str, str | None]:
     traces = [t for t in (m.group(1).strip() for m in _THINK_BLOCK_RE.finditer(text)) if t]
     stripped = _THINK_BLOCK_RE.sub("", text).strip()
     return stripped, "\n\n".join(traces) or None
-
-
-def estimate_tokens(text: str) -> int:
-    """Fast token estimate (~1.3 tokens per whitespace-delimited word).
-
-    Used as a fallback when provider-specific counting is unavailable,
-    and for quick budget checks where exact counts aren't critical.
-    """
-    if not text:
-        return 0
-    return int(len(text.split()) * 1.3)
 
 
 def _is_thinking_rejection(exc: BaseException, create_kwargs: dict[str, object]) -> bool:

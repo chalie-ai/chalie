@@ -67,25 +67,20 @@ class TurnHandoverService:
 
     @staticmethod
     def _fit(mp: "MessageProcessor") -> str | None:
-        """Build the hand-over request body and shrink it to fit the cap.
+        """Build the hand-over request body.
 
         The body is the in-flight turn's transcript rows followed by its raw
-        tool-call results. Sizing mirrors
-        ``ChatHistoryCompactor._fit_compaction_input``: the bare request almost
-        always fits, so the drop loop is the EXTREMELY RARE fallback — while the
-        {system + body} pair exceeds the cap, drop the OLDEST tool result one at
-        a time, keeping the newest, with a floor of one surviving result. Only
-        tool results are droppable; the turn's prose is what the hand-over is
-        for. Returns None when the turn has nothing to hand over.
+        tool-call results. It is a strict subset of the turn the provider has
+        already been carrying — one turn's rows, no system history, no tools —
+        so it cannot be larger than a request that provider already accepted.
+        Nothing is sized and nothing is dropped. Returns None when the turn has
+        nothing to hand over.
 
         The compaction marker itself is skipped: a previous compaction in this
         same turn leaves a ``chat_history_compactor`` row whose result is
         bookkeeping, not turn work.
         """
-        from abilities._turn_handover_config import TurnHandoverConfig  # noqa: PLC0415
         from abilities.chat_history_compactor import ChatHistoryCompactor  # noqa: PLC0415
-        from configs.enums.thinking_level import ThinkingLevel  # noqa: PLC0415
-        from models.provider_request import ProviderRequest  # noqa: PLC0415
 
         lines: list[str] = []
         for row in mp.transcript_service.turn_rows():
@@ -102,25 +97,7 @@ class TurnHandoverService:
         if not lines and not tools:
             return None
 
-        system = TurnHandoverConfig().system_prompt
-        window = mp.provider_service.context_limit()
-        cap = window - max(int(0.10 * window), 8000) if window else 0
-
-        drop = 0
-        while True:
-            body = "\n".join(lines + tools[drop:])
-            if cap <= 0 or drop >= len(tools) - 1:
-                return body   # cannot shrink further (no window, or one result left)
-            candidate_dto = ProviderRequest(
-                system=system,
-                messages=[{"role": "user", "content": body}],
-                tools=None,
-                thinking_mode=ThinkingLevel.LOW,
-                cache_prefix=False,
-            )
-            if mp.provider_service.measure(candidate_dto) <= cap:
-                return body
-            drop += 1
+        return "\n".join(lines + tools)
 
     @staticmethod
     def _fallback(mp: "MessageProcessor") -> str:

@@ -72,7 +72,7 @@ class _RecordingClient:
 
 class _TokenReportingProvider:
     """A real functional double at the network boundary: implements the thin
-    client protocol (``get_context_limit``/``estimate_request_tokens``/``send``)
+    client protocol (``get_context_limit``/``send``)
     and answers with one benign terminal response (non-empty text, no tool
     calls) so the turn settles in a single step — one CHAT call, hence one
     expected move of the meter. The text must be non-empty: an empty completion
@@ -87,8 +87,6 @@ class _TokenReportingProvider:
     def get_context_limit(self) -> int:
         return _CLIENT_WINDOW
 
-    def estimate_request_tokens(self, _dto: object) -> int:
-        return 1
 
     def send(self, _dto: object) -> ProviderResponse:
         self.sends += 1

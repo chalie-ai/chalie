@@ -50,8 +50,6 @@ class _RecordingProvider:
     def get_context_limit(self) -> int:
         return 200000
 
-    def estimate_request_tokens(self, _dto: object) -> int:
-        return 1
 
     def send(self, _dto: object) -> ProviderResponse:
         return ProviderResponse(text=self._response_text, model="recorder", tool_calls=None)

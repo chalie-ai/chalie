@@ -69,9 +69,6 @@ class _ReplyingProvider:
     def get_context_limit(self) -> int:
         return 120_000
 
-    def estimate_request_tokens(self, _dto: object) -> int:
-        return 1
-
     def send(self, _dto: object) -> ProviderResponse:
         return ProviderResponse(
             text=_REPLY, model="scripted-presynthesis", tool_calls=None, tokens_input=1,

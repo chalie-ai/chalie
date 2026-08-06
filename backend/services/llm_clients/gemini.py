@@ -32,14 +32,13 @@ Native size-rejection signal — VERIFIED (google-genai 1.65.0):
   for rate limits, but the SDK raises ``ClientError`` (not a class named
   ``ResourceExhausted``); ``'429' in str(exc)`` is the reliable catch and is kept.
 
-Depends on: services.provider_api (contract), services.llm_service (estimate_tokens,
-_app_user_agent, _resolve_api_key).
+Depends on: services.provider_api (contract), services.llm_service
+(_app_user_agent, _resolve_api_key).
 Consumed by: services.llm_clients.factory (platform dispatch).
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from typing import TYPE_CHECKING, ClassVar, Optional, cast
@@ -486,28 +485,3 @@ class GeminiClient(ProviderClient):
                 "using DEFAULT_WINDOW %d", self.model, self._cached_context_limit,
             )
         return self._cached_context_limit
-
-    def estimate_request_tokens(self, dto: ProviderApiRequest) -> int:
-        """Estimate using build_request_body + heuristic estimate_tokens."""
-        from services.llm_service import estimate_tokens  # noqa: PLC0415
-        contents = _gemini_convert_messages(dto.messages)
-        config_dict: dict[str, object] = {'system_instruction': dto.system}
-        if dto.tools:
-            config_dict['tools'] = [
-                {
-                    'function_declarations': [
-                        {
-                            'name': t['name'],
-                            'description': t.get('description', ''),
-                            'parameters': t.get('input_schema'),
-                        }
-                        for t in dto.tools
-                    ]
-                }
-            ]
-        body = json.dumps({
-            'model': self.model,
-            'contents': contents,
-            'config': config_dict,
-        }, default=str)
-        return estimate_tokens(body)

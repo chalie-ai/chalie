@@ -82,7 +82,7 @@ class _RecordingClient:
 
 class _RecordingProvider:
     """A real functional double at the network boundary: implements the thin
-    client protocol (``get_context_limit``/``estimate_request_tokens``/``send``)
+    client protocol (``get_context_limit``/``send``)
     and RECORDS every request it receives, always answering with one benign
     terminal response (empty text, no tool calls) so the delivered synthesis
     turn completes in a single step. Mirrors ``_ScriptedProvider`` in
@@ -97,8 +97,6 @@ class _RecordingProvider:
     def get_context_limit(self) -> int:
         return 200000
 
-    def estimate_request_tokens(self, _dto: object) -> int:
-        return 1
 
     def send(self, dto: object) -> ProviderResponse:
         self.requests.append(dto)

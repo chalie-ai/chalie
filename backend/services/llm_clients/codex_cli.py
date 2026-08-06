@@ -16,7 +16,7 @@ fall back to matching the message prose (``is_token_limit_message``) to raise
 propagates as a normal provider error and the MessageProcessor retries.
 Confirmed against codex-cli 0.143.0 (JSONL stdout, ``-o`` output file).
 
-Depends on: services.provider_api (contract), services.llm_service (estimate_tokens).
+Depends on: services.provider_api (contract).
 Consumed by: services.llm_clients.factory (platform dispatch).
 """
 
@@ -406,18 +406,3 @@ class CodexCliClient(ProviderClient):
             "DEFAULT_WINDOW %d", self.model, window,
         )
         return window
-
-    def estimate_request_tokens(self, dto: ProviderApiRequest) -> int:
-        """Estimate token cost using the same heuristic as OpenAIClient.
-
-        Adds +8000 to account for codex's large injected base-instruction
-        overhead (measured ~8.7k for a trivial prompt).
-        """
-        from services.llm_service import estimate_tokens  # noqa: PLC0415
-        parts: list[str] = []
-        if dto.system:
-            parts.append(dto.system)
-        for msg in dto.messages:
-            parts.append(_extract_text(msg.get('content', '') or ''))
-        text = ' '.join(parts)
-        return estimate_tokens(text) + 8000

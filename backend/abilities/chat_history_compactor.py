@@ -32,7 +32,6 @@ from typing import TYPE_CHECKING, ClassVar, cast
 from abilities._ability import Ability
 from abilities._compaction_config import CompactionConfig
 from abilities._result import ToolResult
-from configs.enums.thinking_level import ThinkingLevel
 from contracts.params.chat_history_compactor_params_bag import ChatHistoryCompactorParamsBag
 from contracts.params.param_bag import ParamBag
 from models.compaction import Compaction
@@ -56,12 +55,6 @@ if TYPE_CHECKING:
             def previous_messages(self, drop_oldest: int = ...) -> str: ...
 
         prompt_service: _PromptService
-
-        class _ProviderService(Protocol):
-            def context_limit(self) -> int: ...
-            def measure(self, dto: object) -> int: ...
-
-        provider_service: _ProviderService
 
         class _Config(Protocol):
             channel: str
@@ -198,50 +191,25 @@ class ChatHistoryCompactor(Ability[ChatHistoryCompactorParamsBag]):
 
     @staticmethod
     def _fit_compaction_input(parent: "_CompactionParent", prior: str) -> str | None:
-        """Build the bare compaction request body and shrink it to fit the cap.
+        """Build the bare compaction request body.
 
-        Canonical design step 4.1/4.2: the compaction request includes ONLY the
-        system prompt, the prior checkpoint, and ``prompt_service.previous_messages``
-        — no tools, no act-trail. That bare request almost always fits, so the drop
-        loop is the EXTREMELY RARE fallback: while the {system + combined} body
-        exceeds the context cap, drop the OLDEST message from previous_messages
-        one at a time (typically 1–2) until it fits. A floor of one surviving
-        message prevents dropping everything. Returns the combined text to
-        summarise, or None when there is nothing left to compact.
+        The compaction request includes ONLY the system prompt, the prior
+        checkpoint, and ``prompt_service.previous_messages`` — no tools, no
+        act-trail.  It is a strict subset of the request that triggered
+        compaction (system + prior checkpoint + previous_messages, no tools, no
+        act-trail), so it cannot be larger than a request the provider already
+        accepted.  No sizing is needed.
 
-        Uses parent.provider_service.measure(dto) for sizing — no raw provider object.
-
-        Surfaces the count of transcript rows actually folded — ``total - drop``,
-        the kept count after the rare drop-oldest fallback — onto
+        Returns the combined text to summarise, or None when there is nothing
+        left to compact.  Surfaces the row count folded into
         ``parent._compaction_kept_rows`` so ``run()`` can attach an honest
-        ``rows_compacted`` to the success result without recomputing or paying a
-        second provider call. It is 0 when there is nothing to compact.
+        ``rows_compacted`` to the success result without recomputing.
         """
-        from services.provider_api import ProviderApiRequest  # noqa: PLC0415
-
-        system = parent.config.system_prompt
-        window = parent.provider_service.context_limit()
-        cap = window - max(int(0.10 * window), 8000) if window else 0
         total = len(parent.transcript_service.read())
-
-        drop = 0
-        while True:
-            prev = parent.prompt_service.previous_messages(drop_oldest=drop)
-            if not prev.strip():
-                parent._compaction_kept_rows = 0
-                return None
-            combined = prev if not prior else f"## Previous Summary\n\n{prior}\n\n## New Turns\n\n{prev}"
-            if cap <= 0 or drop >= total - 1:
-                parent._compaction_kept_rows = max(total - drop, 0)
-                return combined   # cannot shrink further (no window, or one row left)
-            candidate_dto = ProviderApiRequest(
-                system=system,
-                messages=[{"role": "user", "content": combined}],
-                tools=None,
-                thinking_mode=ThinkingLevel.LOW,
-                cache_prefix=False,
-            )
-            if parent.provider_service.measure(candidate_dto) <= cap:
-                parent._compaction_kept_rows = max(total - drop, 0)
-                return combined
-            drop += 1
+        prev = parent.prompt_service.previous_messages()
+        if not prev.strip():
+            parent._compaction_kept_rows = 0
+            return None
+        combined = prev if not prior else f"## Previous Summary\n\n{prior}\n\n## New Turns\n\n{prev}"
+        parent._compaction_kept_rows = total
+        return combined

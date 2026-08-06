@@ -64,9 +64,6 @@ class _ScriptedProvider:
     def get_context_limit(self) -> int:
         return 200000
 
-    def estimate_request_tokens(self, _dto: object) -> int:
-        return 1
-
     def send(self, dto: object) -> ProviderResponse:
         self.requests.append(dto)
         if len(self.requests) > len(self._responses):

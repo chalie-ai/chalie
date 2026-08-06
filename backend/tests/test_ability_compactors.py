@@ -8,7 +8,7 @@ this file was removed during the old-spine ``MessageProcessor`` cleanup because
 ``ChatHistoryCompactor`` still called the deleted ``mp.providers.get_context_limit()``
 / ``mp.providers.measure()`` API. That half of the migration is now done —
 ``_fit_compaction_input`` correctly calls ``parent.provider_service.context_limit()``
-/ ``parent.provider_service.measure()`` (``abilities/chat_history_compactor.py``
+/ (``abilities/chat_history_compactor.py``
 lines ~205/226) — so this file restores that coverage against the current
 ``controllers.message_processor.MessageProcessor`` / ``ProviderService`` surface.
 
@@ -77,8 +77,6 @@ class _OfflineClient:
     def get_context_limit(self) -> int:
         return _OFFLINE_WINDOW
 
-    def estimate_request_tokens(self, _dto: object) -> int:
-        return 0
 
 
 def _seed_offline_provider_cap_zero(db: sqlite3.Connection) -> int:
