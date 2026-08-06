@@ -154,14 +154,18 @@ def test_preflight_over_cap_compacts_then_completes(db: sqlite3.Connection) -> N
     mp = _run(provider, "a very long conversation")
 
     assert provider.measurements >= 2, "the turn never re-measured — no retry happened"
-    assert provider.sends == 1, (
-        f"expected the over-cap request to be withheld and only the retry sent, "
-        f"got {provider.sends} sends"
+    # Exactly two sends, and neither is the over-cap payload: the hand-over pass
+    # then the retry. Had the cap not fired the turn would have completed on send
+    # #1 with no compaction at all (1); had the over-cap request been sent and
+    # rejected instead of withheld, there would be three.
+    assert provider.sends == 2, (
+        f"expected the over-cap request to be withheld and only the hand-over "
+        f"pass plus the retry sent, got {provider.sends} sends"
     )
     assert _terminal_state(mp) == TurnExecution.COMPLETED
-    # Compaction folds history away, so the model is handed the tool that reads
-    # it back — otherwise the turn continues blind to what it just lost.
-    assert "review_transcript" in mp.active_tools
+    # Compaction erases the in-flight turn's act trail, so the turn writes itself
+    # a hand-over first — otherwise it continues blind to what it just lost.
+    assert mp.turn_handover, "the turn was compacted with no hand-over captured"
 
 
 def test_provider_side_rejection_takes_the_same_recovery(db: sqlite3.Connection) -> None:
@@ -179,7 +183,7 @@ def test_provider_side_rejection_takes_the_same_recovery(db: sqlite3.Connection)
 
     assert provider.sends >= 2, "the rejected request was never retried"
     assert _terminal_state(mp) == TurnExecution.COMPLETED
-    assert "review_transcript" in mp.active_tools
+    assert mp.turn_handover, "the turn was compacted with no hand-over captured"
 
 
 def test_unshrinkable_payload_is_let_out_not_spun_on(db: sqlite3.Connection) -> None:

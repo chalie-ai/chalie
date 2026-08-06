@@ -201,6 +201,17 @@ class TranscriptService:
         self.mp.push_websocket(TurnSignal.updated(self.mp))
         return row_id
 
+    def append_handover(self, content: str) -> int:
+        """Write the pre-compaction hand-over row (role="compaction", settled=0).
+
+        ``role="compaction"`` is deliberate: it matches no ``role='user'`` query —
+        ``Transcript.last_user_message_at()`` gates idle cognition and DMN
+        reflection with ``SELECT MAX(created_at) FROM transcript WHERE role = 'user'``
+        (no channel filter), and a hand-over written under an input role would
+        fool both.
+        """
+        return self._append(content, role="compaction", settled=0)
+
     def set_deliberation_score(self, score: float) -> None:
         """Persist ``score`` on this turn's anchoring input row — the value
         that drives thinking-level selection (§6.12). A no-op before that row

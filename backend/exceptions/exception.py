@@ -92,26 +92,47 @@ class ContextLimit(ProviderError):
     def recover(self) -> None:
         """Compact the turn's history so the next send has room.
 
-        Fires the chat-history compactor on the turn that raised and arms the
-        transcript reviewer, so the model can go and read whatever was folded
-        away. Re-sending is deliberately NOT done here: the retry belongs to
-        the step loop that owns the recursion, not to an exception.
+        Captures the turn's hand-over (a first-person summary of what was being
+        worked on) and writes it to the transcript BEFORE dispatching compaction,
+        so the erasure never lands with nothing in its place. Then fires the
+        chat-history compactor on the turn that raised. Re-sending is deliberately
+        NOT done here: the retry belongs to the step loop that owns the recursion,
+        not to an exception.
+
+        A processor whose config suppresses history has NO recovery available and
+        says so immediately instead of pretending: ``transcript_service.read()``
+        returns ``[]`` for it, so the compactor finds nothing to fold, writes no
+        watermark, and the retry re-sends a byte-identical request. Letting the
+        exception out on the first hit — rather than burning the step loop's three
+        attempts on a request nothing has changed — is what keeps the failure
+        honest. It also terminates the recursion this method would otherwise
+        create: the hand-over pass is itself such a processor, so an oversized
+        hand-over would spawn another hand-over, each sub-processor starting a
+        fresh ``_context_limit_hits``, and the step loop's bound would never bind.
         """
         if self.mp is None:
             raise RuntimeError(
                 "ContextLimit.recover() called without a MessageProcessor — "
                 "ProviderService.send must attach one before re-raising",
             )
+        if self.mp.config.suppress_history:
+            logger.warning(
+                "[ContextLimit] %s tokens against a %s window on a suppressed-history "
+                "channel (%s) — nothing to compact, letting it out",
+                self.measured or "?", self.window or "?", self.mp.channel,
+            )
+            raise self
         logger.warning(
             "[ContextLimit] %s tokens against a %s window — compacting turn %s",
             self.measured or "?", self.window or "?", self.mp.turn_id,
         )
+        from services.turn_handover_service import TurnHandoverService  # noqa: PLC0415
+        handover = TurnHandoverService.capture(self.mp)
+        self.mp.turn_handover = handover
+        self.mp.transcript_service.append_handover(handover)
         self.mp.dispatch_service.dispatch(
             "chat_history_compactor", {"act_summary": "Compacting conversation"},
         )
-        self.mp.post_compaction_continuation = True
-        if "review_transcript" not in self.mp.active_tools:
-            self.mp.active_tools.append("review_transcript")
 
 
 class ProviderResponseError(ProviderError):

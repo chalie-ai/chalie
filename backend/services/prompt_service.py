@@ -25,11 +25,10 @@ thread-gist's opener rows) are the trigger turn's identity — a DIFFERENT
 / ``self.mp._trigger_turn_id`` (§4.3, added by F1). A service reads its own
 models, so those go straight through ``ToolCall`` / ``Transcript`` classmethods.
 
-``self.mp.post_compaction_continuation`` is read verbatim (same name as today's
-``MessageProcessor``) to gate the post-compaction continuity banner; the banner's
-user-query text comes straight off ``self.mp.raw_input`` — the new processor holds
-the turn's input for its whole recursion, so the old ``continuation_user_query``
-DB-refetch (a redundant read of the same value) is gone.
+``self.mp.turn_handover`` is read by :meth:`_handover` to gate the post-compaction
+continuity banner; the banner carries the first-person hand-over summary produced
+by :class:`~services.turn_handover_service.TurnHandoverService` immediately before
+the compactor erases the act trail.
 """
 
 from __future__ import annotations
@@ -40,7 +39,6 @@ import logging
 from typing import TYPE_CHECKING, cast
 
 from abilities.memory import MemoryAbility
-from abilities.review_transcript import ReviewTranscriptAbility
 from configs.channels.dmn import DmnConfig
 from configs.channels.external_agent import EAMPConfig
 from configs.channels.user import UserConfig
@@ -102,6 +100,13 @@ _USER_DEFINITION_FALLBACK = (
 )
 _CONTENT_FIELD_PLACEHOLDER = "{{provider_content_field_name}}"
 _MISSING_TS_PLACEHOLDER = "????-??-?? ??:??"
+
+_HANDOVER_FRAME = (
+    "You hit your context limit mid-task and are continuing the same task — "
+    "this is not a new conversation. Below is the hand-over you produced. "
+    "Trust it: do not re-verify or repeat completed work; continue from the "
+    "pending list.\n\n{handover}"
+)
 
 #: The tag list the model is given, rendered from the sanitiser's own authority
 #: (``markup.PROMPT_TAGS``) so widening or narrowing the contract rewrites this
@@ -396,6 +401,13 @@ class PromptService:
             logger.warning("[PromptService] act_trail failed: %s", exc, exc_info=True)
             return ""
 
+    def _handover(self) -> str:
+        """The post-compaction continuity banner, or ``""`` when there is no
+        hand-over stored on this turn."""
+        if not self.mp.turn_handover:
+            return ""
+        return _HANDOVER_FRAME.format(handover=self.mp.turn_handover)
+
     def _world(self) -> str:
         """``world_state.render()``, guarded — the turn's telemetry block, whose
         ``local_time`` line is the ONLY date anchor any channel receives. Off-spine
@@ -440,15 +452,9 @@ class PromptService:
 
         parts.append("")
 
-        if self.mp.post_compaction_continuation:
-            query = self.mp.raw_input
-            parts.append(
-                f"You are continuing after a mid-turn compaction. "
-                f"The user query was: {query}. "
-                f"Read the Checkpoint section above to recover what you were "
-                f"working on, and use the {ReviewTranscriptAbility.NAME} tool to read the "
-                f"previous turns of this conversation."
-            )
+        handover = self._handover()
+        if handover:
+            parts.append(handover)
 
         parts.append(f"user: {self.mp.raw_input}")
 
@@ -547,6 +553,9 @@ class PromptService:
         prev = self._prev()
         if prev:
             parts.append(f"## Previous Messages\n{prev}")
+        handover = self._handover()
+        if handover:
+            parts.append(handover)
         parts.append(f"Scheduled task:\n{self.mp.raw_input}")
         trail = self._trail()
         if trail:

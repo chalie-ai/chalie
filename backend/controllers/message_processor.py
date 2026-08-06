@@ -173,7 +173,7 @@ class MessageProcessor:
         self.active_tools: list[str] = []
         self.thinking_level: str = "low"
         self.thinking_override: str | None = None
-        self.post_compaction_continuation: bool = False
+        self.turn_handover: str = ""
         self.seeding_turn_zero: bool = False
         self._placed_attachments: list[str] = []
         self._trigger_channel: str | None = cast("str | None", self.metadata.get("trigger_channel"))
@@ -348,7 +348,6 @@ class MessageProcessor:
             limit.recover()
             return self._step()
         self._context_limit_hits = 0
-        self.post_compaction_continuation = False
         if self.turn_execution_service.should_stop():
             raise _TurnCancelled()
         tool_calls = response.tool_calls
