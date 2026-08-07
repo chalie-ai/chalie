@@ -24,7 +24,7 @@ import pytest
 from contracts.search_config import config_for_table
 from models.memory_graph import MemoryGraphRow
 from models.memory_map import MemoryMapRow
-from services.memory_v3_recall_service import MemoryV3RecallService
+from services.memory_recall_service import MemoryRecallService
 from services.search_expander_service import SearchExpanderService
 
 pytestmark = pytest.mark.unit
@@ -54,7 +54,7 @@ def fixed_embedder(monkeypatch: pytest.MonkeyPatch) -> _FixedEmbedder:
         "services.embedding_service.get_embedding_service", lambda: emb
     )
     monkeypatch.setattr(
-        "services.memory_v3_recall_service.get_embedding_service", lambda: emb
+        "services.memory_recall_service.get_embedding_service", lambda: emb
     )
     return emb
 
@@ -72,7 +72,7 @@ def test_graph_fts_lane_returns_subject_match(fixed_embedder: _FixedEmbedder, db
     assert isinstance(g.id, int)
     _index("memory_graph", g.id)
 
-    result = MemoryV3RecallService().recall("residence", k_graph=3, k_map=0)
+    result = MemoryRecallService().recall("residence", k_graph=3, k_map=0)
     assert len(result["graph"]) == 1
     assert result["graph"][0]["subject"] == "user.residence"
     assert result["graph"][0]["contents"] == "Lisbon"
@@ -96,7 +96,7 @@ def test_map_vector_lane_excludes_retired_rows_and_ranks_by_iteration(
         assert isinstance(row.id, int)
         _index("memory_map", row.id)
 
-    hits = MemoryV3RecallService().recall("Lisbon", k_graph=0, k_map=3)["map"]
+    hits = MemoryRecallService().recall("Lisbon", k_graph=0, k_map=3)["map"]
 
     # A (iteration 5) must NOT surface — it's retired by C's derived_from.
     iterations = [h["iteration"] for h in hits]
@@ -107,5 +107,5 @@ def test_map_vector_lane_excludes_retired_rows_and_ranks_by_iteration(
 
 
 def test_recall_returns_empty_on_miss_without_raising(fixed_embedder: _FixedEmbedder, db: sqlite3.Connection) -> None:
-    result = MemoryV3RecallService().recall("nothing matches this query")
+    result = MemoryRecallService().recall("nothing matches this query")
     assert result == {"graph": [], "map": []}

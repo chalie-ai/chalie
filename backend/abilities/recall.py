@@ -13,7 +13,7 @@ from abilities._ability import Ability
 from abilities._result import ToolResult
 from contracts.params.param_bag import ParamBag
 from contracts.params.recall_params_bag import RecallParamsBag
-from services.memory_v3_recall_service import MemoryV3RecallService
+from services.memory_recall_service import MemoryRecallService
 
 
 class Recall(Ability[RecallParamsBag]):
@@ -47,7 +47,7 @@ class Recall(Ability[RecallParamsBag]):
         return self._PARAMETERS
 
     def run(self, params: RecallParamsBag) -> ToolResult:
-        result = MemoryV3RecallService().recall(params.query)
+        result = MemoryRecallService().recall(params.query)
         graph = result.get("graph", [])
         episodes = result.get("map", [])
         lines: list[str] = []

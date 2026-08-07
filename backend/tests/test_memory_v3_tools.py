@@ -11,7 +11,7 @@
 Exercises the four abilities end-to-end on the real ``db`` fixture: each tool's
 param bag (validation) + run() (store mutation), driving the real
 SearchExpanderService indexing where a vector lane is involved. The embedding
-model is stubbed deterministically (same seam as test_memory_v3_recall.py).
+model is stubbed deterministically (same seam as test_memory_recall.py).
 """
 
 import json
@@ -58,7 +58,7 @@ def fixed_embedder(monkeypatch: pytest.MonkeyPatch) -> _FixedEmbedder:
         "services.embedding_service.get_embedding_service", lambda: emb
     )
     monkeypatch.setattr(
-        "services.memory_v3_recall_service.get_embedding_service", lambda: emb
+        "services.memory_recall_service.get_embedding_service", lambda: emb
     )
     return emb
 
