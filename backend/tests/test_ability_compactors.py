@@ -61,7 +61,7 @@ pytestmark = pytest.mark.unit
 # ProviderService builds its thin transport client through this factory — the
 # real network boundary (same seam as test_context_usage_signal.py). Patching it
 # is what keeps these tests off ``http://localhost:11434``.
-_BUILD_CLIENT = "services.provider_service.build_client"
+_BUILD_CLIENT = "services.provider_service.Factory.build_client"
 
 # A window small enough that the compactor's cap formula
 # (``window - max(0.10*window, 8000)``) lands at zero, so ``_fit_compaction_input``

@@ -125,9 +125,9 @@ class ProviderDbService:
         host points at no server, and no later edit short of supplying the host
         can make it mean anything.
         """
-        from services.llm_clients.registry import client_class_for  # noqa: PLC0415
+        from services.llm_clients.registry import Registry  # noqa: PLC0415
 
-        client = client_class_for(platform)
+        client = Registry.client_class_for(platform)
         if client is None or not client.REQUIRES_HOST or client.DEFAULT_BASE_URL:
             return
 
@@ -364,8 +364,8 @@ class ProviderDbService:
         Never raises: a provider must remain creatable while its host is down.
         """
         try:
-            from services.llm_clients.factory import build_client  # noqa: PLC0415
-            client = build_client({
+            from services.llm_clients.factory import Factory  # noqa: PLC0415
+            client = Factory.build_client({
                 'platform': platform, 'model': model,
                 'host': host, 'api_key': api_key,
             })
@@ -476,9 +476,9 @@ class ProviderDbService:
         too. Skipping the vision probe and refusing a connectivity test are the
         same question, and answering it in two places is how they drift.
         """
-        from services.llm_clients.registry import platform_requires_key  # noqa: PLC0415
+        from services.llm_clients.registry import Registry  # noqa: PLC0415
 
-        return platform_requires_key(platform)
+        return Registry.platform_requires_key(platform)
 
     def _resolve_vision_provider(self) -> tuple[Optional[Dict[str, object]], str]:
         value = Setting.get_value('vision_provider_id')

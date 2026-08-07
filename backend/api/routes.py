@@ -21,9 +21,6 @@ traces back to a missing line.
 
 from __future__ import annotations
 
-from importlib import import_module
-from pkgutil import walk_packages
-
 from .actions.capabilities.disconnect import CapabilitiesDisconnect
 from .actions.capabilities.setup import CapabilitiesSetup
 from .actions.capabilities.status import CapabilitiesStatus
@@ -55,6 +52,7 @@ from .actions.threads.thinking_level import ThreadsThinkingLevel
 from .actions.voice.health import VoiceHealthAction
 from .actions.voice.transcribe import VoiceTranscribeAction
 from .actions.voice.transcript import VoiceTranscriptAction
+from . import ApiBootstrap
 from .endpoint import Endpoint
 from .endpoints.capabilities import CapabilitiesEndpoint
 from .endpoints.lists import Lists
@@ -131,40 +129,4 @@ ROUTES: tuple[Endpoint, ...] = (
 Flask matches on the generated rule, never on registration order."""
 
 
-def _verify_every_controller_is_mounted() -> None:
-    """Refuse to import while a declared controller has no URL.
-
-    Walks every module under ``api/endpoints`` and ``api/actions`` and diffs the
-    controller classes it finds against the table above. Classes are matched on
-    ``__module__``, so one a package ``__init__`` re-exports is judged once —
-    where it is defined — and the shared ``Endpoint``/``Action`` bases, which
-    live outside both packages, are never candidates.
-
-    Raising here rather than reporting it from a test is deliberate: the failure
-    mode this catches is a 404 in production that reads like a frontend bug, and
-    no amount of green test output makes an unreachable controller reachable.
-    """
-    mounted = {type(controller) for controller in ROUTES}
-    unmounted: set[type[Endpoint]] = set()
-    for subpackage_name in ("endpoints", "actions"):
-        subpackage = import_module(f"{__package__}.{subpackage_name}")
-        for module_info in walk_packages(subpackage.__path__, prefix=f"{subpackage.__name__}."):
-            module = import_module(module_info.name)
-            for attribute in vars(module).values():
-                if (
-                    isinstance(attribute, type)
-                    and issubclass(attribute, Endpoint)
-                    and attribute.__module__ == module_info.name
-                    and attribute not in mounted
-                ):
-                    unmounted.add(attribute)
-
-    if unmounted:
-        names = ", ".join(sorted(f"{c.__module__}.{c.__name__}" for c in unmounted))
-        raise RuntimeError(
-            f"declared but absent from ROUTES in api/routes.py, so unreachable: {names}. "
-            "Add an Endpoint(slug) or Action(slug, verb) entry for each, or delete the class."
-        )
-
-
-_verify_every_controller_is_mounted()
+ApiBootstrap._verify_every_controller_is_mounted()

@@ -48,7 +48,7 @@ def send_image_with_config(config: Dict[str, object], image_bytes: bytes,
     """
     try:
         from services.provider_api import ProviderApiRequest  # noqa: PLC0415
-        from services.llm_clients.factory import build_client  # noqa: PLC0415
+        from services.llm_clients.factory import Factory  # noqa: PLC0415
 
         b64 = base64.b64encode(image_bytes).decode('ascii')
         message = {
@@ -64,7 +64,7 @@ def send_image_with_config(config: Dict[str, object], image_bytes: bytes,
             cache_prefix=False,
             max_tokens=_PROBE_MAX_TOKENS,
         )
-        client = build_client(config)
+        client = Factory.build_client(config)
         response = client.send(dto)
         text = (response.text or '').strip()
         return text or None

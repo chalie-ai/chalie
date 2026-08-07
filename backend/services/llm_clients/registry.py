@@ -99,23 +99,27 @@ def _build_index() -> dict[str, type[ProviderClient]]:
 PROVIDERS_BY_PLATFORM: dict[str, type[ProviderClient]] = _build_index()
 
 
-def client_class_for(platform: str) -> type[ProviderClient] | None:
-    """The client class serving *platform*, or None when nothing claims it."""
-    return PROVIDERS_BY_PLATFORM.get(platform)
+class Registry:
+    """Lookup utilities for the provider registry."""
 
+    @classmethod
+    def client_class_for(cls, platform: str) -> type[ProviderClient] | None:
+        """The client class serving *platform*, or None when nothing claims it."""
+        return PROVIDERS_BY_PLATFORM.get(platform)
 
-def platform_requires_key(platform: str) -> bool:
-    """Whether *platform* cannot be reached at all without a credential.
+    @classmethod
+    def platform_requires_key(cls, platform: str) -> bool:
+        """Whether *platform* cannot be reached at all without a credential.
 
-    Read off the client class rather than listed anywhere: a hand-kept tuple
-    omits every provider added after it was written, and the omission is silent
-    in both directions — a hosted vendor left out gets a guaranteed-to-fail call
-    recorded as a real failure, and a self-hosted server wrongly included is
-    refused before it is ever contacted.
+        Read off the client class rather than listed anywhere: a hand-kept tuple
+        omits every provider added after it was written, and the omission is silent
+        in both directions — a hosted vendor left out gets a guaranteed-to-fail call
+        recorded as a real failure, and a self-hosted server wrongly included is
+        refused before it is ever contacted.
 
-    False for a platform nothing claims. An unknown platform is rejected at the
-    factory with a message naming it, which is a better answer than a complaint
-    about a missing key for a provider that does not exist.
-    """
-    client = client_class_for(platform)
-    return client is not None and client.REQUIRES_KEY
+        False for a platform nothing claims. An unknown platform is rejected at the
+        factory with a message naming it, which is a better answer than a complaint
+        about a missing key for a provider that does not exist.
+        """
+        client = cls.client_class_for(platform)
+        return client is not None and client.REQUIRES_KEY

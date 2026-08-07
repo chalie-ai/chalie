@@ -12,7 +12,7 @@ from services.auth_service import AuthService
 from services.feature_flags import internal_dev_enabled
 from contracts.constants.auth import LOGIN_RATE_LIMIT, LOGIN_RATE_WINDOW_SECONDS
 from .auth import require_auth, _cookie_only, internal_only
-from .dto import Error, expects, responds, register_dto
+from .dto import Error, expects, responds, OpenApiRegistry
 from .dto.auth import AuthStatus, LoginRequest, RegisterRequest, Username, VaultResult
 
 
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 user_auth_ns = Namespace('user_auth', description='Master account authentication', path='/api/auth')
 
-register_dto(user_auth_ns, AuthStatus, Username, RegisterRequest, LoginRequest, VaultResult, Error)
+OpenApiRegistry.register_dto(user_auth_ns, AuthStatus, Username, RegisterRequest, LoginRequest, VaultResult, Error)
 
 _m = user_auth_ns.models
 

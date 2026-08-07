@@ -51,15 +51,6 @@ logger = logging.getLogger(__name__)
 _ITEM_NOT_FOUND = "Scheduled item not found"
 
 
-def _embed(item_id: int, message: str) -> None:
-    """Fire-and-forget embedding of a freshly created item (non-fatal on failure)."""
-    try:
-        from services.scheduler_service import embed_scheduled_item
-        embed_scheduled_item(item_id, message)
-    except Exception as exc:
-        logger.warning("[SCHEDULER API] Embedding failed (non-fatal): %s", exc)
-
-
 class Scheduler(Endpoint):
     """CRUD endpoint for scheduled prompts."""
 
@@ -72,6 +63,15 @@ class Scheduler(Endpoint):
         "post": DocumentedResponse(SchedulerItem, extras=((404, _ITEM_NOT_FOUND),)),
         "delete": DocumentedResponse(),
     }
+
+    @staticmethod
+    def _embed(item_id: int, message: str) -> None:
+        """Fire-and-forget embedding of a freshly created item (non-fatal on failure)."""
+        try:
+            from services.scheduler_service import embed_scheduled_item
+            embed_scheduled_item(item_id, message)
+        except Exception as exc:
+            logger.warning("[SCHEDULER API] Embedding failed (non-fatal): %s", exc)
 
     def get_all(self, page: int = 1, limit: int = 20) -> ResponseReturnValue:
         """List every live schedule, newest first (``created_at`` DESC)."""
@@ -142,7 +142,7 @@ class Scheduler(Endpoint):
         saved = ScheduledItem.get(item_id)
 
         threading.Thread(
-            target=_embed, args=(item_id, dto.message),
+            target=Scheduler._embed, args=(item_id, dto.message),
             daemon=True, name="scheduler-embed",
         ).start()
         return SchedulerItem.from_model(cast(ScheduledItem, saved)).single(), 201

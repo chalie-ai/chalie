@@ -31,19 +31,19 @@ def _ollama_response_with(*tool_names: str) -> dict[str, object]:
 
 class TestOllamaToolCallIds:
     def test_same_tool_across_responses_gets_unique_ids(self) -> None:
-        from services.llm_clients.ollama import _parse_chat_response
+        from services.llm_clients.ollama import OllamaClient
 
-        first = _parse_chat_response(_ollama_response_with('find_tools'), 'm')
-        second = _parse_chat_response(_ollama_response_with('find_tools'), 'm')
+        first = OllamaClient._parse_chat_response(_ollama_response_with('find_tools'), 'm')
+        second = OllamaClient._parse_chat_response(_ollama_response_with('find_tools'), 'm')
 
         id_a = cast(list[dict[str, object]], first.tool_calls)[0]['id']
         id_b = cast(list[dict[str, object]], second.tool_calls)[0]['id']
         assert id_a != id_b, f"colliding ids across responses: {id_a!r}"
 
     def test_same_tool_twice_in_one_response_unique(self) -> None:
-        from services.llm_clients.ollama import _parse_chat_response
+        from services.llm_clients.ollama import OllamaClient
 
-        resp = _parse_chat_response(
+        resp = OllamaClient._parse_chat_response(
             _ollama_response_with('find_tools', 'find_tools'), 'm'
         )
         ids = [tc['id'] for tc in cast(list[dict[str, object]], resp.tool_calls)]
@@ -52,7 +52,7 @@ class TestOllamaToolCallIds:
 
 class TestGeminiToolCallIds:
     def test_same_tool_twice_gets_unique_ids(self) -> None:
-        from services.llm_clients.gemini import _accumulate_part as _gemini_accumulate_part
+        from services.llm_clients.gemini import GeminiClient
 
         def make_part(name: str) -> object:
             return SimpleNamespace(
@@ -62,8 +62,8 @@ class TestGeminiToolCallIds:
 
         tool_calls: list[dict[str, object]] = []
         thinking_parts: list[str] = []
-        _gemini_accumulate_part(make_part('find_tools'), [], tool_calls, thinking_parts)
-        _gemini_accumulate_part(make_part('find_tools'), [], tool_calls, thinking_parts)
+        GeminiClient._accumulate_part(make_part('find_tools'), [], tool_calls, thinking_parts)
+        GeminiClient._accumulate_part(make_part('find_tools'), [], tool_calls, thinking_parts)
 
         ids = [tc['id'] for tc in tool_calls]
         assert len(set(ids)) == len(ids), f"colliding gemini ids: {ids}"

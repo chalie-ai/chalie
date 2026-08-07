@@ -276,7 +276,7 @@ def test_link_rows_exist_before_the_working_frame_is_broadcast(
 
     mp = MessageProcessor(UserConfig(), -1, "Here's a file.", {"attachments": [staged]})
     provider = _ScriptedProvider(ProviderResponse(text="Noted.", model="scripted", tool_calls=None))
-    with patch("services.provider_service.build_client", return_value=provider):
+    with patch("services.provider_service.Factory.build_client", return_value=provider):
         mp.begin()
         mp.result()
         _drain_background_turns()

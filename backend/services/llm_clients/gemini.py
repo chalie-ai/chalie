@@ -112,74 +112,18 @@ from services.provider_api import (
 
 logger = logging.getLogger(__name__)
 
-def _gemini_tool_response(msg: dict[str, object]) -> dict[str, object]:
-    return {
-        "role": "user",
-        "parts": [{
-            "function_response": {
-                "name": msg.get('name', ''),
-                "response": {"content": msg.get('content', '')},
-            }
-        }],
-    }
-
-
-def _gemini_assistant_parts(msg: dict[str, object]) -> dict[str, object]:
-    parts: list[dict[str, object]] = []
-    text = msg.get('content', '')
-    if text:
-        parts.append({"text": text})
-    for tc in cast(list[dict[str, object]], msg['tool_calls']):
-        parts.append({
-            "function_call": {"name": tc['name'], "args": tc['input']},
-        })
-    return {"role": "model", "parts": parts}
-
-
-def _gemini_plain_parts(msg: dict[str, object], role: str) -> dict[str, object]:
-    parts: list[dict[str, object]] = [{"text": msg.get('content', '')}]
-    img = msg.get('image')
-    if img:
-        parts.append({
-            "inline_data": {"mime_type": cast(dict[str, object], img)['mime_type'], "data": cast(dict[str, object], img)['data']},
-        })
-    return {"role": role, "parts": parts}
-
-
 def _gemini_convert_messages(messages: list[dict[str, object]]) -> list[dict[str, object]]:
     """Convert normalised messages to Gemini content format."""
     result: list[dict[str, object]] = []
     for msg in messages:
         role = "model" if msg['role'] == 'assistant' else cast(str, msg['role'])
         if msg['role'] == 'tool':
-            result.append(_gemini_tool_response(msg))
+            result.append(GeminiClient._gemini_tool_response(msg))
         elif msg['role'] == 'assistant' and msg.get('tool_calls'):
-            result.append(_gemini_assistant_parts(msg))
+            result.append(GeminiClient._gemini_assistant_parts(msg))
         else:
-            result.append(_gemini_plain_parts(msg, role))
+            result.append(GeminiClient._gemini_plain_parts(msg, role))
     return result
-
-
-def _accumulate_part(part: object, text_parts: list[str], tool_calls: list[dict[str, object]], thinking_parts: list[str]) -> None:
-    """Append text or a tool-call dict from a single Gemini response part.
-
-    Parts flagged thought=True are collected into thinking_parts and do NOT
-    leak into the visible text or get treated as function calls.
-    """
-    if getattr(part, 'thought', False):
-        text = getattr(part, 'text', None)
-        if text:
-            thinking_parts.append(text)
-        return
-    if getattr(part, 'text', None):
-        text_parts.append(cast("_Part", part).text)
-    fc = getattr(part, 'function_call', None)
-    if fc:
-        tool_calls.append({
-            'id': f"gemini_{cast('_FunctionCall', fc).name}_{uuid4().hex[:8]}",
-            'name': cast("_FunctionCall", fc).name,
-            'input': dict(cast("_FunctionCall", fc).args) if cast("_FunctionCall", fc).args else {},
-        })
 
 
 class GeminiClient(ProviderClient):
@@ -200,6 +144,62 @@ class GeminiClient(ProviderClient):
         """Google publishes the list against the key; there is no host to give."""
         from services.provider_probe import fetch_gemini_models  # noqa: PLC0415
         return fetch_gemini_models(api_key)
+
+    @staticmethod
+    def _gemini_tool_response(msg: dict[str, object]) -> dict[str, object]:
+        return {
+            "role": "user",
+            "parts": [{
+                "function_response": {
+                    "name": msg.get('name', ''),
+                    "response": {"content": msg.get('content', '')},
+                }
+            }],
+        }
+
+    @staticmethod
+    def _gemini_assistant_parts(msg: dict[str, object]) -> dict[str, object]:
+        parts: list[dict[str, object]] = []
+        text = msg.get('content', '')
+        if text:
+            parts.append({"text": text})
+        for tc in cast(list[dict[str, object]], msg['tool_calls']):
+            parts.append({
+                "function_call": {"name": tc['name'], "args": tc['input']},
+            })
+        return {"role": "model", "parts": parts}
+
+    @staticmethod
+    def _gemini_plain_parts(msg: dict[str, object], role: str) -> dict[str, object]:
+        parts: list[dict[str, object]] = [{"text": msg.get('content', '')}]
+        img = msg.get('image')
+        if img:
+            parts.append({
+                "inline_data": {"mime_type": cast(dict[str, object], img)['mime_type'], "data": cast(dict[str, object], img)['data']},
+            })
+        return {"role": role, "parts": parts}
+
+    @staticmethod
+    def _accumulate_part(part: object, text_parts: list[str], tool_calls: list[dict[str, object]], thinking_parts: list[str]) -> None:
+        """Append text or a tool-call dict from a single Gemini response part.
+
+        Parts flagged thought=True are collected into thinking_parts and do NOT
+        leak into the visible text or get treated as function calls.
+        """
+        if getattr(part, 'thought', False):
+            text = getattr(part, 'text', None)
+            if text:
+                thinking_parts.append(text)
+            return
+        if getattr(part, 'text', None):
+            text_parts.append(cast("_Part", part).text)
+        fc = getattr(part, 'function_call', None)
+        if fc:
+            tool_calls.append({
+                'id': f"gemini_{cast('_FunctionCall', fc).name}_{uuid4().hex[:8]}",
+                'name': cast("_FunctionCall", fc).name,
+                'input': dict(cast("_FunctionCall", fc).args) if cast("_FunctionCall", fc).args else {},
+            })
 
     def __init__(self, config: dict[str, object]) -> None:
         self._config = config
@@ -281,7 +281,7 @@ class GeminiClient(ProviderClient):
         candidate = response.candidates[0] if response.candidates else None
         if candidate is not None:
             for part in (cast("_Content", candidate.content).parts or []):
-                _accumulate_part(part, text_parts, tool_calls, thinking_parts)
+                GeminiClient._accumulate_part(part, text_parts, tool_calls, thinking_parts)
         finish_reason = str(candidate.finish_reason) if candidate and candidate.finish_reason else None
         thinking_block = '\n'.join(thinking_parts) or None
         return '\n'.join(text_parts), tool_calls or None, finish_reason, thinking_block

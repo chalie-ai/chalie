@@ -417,14 +417,14 @@ def test_ollama_provider(host: str, model: str, start: float) -> ProviderTestOut
 def test_api_provider(api_key: str | None, host: str | None, platform: str, model: str, start: float) -> ProviderTestOutcome:
     import time
 
-    from services.llm_clients.registry import platform_requires_key
+    from services.llm_clients.registry import Registry
 
     # Only refuse when the platform genuinely cannot be reached without a key.
     # A self-hosted server (vLLM, llama.cpp) serves openly unless its operator
     # opted in to a token, so demanding one here would make Test Connection the
     # single button that fails on a provider whose models list and whose chat
     # both work — a contradiction the user has no way to resolve.
-    if not api_key and platform_requires_key(platform):
+    if not api_key and Registry.platform_requires_key(platform):
         return ProviderTestOutcome(
             success=False,
             error="API key is required to test this provider",
@@ -438,9 +438,9 @@ def test_api_provider(api_key: str | None, host: str | None, platform: str, mode
         }
         if host:
             test_config['host'] = host
-        from services.llm_clients.factory import build_client
+        from services.llm_clients.factory import Factory
         from services.provider_api import ProviderApiRequest
-        client = build_client(test_config)
+        client = Factory.build_client(test_config)
         dto = ProviderApiRequest(
             system="You are a test assistant.",
             messages=[{"role": "user", "content": "Say: ok"}],

@@ -30,8 +30,8 @@ from services.locale_service import LocaleService
 from services.time_utils import utc_now
 from utils.logger import LOG_FILE_PATH as _LOG_FILE_PATH  # Written exclusively by utils/logger.py in the same process
 from .auth import require_session
-from .dto import Error, expects, register_dto, responds
-from .dto.boundary import error
+from .dto import Error, expects, OpenApiRegistry, responds
+from .dto.boundary import _FileStorageAnnotation
 from .dto.health import ClientTelemetry, Health
 from .dto.network import NetworkState, NetworkUpdate, NetworkUpdateResult
 from .dto.observability_compaction import CompactionRecord, CompactionView
@@ -91,42 +91,11 @@ _SYSTEM_DTOS = (
     NetworkUpdateResult,
     Error,
 )
-register_dto(health_ns, *_HEALTH_DTOS)
-register_dto(system_ns, *_SYSTEM_DTOS)
+OpenApiRegistry.register_dto(health_ns, *_HEALTH_DTOS)
+OpenApiRegistry.register_dto(system_ns, *_SYSTEM_DTOS)
 
 _H = health_ns.models
 _S = system_ns.models
-
-
-
-def _health() -> Health:
-    """Build the standard health response — status + running app version."""
-    from consumer import APP_VERSION
-    return Health(status="ok", version=APP_VERSION)
-
-
-def _mirror_telemetry_to_world_state(svc: "ClientContextService", data: dict[str, object]) -> None:
-    """Mirror persisted client telemetry into WorldState as Signals."""
-    from services.world_state import world_state, Signal
-    world_state.set("telemetry", svc.get() or data)
-    world_state.absorb(Signal(source=_SIGNAL_SOURCE_HEALTH, kind="heartbeat", payload=data))
-    device_class = data.get("device_class") or cast(dict[str, object], data.get("device") or {}).get("class")
-    if device_class:
-        world_state.absorb(Signal(source=_SIGNAL_SOURCE_HEALTH, kind="device", payload={"device_class": device_class}))
-    local_time = data.get("local_time")
-    if local_time:
-        world_state.absorb(Signal(source=_SIGNAL_SOURCE_HEALTH, kind="local_time", payload={"local_time": local_time}))
-
-
-def _persist_heartbeat(data: dict[str, object]) -> None:
-    """Persist client context + mirror to WorldState. Each step is independently logged on failure."""
-    from services.client_context_service import ClientContextService
-    svc = ClientContextService()
-    svc.save(data)
-    try:
-        _mirror_telemetry_to_world_state(svc, data)
-    except Exception as ws_err:
-        logger.warning(f"[HEALTH] Failed to mirror telemetry to WorldState: {ws_err}")
 
 
 # ---------------------------------------------------------------------------
@@ -135,10 +104,40 @@ def _persist_heartbeat(data: dict[str, object]) -> None:
 
 @health_ns.route("/health")
 class HealthResource(Resource):
+    @staticmethod
+    def _health() -> Health:
+        """Build the standard health response — status + running app version."""
+        from consumer import APP_VERSION
+        return Health(status="ok", version=APP_VERSION)
+
+    @staticmethod
+    def _mirror_telemetry_to_world_state(svc: "ClientContextService", data: dict[str, object]) -> None:
+        """Mirror persisted client telemetry into WorldState as Signals."""
+        from services.world_state import world_state, Signal
+        world_state.set("telemetry", svc.get() or data)
+        world_state.absorb(Signal(source=_SIGNAL_SOURCE_HEALTH, kind="heartbeat", payload=data))
+        device_class = data.get("device_class") or cast(dict[str, object], data.get("device") or {}).get("class")
+        if device_class:
+            world_state.absorb(Signal(source=_SIGNAL_SOURCE_HEALTH, kind="device", payload={"device_class": device_class}))
+        local_time = data.get("local_time")
+        if local_time:
+            world_state.absorb(Signal(source=_SIGNAL_SOURCE_HEALTH, kind="local_time", payload={"local_time": local_time}))
+
+    @staticmethod
+    def _persist_heartbeat(data: dict[str, object]) -> None:
+        """Persist client context + mirror to WorldState. Each step is independently logged on failure."""
+        from services.client_context_service import ClientContextService
+        svc = ClientContextService()
+        svc.save(data)
+        try:
+            HealthResource._mirror_telemetry_to_world_state(svc, data)
+        except Exception as ws_err:
+            logger.warning(f"[HEALTH] Failed to mirror telemetry to WorldState: {ws_err}")
+
     @health_ns.response(200, "OK", model=_H["Health"])
     def get(self) -> ResponseReturnValue:
         """Health check endpoint (no auth required)."""
-        return _health().model_dump(mode="json"), 200
+        return HealthResource._health().model_dump(mode="json"), 200
 
     @health_ns.expect(_H["ClientTelemetry"])
     @health_ns.response(200, "OK", model=_H["Health"])
@@ -149,10 +148,10 @@ class HealthResource(Resource):
         data = dto.model_dump(mode="json")
         try:
             if data:
-                _persist_heartbeat(data)
+                HealthResource._persist_heartbeat(data)
         except Exception as e:
             logger.warning(f"[HEALTH] Failed to save client context: {e}")
-        return _health()
+        return HealthResource._health()
 
 
 @health_ns.route("/ready")
@@ -195,7 +194,7 @@ class MetricsResource(Resource):
             return MetricsService().get_dashboard_data()
         except Exception as e:
             logger.exception(f"[REST API] Metrics error: {e}")
-            return error("Failed to retrieve metrics", 500)
+            return _FileStorageAnnotation.error("Failed to retrieve metrics", 500)
 
 
 @system_ns.route("/status")
@@ -260,7 +259,7 @@ class SystemStatusResource(Resource):
             )
         except Exception as e:
             logger.exception(f"[REST API] System status error: {e}")
-            return error("System status check failed", 500)
+            return _FileStorageAnnotation.error("System status check failed", 500)
 
 
 # ─────────────────────────────────────────────
@@ -282,15 +281,15 @@ class ObservabilityRecordsResource(Resource):
         try:
             source = request.args.get("source", "")
             if source not in _VALID_SOURCES:
-                return error("invalid source", 400)
+                return _FileStorageAnnotation.error("invalid source", 400)
 
             raw_offset = request.args.get("offset", "0")
             try:
                 offset = int(raw_offset)
             except (ValueError, TypeError):
-                return error("invalid offset", 400)
+                return _FileStorageAnnotation.error("invalid offset", 400)
             if offset < 0:
-                return error("invalid offset", 400)
+                return _FileStorageAnnotation.error("invalid offset", 400)
 
             q = (request.args.get("q", "") or "")[:200]
 
@@ -333,7 +332,7 @@ class ObservabilityRecordsResource(Resource):
             )
         except Exception as e:
             logger.exception(f"[REST API] observability/records error: {e}")
-            return error("Failed to retrieve records", 500)
+            return _FileStorageAnnotation.error("Failed to retrieve records", 500)
 
 
 @system_ns.route("/observability/tools")
@@ -359,7 +358,7 @@ class ObservabilityToolsResource(Resource):
             )
         except Exception as e:
             logger.exception(f"[REST API] observability/tools error: {e}")
-            return error("Failed to retrieve tool data", 500)
+            return _FileStorageAnnotation.error("Failed to retrieve tool data", 500)
 
 
 @system_ns.route("/observability/token-usage")
@@ -375,13 +374,13 @@ class ObservabilityTokenUsageResource(Resource):
         """Token usage aggregated by time window, model, provider, and spend type (raw passthrough)."""
         window = request.args.get("window", "day")
         if window not in VALID_WINDOWS:
-            return error(f"Invalid window '{window}'. Use: {', '.join(sorted(VALID_WINDOWS))}", 422)
+            return _FileStorageAnnotation.error(f"Invalid window '{window}'. Use: {', '.join(sorted(VALID_WINDOWS))}", 422)
         usage_type = request.args.get("type") or None
         try:
             return LlmLogService.token_usage(window=window, usage_type=usage_type)
         except Exception as e:
             logger.exception(f"[REST API] observability/token-usage error: {e}")
-            return error("Failed to retrieve token usage data", 500)
+            return _FileStorageAnnotation.error("Failed to retrieve token usage data", 500)
 
 
 @system_ns.route("/observability/world-state")
@@ -404,7 +403,7 @@ class ObservabilityWorldStateResource(Resource):
             }
         except Exception:
             logger.exception("[REST API] observability/world-state error")
-            return error("Failed to retrieve world state", 500)
+            return _FileStorageAnnotation.error("Failed to retrieve world state", 500)
 
 
 @system_ns.route("/observability/compaction")
@@ -430,7 +429,7 @@ class ObservabilityCompactionResource(Resource):
             )
         except Exception:
             logger.exception("[REST API] observability/compaction error")
-            return error("Failed to retrieve compaction summary", 500)
+            return _FileStorageAnnotation.error("Failed to retrieve compaction summary", 500)
 
 
 @system_ns.route("/observability/write-queue")
@@ -451,7 +450,7 @@ class ObservabilityWriteQueueResource(Resource):
             )
         except Exception as e:
             logger.exception(f"[REST API] observability/write-queue error: {e}")
-            return error("Failed to retrieve write queue stats", 500)
+            return _FileStorageAnnotation.error("Failed to retrieve write queue stats", 500)
 
 
 @system_ns.route("/observability/telemetry")
@@ -468,45 +467,45 @@ class ObservabilityTelemetryResource(Resource):
             return {"generated_at": utc_now().isoformat(), **summary}
         except Exception as e:
             logger.exception(f"[REST API] observability/telemetry error: {e}")
-            return error("Failed to retrieve telemetry summary", 500)
-
-
-def _tail_error_lines() -> list[dict[str, object]]:
-    """Read the last ~256 KB of the JSON log file (_LOG_FILE_PATH) and return ERROR/CRITICAL entries newest-first.
-
-    Written by utils.logger.Logger.start() — see backend/utils/logger.py FileHandler.
-    Skips malformed JSON lines silently. Capped at _ERROR_CAP entries.
-    """
-    try:
-        size = os.path.getsize(_LOG_FILE_PATH)
-    except OSError:
-        return []
-
-    errors: list[dict[str, object]] = []
-    try:
-        fh_cm = open(_LOG_FILE_PATH, "r", errors="replace")
-    except OSError:
-        return []
-
-    with fh_cm as fh:
-        if size > _LOG_TAIL_BYTES:
-            # Absolute seek — text-mode files only allow 0-byte end-relative seeks.
-            fh.seek(size - _LOG_TAIL_BYTES)
-            fh.readline()   # discard partial first line
-        for raw in fh:
-            try:
-                entry = json.loads(raw)
-            except ValueError:
-                continue
-            if entry.get("level") in _ERROR_LEVELS:
-                errors.append({"timestamp": entry.get("timestamp", ""), "message": entry.get("message", "")})
-
-    errors.reverse()
-    return errors[:_ERROR_CAP]
+            return _FileStorageAnnotation.error("Failed to retrieve telemetry summary", 500)
 
 
 @system_ns.route("/observability/errors")
 class ObservabilityErrorsResource(Resource):
+    @staticmethod
+    def _tail_error_lines() -> list[dict[str, object]]:
+        """Read the last ~256 KB of the JSON log file (_LOG_FILE_PATH) and return ERROR/CRITICAL entries newest-first.
+
+        Written by utils.logger.Logger.start() — see backend/utils/logger.py FileHandler.
+        Skips malformed JSON lines silently. Capped at _ERROR_CAP entries.
+        """
+        try:
+            size = os.path.getsize(_LOG_FILE_PATH)
+        except OSError:
+            return []
+
+        errors: list[dict[str, object]] = []
+        try:
+            fh_cm = open(_LOG_FILE_PATH, "r", errors="replace")
+        except OSError:
+            return []
+
+        with fh_cm as fh:
+            if size > _LOG_TAIL_BYTES:
+                # Absolute seek — text-mode files only allow 0-byte end-relative seeks.
+                fh.seek(size - _LOG_TAIL_BYTES)
+                fh.readline()   # discard partial first line
+            for raw in fh:
+                try:
+                    entry = json.loads(raw)
+                except ValueError:
+                    continue
+                if entry.get("level") in _ERROR_LEVELS:
+                    errors.append({"timestamp": entry.get("timestamp", ""), "message": entry.get("message", "")})
+
+        errors.reverse()
+        return errors[:_ERROR_CAP]
+
     @require_session
     @system_ns.response(200, "Recent error log lines", model=_S["ErrorsList"])
     @system_ns.response(500, "Failed to retrieve error log", model=_S["Error"])
@@ -521,12 +520,12 @@ class ObservabilityErrorsResource(Resource):
                         timestamp=cast(str, e["timestamp"]),
                         message=cast(str, e["message"]),
                     )
-                    for e in _tail_error_lines()
+                    for e in ObservabilityErrorsResource._tail_error_lines()
                 ],
             )
         except Exception as e:
             logger.exception(f"[REST API] observability/errors error: {e}")
-            return error("Failed to retrieve error log", 500)
+            return _FileStorageAnnotation.error("Failed to retrieve error log", 500)
 
 
 # ──────────────────────────────────────────────
@@ -547,7 +546,7 @@ class SettingsResource(Resource):
             return Setting(key=key, value=SettingModel.get_value(key))
         except Exception as e:
             logger.exception(f"[REST API] get setting error: {e}")
-            return error("Failed to get setting", 500)
+            return _FileStorageAnnotation.error("Failed to get setting", 500)
 
     @require_session
     @system_ns.expect(_S["SettingWrite"])
@@ -567,50 +566,50 @@ class SettingsResource(Resource):
             return Setting(key=key, value=value or None)
         except Exception as e:
             logger.exception(f"[REST API] set setting error: {e}")
-            return error("Failed to save setting", 500)
+            return _FileStorageAnnotation.error("Failed to save setting", 500)
 
 
 # ──────────────────────────────────────────────
 # Network / TLS endpoints
 # ──────────────────────────────────────────────
 
-def _save_secure(upload: "FileStorage", path: "Path") -> None:
-    """Persist an uploaded file owner-only (0600) from creation — never a world-readable window."""
-    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, _SECURE_FILE_MODE)
-    with os.fdopen(fd, "wb") as sink:
-        upload.save(sink)
-
-
-def _store_tls_material(cert: "FileStorage", key: "FileStorage") -> bool:
-    """Validate an uploaded cert+key pair and, only if they form a TLS context, install them.
-
-    Writes to temp siblings (0600) first and atomically replaces the live files
-    only on success, so a bad upload never reaches the serving path, crash-loops
-    boot, or destroys a working certificate already on file.
-    """
-    import ssl
-    secure_dir = FileMapperService.get_secure_dir()
-    secure_dir.mkdir(parents=True, exist_ok=True)
-    cert_path = FileMapperService.get_ssl_cert_path()
-    key_path = FileMapperService.get_ssl_key_path()
-    tmp_cert = cert_path.with_name(cert_path.name + ".tmp")
-    tmp_key = key_path.with_name(key_path.name + ".tmp")
-    _save_secure(cert, tmp_cert)
-    _save_secure(key, tmp_key)
-    try:
-        ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER).load_cert_chain(str(tmp_cert), str(tmp_key))
-    except OSError as exc:
-        logger.warning("[SSL] uploaded certificate/key rejected: %s", exc)
-        tmp_cert.unlink(missing_ok=True)
-        tmp_key.unlink(missing_ok=True)
-        return False
-    os.replace(tmp_cert, cert_path)
-    os.replace(tmp_key, key_path)
-    return True
-
-
 @system_ns.route("/network")
 class NetworkResource(Resource):
+    @staticmethod
+    def _save_secure(upload: "FileStorage", path: "Path") -> None:
+        """Persist an uploaded file owner-only (0600) from creation — never a world-readable window."""
+        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, _SECURE_FILE_MODE)
+        with os.fdopen(fd, "wb") as sink:
+            upload.save(sink)
+
+    @staticmethod
+    def _store_tls_material(cert: "FileStorage", key: "FileStorage") -> bool:
+        """Validate an uploaded cert+key pair and, only if they form a TLS context, install them.
+
+        Writes to temp siblings (0600) first and atomically replaces the live files
+        only on success, so a bad upload never reaches the serving path, crash-loops
+        boot, or destroys a working certificate already on file.
+        """
+        import ssl
+        secure_dir = FileMapperService.get_secure_dir()
+        secure_dir.mkdir(parents=True, exist_ok=True)
+        cert_path = FileMapperService.get_ssl_cert_path()
+        key_path = FileMapperService.get_ssl_key_path()
+        tmp_cert = cert_path.with_name(cert_path.name + ".tmp")
+        tmp_key = key_path.with_name(key_path.name + ".tmp")
+        NetworkResource._save_secure(cert, tmp_cert)
+        NetworkResource._save_secure(key, tmp_key)
+        try:
+            ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER).load_cert_chain(str(tmp_cert), str(tmp_key))
+        except OSError as exc:
+            logger.warning("[SSL] uploaded certificate/key rejected: %s", exc)
+            tmp_cert.unlink(missing_ok=True)
+            tmp_key.unlink(missing_ok=True)
+            return False
+        os.replace(tmp_cert, cert_path)
+        os.replace(tmp_key, key_path)
+        return True
+
     @require_session
     @system_ns.response(200, "Current deployment domain + TLS state", model=_S["NetworkState"])
     @system_ns.response(500, "Failed to read network settings", model=_S["Error"])
@@ -626,7 +625,7 @@ class NetworkResource(Resource):
             )
         except Exception:
             logger.exception("[REST API] network state error")
-            return error("Failed to read network settings", 500)
+            return _FileStorageAnnotation.error("Failed to read network settings", 500)
 
     @require_session
     @system_ns.expect(_S["NetworkUpdate"])
@@ -646,15 +645,15 @@ class NetworkResource(Resource):
         from services.restart_service import request_restart
         try:
             if (dto.ssl_cert is None) != (dto.ssl_key is None):
-                return error("Certificate and key must be supplied together", 422)
+                return _FileStorageAnnotation.error("Certificate and key must be supplied together", 422)
             if dto.ssl_cert is not None and dto.ssl_key is not None \
-                    and not _store_tls_material(dto.ssl_cert, dto.ssl_key):
-                return error("Certificate and key are not a valid pair", 422)
+                    and not NetworkResource._store_tls_material(dto.ssl_cert, dto.ssl_key):
+                return _FileStorageAnnotation.error("Certificate and key are not a valid pair", 422)
 
             cert_ready = (FileMapperService.get_ssl_cert_path().is_file()
                           and FileMapperService.get_ssl_key_path().is_file())
             if dto.ssl_enabled and not cert_ready:
-                return error("Cannot enable SSL without a certificate and key", 422)
+                return _FileStorageAnnotation.error("Cannot enable SSL without a certificate and key", 422)
 
             SettingModel.set(SettingModel.DEPLOYMENT_DOMAIN, dto.deployment_domain)
             SettingModel.set_bool(SettingModel.SSL_ENABLED, dto.ssl_enabled)
@@ -663,4 +662,4 @@ class NetworkResource(Resource):
             return NetworkUpdateResult(ssl_enabled=dto.ssl_enabled, restarting=True)
         except Exception:
             logger.exception("[REST API] network update error")
-            return error("Failed to save network settings", 500)
+            return _FileStorageAnnotation.error("Failed to save network settings", 500)

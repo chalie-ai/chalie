@@ -52,7 +52,7 @@ pytestmark = pytest.mark.unit
 # exactly once in ``cron.JOBS`` too.
 _DISPATCHER = ScheduledItemsDispatcherJob()
 
-_BUILD_CLIENT = "services.provider_service.build_client"
+_BUILD_CLIENT = "services.provider_service.Factory.build_client"
 _JOIN_TIMEOUT = 10.0
 
 

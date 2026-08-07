@@ -46,43 +46,101 @@ mimetypes.add_type('text/css', '.css')
 mimetypes.add_type('text/html', '.html')
 
 
-def _register_namespaces(app: Flask, api: Api) -> None:
-    """Register the route table, plus every legacy Namespace in this package.
+class ApiBootstrap:
+    """Bootstrap logic for the REST API — namespace registration and deployment CORS."""
 
-    Walks ``backend/api/*.py``, imports each module, and registers any top-level
-    ``Namespace`` instance on the given ``Api`` object. Modules without a
-    Namespace (e.g. ``auth``, ``websocket``) are skipped silently.
+    @staticmethod
+    def _register_namespaces(app: Flask, api: Api) -> None:
+        """Register the route table, plus every legacy Namespace in this package.
 
-    Everything on the ``Endpoint``/``Action`` contract is registered from
-    :data:`api.routes.ROUTES` instead — that table is the only place a path is
-    decided, so a route is never conjured by the mere existence of a file.
-    """
-    package = importlib.import_module(__name__)
-    seen: set[int] = set()
-    for module_info in pkgutil.iter_modules(package.__path__):
-        if module_info.name.startswith('_'):
-            continue
-        module = importlib.import_module(f"{__name__}.{module_info.name}")
-        for attr_name, attr in vars(module).items():
-            if isinstance(attr, Namespace) and id(attr) not in seen:
-                api.add_namespace(attr)
-                seen.add(id(attr))
-                logger.info("[REST API] Registered %s.%s", module_info.name, attr_name)
-        # Also register plain Blueprints (gateway etc.) that are not Namespaces
-        for attr_name, attr in vars(module).items():
-            if isinstance(attr, Blueprint) and not isinstance(attr, Namespace) and id(attr) not in seen:
-                app.register_blueprint(attr)
-                seen.add(id(attr))
-                logger.info("[REST API] Registered blueprint %s.%s", module_info.name, attr_name)
+        Walks ``backend/api/*.py``, imports each module, and registers any top-level
+        ``Namespace`` instance on the given ``Api`` object. Modules without a
+        Namespace (e.g. ``auth``, ``websocket``) are skipped silently.
 
-    from .routes import ROUTES
-    for controller in ROUTES:
-        api.add_namespace(controller.namespace())
-        logger.info("[REST API] Registered /api/%s → %s", controller.slug, type(controller).__name__)
+        Everything on the ``Endpoint``/``Action`` contract is registered from
+        :data:`api.routes.ROUTES` instead — that table is the only place a path is
+        decided, so a route is never conjured by the mere existence of a file.
+        """
+        package = importlib.import_module(__name__)
+        seen: set[int] = set()
+        for module_info in pkgutil.iter_modules(package.__path__):
+            if module_info.name.startswith('_'):
+                continue
+            module = importlib.import_module(f"{__name__}.{module_info.name}")
+            for attr_name, attr in vars(module).items():
+                if isinstance(attr, Namespace) and id(attr) not in seen:
+                    api.add_namespace(attr)
+                    seen.add(id(attr))
+                    logger.info("[REST API] Registered %s.%s", module_info.name, attr_name)
+            # Also register plain Blueprints (gateway etc.) that are not Namespaces
+            for attr_name, attr in vars(module).items():
+                if isinstance(attr, Blueprint) and not isinstance(attr, Namespace) and id(attr) not in seen:
+                    app.register_blueprint(attr)
+                    seen.add(id(attr))
+                    logger.info("[REST API] Registered blueprint %s.%s", module_info.name, attr_name)
 
-    # api.init_app() is deferred to create_app(): RESTx registers its own root
-    # '/' route during init, which would shadow the SPA's '/' handler. Init must
-    # run AFTER the static routes so the SPA wins the '/' match.
+        from .routes import ROUTES
+        for controller in ROUTES:
+            api.add_namespace(controller.namespace())
+            logger.info("[REST API] Registered /api/%s → %s", controller.slug, type(controller).__name__)
+
+        # api.init_app() is deferred to create_app(): RESTx registers its own root
+        # '/' route during init, which would shadow the SPA's '/' handler. Init must
+        # run AFTER the static routes so the SPA wins the '/' match.
+
+    @staticmethod
+    def _deployment_origins() -> list[str]:
+        """Cross-origin allowlist = the configured deployment domain (both schemes).
+
+        Blank/unset → empty list, i.e. same-origin only (browsers do not enforce CORS
+        on same-origin requests). Resolved once at app construction; the System page
+        persists a domain change and restarts, so the new policy is read on next boot.
+        """
+        try:
+            domain = (Setting.get_value(Setting.DEPLOYMENT_DOMAIN) or "").strip()
+        except Exception as exc:
+            logger.warning("[REST API] deployment_domain unreadable; CORS limited to same-origin: %s", exc)
+            return []
+        return [f"https://{domain}", f"http://{domain}"] if domain else []
+
+    @staticmethod
+    def _verify_every_controller_is_mounted() -> None:
+        """Refuse to import while a declared controller has no URL.
+
+        Walks every module under ``api/endpoints`` and ``api/actions`` and diffs the
+        controller classes it finds against the table above. Classes are matched on
+        ``__module__``, so one a package ``__init__`` re-exports is judged once —
+        where it is defined — and the shared ``Endpoint``/``Action`` bases, which
+        live outside both packages, are never candidates.
+
+        Raising here rather than reporting it from a test is deliberate: the failure
+        mode this catches is a 404 in production that reads like a frontend bug, and
+        no amount of green test output makes an unreachable controller reachable.
+        """
+        from .routes import ROUTES
+        from .endpoint import Endpoint
+
+        mounted = {type(controller) for controller in ROUTES}
+        unmounted: set[type[Endpoint]] = set()
+        for subpackage_name in ("endpoints", "actions"):
+            subpackage = importlib.import_module(f"{__name__}.{subpackage_name}")
+            for module_info in pkgutil.walk_packages(subpackage.__path__, prefix=f"{subpackage.__name__}."):
+                module = importlib.import_module(module_info.name)
+                for attribute in vars(module).values():
+                    if (
+                        isinstance(attribute, type)
+                        and issubclass(attribute, Endpoint)
+                        and attribute.__module__ == module_info.name
+                        and attribute not in mounted
+                    ):
+                        unmounted.add(attribute)
+
+        if unmounted:
+            names = ", ".join(sorted(f"{c.__module__}.{c.__name__}" for c in unmounted))
+            raise RuntimeError(
+                f"declared but absent from ROUTES in api/routes.py, so unreachable: {names}. "
+                "Add an Endpoint(slug) or Action(slug, verb) entry for each, or delete the class."
+            )
 
 
 _SECURITY_HEADERS = {
@@ -91,21 +149,6 @@ _SECURITY_HEADERS = {
     "Referrer-Policy": "strict-origin-when-cross-origin",
 }
 """Baseline hardening stamped on every response — blocks MIME-sniffing, cross-origin framing, and referrer leakage."""
-
-
-def _deployment_origins() -> list[str]:
-    """Cross-origin allowlist = the configured deployment domain (both schemes).
-
-    Blank/unset → empty list, i.e. same-origin only (browsers do not enforce CORS
-    on same-origin requests). Resolved once at app construction; the System page
-    persists a domain change and restarts, so the new policy is read on next boot.
-    """
-    try:
-        domain = (Setting.get_value(Setting.DEPLOYMENT_DOMAIN) or "").strip()
-    except Exception as exc:
-        logger.warning("[REST API] deployment_domain unreadable; CORS limited to same-origin: %s", exc)
-        return []
-    return [f"https://{domain}", f"http://{domain}"] if domain else []
 
 
 def _configure_app(app: Flask) -> None:
@@ -118,7 +161,7 @@ def _configure_app(app: Flask) -> None:
     from werkzeug.middleware.proxy_fix import ProxyFix
     setattr(app, 'wsgi_app', ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1))
 
-    CORS(app, origins=_deployment_origins(), supports_credentials=True)
+    CORS(app, origins=ApiBootstrap._deployment_origins(), supports_credentials=True)
 
     @app.after_request
     def _apply_security_headers(response: Response) -> Response:
@@ -302,13 +345,13 @@ def create_app() -> Flask:
 
     _configure_app(app)
     _register_preflight_login(app)
-    _register_namespaces(app, api)
+    ApiBootstrap._register_namespaces(app, api)
 
     # WebSocket endpoint (replaces SSE for chat + drift)
     from flask_sock import Sock
     sock = Sock(app)
-    from .websocket import register_websocket
-    register_websocket(sock)
+    from .websocket import WebSocketServer
+    WebSocketServer.register_websocket(sock)
 
     # ── Static file serving (replaces nginx) ─────────────────────────
     _register_static_routes(app)

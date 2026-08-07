@@ -163,9 +163,9 @@ class TestCodexCliProvider:
 
     def test_build_client_returns_codex_client_without_credentials(self) -> None:
         from services.llm_clients.codex_cli import CodexCliClient
-        from services.llm_clients.factory import build_client
+        from services.llm_clients.factory import Factory
 
-        client = build_client({'platform': 'codex_cli', 'model': 'gpt-5.5'})
+        client = Factory.build_client({'platform': 'codex_cli', 'model': 'gpt-5.5'})
         assert isinstance(client, CodexCliClient)
         assert client.CONTENT_FIELD_LABEL == 'item.completed.text'
 

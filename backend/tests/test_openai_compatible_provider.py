@@ -133,7 +133,7 @@ class TestOpenAICompatibleProvider:
         the official endpoint. Handing it a third-party host would apply OpenAI's
         facts to another vendor's server.
         """
-        from services.llm_clients.factory import build_client
+        from services.llm_clients.factory import Factory
         from services.llm_clients.openai import OpenAIClient
         from services.llm_clients.openai_compatible import OpenAICompatibleClient
 
@@ -144,7 +144,7 @@ class TestOpenAICompatibleProvider:
             'api_key': secrets.token_hex(16),
         }
 
-        client = build_client(config)
+        client = Factory.build_client(config)
 
         assert isinstance(client, OpenAICompatibleClient)
         assert not isinstance(client, OpenAIClient)

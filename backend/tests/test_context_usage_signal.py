@@ -46,7 +46,7 @@ pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 
 # ProviderService builds its thin transport client via this factory call — the
 # real network boundary (see test_message_processor_runaway_loop.py).
-_BUILD_CLIENT = "services.provider_service.build_client"
+_BUILD_CLIENT = "services.provider_service.Factory.build_client"
 
 # Deliberately BELOW MAX_CONTEXT_WINDOW (200_000) so an asserted window of
 # 120_000 can only have come from this client's real declared limit — a

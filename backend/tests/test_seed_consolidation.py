@@ -64,7 +64,7 @@ _DIM = 768
 # ProviderService builds its thin transport client via this factory — the real
 # LLM network boundary (see test_message_processor_runaway_loop.py). Patching it
 # substitutes the network call and nothing else.
-_BUILD_CLIENT = "services.provider_service.build_client"
+_BUILD_CLIENT = "services.provider_service.Factory.build_client"
 
 # The super-episode encoder's contract is a single JSON object; the consolidated
 # gist is what gets stored on the parent.

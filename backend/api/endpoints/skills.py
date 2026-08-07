@@ -37,17 +37,6 @@ from utils.skills_io import DEFAULT_VERSION, SkillsIO
 logger = logging.getLogger(__name__)
 
 
-def _index_new_skill(conn: sqlite3.Connection, skill_id: int, title: str, use_for: str, tags: str) -> None:
-    try:
-        from services.embedding_service import EmbeddingService
-        from utils.build_skills_db import SkillsDbBuilder
-        emb_service = EmbeddingService()
-        SkillsDbBuilder().index_skill(conn, emb_service, skill_id, title, use_for, tags)
-    except Exception as exc:
-        logger.exception("[SKILLS API] Failed to index skill %d: %s", skill_id, exc)
-        raise
-
-
 class Skills(Endpoint):
     """CRUD endpoint for skills."""
 
@@ -64,6 +53,17 @@ class Skills(Endpoint):
         ),
         "delete": DocumentedResponse(extras=((503, "Skills database unavailable"),)),
     }
+
+    @staticmethod
+    def _index_new_skill(conn: sqlite3.Connection, skill_id: int, title: str, use_for: str, tags: str) -> None:
+        try:
+            from services.embedding_service import EmbeddingService
+            from utils.build_skills_db import SkillsDbBuilder
+            emb_service = EmbeddingService()
+            SkillsDbBuilder().index_skill(conn, emb_service, skill_id, title, use_for, tags)
+        except Exception as exc:
+            logger.exception("[SKILLS API] Failed to index skill %d: %s", skill_id, exc)
+            raise
 
     def get_all(self, page: int = 1, limit: int = 20) -> ResponseReturnValue:
         if not FileMapperService.get_skills_db_path().exists():
@@ -135,7 +135,7 @@ class Skills(Endpoint):
             ).save()
             skill_id = cast(int, skill.id)
 
-            _index_new_skill(conn, skill_id, title, use_for, tags)
+            Skills._index_new_skill(conn, skill_id, title, use_for, tags)
 
         SkillsIO.ensure_user_skills_dir()
         SkillsIO.write_skill_file(
@@ -176,7 +176,7 @@ class Skills(Endpoint):
             skill.save()
 
             SkillsIO.remove_search_entries(conn, skill_id)
-            _index_new_skill(conn, skill_id, title, use_for, tags)
+            Skills._index_new_skill(conn, skill_id, title, use_for, tags)
 
         SkillsIO.ensure_user_skills_dir()
         SkillsIO.write_skill_file(

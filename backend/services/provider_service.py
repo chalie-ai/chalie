@@ -40,7 +40,7 @@ from typing import TYPE_CHECKING, cast
 from configs.enums.provider_type import ProviderType
 from exceptions import ContextLimit, ProviderError
 from models.turn_signal import TurnSignal
-from services.llm_clients.factory import build_client
+from services.llm_clients.factory import Factory
 from services.llm_log_service import LlmLogService
 
 if TYPE_CHECKING:
@@ -98,7 +98,7 @@ class ProviderService:
         # Stamp the DTO before the client ever sees it: a client that asked its
         # own provider would be a second window for the same send.
         request.context_window = window
-        client = build_client(config)
+        client = Factory.build_client(config)
         if self._gate_applies(request):
             measured = LlmLogService.last_context_tokens(self.mp.channel)
             if measured >= int(0.90 * window):
@@ -217,4 +217,4 @@ class ProviderService:
 
     def _resolve(self, provider_type: ProviderType) -> ProviderClient:
         """Build the thin transport client for ``provider_type``'s selected config."""
-        return build_client(self._select(provider_type))
+        return Factory.build_client(self._select(provider_type))

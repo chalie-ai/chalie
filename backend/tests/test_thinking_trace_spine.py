@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 
 pytestmark = pytest.mark.unit
 
-_BUILD_CLIENT = "services.provider_service.build_client"
+_BUILD_CLIENT = "services.provider_service.Factory.build_client"
 
 
 class _RecordingProvider:

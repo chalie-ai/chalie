@@ -58,7 +58,7 @@ pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 # ProviderService builds its thin transport client via this factory call — the
 # real network boundary (see test_message_processor_runaway_loop.py,
 # test_dispatch_repeat_call_steer.py).
-_BUILD_CLIENT = "services.provider_service.build_client"
+_BUILD_CLIENT = "services.provider_service.Factory.build_client"
 
 # Real file content, TWO lines — so a start_line=1, end_line=1 read is a
 # window strictly smaller than the file and comes back stamped ``partial=true``.

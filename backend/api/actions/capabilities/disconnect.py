@@ -16,7 +16,7 @@ from flask.typing import ResponseReturnValue
 from api.action import Action
 from api.endpoint import DocumentedResponse
 from exceptions import NotFoundError
-from api.endpoints.capabilities import _load_caps
+from api.endpoints.capabilities import CapabilitiesEndpoint
 from api.request import Request
 
 if TYPE_CHECKING:
@@ -37,7 +37,7 @@ class CapabilitiesDisconnect(Action):
             NotFoundError: capability id not found.
         """
         cap_id = cast(str, id)
-        caps = _load_caps()
+        caps = CapabilitiesEndpoint._load_caps()
         if cap_id not in caps:
             raise NotFoundError(f"Capability not found: {cap_id}")
         cast("_Capability", caps[cap_id]).disconnect()
