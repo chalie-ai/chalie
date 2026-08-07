@@ -21,7 +21,7 @@ import pytest
 pytestmark = pytest.mark.unit
 
 from tools.search.router import rank_results          # noqa: E402  — baseline-fail target
-from tools.search.enrich import enrich_missing_summaries  # noqa: E402  — baseline-fail target
+from tools.search.enrich import SearchEnricher  # noqa: E402  — baseline-fail target
 
 
 # ── rank_results: top result is the topically-closest one ────────────────────
@@ -131,7 +131,7 @@ def test_enrich_missing_summaries_result_with_existing_summary_is_returned_uncha
     import copy
     result_in = copy.deepcopy(original)
 
-    enriched = enrich_missing_summaries([result_in])
+    enriched = SearchEnricher.enrich_missing_summaries([result_in])
 
     assert len(enriched) == 1
     assert enriched[0]["summary"] == original["summary"], (

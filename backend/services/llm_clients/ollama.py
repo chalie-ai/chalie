@@ -10,7 +10,7 @@ for the on/off decision; only MEDIUM/HIGH/MAX enable the think flag at all,
 but whether it actually appears in the payload depends on the model.
 
 Depends on: services.provider_api (contract), services.llm_service
-(_app_user_agent).
+(LlmService.app_user_agent).
 Consumed by: services.llm_clients.factory (platform dispatch).
 """
 
@@ -106,44 +106,6 @@ def _ollama_convert_messages(messages: list[dict[str, object]]) -> list[dict[str
     return result
 
 
-def _parse_chat_response(data: dict[str, object], default_model: str) -> ProviderApiResponse:
-    """Build a ProviderApiResponse from a raw Ollama /api/chat response dict."""
-    msg = cast(dict[str, object], data.get('message', {}))
-    text = cast(str, msg.get('content', ''))
-    thinking_block = cast(str, msg.get('thinking', '')) or None
-    tool_calls = None
-    raw_tool_calls = msg.get('tool_calls')
-    if raw_tool_calls:
-        tool_calls = [
-            {
-                'id': f"ollama_{cast(dict[str, object], cast(dict[str, object], tc).get('function', {})).get('name', 'unknown')}_{uuid4().hex[:8]}",
-                'name': cast(dict[str, object], cast(dict[str, object], tc).get('function', {})).get('name', ''),
-                'input': cast(dict[str, object], cast(dict[str, object], tc).get('function', {})).get('arguments', {}),
-            }
-            for tc in cast(list[object], raw_tool_calls)
-        ]
-    # Ollama reports prompt_eval_duration and eval_duration in NANOSECONDS.
-    # Defensive read: keys may be absent on older versions or streaming
-    # responses; convert to float milliseconds only when present.
-    _prompt_duration = data.get('prompt_eval_duration')
-    prefill_ms = (_prompt_duration / 1e6) if isinstance(_prompt_duration, (int, float)) else None
-    _eval_duration = data.get('eval_duration')
-    decode_ms = (_eval_duration / 1e6) if isinstance(_eval_duration, (int, float)) else None
-    return ProviderApiResponse(
-        text=text,
-        model=cast(str, data.get('model', default_model)),
-        provider='ollama',
-        tokens_input=cast(Optional[int], data.get('prompt_eval_count')),
-        tokens_output=cast(Optional[int], data.get('eval_count')),
-        prefill_ms=prefill_ms,
-        decode_ms=decode_ms,
-        tool_calls=tool_calls,
-        stop_reason='tool_use' if tool_calls else 'end_turn',
-        thinking_block=thinking_block,
-        response_code=200,
-    )
-
-
 class OllamaClient(ProviderClient):
     CONTENT_FIELD_LABEL: ClassVar[str] = "message.content"
 
@@ -153,13 +115,51 @@ class OllamaClient(ProviderClient):
     REQUIRES_KEY: ClassVar[bool] = False
     REQUIRES_HOST: ClassVar[bool] = True
 
+    @staticmethod
+    def _parse_chat_response(data: dict[str, object], default_model: str) -> ProviderApiResponse:
+        """Build a ProviderApiResponse from a raw Ollama /api/chat response dict."""
+        msg = cast(dict[str, object], data.get('message', {}))
+        text = cast(str, msg.get('content', ''))
+        thinking_block = cast(str, msg.get('thinking', '')) or None
+        tool_calls = None
+        raw_tool_calls = msg.get('tool_calls')
+        if raw_tool_calls:
+            tool_calls = [
+                {
+                    'id': f"ollama_{cast(dict[str, object], cast(dict[str, object], tc).get('function', {})).get('name', 'unknown')}_{uuid4().hex[:8]}",
+                    'name': cast(dict[str, object], cast(dict[str, object], tc).get('function', {})).get('name', ''),
+                    'input': cast(dict[str, object], cast(dict[str, object], tc).get('function', {})).get('arguments', {}),
+                }
+                for tc in cast(list[object], raw_tool_calls)
+            ]
+        # Ollama reports prompt_eval_duration and eval_duration in NANOSECONDS.
+        # Defensive read: keys may be absent on older versions or streaming
+        # responses; convert to float milliseconds only when present.
+        _prompt_duration = data.get('prompt_eval_duration')
+        prefill_ms = (_prompt_duration / 1e6) if isinstance(_prompt_duration, (int, float)) else None
+        _eval_duration = data.get('eval_duration')
+        decode_ms = (_eval_duration / 1e6) if isinstance(_eval_duration, (int, float)) else None
+        return ProviderApiResponse(
+            text=text,
+            model=cast(str, data.get('model', default_model)),
+            provider='ollama',
+            tokens_input=cast(Optional[int], data.get('prompt_eval_count')),
+            tokens_output=cast(Optional[int], data.get('eval_count')),
+            prefill_ms=prefill_ms,
+            decode_ms=decode_ms,
+            tool_calls=tool_calls,
+            stop_reason='tool_use' if tool_calls else 'end_turn',
+            thinking_block=thinking_block,
+            response_code=200,
+        )
+
     @classmethod
     def fetch_models(
         cls, host: str, api_key: str,
     ) -> tuple[list[dict[str, str | None]] | None, str | None]:
         """Ollama lists what is pulled locally; it takes no credential."""
-        from services.provider_probe import fetch_ollama_models  # noqa: PLC0415
-        return fetch_ollama_models(host or cls.DEFAULT_BASE_URL)
+        from services.provider_probe import ProviderProbe  # noqa: PLC0415
+        return ProviderProbe.fetch_ollama_models(host or cls.DEFAULT_BASE_URL)
 
     def __init__(self, config: dict[str, object]) -> None:
         self._config = config
@@ -170,8 +170,8 @@ class OllamaClient(ProviderClient):
         self._thinking_supported: Optional[bool] = None
 
     def _user_agent(self) -> dict[str, str]:
-        from services.llm_service import _app_user_agent  # noqa: PLC0415
-        return {"User-Agent": _app_user_agent()}
+        from services.llm_service import LlmService  # noqa: PLC0415
+        return {"User-Agent": LlmService.app_user_agent()}
 
     def _model_supports_thinking(self) -> bool:
         """Return True if the configured model advertises thinking capability.
@@ -264,7 +264,7 @@ class OllamaClient(ProviderClient):
                 timeout=PROVIDER_CALL_TIMEOUT_S,
             )
             resp.raise_for_status()
-            parsed = _parse_chat_response(resp.json(), self.model)
+            parsed = OllamaClient._parse_chat_response(resp.json(), self.model)
             parsed.latency_ms = int((time.time() - start) * 1000)
             return parsed
         except requests.exceptions.Timeout as exc:

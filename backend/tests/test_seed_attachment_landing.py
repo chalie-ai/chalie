@@ -28,7 +28,7 @@ from configs.channels import UserConfig
 from controllers.message_processor import MessageProcessor
 from services.file_index_service import FileIndexService
 from services.file_mapper_service import FileMapperService
-from services.tmp_storage import new_tmp_path
+from services.tmp_storage import TmpStorage
 
 pytestmark = pytest.mark.unit
 
@@ -38,7 +38,7 @@ def _write_attachment(label: str) -> str:
     must be under ``TMP_PATH_PREFIX`` (so the sandbox guard passes) with an
     8-hex collision prefix on the basename. The body carries the label as a
     searchable token, so the index assertion cannot pass on filename alone."""
-    path = new_tmp_path(f"{uuid.uuid4().hex[:8]}_seed_landing_{label}.txt")
+    path = TmpStorage.new_tmp_path(f"{uuid.uuid4().hex[:8]}_seed_landing_{label}.txt")
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(f"Attachment body mentioning {label.upper()}shire.")
     return path

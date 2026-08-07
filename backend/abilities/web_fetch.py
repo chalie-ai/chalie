@@ -30,8 +30,8 @@ from contracts.params.param_bag import ParamBag
 from contracts.params.web_fetch_params_bag import WebFetchParamsBag
 from exceptions import DownloadTooLarge
 from services.file_mapper_service import FileMapperService
-from services.url_to_markdown_service import UrlToMarkdownService, url_slug
-from services.web_fetch import BROWSER, stream_to_file
+from services.url_to_markdown_service import UrlToMarkdownService
+from services.web_fetch import BROWSER, WebFetch
 
 
 class WebFetchAbility(Ability[WebFetchParamsBag]):
@@ -122,9 +122,9 @@ class WebFetchAbility(Ability[WebFetchParamsBag]):
 
     def run(self, params: WebFetchParamsBag) -> ToolResult:
         url = params.url
-        dest = FileMapperService.get_downloads_path(_filename_from_url(url))
+        dest = FileMapperService.get_downloads_path(self._filename_from_url(url))
         try:
-            bytes_written, content_type = stream_to_file(
+            bytes_written, content_type = WebFetch.stream_to_file(
                 url,
                 str(dest),
                 profile=BROWSER,
@@ -151,6 +151,17 @@ class WebFetchAbility(Ability[WebFetchParamsBag]):
         if content_type and ("text/html" in content_type or "application/xhtml" in content_type):
             return self._persist_page(url, dest, convert=params.convert_to_markdown)
         return self._describe_download(url, dest, content_type, bytes_written)
+
+    # ── URL slug helper ─────────────────────────────────────────────────
+
+    @staticmethod
+    def _filename_from_url(url: str) -> str:
+        """Download name ``<host>--<path-slug>[.<ext>]`` — the same :func:`url_slug`
+        convention as web pages (two hosts' ``report.pdf`` never collide; a re-fetch
+        overwrites in place), keeping the URL's own extension when it has one."""
+        ext = PurePosixPath(urlparse(url.lower()).path).suffix.lstrip(".")
+        base = UrlToMarkdownService.url_slug(url) or "download"
+        return f"{base}.{ext}" if ext.isalnum() else base
 
     # ── HTML → web-pages directory --------------------------------------
 
@@ -235,12 +246,3 @@ class WebFetchAbility(Ability[WebFetchParamsBag]):
         return ToolResult.ok(
             body, url=url, path=path_str, content_type=mime, bytes=bytes_written
         )
-
-
-def _filename_from_url(url: str) -> str:
-    """Download name ``<host>--<path-slug>[.<ext>]`` — the same :func:`url_slug`
-    convention as web pages (two hosts' ``report.pdf`` never collide; a re-fetch
-    overwrites in place), keeping the URL's own extension when it has one."""
-    ext = PurePosixPath(urlparse(url.lower()).path).suffix.lstrip(".")
-    base = url_slug(url) or "download"
-    return f"{base}.{ext}" if ext.isalnum() else base

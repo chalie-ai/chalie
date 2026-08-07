@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from services.text_extractor import extract_text
+from services.text_extractor import TextExtractor
 from tests.helpers import blank_png_bytes, ocrable_png_bytes
 from tests._tool_result_harness import built
 
@@ -29,7 +29,7 @@ def test_extract_text_rejects_every_image_type(tmp_path: Path, name: str) -> Non
     p.write_bytes(blank_png_bytes())
 
     with pytest.raises(ValueError, match="images are described, not extracted"):
-        extract_text(str(p))
+        TextExtractor.extract_text(str(p))
 
 
 def test_extract_text_rejects_image_by_explicit_mime(tmp_path: Path) -> None:
@@ -39,7 +39,7 @@ def test_extract_text_rejects_image_by_explicit_mime(tmp_path: Path) -> None:
     p.write_bytes(blank_png_bytes())
 
     with pytest.raises(ValueError, match="images are described, not extracted"):
-        extract_text(str(p), "image/heic")
+        TextExtractor.extract_text(str(p), "image/heic")
 
 
 def test_image_bytes_are_never_returned_as_mojibake(tmp_path: Path) -> None:
@@ -50,7 +50,7 @@ def test_image_bytes_are_never_returned_as_mojibake(tmp_path: Path) -> None:
     p.write_bytes(ocrable_png_bytes())
 
     with pytest.raises(ValueError):
-        extract_text(str(p), "image/heic")
+        TextExtractor.extract_text(str(p), "image/heic")
 
 
 def test_text_extraction_still_works(tmp_path: Path) -> None:
@@ -58,7 +58,7 @@ def test_text_extraction_still_works(tmp_path: Path) -> None:
     p = tmp_path / "notes.txt"
     p.write_text("hello world")
 
-    assert extract_text(str(p)) == "hello world"
+    assert TextExtractor.extract_text(str(p)) == "hello world"
 
 
 def test_read_ability_routes_images_to_vision(db: sqlite3.Connection, tmp_path: Path) -> None:

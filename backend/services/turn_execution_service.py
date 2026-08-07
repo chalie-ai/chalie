@@ -23,7 +23,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from configs.channels import config_for
+from configs.channels import ChannelConfig
 from models.turn_execution import TurnExecution
 from services.time_utils import utc_now
 from services.websocket import Websocket
@@ -128,7 +128,7 @@ class TurnExecutionService:
         # raise into the caller, so it too falls through to no broadcast.
         if execution.type is not None:
             try:
-                if config_for(execution.type).BROADCASTS_STATE:
+                if ChannelConfig.config_for(execution.type).BROADCASTS_STATE:
                     Websocket.broadcast(execution)
             except ValueError as exc:
                 logger.warning(

@@ -15,7 +15,7 @@ reaches the DB purely through the bound getter.
 
 Holds no ``mp``, calls no other service. The ``skill_search_entries`` /
 ``skill_search_vec`` / ``skill_search_fts`` side-tables (embedding index) are
-WRITTEN through ``utils.build_skills_db.index_skill`` /
+WRITTEN through ``utils.build_skills_db.SkillsDbBuilder.index_skill`` /
 ``utils.skills_io.remove_search_entries`` on a raw connection, not through
 this model — but this model DOES own the read side of that index: the
 ``find_skills`` discovery cascade's bm25/vector search queries

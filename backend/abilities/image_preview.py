@@ -24,7 +24,7 @@ from typing import ClassVar
 from urllib.parse import unquote, urlparse
 
 from abilities._ability import Ability
-from abilities._result import ToolResult, truncate
+from abilities._result import ToolResult
 from configs.enums.ability_category import AbilityCategory
 from configs.enums.param_key import Keys
 from contracts.params.image_preview_params_bag import ImagePreviewParamsBag
@@ -137,7 +137,7 @@ class ImagePreviewAbility(Ability[ImagePreviewParamsBag]):
         ``subtitle_truncated`` — decoration sized to the card, cut loudly rather
         than dropped.
         """
-        caption, truncated = truncate(
+        caption, truncated = ToolResult.truncate(
             subtitle or "", _SUBTITLE_WORD_LIMIT, words=True, suffix="…"
         )
         body = f"Showed '{name}' to the user."

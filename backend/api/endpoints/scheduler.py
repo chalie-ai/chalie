@@ -43,21 +43,12 @@ from api.request.scheduler_item import SchedulerItemRequest
 from api.response.scheduler_item import SchedulerItem
 from models.scheduled_item import ScheduledItem
 from services.database import Database
-from services.locale_service import parse_local
+from services.locale_service import LocaleService
 from services.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
 _ITEM_NOT_FOUND = "Scheduled item not found"
-
-
-def _embed(item_id: int, message: str) -> None:
-    """Fire-and-forget embedding of a freshly created item (non-fatal on failure)."""
-    try:
-        from services.scheduler_service import embed_scheduled_item
-        embed_scheduled_item(item_id, message)
-    except Exception as exc:
-        logger.warning("[SCHEDULER API] Embedding failed (non-fatal): %s", exc)
 
 
 class Scheduler(Endpoint):
@@ -72,6 +63,15 @@ class Scheduler(Endpoint):
         "post": DocumentedResponse(SchedulerItem, extras=((404, _ITEM_NOT_FOUND),)),
         "delete": DocumentedResponse(),
     }
+
+    @staticmethod
+    def _embed(item_id: int, message: str) -> None:
+        """Fire-and-forget embedding of a freshly created item (non-fatal on failure)."""
+        try:
+            from services.scheduler_service import SchedulerService
+            SchedulerService.embed_scheduled_item(item_id, message)
+        except Exception as exc:
+            logger.warning("[SCHEDULER API] Embedding failed (non-fatal): %s", exc)
 
     def get_all(self, page: int = 1, limit: int = 20) -> ResponseReturnValue:
         """List every live schedule, newest first (``created_at`` DESC)."""
@@ -124,7 +124,7 @@ class Scheduler(Endpoint):
         return "", 204
 
     def _create(self, dto: SchedulerItemRequest) -> ResponseReturnValue:
-        start_at_utc = parse_local(dto.start_at) if dto.start_at else utc_now()
+        start_at_utc = LocaleService.parse_local(dto.start_at) if dto.start_at else utc_now()
         item = ScheduledItem.create(
             message=dto.message,
             start_at=start_at_utc.isoformat(),
@@ -142,7 +142,7 @@ class Scheduler(Endpoint):
         saved = ScheduledItem.get(item_id)
 
         threading.Thread(
-            target=_embed, args=(item_id, dto.message),
+            target=Scheduler._embed, args=(item_id, dto.message),
             daemon=True, name="scheduler-embed",
         ).start()
         return SchedulerItem.from_model(cast(ScheduledItem, saved)).single(), 201
@@ -154,7 +154,7 @@ class Scheduler(Endpoint):
         # Anchor: the caller's new start_at when supplied, else the row's
         # existing one (a plain enabled-toggle omits it) — a future-dated
         # start_at is never re-floored to now.
-        item.start_at = parse_local(dto.start_at).isoformat() if dto.start_at else item.start_at
+        item.start_at = LocaleService.parse_local(dto.start_at).isoformat() if dto.start_at else item.start_at
         item.message = dto.message
         item.cron_minute = dto.minute
         item.cron_hour = dto.hour

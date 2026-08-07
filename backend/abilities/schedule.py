@@ -54,7 +54,7 @@ from contracts.params.schedule_params_bag import (
 )
 from models.scheduled_item import ScheduledItem
 from services.database import Database
-from services.locale_service import format_date
+from services.locale_service import LocaleService
 from configs.enums.ability_category import AbilityCategory
 
 logger = logging.getLogger(__name__)
@@ -261,22 +261,22 @@ class ScheduleAbility(Ability[ScheduleParamsBag]):
             # the existing schedule. The cancel must still LAND before
             # recreating, so a bad item_id surfaces the error instead of
             # silently creating a duplicate under the guise of an update.
-            cancel_result = _cancel(params.item_id, "")
+            cancel_result = ScheduleAbility._cancel(params.item_id, "")
             if cancel_result.status == "error":
                 return cancel_result
-            return _create(mp.config.channel, params)
+            return ScheduleAbility._create(mp.config.channel, params)
         if isinstance(params, ScheduleCreateParams):
-            return _create(mp.config.channel, params)
+            return ScheduleAbility._create(mp.config.channel, params)
         if isinstance(params, ScheduleListParams):
-            return _list()
+            return ScheduleAbility._list()
         if isinstance(params, ScheduleSearchParams):
-            return _search(params, mp)
+            return ScheduleAbility._search(params, mp)
         if isinstance(params, ScheduleCancelParams):
-            return _cancel(params.item_id, params.message)
+            return ScheduleAbility._cancel(params.item_id, params.message)
         if isinstance(params, ScheduleEnableParams):
-            return _set_enabled(params.item_id, params.message, enabled=True)
+            return ScheduleAbility._set_enabled(params.item_id, params.message, enabled=True)
         if isinstance(params, ScheduleDisableParams):
-            return _set_enabled(params.item_id, params.message, enabled=False)
+            return ScheduleAbility._set_enabled(params.item_id, params.message, enabled=False)
 
         # Unreachable off the dispatch path (the router factory only yields the
         # leaves above); kept as a self-correcting belt-and-braces error for a
@@ -288,249 +288,249 @@ class ScheduleAbility(Ability[ScheduleParamsBag]):
             valid=_ACTIONS,
         )
 
+    @staticmethod
+    def _format_record(
+        item_id: int,
+        message: str,
+        start_at: datetime,
+        minute: str,
+        hour: str,
+        day: str,
+        month: str,
+        weekday: str,
+    ) -> dict[str, object]:
+        """The user/LLM-facing shape for a scheduled item — the five raw crontab
+        field expressions verbatim (``day`` = day-of-month, ``weekday`` =
+        day-of-week)."""
+        return {
+            "id": item_id,
+            "message": message,
+            "start_at": LocaleService.format_date(start_at, fmt=_LOCAL_ISO_FMT, for_ui=True),
+            "minute": minute,
+            "hour": hour,
+            "day": day,
+            "month": month,
+            "weekday": weekday,
+        }
 
-def _format_record(
-    item_id: int,
-    message: str,
-    start_at: datetime,
-    minute: str,
-    hour: str,
-    day: str,
-    month: str,
-    weekday: str,
-) -> dict[str, object]:
-    """The user/LLM-facing shape for a scheduled item — the five raw crontab
-    field expressions verbatim (``day`` = day-of-month, ``weekday`` =
-    day-of-week)."""
-    return {
-        "id": item_id,
-        "message": message,
-        "start_at": format_date(start_at, fmt=_LOCAL_ISO_FMT, for_ui=True),
-        "minute": minute,
-        "hour": hour,
-        "day": day,
-        "month": month,
-        "weekday": weekday,
-    }
-
-
-def _create(channel: str, params: ScheduleCreateParams) -> ToolResult:
-    try:
-        logger.debug(
-            f"{LOG_PREFIX} _create called — message={params.message!r:.80}, "
-            f"start_at={params.start_at!r}, minute={params.minute!r}, "
-            f"hour={params.hour!r}, day={params.day!r}, "
-            f"month={params.month!r}, weekday={params.weekday!r}"
-        )
-
-        item = ScheduledItem.create(
-            message=params.message,
-            start_at=params.start_at.isoformat(),
-            cron_minute=params.minute,
-            cron_hour=params.hour,
-            cron_dom=params.day,
-            cron_month=params.month,
-            cron_dow=params.weekday,
-            enabled=1,
-            channel=channel,
-            created_by_session=None,
-        )  # INSERT + 1-1 gist seed, atomic
-        item_id = cast(int, item.id)
-
+    @staticmethod
+    def _create(channel: str, params: ScheduleCreateParams) -> ToolResult:
         try:
-            from services.scheduler_service import embed_scheduled_item
-            embed_scheduled_item(item_id, params.message)
-        except Exception as emb_err:
-            logger.warning(f"{LOG_PREFIX} Embedding failed (non-fatal): {emb_err}")
-
-        logger.info(f"{LOG_PREFIX} Created prompt: {item_id}")
-        record = _format_record(
-            item_id, params.message, params.start_at,
-            params.minute, params.hour, params.day, params.month, params.weekday,
-        )
-        return _create_result(record)
-
-    except Exception as e:
-        logger.exception(f"{LOG_PREFIX} Create failed: {e}")
-        return ToolResult.err(f"Create failed: {e}", code="create-failed")
-
-
-def _create_result(record: dict[str, object]) -> ToolResult:
-    """The dispatcher injects the ordinal + span instruction only when the
-    invoking channel broadcasts to the user."""
-    body: dict[str, object] = {"status": "success", "action_performed": "create", "record": record}
-    card: dict[str, object] = {"action_performed": "create", "record": record}
-    return ToolResult.ok(body, rich=card, action="create")
-
-
-def _search(params: ScheduleSearchParams, mp: object = None) -> ToolResult:
-    try:
-        from services.embedding_service import get_embedding_service
-        from services.embedding_utils import pack_embedding
-
-        emb = get_embedding_service().generate_embedding(params.query, mp=mp)
-        if not emb:
-            return ToolResult.no_results(action="search")
-
-        blob = pack_embedding(emb)
-        if blob is None:
-            return ToolResult.no_results(action="search")
-
-        rows = ScheduledItem.vector_search(blob, params.limit)
-
-        records = []
-        for row in rows:
-            rec = _serialise_item_row(dict(row))
-            rec["distance"] = float(row["distance"])
-            records.append(rec)
-
-        if not records:
-            return ToolResult.no_results(action="search")
-
-        return ToolResult.ok(
-            {"status": "success", "action_performed": "search", "records": records},
-            action="search", count=len(records),
-        )
-
-    except Exception as e:
-        logger.exception(f"{LOG_PREFIX} Search failed: {e}")
-        return ToolResult.err(f"Search failed: {e}", code="search-failed")
-
-
-def _list() -> ToolResult:
-    try:
-        rows = ScheduledItem.by_start_at(_COLS)
-        records = [_serialise_item_row(row) for row in rows]
-        if not records:
-            return ToolResult.no_results(action="list")
-        return ToolResult.ok(
-            {"status": "success", "action_performed": "list", "records": records},
-            action="list", count=len(records),
-        )
-
-    except Exception as e:
-        logger.exception(f"{LOG_PREFIX} List failed: {e}")
-        return ToolResult.err(f"List failed: {e}", code="list-failed")
-
-
-def _serialise_item_row(row: dict[str, object]) -> dict[str, object]:
-    """The user/LLM-facing shape for a scheduled item row — the five raw crontab
-    field expressions (``day`` = day-of-month, ``weekday`` = day-of-week)."""
-    return {
-        "id": row.get("id"),
-        "message": row.get("message"),
-        "start_at": format_date(cast("datetime | str | None", row.get("start_at")), fmt=_LOCAL_ISO_FMT, for_ui=True),
-        "minute": row.get("cron_minute"),
-        "hour": row.get("cron_hour"),
-        "day": row.get("cron_dom"),
-        "month": row.get("cron_month"),
-        "weekday": row.get("cron_dow"),
-    }
-
-
-def _resolve_pending_target(item_id: str, message_query: str) -> tuple[object, ToolResult | None]:
-    """Resolve the item a mutating action targets.
-
-    ``item_id`` (exact) wins; otherwise ``message_query`` is a fuzzy ``LIKE``
-    match. The bag guarantees at least one is non-blank — a call with neither
-    was rejected at the seam as ``<verb>-target-required``. Returns
-    ``(item_id, None)`` on a unique hit, or ``(None, error)`` when nothing
-    matched or the fuzzy match was ambiguous. One resolver for every
-    id-or-message action (Law 9)."""
-    if item_id:
-        return item_id, None
-
-    pattern = f"%{message_query}%"
-    matches = ScheduledItem.search_by_message(pattern)
-
-    if not matches:
-        return None, ToolResult.err(
-            f"No scheduled task matching {message_query!r} found.",
-            code="not-found",
-            hint="call schedule with action=list to see what exists.",
-        )
-    if len(matches) > 1:
-        descriptions = ", ".join(f"'{cast(str, m['message'])[:40]}' (id:{m['id']})" for m in matches)
-        return None, ToolResult.err(
-            f"Multiple scheduled tasks match {message_query!r}: {descriptions}.",
-            code="ambiguous-match",
-            hint="pass item_id to target the specific one.",
-        )
-    return matches[0]["id"], None
-
-
-def _fetch_item_record(item_id: object) -> dict[str, object]:
-    """Serialise a single item row for a tool result; ``{"id": item_id}`` on any
-    failure (the record is advisory — never fatal to the mutating action)."""
-    try:
-        item = ScheduledItem.get(item_id)
-        if item is not None:
-            return _serialise_item_row(item.to_dict())
-    except Exception as fetch_err:
-        logger.debug(f"{LOG_PREFIX} Could not fetch row {item_id} (non-fatal): {fetch_err}")
-    return {"id": item_id}
-
-
-def _cancel(target_id: str, message_query: str) -> ToolResult:
-    try:
-        item_id, err = _resolve_pending_target(target_id, message_query)
-        if err is not None:
-            return err
-
-        with Database.transaction():
-            affected = ScheduledItem.filter("id", item_id).delete()
-            # rowid == id under INTEGER PRIMARY KEY, so the vec row keyed on
-            # rowid is the same id. Drop it in the same transaction to avoid
-            # orphaning the embedding when the schedule is hard-deleted.
-            ScheduledItem.delete_embedding(cast(int, item_id))
-
-        if affected == 0:
-            return ToolResult.err(
-                f"Item {item_id} not found.",
-                code="not-found",
-                hint="call schedule with action=list to see items.",
+            logger.debug(
+                f"{LOG_PREFIX} _create called — message={params.message!r:.80}, "
+                f"start_at={params.start_at!r}, minute={params.minute!r}, "
+                f"hour={params.hour!r}, day={params.day!r}, "
+                f"month={params.month!r}, weekday={params.weekday!r}"
             )
 
-        logger.info(f"{LOG_PREFIX} Cancelled {item_id}")
-        return ToolResult.ok(
-            {"status": "success", "action_performed": "cancel", "record": {"id": item_id}},
-            action="cancel",
-        )
+            item = ScheduledItem.create(
+                message=params.message,
+                start_at=params.start_at.isoformat(),
+                cron_minute=params.minute,
+                cron_hour=params.hour,
+                cron_dom=params.day,
+                cron_month=params.month,
+                cron_dow=params.weekday,
+                enabled=1,
+                channel=channel,
+                created_by_session=None,
+            )  # INSERT + 1-1 gist seed, atomic
+            item_id = cast(int, item.id)
 
-    except Exception as e:
-        logger.exception(f"{LOG_PREFIX} Cancel failed: {e}")
-        return ToolResult.err(f"Cancel failed: {e}", code="cancel-failed")
+            try:
+                from services.scheduler_service import SchedulerService
+                SchedulerService.embed_scheduled_item(item_id, params.message)
+            except Exception as emb_err:
+                logger.warning(f"{LOG_PREFIX} Embedding failed (non-fatal): {emb_err}")
 
+            logger.info(f"{LOG_PREFIX} Created prompt: {item_id}")
+            record = ScheduleAbility._format_record(
+                item_id, params.message, params.start_at,
+                params.minute, params.hour, params.day, params.month, params.weekday,
+            )
+            return ScheduleAbility._create_result(record)
 
-def _set_enabled(target_id: str, message_query: str, *, enabled: bool) -> ToolResult:
-    """Enable or disable a schedule. Disabling sets ``enabled=0`` so the poller
-    skips it; enabling flips it back to 1. There is no ``due_at`` to recompute —
-    the poller matches purely off the row's ``start_at`` floor and cron fields
-    against the current wall-clock minute, so a re-enabled series simply
-    resumes matching from the next minute a cron field lines up. A past
-    ``start_at`` never re-floors to now; it already satisfies the floor check."""
-    verb = "enable" if enabled else "disable"
-    try:
-        item_id, err = _resolve_pending_target(target_id, message_query)
-        if err is not None:
-            return err
+        except Exception as e:
+            logger.exception(f"{LOG_PREFIX} Create failed: {e}")
+            return ToolResult.err(f"Create failed: {e}", code="create-failed")
 
-        with Database.transaction():
-            affected = ScheduledItem.filter("id", item_id).update(enabled=1 if enabled else 0)
+    @staticmethod
+    def _create_result(record: dict[str, object]) -> ToolResult:
+        """The dispatcher injects the ordinal + span instruction only when the
+        invoking channel broadcasts to the user."""
+        body: dict[str, object] = {"status": "success", "action_performed": "create", "record": record}
+        card: dict[str, object] = {"action_performed": "create", "record": record}
+        return ToolResult.ok(body, rich=card, action="create")
 
-        if affected == 0:
-            return ToolResult.err(
-                f"Item {item_id} not found.",
-                code="not-found",
-                hint="call schedule with action=list to see items.",
+    @staticmethod
+    def _search(params: ScheduleSearchParams, mp: object | None = None) -> ToolResult:
+        try:
+            from services.embedding_service import get_embedding_service
+            from services.embedding_utils import pack_embedding
+
+            emb = get_embedding_service().generate_embedding(params.query, mp=mp)
+            if not emb:
+                return ToolResult.no_results(action="search")
+
+            blob = pack_embedding(emb)
+            if blob is None:
+                return ToolResult.no_results(action="search")
+
+            rows = ScheduledItem.vector_search(blob, params.limit)
+
+            records: list[dict[str, object]] = []
+            for row in rows:
+                rec = ScheduleAbility._serialise_item_row(dict(row))
+                rec["distance"] = float(row["distance"])
+                records.append(rec)
+
+            if not records:
+                return ToolResult.no_results(action="search")
+
+            return ToolResult.ok(
+                {"status": "success", "action_performed": "search", "records": records},
+                action="search", count=len(records),
             )
 
-        logger.info(f"{LOG_PREFIX} {verb.capitalize()}d {item_id}")
-        return ToolResult.ok(
-            {"status": "success", "action_performed": verb, "record": _fetch_item_record(item_id)},
-            action=verb,
-        )
+        except Exception as e:
+            logger.exception(f"{LOG_PREFIX} Search failed: {e}")
+            return ToolResult.err(f"Search failed: {e}", code="search-failed")
 
-    except Exception as e:
-        logger.exception(f"{LOG_PREFIX} {verb.capitalize()} failed: {e}")
-        return ToolResult.err(f"{verb.capitalize()} failed: {e}", code=f"{verb}-failed")
+    @staticmethod
+    def _list() -> ToolResult:
+        try:
+            rows = ScheduledItem.by_start_at(_COLS)
+            records = [ScheduleAbility._serialise_item_row(row) for row in rows]
+            if not records:
+                return ToolResult.no_results(action="list")
+            return ToolResult.ok(
+                {"status": "success", "action_performed": "list", "records": records},
+                action="list", count=len(records),
+            )
+
+        except Exception as e:
+            logger.exception(f"{LOG_PREFIX} List failed: {e}")
+            return ToolResult.err(f"List failed: {e}", code="list-failed")
+
+    @staticmethod
+    def _serialise_item_row(row: dict[str, object]) -> dict[str, object]:
+        """The user/LLM-facing shape for a scheduled item row — the five raw crontab
+        field expressions (``day`` = day-of-month, ``weekday`` = day-of-week)."""
+        return {
+            "id": row.get("id"),
+            "message": row.get("message"),
+            "start_at": LocaleService.format_date(cast("datetime | str | None", row.get("start_at")), fmt=_LOCAL_ISO_FMT, for_ui=True),
+            "minute": row.get("cron_minute"),
+            "hour": row.get("cron_hour"),
+            "day": row.get("cron_dom"),
+            "month": row.get("cron_month"),
+            "weekday": row.get("cron_dow"),
+        }
+
+    @staticmethod
+    def _resolve_pending_target(item_id: str, message_query: str) -> tuple[object, ToolResult | None]:
+        """Resolve the item a mutating action targets.
+
+        ``item_id`` (exact) wins; otherwise ``message_query`` is a fuzzy ``LIKE``
+        match. The bag guarantees at least one is non-blank — a call with neither
+        was rejected at the seam as ``<verb>-target-required``. Returns
+        ``(item_id, None)`` on a unique hit, or ``(None, error)`` when nothing
+        matched or the fuzzy match was ambiguous. One resolver for every
+        id-or-message action (Law 9)."""
+        if item_id:
+            return item_id, None
+
+        pattern = f"%{message_query}%"
+        matches = ScheduledItem.search_by_message(pattern)
+
+        if not matches:
+            return None, ToolResult.err(
+                f"No scheduled task matching {message_query!r} found.",
+                code="not-found",
+                hint="call schedule with action=list to see what exists.",
+            )
+        if len(matches) > 1:
+            descriptions = ", ".join(f"'{cast(str, m['message'])[:40]}' (id:{m['id']})" for m in matches)
+            return None, ToolResult.err(
+                f"Multiple scheduled tasks match {message_query!r}: {descriptions}.",
+                code="ambiguous-match",
+                hint="pass item_id to target the specific one.",
+            )
+        return matches[0]["id"], None
+
+    @staticmethod
+    def _fetch_item_record(item_id: object) -> dict[str, object]:
+        """Serialise a single item row for a tool result; ``{"id": item_id}`` on any
+        failure (the record is advisory — never fatal to the mutating action)."""
+        try:
+            item = ScheduledItem.get(item_id)
+            if item is not None:
+                return ScheduleAbility._serialise_item_row(item.to_dict())
+        except Exception as fetch_err:
+            logger.debug(f"{LOG_PREFIX} Could not fetch row {item_id} (non-fatal): {fetch_err}")
+        return {"id": item_id}
+
+    @staticmethod
+    def _cancel(target_id: str, message_query: str) -> ToolResult:
+        try:
+            item_id, err = ScheduleAbility._resolve_pending_target(target_id, message_query)
+            if err is not None:
+                return err
+
+            with Database.transaction():
+                affected = ScheduledItem.filter("id", item_id).delete()
+                # rowid == id under INTEGER PRIMARY KEY, so the vec row keyed on
+                # rowid is the same id. Drop it in the same transaction to avoid
+                # orphaning the embedding when the schedule is hard-deleted.
+                ScheduledItem.delete_embedding(cast(int, item_id))
+
+            if affected == 0:
+                return ToolResult.err(
+                    f"Item {item_id} not found.",
+                    code="not-found",
+                    hint="call schedule with action=list to see items.",
+                )
+
+            logger.info(f"{LOG_PREFIX} Cancelled {item_id}")
+            return ToolResult.ok(
+                {"status": "success", "action_performed": "cancel", "record": {"id": item_id}},
+                action="cancel",
+            )
+
+        except Exception as e:
+            logger.exception(f"{LOG_PREFIX} Cancel failed: {e}")
+            return ToolResult.err(f"Cancel failed: {e}", code="cancel-failed")
+
+    @staticmethod
+    def _set_enabled(target_id: str, message_query: str, *, enabled: bool) -> ToolResult:
+        """Enable or disable a schedule. Disabling sets ``enabled=0`` so the poller
+        skips it; enabling flips it back to 1. There is no ``due_at`` to recompute —
+        the poller matches purely off the row's ``start_at`` floor and cron fields
+        against the current wall-clock minute, so a re-enabled series simply
+        resumes matching from the next minute a cron field lines up. A past
+        ``start_at`` never re-floors to now; it already satisfies the floor check."""
+        verb = "enable" if enabled else "disable"
+        try:
+            item_id, err = ScheduleAbility._resolve_pending_target(target_id, message_query)
+            if err is not None:
+                return err
+
+            with Database.transaction():
+                affected = ScheduledItem.filter("id", item_id).update(enabled=1 if enabled else 0)
+
+            if affected == 0:
+                return ToolResult.err(
+                    f"Item {item_id} not found.",
+                    code="not-found",
+                    hint="call schedule with action=list to see items.",
+                )
+
+            logger.info(f"{LOG_PREFIX} {verb.capitalize()}d {item_id}")
+            return ToolResult.ok(
+                {"status": "success", "action_performed": verb, "record": ScheduleAbility._fetch_item_record(item_id)},
+                action=verb,
+            )
+
+        except Exception as e:
+            logger.exception(f"{LOG_PREFIX} {verb.capitalize()} failed: {e}")
+            return ToolResult.err(f"{verb.capitalize()} failed: {e}", code=f"{verb}-failed")

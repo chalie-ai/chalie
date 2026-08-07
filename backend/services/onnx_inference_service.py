@@ -55,14 +55,6 @@ _encoder_sha256_cache: Optional[str] = None
 _encoder_sha256_lock = threading.Lock()
 
 
-def _compute_encoder_sha256(onnx_path: Path) -> str:
-    h = hashlib.sha256()
-    with open(onnx_path, "rb") as f:
-        for chunk in iter(lambda: f.read(65536), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
 def _get_encoder_sha256(onnx_path: Path) -> str:
     global _encoder_sha256_cache
     if _encoder_sha256_cache is not None:
@@ -71,7 +63,7 @@ def _get_encoder_sha256(onnx_path: Path) -> str:
     with _encoder_sha256_lock:
         if _encoder_sha256_cache is not None:
             return _encoder_sha256_cache
-        _encoder_sha256_cache = _compute_encoder_sha256(onnx_path)
+        _encoder_sha256_cache = OnnxInferenceService._compute_encoder_sha256(onnx_path)
         return _encoder_sha256_cache
 
 
@@ -126,19 +118,27 @@ class _ClassifierHead:
         return h @ self.W2.T + self.b2
 
 
-def _mean_pool(last_hidden_state: np.ndarray, attention_mask: np.ndarray) -> np.ndarray:
-    mask = attention_mask[..., np.newaxis].astype(np.float32)
-    sum_emb = (last_hidden_state * mask).sum(axis=1)
-    sum_mask = mask.sum(axis=1).clip(min=1e-9)
-    return cast(np.ndarray, sum_emb / sum_mask)
-
-
 def _l2_normalize(embeddings: np.ndarray) -> np.ndarray:
     norms = np.linalg.norm(embeddings, axis=-1, keepdims=True).clip(min=1e-9)
     return cast(np.ndarray, embeddings / norms)
 
 
 class OnnxInferenceService:
+    @staticmethod
+    def _compute_encoder_sha256(onnx_path: Path) -> str:
+        h = hashlib.sha256()
+        with open(onnx_path, "rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                h.update(chunk)
+        return h.hexdigest()
+
+    @staticmethod
+    def _mean_pool(last_hidden_state: np.ndarray, attention_mask: np.ndarray) -> np.ndarray:
+        mask = attention_mask[..., np.newaxis].astype(np.float32)
+        sum_emb = (last_hidden_state * mask).sum(axis=1)
+        sum_mask = mask.sum(axis=1).clip(min=1e-9)
+        return cast(np.ndarray, sum_emb / sum_mask)
+
     def __init__(self, models_dir: str, pretrained_dir: str):
         self._models_dir = Path(models_dir)
         self._models_dir.mkdir(parents=True, exist_ok=True)
@@ -169,9 +169,9 @@ class OnnxInferenceService:
     # ── Encoder access (borrowed from embedding_service) ──────────────────────
 
     def _get_encoder(self) -> tuple[object, object, list[str], list[str]]:
-        from services import embedding_service as _emb_mod
-        session, tokenizer = _emb_mod._get_session_and_tokenizer()
-        return session, tokenizer, _emb_mod._output_names, _emb_mod._input_names
+        from services import embedding_service
+        session, tokenizer = embedding_service.EmbeddingService._get_session_and_tokenizer()
+        return session, tokenizer, embedding_service._output_names, embedding_service._input_names
 
     def _encoder_onnx_path(self) -> Path:
         return self._models_dir / "gte-modernbert-base" / "onnx" / "model.onnx"
@@ -199,7 +199,7 @@ class OnnxInferenceService:
             pooled = outputs[output_names.index("sentence_embedding")]
         else:
             last_hidden = outputs[output_names.index("last_hidden_state")]
-            pooled = _mean_pool(last_hidden, attention_mask)
+            pooled = OnnxInferenceService._mean_pool(last_hidden, attention_mask)
 
         return _l2_normalize(pooled).astype(np.float32)  # (1, 768)
 

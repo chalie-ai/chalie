@@ -19,27 +19,31 @@ import time
 from typing import Callable, Dict, List, Tuple, cast
 
 
-def _read_version() -> str:
-    try:
-        from services.file_mapper_service import FileMapperService
-        return FileMapperService.get_version_path().read_text().strip()
-    except Exception:
-        return "0.0.0"
+class ConsumerHelpers:
+    """Helpers for the consumer entrypoint."""
 
-APP_VERSION = _read_version()
+    @staticmethod
+    def read_version() -> str:
+        try:
+            from services.file_mapper_service import FileMapperService
+            return FileMapperService.get_version_path().read_text().strip()
+        except Exception:
+            return "0.0.0"
+
+    @staticmethod
+    def thread_excepthook(args: threading.ExceptHookArgs) -> None:
+        """Threads die silently by default — log uncaught exceptions globally."""
+        logging.error(
+            f"[ThreadException] Uncaught exception in thread '{cast(threading.Thread, args.thread).name}': "
+            f"{args.exc_type.__name__}: {args.exc_value}",
+            exc_info=(args.exc_type, cast("BaseException", args.exc_value), args.exc_traceback)
+        )
 
 
-def _thread_excepthook(args: threading.ExceptHookArgs) -> None:
-    """Threads die silently by default — log uncaught exceptions globally."""
-    logging.error(
-        f"[ThreadException] Uncaught exception in thread '{cast(threading.Thread, args.thread).name}': "
-        f"{args.exc_type.__name__}: {args.exc_value}",
-        exc_info=(args.exc_type, cast("BaseException", args.exc_value), args.exc_traceback)
-    )
-
+APP_VERSION = ConsumerHelpers.read_version()
 
 # Install global thread exception handler
-threading.excepthook = _thread_excepthook
+threading.excepthook = ConsumerHelpers.thread_excepthook
 
 
 class WorkerManager:

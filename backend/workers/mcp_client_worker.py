@@ -26,16 +26,20 @@ _INITIAL_DELAY_SECS = 30
 _HEARTBEAT_INTERVAL_SECS = 900
 
 
-def mcp_client_worker() -> None:
-    logger.info("[MCP CLIENT WORKER] Starting; initial delay %ds", _INITIAL_DELAY_SECS)
-    time.sleep(_INITIAL_DELAY_SECS)
+class McpClientWorker:
+    """Daemon thread entry point for the MCP client heartbeat service."""
 
-    from services.mcp_client_service import McpClientService
-    svc = McpClientService()
+    @classmethod
+    def run(cls) -> None:
+        logger.info("[MCP CLIENT WORKER] Starting; initial delay %ds", _INITIAL_DELAY_SECS)
+        time.sleep(_INITIAL_DELAY_SECS)
 
-    while True:
-        try:
-            svc.run_heartbeat()
-        except Exception as exc:
-            logger.exception("[MCP CLIENT WORKER] Heartbeat cycle error: %s", exc)
-        time.sleep(_HEARTBEAT_INTERVAL_SECS)
+        from services.mcp_client_service import McpClientService
+        svc = McpClientService()
+
+        while True:
+            try:
+                svc.run_heartbeat()
+            except Exception as exc:
+                logger.exception("[MCP CLIENT WORKER] Heartbeat cycle error: %s", exc)
+            time.sleep(_HEARTBEAT_INTERVAL_SECS)

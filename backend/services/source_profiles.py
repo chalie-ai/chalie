@@ -88,6 +88,68 @@ class Profile:
     the user's live coordinates. Muted channels store NULL location instead so
     background activity never masquerades as the user being somewhere."""
 
+    @classmethod
+    def profile_for(cls, channel: str) -> "Profile":
+        """Return the :class:`Profile` for a channel — fully muted when absent (allowlist default)."""
+        if not channel:
+            return _MUTED
+        exact = _EXACT_PROFILES.get(channel)
+        if exact is not None:
+            return exact
+        for prefix, profile in _PREFIX_PROFILES:
+            if channel.startswith(prefix.rstrip("%")):
+                return profile
+        return _MUTED
+
+    @staticmethod
+    def _exact_channels(predicate: Callable[[Profile], bool]) -> list[str]:
+        return [ch for ch, profile in _EXACT_PROFILES.items() if predicate(profile)]
+
+    @staticmethod
+    def _prefix_patterns(predicate: Callable[[Profile], bool]) -> list[str]:
+        return [pat for pat, profile in _PREFIX_PROFILES if predicate(profile)]
+
+    @classmethod
+    def _allowlist_sql(cls, column: str, predicate: Callable[[Profile], bool]) -> str:
+        """Build an allowlist SQL fragment for ``column`` over the profiles passing
+        ``predicate``.
+
+        Emits ``(column IN ('a','b') OR column LIKE 'p:%')`` — the positive,
+        allowlist form so a new muted channel is excluded by default rather than
+        needing a matching ``NOT LIKE``. Returns ``0`` (always-false) when no
+        profile qualifies, so the caller's predicate is never vacuously true.
+        """
+        exact = Profile._exact_channels(predicate)
+        patterns = Profile._prefix_patterns(predicate)
+        clauses: list[str] = []
+        if exact:
+            quoted = ", ".join(f"'{ch}'" for ch in exact)
+            clauses.append(f"{column} IN ({quoted})")
+        for pat in patterns:
+            clauses.append(f"{column} LIKE '{pat}'")
+        if not clauses:
+            return "0"
+        return "(" + " OR ".join(clauses) + ")"
+
+    @classmethod
+    def geo_user_channels_sql(cls, column: str = "channel") -> str:
+        return Profile._allowlist_sql(column, lambda p: p.geo_is_user)
+
+    @classmethod
+    def pattern_user_channels_sql(cls, column: str = "channel") -> str:
+        return Profile._allowlist_sql(column, lambda p: p.pattern_is_user)
+
+    @classmethod
+    def janitor_protected_sql(cls, column: str = "channel") -> str:
+        """Allowlist fragment selecting the HEAVY channels the fossil janitor must
+        NOT tombstone (their leaves are legitimate apex memory).
+
+        HEAVY = channels that produce episodes. dmn never consolidates, so its
+        leaves are permanently apex and would otherwise be reaped after the fossil
+        cutoff; protecting every episode-producing channel keeps that memory.
+        """
+        return Profile._allowlist_sql(column, lambda p: p.extract_episodes)
+
 
 # Fully-muted default for any channel absent from the table.
 _MUTED = Profile(
@@ -158,63 +220,10 @@ _PREFIX_PROFILES: tuple[tuple[str, Profile], ...] = (
     (LIKE_DELEGATE, _MUTED),
 )
 
-def profile_for(channel: str) -> Profile:
-    """Return the :class:`Profile` for a channel — fully muted when absent (allowlist default)."""
-    if not channel:
-        return _MUTED
-    exact = _EXACT_PROFILES.get(channel)
-    if exact is not None:
-        return exact
-    for prefix, profile in _PREFIX_PROFILES:
-        if channel.startswith(prefix.rstrip("%")):
-            return profile
-    return _MUTED
 
-
-def _exact_channels(predicate: Callable[[Profile], bool]) -> list[str]:
-    return [ch for ch, profile in _EXACT_PROFILES.items() if predicate(profile)]
-
-
-def _prefix_patterns(predicate: Callable[[Profile], bool]) -> list[str]:
-    return [pat for pat, profile in _PREFIX_PROFILES if predicate(profile)]
-
-
-def _allowlist_sql(column: str, predicate: Callable[[Profile], bool]) -> str:
-    """Build an allowlist SQL fragment for ``column`` over the profiles passing
-    ``predicate``.
-
-    Emits ``(column IN ('a','b') OR column LIKE 'p:%')`` — the positive,
-    allowlist form so a new muted channel is excluded by default rather than
-    needing a matching ``NOT LIKE``. Returns ``0`` (always-false) when no
-    profile qualifies, so the caller's predicate is never vacuously true.
-    """
-    exact = _exact_channels(predicate)
-    patterns = _prefix_patterns(predicate)
-    clauses: list[str] = []
-    if exact:
-        quoted = ", ".join(f"'{ch}'" for ch in exact)
-        clauses.append(f"{column} IN ({quoted})")
-    for pat in patterns:
-        clauses.append(f"{column} LIKE '{pat}'")
-    if not clauses:
-        return "0"
-    return "(" + " OR ".join(clauses) + ")"
-
-
-def geo_user_channels_sql(column: str = "channel") -> str:
-    return _allowlist_sql(column, lambda p: p.geo_is_user)
-
-
-def pattern_user_channels_sql(column: str = "channel") -> str:
-    return _allowlist_sql(column, lambda p: p.pattern_is_user)
-
-
-def janitor_protected_sql(column: str = "channel") -> str:
-    """Allowlist fragment selecting the HEAVY channels the fossil janitor must
-    NOT tombstone (their leaves are legitimate apex memory).
-
-    HEAVY = channels that produce episodes. dmn never consolidates, so its
-    leaves are permanently apex and would otherwise be reaped after the fossil
-    cutoff; protecting every episode-producing channel keeps that memory.
-    """
-    return _allowlist_sql(column, lambda p: p.extract_episodes)
+# Backwards-compat module-level aliases for callers that import the bare function
+# names from this module.
+profile_for = Profile.profile_for
+geo_user_channels_sql = Profile.geo_user_channels_sql
+pattern_user_channels_sql = Profile.pattern_user_channels_sql
+janitor_protected_sql = Profile.janitor_protected_sql

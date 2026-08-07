@@ -262,12 +262,12 @@ class TranscriptService:
         permits backfill (user-activity channels) — muted/background channels
         store NULL so their rows never corrupt the geo signal. ``{}`` when
         gated off or when the lookup fails."""
-        from services.source_profiles import profile_for  # noqa: PLC0415
-        if not profile_for(self.mp.channel).location_backfill:
+        from services.source_profiles import Profile  # noqa: PLC0415
+        if not Profile.profile_for(self.mp.channel).location_backfill:
             return {}
-        from services.locale_service import get_location  # noqa: PLC0415
+        from services.locale_service import LocaleService  # noqa: PLC0415
         try:
-            return get_location()
+            return LocaleService.get_location()
         except Exception as exc:  # noqa: BLE001 — a geo hiccup must not lose the row
             logger.warning(
                 "[TranscriptService] location backfill failed for %s: %s",

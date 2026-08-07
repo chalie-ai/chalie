@@ -49,43 +49,66 @@ _VALIDATION_FAILED = "Validation failed"
 # ---------------------------------------------------------------------------
 
 
-def _read_payload(source: Source) -> object:
-    """Materialize the request payload for the given ``source``."""
-    if source == "json":
-        return request.get_json(silent=True) or {}
-    if source == "args":
-        # Single-valued params collapse to scalars (ergonomic for int/str fields);
-        # repeated params stay lists (for sequence fields).
-        return {
-            key: (values[0] if len(values) == 1 else list(values))
-            for key, values in request.args.to_dict(flat=False).items()
-        }
-    if source == "form":
-        return {**request.form, **request.files}
-    raise ValueError(f"unknown expects source: {source!r}")
+class _FileStorageAnnotation:
+    """Pydantic core-schema + json-schema hooks so :data:`File` validates and renders in any strict DTO."""
 
+    @staticmethod
+    def _read_payload(source: Source) -> object:
+        """Materialize the request payload for the given ``source``."""
+        if source == "json":
+            return request.get_json(silent=True) or {}
+        if source == "args":
+            # Single-valued params collapse to scalars (ergonomic for int/str fields);
+            # repeated params stay lists (for sequence fields).
+            return {
+                key: (values[0] if len(values) == 1 else list(values))
+                for key, values in request.args.to_dict(flat=False).items()
+            }
+        if source == "form":
+            return {**request.form, **request.files}
+        raise ValueError(f"unknown expects source: {source!r}")
 
-def _validation_body(exc: ValidationError) -> tuple[dict[str, object], int]:
-    """Build the uniform 422 ``Error`` body for a validation failure."""
-    return (
-        Error(
-            error=_VALIDATION_FAILED,
-            details=cast(
-                "list[dict[str, object]]",
-                [{k: v for k, v in e.items() if k != "url"} for e in exc.errors()],
-            ),
-        ).model_dump(mode="json"),
-        422,
-    )
+    @staticmethod
+    def _validation_body(exc: ValidationError) -> tuple[dict[str, object], int]:
+        """Build the uniform 422 ``Error`` body for a validation failure."""
+        return (
+            Error(
+                error=_VALIDATION_FAILED,
+                details=cast(
+                    "list[dict[str, object]]",
+                    [{k: v for k, v in e.items() if k != "url"} for e in exc.errors()],
+                ),
+            ).model_dump(mode="json"),
+            422,
+        )
 
+    @staticmethod
+    def error(message: str, status: int) -> ResponseReturnValue:
+        """Build a uniform non-2xx ``Error`` body carrying its own HTTP status code.
 
-def error(message: str, status: int) -> ResponseReturnValue:
-    """Build a uniform non-2xx ``Error`` body carrying its own HTTP status code.
+        The single error-response constructor shared by every namespace, so the wire
+        shape of a failure is identical across the whole API surface.
+        """
+        return Error(error=message).model_dump(mode="json"), status
 
-    The single error-response constructor shared by every namespace, so the wire
-    shape of a failure is identical across the whole API surface.
-    """
-    return Error(error=message).model_dump(mode="json"), status
+    @classmethod
+    def __get_pydantic_core_schema__(
+        cls,
+        source_type: object,
+        handler: GetCoreSchemaHandler,
+    ) -> CoreSchema:
+        return core_schema.no_info_plain_validator_function(_validate_file)
+
+    @classmethod
+    def __get_pydantic_json_schema__(
+        cls,
+        core_schema: CoreSchema,
+        handler: GetCoreSchemaHandler,
+    ) -> JsonSchemaValue:
+        # Render as a binary string in OpenAPI — a multipart file upload is not a
+        # JSON-encodable value, but the schema must still resolve so register_dto
+        # can lift an UploadRequest-shaped DTO into the swagger definitions.
+        return {"type": "string", "format": "binary"}
 
 
 # ---------------------------------------------------------------------------
@@ -108,9 +131,9 @@ def expects(
         @wraps(func)
         def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
             try:
-                dto = dto_cls.model_validate(_read_payload(source))
+                dto = dto_cls.model_validate(_FileStorageAnnotation._read_payload(source))
             except ValidationError as exc:
-                return cast("R", _validation_body(exc))
+                return cast("R", _FileStorageAnnotation._validation_body(exc))
             return cast("Callable[..., R]", func)(*args, **kwargs, dto=dto)
 
         return wrapper
@@ -172,29 +195,6 @@ def _validate_file(value: object) -> FileStorage:
     if not isinstance(value, FileStorage):
         raise TypeError("expected an uploaded file (werkzeug FileStorage)")
     return value
-
-
-class _FileStorageAnnotation:
-    """Pydantic core-schema + json-schema hooks so :data:`File` validates and renders in any strict DTO."""
-
-    @classmethod
-    def __get_pydantic_core_schema__(
-        cls,
-        source_type: object,
-        handler: GetCoreSchemaHandler,
-    ) -> CoreSchema:
-        return core_schema.no_info_plain_validator_function(_validate_file)
-
-    @classmethod
-    def __get_pydantic_json_schema__(
-        cls,
-        core_schema: CoreSchema,
-        handler: GetCoreSchemaHandler,
-    ) -> JsonSchemaValue:
-        # Render as a binary string in OpenAPI — a multipart file upload is not a
-        # JSON-encodable value, but the schema must still resolve so register_dto
-        # can lift an UploadRequest-shaped DTO into the swagger definitions.
-        return {"type": "string", "format": "binary"}
 
 
 File = Annotated[FileStorage, _FileStorageAnnotation]

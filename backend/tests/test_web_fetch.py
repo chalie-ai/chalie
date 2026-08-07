@@ -73,7 +73,7 @@ def _stub_fetch(
         Path(dest_path).write_bytes(payload)
         return len(payload), content_type
 
-    monkeypatch.setattr("abilities.web_fetch.stream_to_file", fake)
+    monkeypatch.setattr("services.web_fetch.WebFetch.stream_to_file", fake)
 
 
 def _run(url: str, **extra: object) -> ToolResult:

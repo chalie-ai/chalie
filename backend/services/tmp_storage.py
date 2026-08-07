@@ -38,10 +38,13 @@ TMP_PREFIX = "chalie_"
 TMP_PATH_PREFIX = os.path.join(TMP_DIR, TMP_PREFIX)
 
 
-def new_tmp_path(suffix: str = "") -> str:
-    return f"{TMP_PATH_PREFIX}{suffix}"
+class TmpStorage:
 
+    @staticmethod
+    def new_tmp_path(suffix: str = "") -> str:
+        return f"{TMP_PATH_PREFIX}{suffix}"
 
-def is_chalie_tmp_file(path: str) -> bool:
-    real = os.path.realpath(path)
-    return real.startswith(TMP_PATH_PREFIX) and os.path.isfile(real)
+    @staticmethod
+    def is_chalie_tmp_file(path: str) -> bool:
+        real = os.path.realpath(path)
+        return real.startswith(TMP_PATH_PREFIX) and os.path.isfile(real)

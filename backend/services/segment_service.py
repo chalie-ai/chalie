@@ -3,6 +3,7 @@
 import logging
 
 from models.tool_call import ToolCall
+from services.rich_media_parser import RichMediaParser
 
 logger = logging.getLogger(__name__)
 
@@ -18,10 +19,8 @@ class SegmentService:
             )
             return [{"type": "text", "content": content}]
 
-        from services.rich_media_parser import parse as _parse_rich_media
-
         tool_calls = SegmentService._fetch_tool_calls(transcript_ids)
-        segments = _parse_rich_media(content, tool_calls)
+        segments = RichMediaParser.parse(content, tool_calls)
         return segments or [{"type": "text", "content": content}]
 
     @staticmethod

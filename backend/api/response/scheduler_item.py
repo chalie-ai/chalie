@@ -15,7 +15,7 @@ from typing import cast
 from pydantic import field_validator
 
 from models.scheduled_item import ScheduledItem
-from services.locale_service import format_date
+from services.locale_service import LocaleService
 from .response import Response
 
 # ISO 8601 with offset — the localized wire format for start_at, matching the
@@ -42,7 +42,7 @@ class SchedulerItem(Response):
     @field_validator("start_at", mode="before")
     @classmethod
     def _localize(cls, value: object) -> object:
-        return format_date(value, _LOCAL_ISO_FMT, for_ui=True) if isinstance(value, str) else value
+        return LocaleService.format_date(value, _LOCAL_ISO_FMT, for_ui=True) if isinstance(value, str) else value
 
     @classmethod
     def from_model(cls, item: ScheduledItem) -> "SchedulerItem":

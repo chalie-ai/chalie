@@ -42,7 +42,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> "Generator[FlaskClient, None, Non
     # require_session decorates at def-time, so patching it on the module is too late;
     # require_auth.decorated calls validate_session(request) at request-time via a
     # function-local import, so patch THAT to bypass auth (same approach as conftest).
-    monkeypatch.setattr("services.auth_session_service.validate_session", lambda *a, **k: True)
+    monkeypatch.setattr("services.auth_session_service.AuthSessionService.validate_session", lambda *a, **k: True)
 
     _db_gateway._local.conns = {str(sentinel): conn}
     _db_gateway._local.depths = {}
@@ -137,7 +137,7 @@ def mcp_client(monkeypatch: pytest.MonkeyPatch) -> "Generator[FlaskClient, None,
     # from this one in-memory handle.
     sentinel = Path(":memory:policies-api-mcp-test")
     monkeypatch.setattr(FileMapperService, "get_db_path", lambda *_: sentinel)
-    monkeypatch.setattr("services.auth_session_service.validate_session", lambda *a, **k: True)
+    monkeypatch.setattr("services.auth_session_service.AuthSessionService.validate_session", lambda *a, **k: True)
 
     _db_gateway._local.conns = {str(sentinel): conn}
     _db_gateway._local.depths = {}

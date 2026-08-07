@@ -22,7 +22,7 @@ pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 # ``ProviderService.send`` (the new spine's provider chokepoint) builds its thin
 # transport client via ``services.llm_clients.factory.build_client`` directly —
 # it does not go through the old ``services.providers.Providers`` facade at all.
-_BUILD_CLIENT = "services.provider_service.build_client"
+_BUILD_CLIENT = "services.provider_service.Factory.build_client"
 
 
 class _RecordingProvider:

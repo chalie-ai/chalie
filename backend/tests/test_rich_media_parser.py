@@ -2,7 +2,7 @@ from typing import cast
 
 import pytest
 
-from services.rich_media_parser import parse, _find_payload
+from services.rich_media_parser import RichMediaParser
 
 pytestmark = pytest.mark.unit
 
@@ -18,13 +18,13 @@ def _tc(tool_name: str, result: str) -> dict[str, object]:
 class TestFindPayload:
     def test_matches_single_quote_syntax(self) -> None:
         tc = _tc("weather", '{"loc":"London"}\n\n<span id=\'weather_1\'>')
-        payload, row = cast("tuple[object, object]", _find_payload("weather_1", [tc]))
+        payload, row = cast("tuple[object, object]", RichMediaParser._find_payload("weather_1", [tc]))
         assert payload == {"loc": "London"}
         assert row is tc
 
     def test_matches_double_quote_syntax(self) -> None:
         tc = _tc("weather", '{"loc":"Paris"}\n\n<span id="weather_1">')
-        payload, row = cast("tuple[object, object]", _find_payload("weather_1", [tc]))
+        payload, row = cast("tuple[object, object]", RichMediaParser._find_payload("weather_1", [tc]))
         assert payload == {"loc": "Paris"}
         assert row is tc
 
@@ -33,11 +33,11 @@ class TestFindPayload:
 
 class TestParseNoSpans:
     def test_prose_only_returns_single_text_segment(self) -> None:
-        segs = parse("Hello there, how can I help?", [])
+        segs = RichMediaParser.parse("Hello there, how can I help?", [])
         assert segs == [{"type": "text", "content": "Hello there, how can I help?"}]
 
     def test_empty_content_returns_empty_list(self) -> None:
-        assert parse("", []) == []
+        assert RichMediaParser.parse("", []) == []
 
 
 
@@ -46,7 +46,7 @@ class TestParseSingleCard:
         tool_result = '{"location":"London","temperature_c":12}\n\n<span id=\'weather_1\'>'
         tc = _tc("weather", tool_result)
         content = "<span id='weather_1'>It is partly cloudy in London.</span>"
-        segs = parse(content, [tc])
+        segs = RichMediaParser.parse(content, [tc])
         assert len(segs) == 1
         seg = segs[0]
         assert seg["type"] == "rich"
@@ -58,7 +58,7 @@ class TestParseSingleCard:
         tool_result = '{"location":"Tokyo"}\n\n<span id=\'weather_1\'>'
         tc = _tc("weather", tool_result)
         content = "Here is the weather. <span id='weather_1'>Clear skies.</span>"
-        segs = parse(content, [tc])
+        segs = RichMediaParser.parse(content, [tc])
         assert len(segs) == 2
         assert segs[0] == {"type": "text", "content": "Here is the weather."}
         assert segs[1]["type"] == "rich"
@@ -75,7 +75,7 @@ class TestParseMultiCard:
             "Here is London: <span id='weather_1'>Cloudy.</span> "
             "And here is Tokyo: <span id='weather_2'>Sunny.</span>"
         )
-        segs = parse(content, [tc1, tc2])
+        segs = RichMediaParser.parse(content, [tc1, tc2])
         assert len(segs) == 4
         assert segs[0] == {"type": "text", "content": "Here is London:"}
         assert segs[1]["type"] == "rich"
@@ -92,7 +92,7 @@ class TestParseOrphanTag:
         import logging
         content = "<span id='weather_1'>Some synthesis here.</span>"
         with caplog.at_level(logging.WARNING, logger="services.rich_media_parser"):
-            segs = parse(content, [])
+            segs = RichMediaParser.parse(content, [])
         assert any("orphan" in r.message for r in caplog.records)
         assert len(segs) == 1
         assert segs[0] == {"type": "text", "content": "Some synthesis here."}
@@ -104,7 +104,7 @@ class TestParseUnclosedSpan:
         # Non-greedy regex won't match if </span> is absent
         tc = _tc("weather", '{"loc":"X"}\n\n<span id=\'weather_1\'>')
         content = "Hello <span id='weather_1'>No close"
-        segs = parse(content, [tc])
+        segs = RichMediaParser.parse(content, [tc])
         # Entire content becomes a text segment since the regex doesn't match
         assert len(segs) == 1
         assert segs[0]["type"] == "text"

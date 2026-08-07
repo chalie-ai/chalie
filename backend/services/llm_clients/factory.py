@@ -15,35 +15,39 @@ Consumed by: services.provider_service (send / _resolve).
 from __future__ import annotations
 
 from contracts.provider_client import ProviderClient
-from services.llm_clients.registry import client_class_for
+from services.llm_clients.registry import Registry
 
 
-def build_client(config: dict[str, object]) -> ProviderClient:
-    """Return a ProviderClient for the given provider config dict."""
-    platform = config.get('platform')
-    if not platform:
-        raise ValueError(
-            "LLM config missing 'platform'. No provider configured — "
-            "add one via POST /api/providers/-1"
-        )
+class Factory:
+    """Dispatch a provider config dict to the correct thin client class."""
 
-    model = config.get('model')
-    if not model:
-        raise ValueError(
-            "LLM config missing 'model'. Configure it via the providers API"
-        )
+    @classmethod
+    def build_client(cls, config: dict[str, object]) -> ProviderClient:
+        """Return a ProviderClient for the given provider config dict."""
+        platform = config.get('platform')
+        if not platform:
+            raise ValueError(
+                "LLM config missing 'platform'. No provider configured — "
+                "add one via POST /api/providers/-1"
+            )
 
-    client_class = client_class_for(str(platform))
-    if client_class is None:
-        raise ValueError(f"Unknown platform: {platform}")
+        model = config.get('model')
+        if not model:
+            raise ValueError(
+                "LLM config missing 'model'. Configure it via the providers API"
+            )
 
-    if client_class.REQUIRES_KEY and not config.get('api_key'):
-        raise ValueError(f"{platform} provider requires 'api_key' field")
+        client_class = Registry.client_class_for(str(platform))
+        if client_class is None:
+            raise ValueError(f"Unknown platform: {platform}")
 
-    if client_class.REQUIRES_HOST and not config.get('host'):
-        raise ValueError(
-            f"{platform} provider requires 'host' field "
-            f"(e.g. '{client_class.DEFAULT_BASE_URL}')"
-        )
+        if client_class.REQUIRES_KEY and not config.get('api_key'):
+            raise ValueError(f"{platform} provider requires 'api_key' field")
 
-    return client_class(config)
+        if client_class.REQUIRES_HOST and not config.get('host'):
+            raise ValueError(
+                f"{platform} provider requires 'host' field "
+                f"(e.g. '{client_class.DEFAULT_BASE_URL}')"
+            )
+
+        return client_class(config)

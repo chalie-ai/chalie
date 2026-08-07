@@ -18,7 +18,7 @@ import pytest
 
 from configs.channels.thread_gist import ThreadGistConfig
 from controllers.message_processor import MessageProcessor
-from services.thread_gist_message_processor import _persist_gist
+from services.thread_gist_message_processor import ThreadGistMessageProcessor
 
 pytestmark = pytest.mark.unit
 
@@ -32,7 +32,7 @@ def _labels(turn_ids: list[int]) -> dict[int, str]:
 def test_gist_with_think_block_is_persisted_clean(db: sqlite3.Connection) -> None:
     """A gist carrying a well-formed <think>...</think> block must be stored
     with the reasoning noise removed — never leaked into the user-facing label."""
-    stored = _persist_gist(_CHANNEL, 101, "<think>reasoning noise</think>Weekend Malta trip planning")
+    stored = ThreadGistMessageProcessor._persist_gist(_CHANNEL, 101, "<think>reasoning noise</think>Weekend Malta trip planning")
 
     labels = _labels([101])
 
@@ -45,7 +45,7 @@ def test_gist_with_think_block_is_persisted_clean(db: sqlite3.Connection) -> Non
 def test_gist_without_think_block_is_stored_unchanged(db: sqlite3.Connection) -> None:
     """A normal gist with no think tags must survive the strip untouched — the
     should-not-fire path, guarding against over-stripping ordinary labels."""
-    stored = _persist_gist(_CHANNEL, 102, "Mac Mini Research")
+    stored = ThreadGistMessageProcessor._persist_gist(_CHANNEL, 102, "Mac Mini Research")
 
     labels = _labels([102])
 
@@ -62,7 +62,7 @@ def test_unclosed_think_block_is_never_stored(db: sqlite3.Connection) -> None:
         '<think>\nThe user sent just "Yo" - a casual greeting. I need to create '
         "a terse 3-5 word topical label for this message.Casual Greeting Message"
     )
-    stored = _persist_gist(_CHANNEL, 103, raw)
+    stored = ThreadGistMessageProcessor._persist_gist(_CHANNEL, 103, raw)
 
     labels = _labels([103])
 

@@ -61,7 +61,7 @@ from services.provider_db_service import ProviderDbService
 
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 
-_BUILD_CLIENT = "services.provider_service.build_client"
+_BUILD_CLIENT = "services.provider_service.Factory.build_client"
 
 # Deliberately below MAX_CONTEXT_WINDOW so an asserted window can only have come
 # from the source under test, never from a silently-substituted ceiling.

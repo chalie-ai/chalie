@@ -251,7 +251,7 @@ class TestResolveWindow:
         # 2026-07-18T22:00:00Z. Local-midnight must still trigger the extension so
         # the window covers the whole local day.
         with patch(
-            "services.locale_service.get_timezone_name", return_value="Europe/Malta"
+            "services.locale_service.LocaleService.get_timezone_name", return_value="Europe/Malta"
         ):
             _start, end = self._window(
                 {"date_from": "2026-07-18T22:00:00+00:00", "date_to": "2026-07-18T22:00:00+00:00"},
@@ -264,7 +264,7 @@ class TestResolveWindow:
         # Non-midnight explicit time (08:30 UTC) must NOT be extended, even for a
         # non-UTC user — the user explicitly set a time of day.
         with patch(
-            "services.locale_service.get_timezone_name", return_value="Europe/Malta"
+            "services.locale_service.LocaleService.get_timezone_name", return_value="Europe/Malta"
         ):
             _start, end = self._window({"date_to": "2026-07-19T08:30:00+00:00"})
         assert end == _dt(2026, 7, 19, 8, 30)

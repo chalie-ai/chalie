@@ -18,7 +18,7 @@ from typing import ClassVar, Self
 
 from models.model import Model
 from models.query import Query
-from services._vec_upsert import vec0_upsert
+from services._vec_upsert import VecUpsert
 
 
 class List(Model):
@@ -148,4 +148,4 @@ class List(Model):
             "SELECT rowid FROM lists WHERE id = ?", (list_id,)
         ).fetchone()
         if row:
-            vec0_upsert(connection, "lists_vec", row[0], blob)
+            VecUpsert.vec0_upsert(connection, "lists_vec", row[0], blob)

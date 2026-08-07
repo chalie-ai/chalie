@@ -64,7 +64,7 @@ pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 
 # ProviderService builds its thin transport client via this factory call — the
 # real network boundary (see test_read_guard.py).
-_BUILD_CLIENT = "services.provider_service.build_client"
+_BUILD_CLIENT = "services.provider_service.Factory.build_client"
 
 # A span bracketed by keepers, so a deletion that removes too much (or the
 # wrong span) is visible in the assertion rather than passing silently.

@@ -12,6 +12,6 @@ Conversations are stored in per-agent channels and optionally disclosed to
 the user.
 """
 
-from mcp_server.server import create_mcp_server, run_mcp_server
+from mcp_server.server import McpServer, create_mcp_server
 
-__all__ = ["create_mcp_server", "run_mcp_server"]
+__all__ = ["McpServer", "create_mcp_server"]

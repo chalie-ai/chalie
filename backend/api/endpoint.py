@@ -31,7 +31,7 @@ from pydantic import ValidationError
 
 from exceptions import EndpointError, ForbiddenError
 from .auth import require_auth
-from .dto.openapi import register_auth_error, register_dto, register_envelope, register_error_envelope
+from .dto.openapi import OpenApiRegistry
 from .request import Request
 from .response import Response
 
@@ -230,7 +230,7 @@ class Endpoint(ABC):
                 )
 
         if self.request_dto is not None:
-            register_dto(ns, self.request_dto)
+            OpenApiRegistry.register_dto(ns, self.request_dto)
 
         dto_classes: list[type[Response]] = []
         seen: set[str] = set()
@@ -239,10 +239,10 @@ class Endpoint(ABC):
                 dto_classes.append(doc.dto)
                 seen.add(doc.dto.__name__)
         if dto_classes:
-            register_dto(ns, *dto_classes)
+            OpenApiRegistry.register_dto(ns, *dto_classes)
 
-        error_model = ns.models[register_error_envelope(ns)]
-        auth_error_model = ns.models[register_auth_error(ns)]
+        error_model = ns.models[OpenApiRegistry.register_error_envelope(ns)]
+        auth_error_model = ns.models[OpenApiRegistry.register_auth_error(ns)]
 
         for resource, verb_map in resources:
             for http_verb, handler_name in verb_map.items():
@@ -289,7 +289,7 @@ class Endpoint(ABC):
         if doc is None or doc.dto is None:
             func = ns.response(204, "No Content")(func)
         else:
-            envelope_model = ns.models[register_envelope(ns, doc.dto, listing=doc.listing)]
+            envelope_model = ns.models[OpenApiRegistry.register_envelope(ns, doc.dto, listing=doc.listing)]
             func = ns.response(200, "OK", model=envelope_model)(func)
             if handler_name == "post" and self._post_may_create:
                 func = ns.response(201, "Created", model=envelope_model)(func)

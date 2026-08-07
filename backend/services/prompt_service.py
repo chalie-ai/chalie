@@ -49,7 +49,7 @@ from models.fact import FactRow
 from models.tool_call import ToolCall
 from models.transcript import Transcript
 from models.transcript_thinking import TranscriptThinking
-from services.locale_service import CHAT_TIMESTAMP_FMT, format_date
+from services.locale_service import CHAT_TIMESTAMP_FMT, LocaleService
 from services.markup import PROMPT_TAGS
 from services.personality.personality_service import personality_service
 from services.time_formatter_service import TimeFormatterService
@@ -624,7 +624,7 @@ class PromptService:
         picked = [rows[0]] + ([beyond] if beyond is not None and beyond is not rows[0] else [])
         lines = ["# User Message Prompt", "## User Messages"]
         for r in picked:
-            ts = format_date(cast("str | None", r.get("created_at")), CHAT_TIMESTAMP_FMT, for_ui=True) or ""
+            ts = LocaleService.format_date(cast("str | None", r.get("created_at")), CHAT_TIMESTAMP_FMT, for_ui=True) or ""
             content = cast("str", r.get("content") or "").replace("\n", " ").strip()
             lines.append(f"[{ts}] {content}")
         return "\n".join(lines)

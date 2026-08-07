@@ -8,9 +8,14 @@ one switch.
 
 import os
 
+
 _INTERNAL_DEV_ENV = "CHALIE_INTERNAL_DEV"
 
 
-def internal_dev_enabled() -> bool:
-    """True when in-development features are enabled for this process."""
-    return os.environ.get(_INTERNAL_DEV_ENV, "") == "1"
+class FeatureFlags:
+    """In-development feature gating."""
+
+    @staticmethod
+    def internal_dev_enabled() -> bool:
+        """True when in-development features are enabled for this process."""
+        return os.environ.get(_INTERNAL_DEV_ENV, "") == "1"

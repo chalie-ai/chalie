@@ -31,13 +31,13 @@ import re
 import sqlite3
 from typing import ClassVar, Self, cast
 
-from contracts.search_config import DATA_GRAPH_SEARCH, SearchConfig, register_kind
+from contracts.search_config import DATA_GRAPH_SEARCH, SearchConfig
 from contracts.tuples.recall_signals import RecallSignals
 from models.model import Model
 from models.query import Query
-from services._fts_delete import fts5_external_delete
+from services._fts_delete import FtsDelete
 from services.embedding_utils import pack_embedding
-from services.search_expander_service import enqueue
+from services.search_expander_service import SearchExpanderService
 from services.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
@@ -106,7 +106,7 @@ class DataGraphRow(Model):
         super().__init_subclass__(**kwargs)
         kind = cls.__dict__.get("KIND")
         if kind is not None:
-            register_kind(kind, cls.__search__)
+            SearchConfig.register_kind(kind, cls.__search__)
 
     # ── persistence + write-sync ─────────────────────────────────────────
 
@@ -139,7 +139,7 @@ class DataGraphRow(Model):
         if self.__search__ is None:
             return
         try:
-            enqueue("data_graph", cast("int", self.id))
+            SearchExpanderService.enqueue("data_graph", cast("int", self.id))
         except Exception:
             logger.warning(
                 "[DATA GRAPH] search-index enqueue failed for id=%s", self.id, exc_info=True
@@ -164,7 +164,7 @@ class DataGraphRow(Model):
         config = cls.__search__
         if config is None:
             return
-        fts5_external_delete(
+        FtsDelete.fts5_external_delete(
             conn, config.fts_table, rowid,
             {col: cast("str | None", indexed.get(col)) for col in config.fts_columns},
         )

@@ -1,11 +1,12 @@
-"""ScheduledJob base contract and the idle-gated cognition job.
+"""ScheduledJob base contract, cron utilities, and the idle-gated cognition job.
 
 The cron package unifies two hand-rolled crontabs (``scheduler_service`` and
 ``subconscious_worker``) into one minute-aligned runner over ``ScheduledJob``
 classes. Concrete jobs subclass ``ScheduledJob`` (or ``IdleGatedJob`` for the
 idle-gated cognition loop) and register themselves in ``cron.JOBS``.
 
-``ScheduledJobProtocol`` is the duck-type the runner uses to iterate the
+``CronBase`` provides shared cron utilities (e.g. the LLM-provider precondition
+gate). ``ScheduledJobProtocol`` is the duck-type the runner uses to iterate the
 registry without pulling in concrete classes at import time.
 """
 
@@ -16,29 +17,33 @@ import threading
 from datetime import datetime, timedelta
 from typing import Protocol, runtime_checkable
 
-from services.cron_schedule import matches
+from services.cron_schedule import CronSchedule
 from services.durable_timestamp import DurableTimestamp
 from services.time_utils import parse_utc, utc_now
 
 logger = logging.getLogger(__name__)
 
 
-def llm_provider_configured() -> bool:
-    """True when at least one LLM provider is available for CHAT turns.
+class CronBase:
+    """Base utilities for the cron system."""
 
-    Mirrors the selection fallback chain the CHAT path uses in
-    :meth:`provider_service.ProviderService._select`: ``get_selected_provider``
-    first, then ``get_providers``. A fresh install has neither set for the
-    first seconds/minutes of life, so this is the shared precondition for any
-    cron job that drives an LLM turn — gate on this in ``should_run`` before
-    the job's own work starts, so a skipped tick never stamps ``last_fired``.
-    """
-    from services.provider_cache_service import ProviderCacheService  # noqa: PLC0415
+    @staticmethod
+    def llm_provider_configured() -> bool:
+        """True when at least one LLM provider is available for CHAT turns.
 
-    return (
-        bool(ProviderCacheService.get_selected_provider())
-        or bool(ProviderCacheService.get_providers())
-    )
+        Mirrors the selection fallback chain the CHAT path uses in
+        :meth:`provider_service.ProviderService._select`: ``get_selected_provider``
+        first, then ``get_providers``. A fresh install has neither set for the
+        first seconds/minutes of life, so this is the shared precondition for any
+        cron job that drives an LLM turn — gate on this in ``should_run`` before
+        the job's own work starts, so a skipped tick never stamps ``last_fired``.
+        """
+        from services.provider_cache_service import ProviderCacheService  # noqa: PLC0415
+
+        return (
+            bool(ProviderCacheService.get_selected_provider())
+            or bool(ProviderCacheService.get_providers())
+        )
 
 
 @runtime_checkable
@@ -75,7 +80,7 @@ class ScheduledJob:
 
     def should_run(self) -> bool:
         """True when the five cron fields match the current local minute."""
-        return matches(
+        return CronSchedule.matches(
             utc_now(), self.minute, self.hour, self.dom, self.month, self.dow
         )
 

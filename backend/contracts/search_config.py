@@ -20,6 +20,7 @@ imported.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import ClassVar
 
 
 @dataclass(frozen=True)
@@ -61,6 +62,58 @@ class SearchConfig:
     indexed_column: str = "indexed_at"
     heal_where: str = "deleted_at IS NULL"
 
+    #: kind → config registry — populated by
+    #: :meth:`DataGraphRow.__init_subclass__` at model-import time. The save path
+    #: reads ``self.__search__`` directly (self IS the L3 instance); this registry
+    #: serves the write-side engine's raw-kind resolution (self-heal / per-row
+    #: processing), which only has a ``kind`` string from a SQL row and no model
+    #: instance.
+    _REGISTRY: ClassVar[dict[str, SearchConfig | None]] = {}
+
+    #: base-table → config registry — populated at module import (one entry per
+    #: searchable base table). The write-side engine dequeues ``{table, rowid}``
+    #: items and self-heals by scanning base tables, so it resolves config by the
+    #: base-table name (not the per-row kind). A table with a ``kind_column``
+    #: still gates individual rows through the kind registry above; a table
+    #: without one indexes every live row.
+    _TABLE_REGISTRY: ClassVar[dict[str, SearchConfig]] = {}
+
+    @classmethod
+    def register_kind(cls, kind: str, config: SearchConfig | None) -> None:
+        """Record a concrete kind's declared search config (may be ``None``)."""
+        cls._REGISTRY[kind] = config
+
+    @classmethod
+    def config_for_kind(cls, kind: str) -> SearchConfig | None:
+        """The declared config for ``kind``, or ``None`` when the kind is
+        non-searchable OR not yet registered (its model not imported). Callers that
+        need to distinguish those two cases must ensure the model is imported."""
+        return cls._REGISTRY.get(kind)
+
+    @classmethod
+    def is_searchable(cls, kind: str) -> bool:
+        """Whether rows of ``kind`` earn a search-index posting — the single
+        authority the write-side engine consults, mirroring the save path's
+        ``self.__search__ is not None``. An unregistered kind reads as
+        non-searchable (safe default: never index an unknown kind)."""
+        return cls._REGISTRY.get(kind) is not None
+
+    @classmethod
+    def register_table(cls, config: SearchConfig) -> None:
+        """Record a searchable base table's config, keyed by ``config.base_table``."""
+        cls._TABLE_REGISTRY[config.base_table] = config
+
+    @classmethod
+    def config_for_table(cls, table: str) -> SearchConfig | None:
+        """The config for a searchable base table, or ``None`` when the table has no
+        declared search footprint (the safe default: never index an unknown table)."""
+        return cls._TABLE_REGISTRY.get(table)
+
+    @classmethod
+    def searchable_tables(cls) -> tuple[str, ...]:
+        """Every registered searchable base table — the self-heal scan set."""
+        return tuple(cls._TABLE_REGISTRY)
+
 
 #: The footprint every searchable ``data_graph`` kind shares — the default
 #: declared on :class:`~models.data_graph.DataGraphRow` and inherited by every
@@ -93,62 +146,5 @@ EPISODE_SEARCH = SearchConfig(
 )
 
 
-# ── kind → config registry ────────────────────────────────────────────────────
-#
-# Populated by DataGraphRow.__init_subclass__ at model-import time. The save path
-# reads self.__search__ directly (self IS the L3 instance); this registry serves
-# the write-side engine's raw-kind resolution (self-heal / per-row processing),
-# which only has a `kind` string from a SQL row and no model instance.
-
-_REGISTRY: dict[str, SearchConfig | None] = {}
-
-
-def register_kind(kind: str, config: SearchConfig | None) -> None:
-    """Record a concrete kind's declared search config (may be ``None``)."""
-    _REGISTRY[kind] = config
-
-
-def config_for_kind(kind: str) -> SearchConfig | None:
-    """The declared config for ``kind``, or ``None`` when the kind is
-    non-searchable OR not yet registered (its model not imported). Callers that
-    need to distinguish those two cases must ensure the model is imported."""
-    return _REGISTRY.get(kind)
-
-
-def is_searchable(kind: str) -> bool:
-    """Whether rows of ``kind`` earn a search-index posting — the single
-    authority the write-side engine consults, mirroring the save path's
-    ``self.__search__ is not None``. An unregistered kind reads as
-    non-searchable (safe default: never index an unknown kind)."""
-    return _REGISTRY.get(kind) is not None
-
-
-# ── base-table → config registry ───────────────────────────────────────────────
-#
-# The write-side engine dequeues ``{table, rowid}`` items and self-heals by
-# scanning base tables, so it resolves config by the base-table name (not the
-# per-row kind). Populated at module import below — one entry per searchable
-# base table. A table with a ``kind_column`` still gates individual rows through
-# the kind registry above; a table without one indexes every live row.
-
-_TABLE_REGISTRY: dict[str, SearchConfig] = {}
-
-
-def register_table(config: SearchConfig) -> None:
-    """Record a searchable base table's config, keyed by ``config.base_table``."""
-    _TABLE_REGISTRY[config.base_table] = config
-
-
-def config_for_table(table: str) -> SearchConfig | None:
-    """The config for a searchable base table, or ``None`` when the table has no
-    declared search footprint (the safe default: never index an unknown table)."""
-    return _TABLE_REGISTRY.get(table)
-
-
-def searchable_tables() -> tuple[str, ...]:
-    """Every registered searchable base table — the self-heal scan set."""
-    return tuple(_TABLE_REGISTRY)
-
-
-register_table(DATA_GRAPH_SEARCH)
-register_table(EPISODE_SEARCH)
+SearchConfig.register_table(DATA_GRAPH_SEARCH)
+SearchConfig.register_table(EPISODE_SEARCH)

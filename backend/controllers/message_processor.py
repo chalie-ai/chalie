@@ -508,8 +508,8 @@ class MessageProcessor:
         HTML branch is sanitized at the persist-time boundary so both the live
         WS send and the GET/refresh read paths inherit it."""
         if self.config.RENDERS_HTML:
-            from services.markup import markdown_to_html, sanitize  # noqa: PLC0415
-            return sanitize(markdown_to_html(text))
+            from services.markup import Markup  # noqa: PLC0415
+            return Markup.sanitize(Markup.markdown_to_html(text))
         return text or ""
 
     @staticmethod
@@ -645,8 +645,8 @@ class MessageProcessor:
             return
         rendered = self.prompt_service.act_trail()
         act_trail = rendered.split("\n") if rendered else []
-        from services.skill_suggestion_message_processor import maybe_suggest_skill  # noqa: PLC0415
-        maybe_suggest_skill(act_trail, self.raw_input, self.channel, self.turn_id)
+        from services.skill_suggestion_message_processor import SkillSuggestionProcessor  # noqa: PLC0415
+        SkillSuggestionProcessor.maybe_suggest_skill(act_trail, self.raw_input, self.channel, self.turn_id)
 
     def _pattern_skill_sync(self) -> None:
         """Decay untouched patterns, then run the skill-association pass over the
@@ -848,7 +848,7 @@ class MessageProcessor:
             return
         try:
             if not self.gist_service.bulk_get(self.channel, [self.turn_id]):
-                from services.thread_gist_message_processor import maybe_ingest_gist  # noqa: PLC0415
-                maybe_ingest_gist(self.channel, self.turn_id, self.config.type_value())
+                from services.thread_gist_message_processor import ThreadGistMessageProcessor  # noqa: PLC0415
+                ThreadGistMessageProcessor.maybe_ingest_gist(self.channel, self.turn_id, self.config.type_value())
         except Exception as exc:  # noqa: BLE001 — gist ingest is best-effort context
             logger.debug("[MessageProcessor] gist ingest skipped for turn %s: %s", self.turn_id, exc)

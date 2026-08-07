@@ -62,7 +62,7 @@ pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 # real network boundary (see test_message_processor_runaway_loop.py). The
 # delivered notice always lands as a real MessageProcessor.process() turn, and
 # that turn's own provider call must not reach a real LLM.
-_BUILD_CLIENT = "services.provider_service.build_client"
+_BUILD_CLIENT = "services.provider_service.Factory.build_client"
 
 
 class _RecordingClient:

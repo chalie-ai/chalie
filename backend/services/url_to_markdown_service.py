@@ -14,21 +14,6 @@ from urllib.parse import urljoin, urlparse
 from services.file_mapper_service import FileMapperService
 
 
-def url_slug(url: str) -> str:
-    """Flat per-URL slug ``<host>--<path-slug>`` (just ``<host>`` on an empty path).
-
-    The one naming convention for every URL-derived filename (web pages AND
-    downloads): distinct URLs never collide on disk, a re-fetch maps to the
-    same name and overwrites in place, and no separator or ``..`` survives
-    into the filename — path runs of non-alphanumerics collapse to a single
-    ``-``, capped at 120 characters.
-    """
-    parsed = urlparse(url.lower())
-    host = parsed.hostname or ""
-    slug = re.sub(r"[^a-z0-9]+", "-", (parsed.path or "").lstrip("/")).strip("-")[:120]
-    return f"{host}--{slug}" if slug else host
-
-
 class _MediaSrcCollector(HTMLParser):
     """Collect ``src`` attributes from iframe/video/source elements (self-closing
     tags included — HTMLParser's ``handle_startendtag`` delegates here)."""
@@ -48,6 +33,21 @@ class _MediaSrcCollector(HTMLParser):
 
 class UrlToMarkdownService:
     """Convert already-fetched HTML to markdown and persist under the web-pages directory."""
+
+    @staticmethod
+    def url_slug(url: str) -> str:
+        """Flat per-URL slug ``<host>--<path-slug>`` (just ``<host>`` on an empty path).
+
+        The one naming convention for every URL-derived filename (web pages AND
+        downloads): distinct URLs never collide on disk, a re-fetch maps to the
+        same name and overwrites in place, and no separator or ``..`` survives
+        into the filename — path runs of non-alphanumerics collapse to a single
+        ``-``, capped at 120 characters.
+        """
+        parsed = urlparse(url.lower())
+        host = parsed.hostname or ""
+        slug = re.sub(r"[^a-z0-9]+", "-", (parsed.path or "").lstrip("/")).strip("-")[:120]
+        return f"{host}--{slug}" if slug else host
 
     def convert(self, html: str | bytes, url: str) -> str:
         """Extract markdown and append the embedded-media section.
@@ -92,7 +92,7 @@ class UrlToMarkdownService:
 
     def filename_for(self, url: str, extension: str) -> str:
         """Flat filename ``<host>--<path-slug>.<extension>`` (rules: :func:`url_slug`)."""
-        return f"{url_slug(url)}.{extension}"
+        return f"{UrlToMarkdownService.url_slug(url)}.{extension}"
 
     def persist(self, content: str, url: str, extension: str) -> Path:
         """Write *content* under the web-pages directory for *url*, overwriting

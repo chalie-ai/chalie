@@ -17,109 +17,105 @@ _MAX_TOTAL_BYTES = 200 * 1024      # 200KB cumulative stdout
 _MAX_TURNS = 10                    # Max tool↔Chalie dialog turns
 
 
-def _read_line_with_timeout(proc: subprocess.Popen[bytes], timeout: int, turn: int) -> bytes | None:
-    line_data: list[bytes | None] = [None]
-    read_error: list[Exception | None] = [None]
-
-    def _read_line() -> None:
-        try:
-            line_data[0] = cast(IO[bytes], proc.stdout).readline()
-        except Exception as e:
-            read_error[0] = e
-
-    t = threading.Thread(target=_read_line, daemon=True)
-    t.start()
-    t.join(timeout=timeout)
-
-    if t.is_alive():
-        proc.kill()
-        raise TimeoutError(
-            f"Interactive tool timed out waiting for output (turn {turn + 1})"
-        )
-
-    if read_error[0]:
-        raise RuntimeError(str(read_error[0]))
-
-    raw_line = line_data[0]
-    if not raw_line:
-        return None
-    return raw_line
-
-
-def _apply_size_limits(raw_line: bytes, total_bytes: int) -> tuple[bytes, int, bool]:
-    if len(raw_line) > _MAX_LINE_BYTES:
-        logger.warning(
-            f"[SUBPROCESS INTERACTIVE] stdout line exceeds {_MAX_LINE_BYTES}B, truncating"
-        )
-        raw_line = raw_line[:_MAX_LINE_BYTES]
-
-    total_bytes += len(raw_line)
-    if total_bytes > _MAX_TOTAL_BYTES:
-        logger.warning(
-            f"[SUBPROCESS INTERACTIVE] cumulative stdout exceeds {_MAX_TOTAL_BYTES}B, stopping"
-        )
-        return raw_line, total_bytes, True
-
-    return raw_line, total_bytes, False
-
-
-def _parse_json_line(raw_line: bytes, turn: int) -> tuple[dict[str, object], bool]:
-    """Decode and parse one stdout line as JSON.
-
-    Returns (parsed_dict, skip_flag).  skip_flag is True when the line
-    should be skipped (empty or non-JSON).
-    """
-    line_str = raw_line.decode("utf-8", errors="replace").strip()
-    if not line_str:
-        return {}, True
-
-    try:
-        return cast(dict[str, object], json.loads(line_str)), False
-    except ValueError:
-        logger.warning(
-            f"[SUBPROCESS INTERACTIVE] non-JSON stdout (turn {turn + 1}): "
-            f"{line_str[:200]}"
-        )
-        return {}, True
-
-
-def _send_chalie_response(proc: subprocess.Popen[bytes], result: dict[str, object], on_tool_output: Callable[[dict[str, object]], str]) -> bool:
-    """Call *on_tool_output*, then write the response JSON to proc.stdin.
-
-    Returns True on success, False if an error occurred (caller should break).
-    """
-    try:
-        chalie_response = on_tool_output(result)
-        response_json = json.dumps({"text": chalie_response}) + "\n"
-        cast(IO[bytes], proc.stdin).write(response_json.encode())
-        cast(IO[bytes], proc.stdin).flush()
-        return True
-    except Exception as e:
-        logger.exception(f"[SUBPROCESS INTERACTIVE] on_tool_output error: {e}")
-        return False
-
-
-def _cleanup_proc(proc: subprocess.Popen[bytes], stderr_lines: list[str]) -> list[str]:
-    """Close stdin, drain stderr, and wait for the subprocess to exit."""
-    try:
-        cast(IO[bytes], proc.stdin).close()
-    except Exception:
-        pass
-    try:
-        stderr_raw = cast(IO[bytes], proc.stderr).read(800)
-        if stderr_raw:
-            stderr_lines.append(stderr_raw.decode("utf-8", errors="replace").strip())
-    except Exception:
-        pass
-    try:
-        proc.wait(timeout=5)
-    except Exception:
-        proc.kill()
-    return stderr_lines
-
 
 class ToolSubprocessService:
     """Execute trusted tools via subprocess (no Docker required)."""
+
+    def _read_line_with_timeout(self, proc: subprocess.Popen[bytes], timeout: int, turn: int) -> bytes | None:
+        line_data: list[bytes | None] = [None]
+        read_error: list[Exception | None] = [None]
+
+        def _read_line() -> None:
+            try:
+                line_data[0] = cast(IO[bytes], proc.stdout).readline()
+            except Exception as e:
+                read_error[0] = e
+
+        t = threading.Thread(target=_read_line, daemon=True)
+        t.start()
+        t.join(timeout=timeout)
+
+        if t.is_alive():
+            proc.kill()
+            raise TimeoutError(
+                f"Interactive tool timed out waiting for output (turn {turn + 1})"
+            )
+
+        if read_error[0]:
+            raise RuntimeError(str(read_error[0]))
+
+        raw_line = line_data[0]
+        if not raw_line:
+            return None
+        return raw_line
+
+    def _apply_size_limits(self, raw_line: bytes, total_bytes: int) -> tuple[bytes, int, bool]:
+        if len(raw_line) > _MAX_LINE_BYTES:
+            logger.warning(
+                f"[SUBPROCESS INTERACTIVE] stdout line exceeds {_MAX_LINE_BYTES}B, truncating"
+            )
+            raw_line = raw_line[:_MAX_LINE_BYTES]
+
+        total_bytes += len(raw_line)
+        if total_bytes > _MAX_TOTAL_BYTES:
+            logger.warning(
+                f"[SUBPROCESS INTERACTIVE] cumulative stdout exceeds {_MAX_TOTAL_BYTES}B, stopping"
+            )
+            return raw_line, total_bytes, True
+
+        return raw_line, total_bytes, False
+
+    def _parse_json_line(self, raw_line: bytes, turn: int) -> tuple[dict[str, object], bool]:
+        """Decode and parse one stdout line as JSON.
+
+        Returns (parsed_dict, skip_flag).  skip_flag is True when the line
+        should be skipped (empty or non-JSON).
+        """
+        line_str = raw_line.decode("utf-8", errors="replace").strip()
+        if not line_str:
+            return {}, True
+
+        try:
+            return cast(dict[str, object], json.loads(line_str)), False
+        except ValueError:
+            logger.warning(
+                f"[SUBPROCESS INTERACTIVE] non-JSON stdout (turn {turn + 1}): "
+                f"{line_str[:200]}"
+            )
+            return {}, True
+
+    def _send_chalie_response(self, proc: subprocess.Popen[bytes], result: dict[str, object], on_tool_output: Callable[[dict[str, object]], str]) -> bool:
+        """Call *on_tool_output*, then write the response JSON to proc.stdin.
+
+        Returns True on success, False if an error occurred (caller should break).
+        """
+        try:
+            chalie_response = on_tool_output(result)
+            response_json = json.dumps({"text": chalie_response}) + "\n"
+            cast(IO[bytes], proc.stdin).write(response_json.encode())
+            cast(IO[bytes], proc.stdin).flush()
+            return True
+        except Exception as e:
+            logger.exception(f"[SUBPROCESS INTERACTIVE] on_tool_output error: {e}")
+            return False
+
+    def _cleanup_proc(self, proc: subprocess.Popen[bytes], stderr_lines: list[str]) -> list[str]:
+        """Close stdin, drain stderr, and wait for the subprocess to exit."""
+        try:
+            cast(IO[bytes], proc.stdin).close()
+        except Exception:
+            pass
+        try:
+            stderr_raw = cast(IO[bytes], proc.stderr).read(800)
+            if stderr_raw:
+                stderr_lines.append(stderr_raw.decode("utf-8", errors="replace").strip())
+        except Exception:
+            pass
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            proc.kill()
+        return stderr_lines
 
     def run(self, runner_path: str, payload: dict[str, object], timeout: int = 9) -> dict[str, object]:
         """
@@ -210,16 +206,16 @@ class ToolSubprocessService:
 
         try:
             while turns < _MAX_TURNS:
-                raw_line = _read_line_with_timeout(proc, timeout, turns)
+                raw_line = self._read_line_with_timeout(proc, timeout, turns)
 
                 if not raw_line:
                     break
 
-                raw_line, total_bytes, should_stop = _apply_size_limits(raw_line, total_bytes)
+                raw_line, total_bytes, should_stop = self._apply_size_limits(raw_line, total_bytes)
                 if should_stop:
                     break
 
-                result, skip = _parse_json_line(raw_line, turns)
+                result, skip = self._parse_json_line(raw_line, turns)
                 if skip:
                     continue
 
@@ -228,14 +224,14 @@ class ToolSubprocessService:
                 if result.get("output") != "tool" or on_tool_output is None:
                     break
 
-                if not _send_chalie_response(proc, result, on_tool_output):
+                if not self._send_chalie_response(proc, result, on_tool_output):
                     break
 
             if turns >= _MAX_TURNS:
                 logger.warning(f"[SUBPROCESS INTERACTIVE] max turns ({_MAX_TURNS}) reached")
 
         finally:
-            stderr_lines = _cleanup_proc(proc, stderr_lines)
+            stderr_lines = self._cleanup_proc(proc, stderr_lines)
 
         if stderr_lines:
             logger.info(f"[SUBPROCESS INTERACTIVE] stderr: {' | '.join(stderr_lines)}")

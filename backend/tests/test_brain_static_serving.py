@@ -77,14 +77,14 @@ def test_brain_authed_serves_index(db: sqlite3.Connection, brain_dist: pathlib.P
     """/brain/ with a valid real session → 200 + SPA index.html."""
     from api import create_app
     from contracts.constants.auth import SESSION_COOKIE_NAME
-    from services.auth_session_service import create_session
+    from services.auth_session_service import AuthSessionService
     from flask import Response as FlaskResponse
 
     app = create_app()
     client = app.test_client()
     # Mint a real session token via the real auth service (writes to the test
     # sqlite auth_sessions table + MemoryStore singleton). No mock.
-    token = create_session(FlaskResponse())
+    token = AuthSessionService.create_session(FlaskResponse())
     client.set_cookie(SESSION_COOKIE_NAME, token)
     r = client.get("/brain/")
     assert r.status_code == 200
@@ -95,12 +95,12 @@ def test_brain_authed_deep_path_spa_fallback(db: sqlite3.Connection, brain_dist:
     """/brain/providers/some-deep-link → 200 SPA fallback (history mode reload)."""
     from api import create_app
     from contracts.constants.auth import SESSION_COOKIE_NAME
-    from services.auth_session_service import create_session
+    from services.auth_session_service import AuthSessionService
     from flask import Response as FlaskResponse
 
     app = create_app()
     client = app.test_client()
-    token = create_session(FlaskResponse())
+    token = AuthSessionService.create_session(FlaskResponse())
     client.set_cookie(SESSION_COOKIE_NAME, token)
     r = client.get("/brain/providers/some-deep-link")
     assert r.status_code == 200

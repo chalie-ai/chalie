@@ -37,133 +37,6 @@ _STATUS_OFFLINE = "offline"
 _SANITIZE_RE = re.compile(r"[^a-z0-9_]")
 
 
-def _sanitize_name(name: str) -> str:
-    """Convert a server name to a safe [a-z0-9_] identifier fragment."""
-    lowered = name.lower().strip()
-    # Replace runs of non-identifier characters with a single underscore.
-    sanitized = _SANITIZE_RE.sub("_", lowered)
-    # Strip leading/trailing underscores produced by the replacement.
-    return sanitized.strip("_") or "server"
-
-
-def _tool_name(server_name: str, remote_tool: str) -> str:
-    """Build the prefixed tool name for a remote MCP tool.
-
-    Format: _mcp_<sanitized_server_name>_<remote_tool_name>
-    Example: server='taskie', tool='create_document' → '_mcp_taskie_create_document'
-    """
-    return f"_mcp_{_sanitize_name(server_name)}_{remote_tool}"
-
-
-# Short words that stay lowercase mid-label when humanizing a tool name.
-_MINOR_LABEL_WORDS = frozenset({
-    "a", "an", "and", "as", "at", "by", "for", "from", "in",
-    "of", "on", "or", "the", "to", "with",
-})
-
-
-def humanize_segment(segment: str) -> str:
-    """Turn an underscore identifier into a Title-Cased label.
-
-    ``add_comment_to_pending_review`` -> ``Add Comment to Pending Review``.
-    The first word is always capitalized; minor words elsewhere stay lowercase.
-    """
-    words = [w for w in segment.split("_") if w]
-    out = []
-    for i, w in enumerate(words):
-        out.append(w if (i and w.lower() in _MINOR_LABEL_WORDS) else w[:1].upper() + w[1:])
-    return " ".join(out)
-
-
-def _normalize_host(host: str) -> str:
-    """Canonical dedup key for a remote MCP endpoint.
-
-    One connection per endpoint: lowercases scheme + hostname, drops default
-    ports (443/https, 80/http), trims surrounding whitespace, and strips a
-    single trailing slash from the path.  A bare host ("mcp.example.com/mcp")
-    is parsed as if https.  The original ``host`` is still stored verbatim for
-    display — this value is only the key used to detect re-adds of the same
-    endpoint.
-    """
-    raw = (host or "").strip()
-    parts = urlsplit(raw)
-    if not parts.scheme and not parts.netloc:
-        # Bare host like "mcp.example.com/mcp" — re-parse with a scheme so the
-        # hostname/port split correctly instead of landing in ``path``.
-        parts = urlsplit("https://" + raw)
-    scheme = (parts.scheme or "https").lower()
-    hostname = (parts.hostname or "").lower()
-    port = parts.port
-    is_default_port = (
-        (scheme == "https" and port == 443)
-        or (scheme == "http" and port == 80)
-    )
-    netloc = hostname if (port is None or is_default_port) else f"{hostname}:{port}"
-    if parts.username:
-        userinfo = parts.username
-        if parts.password:
-            userinfo = f"{userinfo}:{parts.password}"
-        netloc = f"{userinfo}@{netloc}"
-    path = parts.path.rstrip("/")
-    return urlunsplit((scheme, netloc, path, parts.query, ""))
-
-
-# ── Async MCP helpers ────────────────────────────────────────────────────────
-
-async def _async_list_tools(host: str, headers: dict[str, str]) -> list[dict[str, object]]:
-    """Connect to a remote MCP server and return its tool list.
-
-    Each returned dict has 'name', 'description', and 'inputSchema' keys
-    matching the MCP protocol ToolDescription shape.
-    """
-    from mcp.client.streamable_http import streamable_http_client
-    from mcp.client.session import ClientSession
-    # create_mcp_http_client builds an httpx client with headers AND the SDK's
-    # recommended MCP timeouts. It is imported from its definition module because
-    # the transport package does not re-export it (mypy --strict no_implicit_reexport).
-    from mcp.shared._httpx_utils import create_mcp_http_client
-
-    async with create_mcp_http_client(headers=headers) as client:
-        async with streamable_http_client(host, http_client=client) as (read, write):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                result = await session.list_tools()
-                return [
-                    {
-                        "name": t.name,
-                        "description": t.description or "",
-                        "inputSchema": (
-                            t.input_schema if isinstance(t.input_schema, dict) else {}
-                        ),
-                    }
-                    for t in result.tools
-                ]
-
-
-async def _async_call_tool(
-    host: str, headers: dict[str, str], remote_tool: str, params: dict[str, object]
-) -> object:
-    """Connect to a remote MCP server and call a single tool.
-
-    Returns the full ``CallToolResult`` so the caller can read ``is_error`` and
-    ``structured_content`` alongside the content blocks — an MCP tool signalling
-    failure via ``is_error=True`` must NOT be mistaken for success, and structured
-    JSON must be preserved as structure rather than collapsed into a blob.
-    """
-    from mcp.client.streamable_http import streamable_http_client
-    from mcp.client.session import ClientSession
-    from mcp.shared._httpx_utils import create_mcp_http_client
-
-    async with create_mcp_http_client(headers=headers) as client:
-        async with streamable_http_client(host, http_client=client) as (read, write):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                return await session.call_tool(remote_tool, params)
-
-
-# ── McpClientService ──────────────────────────────────────────────────────────
-
-
 class McpClientService:
     """CRUD, sync, and dispatch for outbound MCP client connections.
 
@@ -171,6 +44,129 @@ class McpClientService:
     asyncio.run() — safe in Chalie's sync worker/ability context because those
     threads never carry a running event loop.
     """
+
+    # ── Static helpers (formerly module-level) ────────────────────────────────
+
+    @staticmethod
+    def _sanitize_name(name: str) -> str:
+        """Convert a server name to a safe [a-z0-9_] identifier fragment."""
+        lowered = name.lower().strip()
+        # Replace runs of non-identifier characters with a single underscore.
+        sanitized = _SANITIZE_RE.sub("_", lowered)
+        # Strip leading/trailing underscores produced by the replacement.
+        return sanitized.strip("_") or "server"
+
+    @staticmethod
+    def _tool_name(server_name: str, remote_tool: str) -> str:
+        """Build the prefixed tool name for a remote MCP tool.
+
+        Format: _mcp_<sanitized_server_name>_<remote_tool_name>
+        Example: server='taskie', tool='create_document' → '_mcp_taskie_create_document'
+        """
+        return f"_mcp_{McpClientService._sanitize_name(server_name)}_{remote_tool}"
+
+    # Short words that stay lowercase mid-label when humanizing a tool name.
+    _MINOR_LABEL_WORDS = frozenset({
+        "a", "an", "and", "as", "at", "by", "for", "from", "in",
+        "of", "on", "or", "the", "to", "with",
+    })
+
+    @staticmethod
+    def humanize_segment(segment: str) -> str:
+        """Turn an underscore identifier into a Title-Cased label.
+
+        ``add_comment_to_pending_review`` -> ``Add Comment to Pending Review``.
+        The first word is always capitalized; minor words elsewhere stay lowercase.
+        """
+        words = [w for w in segment.split("_") if w]
+        out = []
+        for i, w in enumerate(words):
+            out.append(w if (i and w.lower() in McpClientService._MINOR_LABEL_WORDS) else w[:1].upper() + w[1:])
+        return " ".join(out)
+
+    @staticmethod
+    def _normalize_host(host: str) -> str:
+        """Canonical dedup key for a remote MCP endpoint.
+
+        One connection per endpoint: lowercases scheme + hostname, drops default
+        ports (443/https, 80/http), trims surrounding whitespace, and strips a
+        single trailing slash from the path.  A bare host ("mcp.example.com/mcp")
+        is parsed as if https.  The original ``host`` is still stored verbatim for
+        display — this value is only the key used to detect re-adds of the same
+        endpoint.
+        """
+        raw = (host or "").strip()
+        parts = urlsplit(raw)
+        if not parts.scheme and not parts.netloc:
+            # Bare host like "mcp.example.com/mcp" — re-parse with a scheme so the
+            # hostname/port split correctly instead of landing in ``path``.
+            parts = urlsplit("https://" + raw)
+        scheme = (parts.scheme or "https").lower()
+        hostname = (parts.hostname or "").lower()
+        port = parts.port
+        is_default_port = (
+            (scheme == "https" and port == 443)
+            or (scheme == "http" and port == 80)
+        )
+        netloc = hostname if (port is None or is_default_port) else f"{hostname}:{port}"
+        if parts.username:
+            userinfo = parts.username
+            if parts.password:
+                userinfo = f"{userinfo}:{parts.password}"
+            netloc = f"{userinfo}@{netloc}"
+        path = parts.path.rstrip("/")
+        return urlunsplit((scheme, netloc, path, parts.query, ""))
+
+    # ── Async MCP helpers ──────────────────────────────────────────────────────
+
+    @staticmethod
+    async def _async_list_tools(host: str, headers: dict[str, str]) -> list[dict[str, object]]:
+        """Connect to a remote MCP server and return its tool list.
+
+        Each returned dict has 'name', 'description', and 'inputSchema' keys
+        matching the MCP protocol ToolDescription shape.
+        """
+        from mcp.client.streamable_http import streamable_http_client
+        from mcp.client.session import ClientSession
+        # create_mcp_http_client builds an httpx client with headers AND the SDK's
+        # recommended MCP timeouts. It is imported from its definition module because
+        # the transport package does not re-export it (mypy --strict no_implicit_reexport).
+        from mcp.shared._httpx_utils import create_mcp_http_client
+
+        async with create_mcp_http_client(headers=headers) as client:
+            async with streamable_http_client(host, http_client=client) as (read, write, _):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    result = await session.list_tools()
+                    return [
+                        {
+                            "name": t.name,
+                            "description": t.description or "",
+                            "inputSchema": t.inputSchema,
+                        }
+                        for t in result.tools
+                    ]
+
+    @staticmethod
+    async def _async_call_tool(
+        host: str, headers: dict[str, str], remote_tool: str, params: dict[str, object]
+    ) -> object:
+        """Connect to a remote MCP server and call a single tool.
+
+        Returns the full ``CallToolResult`` so the caller can read ``is_error`` and
+        ``structured_content`` alongside the content blocks — an MCP tool signalling
+        failure via ``is_error=True`` must NOT be mistaken for success, and structured
+        JSON must be preserved as structure rather than collapsed into a blob.
+        """
+        from mcp.client.streamable_http import streamable_http_client
+        from mcp.client.session import ClientSession
+        from mcp.shared._httpx_utils import create_mcp_http_client
+
+        async with create_mcp_http_client(headers=headers) as client:
+            async with streamable_http_client(host, http_client=client) as (read, write, _):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    return await session.call_tool(remote_tool, params)
 
     # ── CRUD ──────────────────────────────────────────────────────────────────
 
@@ -214,9 +210,9 @@ class McpClientService:
 
     def _find_by_normalized_host(self, host: str) -> dict[str, object] | None:
         """Return an existing server resolving to the same endpoint, else None."""
-        key = _normalize_host(host)
+        key = self._normalize_host(host)
         for server in self.list_servers():
-            if _normalize_host(cast(str, server["host"])) == key:
+            if McpClientService._normalize_host(cast(str, server["host"])) == key:
                 return server
         return None
 
@@ -232,8 +228,8 @@ class McpClientService:
         server name, so a name change additionally invalidates the old
         ``_mcp_<oldname>_*`` policy rows.
         """
-        old_prefix = f"_mcp_{_sanitize_name(existing_name)}_"
-        new_prefix = f"_mcp_{_sanitize_name(name)}_"
+        old_prefix = f"_mcp_{McpClientService._sanitize_name(existing_name)}_"
+        new_prefix = f"_mcp_{McpClientService._sanitize_name(name)}_"
         if old_prefix != new_prefix:
             self._delete_policy_rows(existing_id)
         self._delete_tools_for_server(existing_id)
@@ -313,7 +309,7 @@ class McpClientService:
             headers = json.loads(headers) if headers else {}
 
         try:
-            tools = asyncio.run(_async_list_tools(host, cast(dict[str, str], headers)))
+            tools = asyncio.run(McpClientService._async_list_tools(host, cast(dict[str, str], headers)))
             self._write_tools(server_id, cast(str, server["name"]), tools)
             self._update_status(server_id, _STATUS_ONLINE)
             logger.info(
@@ -404,7 +400,7 @@ class McpClientService:
         One ``list_servers`` read serves the whole batch.
         """
         servers = sorted(
-            ({"slug": _sanitize_name(cast(str, s["name"])), "title": cast(str, s["name"])}
+            ({"slug": McpClientService._sanitize_name(cast(str, s["name"])), "title": cast(str, s["name"])}
              for s in self.list_servers()),
             key=lambda s: len(s["slug"]), reverse=True,  # longest slug wins the prefix race
         )
@@ -416,9 +412,9 @@ class McpClientService:
             for s in servers:
                 prefix = f"_mcp_{s['slug']}_"
                 if base.startswith(prefix):
-                    label = humanize_segment(base[len(prefix):])
+                    label = McpClientService.humanize_segment(base[len(prefix):])
                     if action:
-                        label += f" — {humanize_segment(action)}"
+                        label += f" — {McpClientService.humanize_segment(action)}"
                     out[perm] = {"group": s["title"], "label": label}
                     break
         return out
@@ -456,7 +452,7 @@ class McpClientService:
 
         try:
             result = asyncio.run(
-                _async_call_tool(host, cast(dict[str, str], headers), remote_tool, params)
+                McpClientService._async_call_tool(host, cast(dict[str, str], headers), remote_tool, params)
             )
         except Exception as exc:
             raise McpServerUnreachable(cast(str, server["name"]), str(exc)) from exc
@@ -530,7 +526,7 @@ class McpClientService:
         with Database.transaction(str(FileMapperService.get_mcp_tools_db_path())):
             McpTool.filter("server_id", server_id).delete()
             for t in tools:
-                name = _tool_name(server_name, cast(str, t["name"]))
+                name = McpClientService._tool_name(server_name, cast(str, t["name"]))
                 summary = t.get("description", "") or ""
                 schema_json = json.dumps(t.get("inputSchema") or {})
                 tool = McpTool(
@@ -581,7 +577,7 @@ class McpClientService:
         best_len = 0
 
         for srv in servers:
-            prefix = _sanitize_name(cast(str, srv["name"])) + "_"
+            prefix = McpClientService._sanitize_name(cast(str, srv["name"])) + "_"
             if remainder.startswith(prefix) and len(prefix) > best_len:
                 best = (srv, remainder[len(prefix):])
                 best_len = len(prefix)

@@ -11,7 +11,7 @@ from typing import cast
 import pytest
 
 from services.file_mapper_service import FileMapperService
-from services.mcp_client_service import McpClientService, _sanitize_name, _tool_name
+from services.mcp_client_service import McpClientService
 
 pytestmark = pytest.mark.unit
 
@@ -26,19 +26,19 @@ def test_tool_name_sanitization_produces_valid_prefix() -> None:
     policy seeding, and mcp_tools gating all depend on.
     """
     # Server name with capitals, hyphens, spaces, and leading/trailing noise
-    result = _tool_name("My-Server-One!", "create_document")
+    result = McpClientService._tool_name("My-Server-One!", "create_document")
     assert result == "_mcp_my_server_one_create_document"
 
     # Purely numeric server name
-    result = _tool_name("42services", "ping")
+    result = McpClientService._tool_name("42services", "ping")
     assert result == "_mcp_42services_ping"
 
     # Unicode / special chars collapse to underscores then stripped
-    result = _tool_name("home-assistant", "toggle_light")
+    result = McpClientService._tool_name("home-assistant", "toggle_light")
     assert result == "_mcp_home_assistant_toggle_light"
 
     # All punctuation collapses to a single underscore (then stripped); falls back to 'server'
-    result = _tool_name("!!!---!!!", "foo")
+    result = McpClientService._tool_name("!!!---!!!", "foo")
     assert result == "_mcp_server_foo"
 
 
@@ -136,7 +136,7 @@ def test_get_online_mcp_tool_names_excludes_disabled_and_offline(db: sqlite3.Con
         (server_b["id"], "disabled_svc"),
         (server_c["id"], "offline_svc"),
     ]:
-        tool_name = f"_mcp_{_sanitize_name(srv_name)}_fetch"
+        tool_name = f"_mcp_{McpClientService._sanitize_name(srv_name)}_fetch"
         conn_tools.execute(
             "INSERT OR REPLACE INTO mcp_tools "
             "(server_id, tool_name, summary, raw_schema) VALUES (?, ?, ?, ?)",
@@ -256,7 +256,6 @@ def test_get_tool_schema_round_trips_stored_input_schema(db: sqlite3.Connection,
 # Dedup / idempotent upsert on add
 # ---------------------------------------------------------------------------
 
-from services.mcp_client_service import _normalize_host  # noqa: E402
 from services.mcp_tools_db import get_tools_connection  # noqa: E402
 
 
@@ -269,7 +268,7 @@ from services.mcp_tools_db import get_tools_connection  # noqa: E402
     ("mcp.example.com/mcp", "https://mcp.example.com/mcp"),
 ])
 def test_normalize_host_treats_variants_as_equal(a: str, b: str) -> None:
-    assert _normalize_host(a) == _normalize_host(b)
+    assert McpClientService._normalize_host(a) == McpClientService._normalize_host(b)
 
 
 @pytest.mark.parametrize("a,b", [
@@ -279,7 +278,7 @@ def test_normalize_host_treats_variants_as_equal(a: str, b: str) -> None:
     ("http://mcp.example.com/x", "https://mcp.example.com/x"),
 ])
 def test_normalize_host_keeps_distinct_endpoints_distinct(a: str, b: str) -> None:
-    assert _normalize_host(a) != _normalize_host(b)
+    assert McpClientService._normalize_host(a) != McpClientService._normalize_host(b)
 
 
 def test_add_server_dedups_same_endpoint_variant(db: sqlite3.Connection) -> None:
@@ -322,7 +321,7 @@ def test_add_server_upsert_name_change_purges_old_prefix_rows(db: sqlite3.Connec
     svc = McpClientService()
     s = svc.add_server(name="tasker", host="https://mcp.example.com/mcp",
                        headers={}, enabled=True)
-    old_tool = _tool_name("tasker", "create_document")
+    old_tool = McpClientService._tool_name("tasker", "create_document")
 
     conn = get_tools_connection()
     conn.execute(

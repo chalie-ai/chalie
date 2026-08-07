@@ -29,7 +29,7 @@ from api.request import Request
 from api.request.provider import ProviderRequest
 from api.response.provider import Provider
 from services.provider_db_service import ProviderDbService
-from services.provider_probe import DUPLICATE_NAME_MSG, invalidate_provider_cache, safe_validation_msg
+from services.provider_probe import DUPLICATE_NAME_MSG, ProviderProbe
 
 _PROVIDER_NOT_FOUND = "Provider not found"
 
@@ -98,8 +98,8 @@ class Providers(Endpoint):
         try:
             self._service().delete_provider(cast(int, id))
         except ValueError as exc:
-            return Provider.failure(safe_validation_msg(exc)), 409
-        invalidate_provider_cache()
+            return Provider.failure(ProviderProbe.safe_validation_msg(exc)), 409
+        ProviderProbe.invalidate_provider_cache()
         return "", 204
 
     def _create(self, dto: ProviderRequest) -> ResponseReturnValue:
@@ -115,20 +115,20 @@ class Providers(Endpoint):
                 self._service().create_provider(dto.model_dump(mode="json", exclude_none=True)),
             )
         except ValueError as exc:
-            return Provider.failure(safe_validation_msg(exc)), 400
+            return Provider.failure(ProviderProbe.safe_validation_msg(exc)), 400
         except sqlite3.IntegrityError:
             return Provider.failure(DUPLICATE_NAME_MSG), 409
-        invalidate_provider_cache()
+        ProviderProbe.invalidate_provider_cache()
         return Provider.from_row(row).single(), 201
 
     def _update(self, provider_id: int, dto: ProviderRequest) -> ResponseReturnValue:
         try:
             row = self._service().update_provider(provider_id, dto.model_dump(mode="json", exclude_unset=True))
         except ValueError as exc:
-            return Provider.failure(safe_validation_msg(exc)), 400
+            return Provider.failure(ProviderProbe.safe_validation_msg(exc)), 400
         except sqlite3.IntegrityError:
             return Provider.failure(DUPLICATE_NAME_MSG), 409
         if row is None:
             raise NotFoundError(_PROVIDER_NOT_FOUND)
-        invalidate_provider_cache()
+        ProviderProbe.invalidate_provider_cache()
         return Provider.from_row(row).single()

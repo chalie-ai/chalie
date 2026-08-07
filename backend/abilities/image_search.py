@@ -28,7 +28,7 @@ from configs.enums.param_key import Keys
 from contracts.params.image_search_params_bag import ImageSearchParamsBag
 from contracts.params.param_bag import ParamBag
 from exceptions import DownloadTooLarge
-from tools.image_search import fetcher
+from tools.image_search.fetcher import ImageSearchFetcher
 from configs.enums.ability_category import AbilityCategory
 
 logger = logging.getLogger(__name__)
@@ -98,7 +98,7 @@ class ImageSearchAbility(Ability[ImageSearchParamsBag]):
         query = params.query
 
         try:
-            results = fetcher.fetch(query, limit=5)
+            results = ImageSearchFetcher.fetch(query, limit=5)
         except Exception as exc:  # noqa: BLE001 — surfaced, never swallowed
             logger.exception("[IMAGE_SEARCH] engine failed")
             return ToolResult.err(
@@ -208,13 +208,13 @@ class ImageSearchAbility(Ability[ImageSearchParamsBag]):
     ) -> tuple[dict[str, object] | None, str | None]:
         # Local imports to avoid import cycles.
         from services import tmp_storage  # noqa: PLC0415
-        from services.web_fetch import stream_to_file  # noqa: PLC0415
+        from services.web_fetch import WebFetch  # noqa: PLC0415
         from services.image_description import ImageDescription  # noqa: PLC0415
 
-        dest = tmp_storage.new_tmp_path(f"imgsearch_{uuid.uuid4().hex[:8]}")
+        dest = tmp_storage.TmpStorage.new_tmp_path(f"imgsearch_{uuid.uuid4().hex[:8]}")
         try:
             try:
-                _, content_type = stream_to_file(
+                _, content_type = WebFetch.stream_to_file(
                     result["url"], dest, max_bytes=_MAX_IMAGE_BYTES
                 )
             except DownloadTooLarge:

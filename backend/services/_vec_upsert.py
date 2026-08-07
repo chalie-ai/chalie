@@ -16,12 +16,16 @@ memory tables.
 import sqlite3
 
 
-def vec0_upsert(conn: sqlite3.Connection, table: str, rowid: int, blob: bytes) -> None:
-    """Replace ``table``'s embedding row for ``rowid``: DELETE then INSERT
-    (vec0 rejects ``INSERT OR REPLACE``). Raises on failure — callers own
-    their own warning/transaction policy."""
-    conn.execute(f"DELETE FROM {table} WHERE rowid = ?", (rowid,))
-    conn.execute(
-        f"INSERT INTO {table} (rowid, embedding) VALUES (?, ?)",
-        (rowid, blob),
-    )
+class VecUpsert:
+    """Shared vec0 embedding upsert idiom."""
+
+    @staticmethod
+    def vec0_upsert(conn: sqlite3.Connection, table: str, rowid: int, blob: bytes) -> None:
+        """Replace ``table``'s embedding row for ``rowid``: DELETE then INSERT
+        (vec0 rejects ``INSERT OR REPLACE``). Raises on failure — callers own
+        their own warning/transaction policy."""
+        conn.execute(f"DELETE FROM {table} WHERE rowid = ?", (rowid,))
+        conn.execute(
+            f"INSERT INTO {table} (rowid, embedding) VALUES (?, ?)",
+            (rowid, blob),
+        )

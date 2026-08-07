@@ -44,7 +44,7 @@ class TestAgo:
 class TestLocalConvertsUtcToUserTimezone:
     def _patch_tz(self, tz_name: str) -> AbstractContextManager[object]:
         return patch(
-            "services.locale_service.get_timezone",
+            "services.locale_service.LocaleService.get_timezone",
             return_value=ZoneInfo(tz_name),
         )
 

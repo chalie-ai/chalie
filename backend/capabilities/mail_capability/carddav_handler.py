@@ -73,7 +73,7 @@ class CarddavHandler:
         contacts: list[dict[str, object]] = []
         try:
             principal = cast("_Principal", client.principal())
-            address_books = _get_address_books(principal)
+            address_books = self._get_address_books(principal)
         except Exception as exc:
             logger.warning("[carddav] could not list address books: %s", exc)
             return contacts
@@ -92,7 +92,7 @@ class CarddavHandler:
 
         for abook in address_books:
             try:
-                cards = _fetch_vcard_objects(abook)
+                cards = self._fetch_vcard_objects(abook)
             except Exception as exc:
                 logger.warning("[carddav] could not fetch cards from address book: %s", exc)
                 continue
@@ -105,7 +105,7 @@ class CarddavHandler:
         contacts: list[dict[str, object]] = []
         for card in cards:
             try:
-                raw = _extract_vcard_data(card)
+                raw = self._extract_vcard_data(card)
                 if not raw:
                     continue
                 contact = self.parse_vcard(raw)
@@ -133,14 +133,14 @@ class CarddavHandler:
             logger.debug("[carddav] vobject parse error: %s", exc)
             return None
 
-        uid = _vcard_text(card, "uid")
-        fn = _vcard_text(card, "fn")
-        given_name, family_name = _vcard_name(card)
-        nickname = _vcard_text(card, "nickname")
-        emails = _vcard_typed_list(card, "email")
-        phones = _vcard_typed_list(card, "tel")
-        org = _vcard_org(card)
-        title = _vcard_text(card, "title")
+        uid = self._vcard_text(card, "uid")
+        fn = self._vcard_text(card, "fn")
+        given_name, family_name = self._vcard_name(card)
+        nickname = self._vcard_text(card, "nickname")
+        emails = self._vcard_typed_list(card, "email")
+        phones = self._vcard_typed_list(card, "tel")
+        org = self._vcard_org(card)
+        title = self._vcard_text(card, "title")
 
         if not fn and not emails:
             return None
@@ -162,13 +162,13 @@ class CarddavHandler:
     # -----------------------------------------------------------------------
 
     def index_contacts(self, contacts: list[dict[str, object]]) -> None:
-        from capabilities.contact_resolver import index_contact_profile  # noqa: PLC0415
+        from capabilities.contact_resolver import ContactResolver  # noqa: PLC0415
         for contact in contacts:
             fn = (cast(str, contact.get("fn")) or "").strip()
             if not fn:
                 continue
             try:
-                index_contact_profile(contact, source="carddav")
+                ContactResolver.index_contact_profile(contact, source="carddav")
             except Exception as exc:
                 logger.debug("[carddav] index_contacts failed for %s: %s", fn, exc)
 
@@ -186,16 +186,13 @@ class CarddavHandler:
     # -----------------------------------------------------------------------
 
     def list_contacts(self, params: dict[str, object]) -> dict[str, object]:
-        from capabilities.contact_resolver import (  # noqa: PLC0415
-            _parse_contact_row,
-            resolve,
-        )
+        from capabilities.contact_resolver import ContactResolver  # noqa: PLC0415
 
         limit = min(int(cast(int, params.get("limit", 20))), 50)
         query = (cast(str, params.get("query")) or "").strip()
 
         if query:
-            matches = resolve(query, limit=limit)
+            matches = ContactResolver.resolve(query, limit=limit)
             return {"contacts": matches, "count": len(matches)}
 
         try:
@@ -205,7 +202,7 @@ class CarddavHandler:
             ]
             contacts: list[dict[str, object]] = []
             for r in rows:
-                parsed = _parse_contact_row(cast(str, r.get("key", "")), cast(str, r.get("value", "")))
+                parsed = ContactResolver._parse_contact_row(cast(str, r.get("key", "")), cast(str, r.get("value", "")))
                 if parsed is not None:
                     contacts.append(parsed)
         except Exception as exc:
@@ -215,126 +212,124 @@ class CarddavHandler:
         return {"contacts": contacts, "count": len(contacts)}
 
     def get_contact(self, params: dict[str, object]) -> dict[str, object]:
-        from capabilities.contact_resolver import resolve  # noqa: PLC0415
+        from capabilities.contact_resolver import ContactResolver  # noqa: PLC0415
 
         identifier = (cast(str, params.get("identifier")) or "").strip()
         if not identifier:
             return {"error": "identifier is required"}
 
-        matches = resolve(identifier, limit=1)
+        matches = ContactResolver.resolve(identifier, limit=1)
         if not matches:
             return {"error": "Contact not found"}
 
         return {"contact": matches[0]}
 
+    # -----------------------------------------------------------------------
+    # vCard field helpers
+    # -----------------------------------------------------------------------
 
-# ---------------------------------------------------------------------------
-# vCard field helpers
-# ---------------------------------------------------------------------------
-
-
-def _vcard_text(card: "_VCardObj", prop: str) -> str:
-    try:
-        obj = card.contents.get(prop)
-        if not obj:
+    @staticmethod
+    def _vcard_text(card: "_VCardObj", prop: str) -> str:
+        try:
+            obj = card.contents.get(prop)
+            if not obj:
+                return ""
+            return str(obj[0].value).strip()
+        except Exception:
             return ""
-        return str(obj[0].value).strip()
-    except Exception:
-        return ""
 
-
-def _vcard_name(card: "_VCardObj") -> tuple[str, str]:
-    try:
-        n_list = card.contents.get("n")
-        if not n_list:
+    @staticmethod
+    def _vcard_name(card: "_VCardObj") -> tuple[str, str]:
+        try:
+            n_list = card.contents.get("n")
+            if not n_list:
+                return "", ""
+            n = n_list[0].value
+            # vobject parses N into a Name object with .given and .family
+            given = str(getattr(n, "given", "") or "").strip()
+            family = str(getattr(n, "family", "") or "").strip()
+            return given, family
+        except Exception:
             return "", ""
-        n = n_list[0].value
-        # vobject parses N into a Name object with .given and .family
-        given = str(getattr(n, "given", "") or "").strip()
-        family = str(getattr(n, "family", "") or "").strip()
-        return given, family
-    except Exception:
-        return "", ""
 
+    @staticmethod
+    def _vcard_typed_list(card: "_VCardObj", prop: str) -> list[dict[str, object]]:
+        try:
+            items = card.contents.get(prop) or []
+            result: list[dict[str, object]] = []
+            for obj in items:
+                if not obj.value:
+                    continue
+                val = str(obj.value).strip()
+                type_param = ""
+                if hasattr(obj, "params") and obj.params:
+                    raw = obj.params.get("TYPE", [])
+                    if isinstance(raw, list) and raw:
+                        type_param = str(raw[0]).lower()
+                    elif isinstance(raw, str):
+                        type_param = raw.lower()
+                result.append({"value": val, "type": type_param or "other"})
+            return result
+        except Exception:
+            return []
 
-def _vcard_typed_list(card: "_VCardObj", prop: str) -> list[dict[str, object]]:
-    try:
-        items = card.contents.get(prop) or []
-        result: list[dict[str, object]] = []
-        for obj in items:
-            if not obj.value:
-                continue
-            val = str(obj.value).strip()
-            type_param = ""
-            if hasattr(obj, "params") and obj.params:
-                raw = obj.params.get("TYPE", [])
-                if isinstance(raw, list) and raw:
-                    type_param = str(raw[0]).lower()
-                elif isinstance(raw, str):
-                    type_param = raw.lower()
-            result.append({"value": val, "type": type_param or "other"})
-        return result
-    except Exception:
+    @staticmethod
+    def _vcard_org(card: "_VCardObj") -> str:
+        try:
+            org_list = card.contents.get("org")
+            if not org_list:
+                return ""
+            val = org_list[0].value
+            if isinstance(val, (list, tuple)):
+                return " ".join(str(v) for v in val if v).strip()
+            return str(val).strip()
+        except Exception:
+            return ""
+
+    # -----------------------------------------------------------------------
+    # caldav address-book helpers (isolate API differences)
+    # -----------------------------------------------------------------------
+
+    @staticmethod
+    def _get_address_books(principal: "_Principal") -> list[object]:
+        # caldav >=1.3 exposes addressbook_home_set
+        try:
+            home = principal.addressbook_home_set
+            if home is not None:
+                if hasattr(home, "addressbooks"):
+                    return list(home.addressbooks())
+                if hasattr(home, "__iter__"):
+                    return list(cast("list[object]", home))
+        except Exception:
+            pass
+
+        # Fallback: some builds expose it on the principal directly
+        try:
+            books = principal.addressbooks()
+            if books is not None:
+                return list(books)
+        except Exception:
+            pass
+
         return []
 
+    @staticmethod
+    def _fetch_vcard_objects(address_book: object) -> list[object]:
+        if hasattr(address_book, "vcard_objects"):
+            return list(cast("_HasVcardObjects", address_book).vcard_objects())
+        if hasattr(address_book, "objects"):
+            return list(cast("_HasObjects", address_book).objects())
+        return []
 
-def _vcard_org(card: "_VCardObj") -> str:
-    try:
-        org_list = card.contents.get("org")
-        if not org_list:
-            return ""
-        val = org_list[0].value
-        if isinstance(val, (list, tuple)):
-            return " ".join(str(v) for v in val if v).strip()
-        return str(val).strip()
-    except Exception:
-        return ""
-
-
-# ---------------------------------------------------------------------------
-# caldav address-book helpers (isolate API differences)
-# ---------------------------------------------------------------------------
-
-
-def _get_address_books(principal: "_Principal") -> list[object]:
-    # caldav >=1.3 exposes addressbook_home_set
-    try:
-        home = principal.addressbook_home_set
-        if home is not None:
-            if hasattr(home, "addressbooks"):
-                return list(home.addressbooks())
-            if hasattr(home, "__iter__"):
-                return list(cast("list[object]", home))
-    except Exception:
-        pass
-
-    # Fallback: some builds expose it on the principal directly
-    try:
-        books = principal.addressbooks()
-        if books is not None:
-            return list(books)
-    except Exception:
-        pass
-
-    return []
-
-
-def _fetch_vcard_objects(address_book: object) -> list[object]:
-    if hasattr(address_book, "vcard_objects"):
-        return list(cast("_HasVcardObjects", address_book).vcard_objects())
-    if hasattr(address_book, "objects"):
-        return list(cast("_HasObjects", address_book).objects())
-    return []
-
-
-def _extract_vcard_data(card_obj: object) -> str:
-    if hasattr(card_obj, "vcard_to_string"):
-        return str(cast("_HasVcardToString", card_obj).vcard_to_string())
-    if hasattr(card_obj, "data"):
-        data = cast("_HasData", card_obj).data
-        if not data and hasattr(card_obj, "load"):
-            cast("_HasData", card_obj).load()
+    @staticmethod
+    def _extract_vcard_data(card_obj: object) -> str:
+        if hasattr(card_obj, "vcard_to_string"):
+            return str(cast("_HasVcardToString", card_obj).vcard_to_string())
+        if hasattr(card_obj, "data"):
             data = cast("_HasData", card_obj).data
-        if data:
-            return str(data)
-    return ""
+            if not data and hasattr(card_obj, "load"):
+                cast("_HasData", card_obj).load()
+                data = cast("_HasData", card_obj).data
+            if data:
+                return str(data)
+        return ""

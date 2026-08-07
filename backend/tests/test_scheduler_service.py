@@ -52,7 +52,7 @@ pytestmark = pytest.mark.unit
 # exactly once in ``cron.JOBS`` too.
 _DISPATCHER = ScheduledItemsDispatcherJob()
 
-_BUILD_CLIENT = "services.provider_service.build_client"
+_BUILD_CLIENT = "services.provider_service.Factory.build_client"
 _JOIN_TIMEOUT = 10.0
 
 
@@ -74,7 +74,7 @@ class _RecordingProvider:
 
 def _seed_timezone(db: sqlite3.Connection, tz_name: str = "UTC") -> None:
     """Write a real heartbeat timezone into the telemetry table — the same
-    store the production ``locale_service.get_timezone()`` reads."""
+    store the production ``LocaleService.get_timezone()`` reads."""
     from services.heartbeat_service import heartbeat_service
 
     heartbeat_service._ctx = None

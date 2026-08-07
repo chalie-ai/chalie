@@ -27,7 +27,7 @@ from collections.abc import Callable
 from datetime import timedelta
 
 from orchestrators.decayable import Decayable
-from services._fts_delete import fts5_external_delete
+from services._fts_delete import FtsDelete
 from services.database import Database
 from services.time_utils import utc_now
 
@@ -112,7 +112,7 @@ class DecayEngine:
                 # FTS is external-content: purge its posting with the indexed
                 # values BEFORE the base row goes, in the schema's column order
                 # (key, value, kind).
-                fts5_external_delete(
+                FtsDelete.fts5_external_delete(
                     conn, "data_graph_fts", rowid,
                     {"key": key, "value": value, "kind": kind},
                 )

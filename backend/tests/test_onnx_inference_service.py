@@ -28,7 +28,7 @@ import numpy as np
 import pytest
 
 from services.deliberation_score_service import DeliberationScoreService
-from services.embedding_service import _get_session_and_tokenizer
+from services.embedding_service import EmbeddingService
 from services.file_mapper_service import FileMapperService
 from services.onnx_inference_service import (
     OnnxInferenceService,
@@ -214,7 +214,7 @@ class TestPredictScalarReal:
     @classmethod
     def setup_class(cls) -> None:
         # Load the real encoder once for the whole class. Subsequent tests reuse it.
-        _get_session_and_tokenizer()
+        EmbeddingService._get_session_and_tokenizer()
 
     def _svc(self) -> OnnxInferenceService:
         return OnnxInferenceService(_DEFAULT_MODELS_DIR, _DEFAULT_PRETRAINED_DIR)
@@ -285,7 +285,7 @@ class TestPredictScalarNaNGuard:
 
     @classmethod
     def setup_class(cls) -> None:
-        _get_session_and_tokenizer()
+        EmbeddingService._get_session_and_tokenizer()
 
     def test_nan_weights_in_w1_returns_none(self, tmp_path: object) -> None:
         w1 = np.zeros((256, 768), dtype=np.float32)
@@ -339,7 +339,7 @@ class TestRegisterTaskContractViolations:
 
     @classmethod
     def setup_class(cls) -> None:
-        _get_session_and_tokenizer()
+        EmbeddingService._get_session_and_tokenizer()
 
     def test_num_outputs_not_one_raises(self, tmp_path: object) -> None:
         _write_head_with_arrays(
@@ -384,7 +384,7 @@ class TestRegisterTaskContractViolations:
 class TestSha256PinCheck:
     @classmethod
     def setup_class(cls) -> None:
-        _get_session_and_tokenizer()
+        EmbeddingService._get_session_and_tokenizer()
 
     def test_wrong_sha256_in_meta_raises(self, tmp_path: object) -> None:
         """A head trained against a different encoder must NOT register."""
@@ -409,7 +409,7 @@ class TestSha256PinCheck:
 class TestRegisterTaskGracefulDegradation:
     @classmethod
     def setup_class(cls) -> None:
-        _get_session_and_tokenizer()
+        EmbeddingService._get_session_and_tokenizer()
 
     def test_missing_meta_returns_none(self, tmp_path: object) -> None:
         # Only a .npz, no meta — register should bail with None.
@@ -453,7 +453,7 @@ class TestDeliberationScoreServiceReal:
 
     @classmethod
     def setup_class(cls) -> None:
-        _get_session_and_tokenizer()
+        EmbeddingService._get_session_and_tokenizer()
 
     def _real_svc(self) -> DeliberationScoreService:
         return DeliberationScoreService(

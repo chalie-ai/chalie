@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Optional, cast
 
-from configs.channels import FactExtractionConfig, parse_fact_ops
+from configs.channels import FactExtractionConfig
 from configs.channels.fact_extraction import OP_DELETE
 from cron.base import IdleGatedJob
 from models.episode import Episode
@@ -77,7 +77,7 @@ class FactExtractionJob(IdleGatedJob):
             try:
                 self._extract_facts_for_episode(
                     episode, counters,
-                    FactExtractionConfig, parse_fact_ops, MessageProcessor,
+                    FactExtractionConfig, FactExtractionConfig.parse_fact_ops, MessageProcessor,
                 )
             except Exception as exc:
                 logger.warning(

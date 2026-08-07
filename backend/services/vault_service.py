@@ -73,69 +73,6 @@ class _VaultKeyMaterial:
     created_at: str
 
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
-
-def _derive_kek(password: str, salt: bytes, iterations: int = _KDF_ITERATIONS) -> bytes:
-    """Derive a 256-bit Key Encryption Key from *password* using PBKDF2-HMAC-SHA256.
-
-    Args:
-        password:   The user's master password (UTF-8 string).
-        salt:       Random 32-byte salt read from ``vault_config.kdf_salt``.
-        iterations: PBKDF2 iteration count.  Defaults to :data:`_KDF_ITERATIONS`.
-
-    Returns:
-        32-byte KEK bytes suitable for use with
-        :class:`~cryptography.hazmat.primitives.ciphers.aead.AESGCM`.
-    """
-    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-    from cryptography.hazmat.primitives import hashes
-
-    kdf = PBKDF2HMAC(
-        algorithm=hashes.SHA256(),
-        length=_DEK_SIZE,
-        salt=salt,
-        iterations=iterations,
-    )
-    return kdf.derive(password.encode("utf-8"))
-
-
-def _aesgcm_encrypt(key: bytes, nonce: bytes, plaintext: bytes) -> bytes:
-    """Encrypt *plaintext* with AES-256-GCM.
-
-    Args:
-        key:       32-byte AES key.
-        nonce:     12-byte random nonce.
-        plaintext: Arbitrary-length plaintext bytes.
-
-    Returns:
-        Ciphertext + 16-byte authentication tag as a single bytes object
-        (the format produced by
-        :meth:`~cryptography.hazmat.primitives.ciphers.aead.AESGCM.encrypt`).
-    """
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-    return AESGCM(key).encrypt(nonce, plaintext, None)
-
-
-def _aesgcm_decrypt(key: bytes, nonce: bytes, ciphertext_tag: bytes) -> bytes:
-    """Decrypt *ciphertext_tag* with AES-256-GCM.
-
-    Args:
-        key:             32-byte AES key.
-        nonce:           12-byte nonce that was used during encryption.
-        ciphertext_tag:  Ciphertext + 16-byte tag
-            (as produced by :func:`_aesgcm_encrypt`).
-
-    Returns:
-        Plaintext bytes.
-
-    Raises:
-        :exc:`cryptography.exceptions.InvalidTag`: When the tag verification fails
-            (wrong key, wrong nonce, or tampered ciphertext).
-    """
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-    return AESGCM(key).decrypt(nonce, ciphertext_tag, None)
-
-
 # ── VaultService ───────────────────────────────────────────────────────────────
 
 class VaultService:
@@ -163,6 +100,71 @@ class VaultService:
     """
 
     # ------------------------------------------------------------------
+    # Crypto helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _derive_kek(password: str, salt: bytes, iterations: int = _KDF_ITERATIONS) -> bytes:
+        """Derive a 256-bit Key Encryption Key from *password* using PBKDF2-HMAC-SHA256.
+
+        Args:
+            password:   The user's master password (UTF-8 string).
+            salt:       Random 32-byte salt read from ``vault_config.kdf_salt``.
+            iterations: PBKDF2 iteration count.  Defaults to :data:`_KDF_ITERATIONS`.
+
+        Returns:
+            32-byte KEK bytes suitable for use with
+            :class:`~cryptography.hazmat.primitives.ciphers.aead.AESGCM`.
+        """
+        from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+        from cryptography.hazmat.primitives import hashes
+
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=_DEK_SIZE,
+            salt=salt,
+            iterations=iterations,
+        )
+        return kdf.derive(password.encode("utf-8"))
+
+    @staticmethod
+    def _aesgcm_encrypt(key: bytes, nonce: bytes, plaintext: bytes) -> bytes:
+        """Encrypt *plaintext* with AES-256-GCM.
+
+        Args:
+            key:       32-byte AES key.
+            nonce:     12-byte random nonce.
+            plaintext: Arbitrary-length plaintext bytes.
+
+        Returns:
+            Ciphertext + 16-byte authentication tag as a single bytes object
+            (the format produced by
+            :meth:`~cryptography.hazmat.primitives.ciphers.aead.AESGCM.encrypt`).
+        """
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        return AESGCM(key).encrypt(nonce, plaintext, None)
+
+    @staticmethod
+    def _aesgcm_decrypt(key: bytes, nonce: bytes, ciphertext_tag: bytes) -> bytes:
+        """Decrypt *ciphertext_tag* with AES-256-GCM.
+
+        Args:
+            key:             32-byte AES key.
+            nonce:           12-byte nonce that was used during encryption.
+            ciphertext_tag:  Ciphertext + 16-byte tag
+                (as produced by :meth:`_aesgcm_encrypt`).
+
+        Returns:
+            Plaintext bytes.
+
+        Raises:
+            :exc:`cryptography.exceptions.InvalidTag`: When the tag verification fails
+                (wrong key, wrong nonce, or tampered ciphertext).
+        """
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        return AESGCM(key).decrypt(nonce, ciphertext_tag, None)
+
+    # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
@@ -188,8 +190,8 @@ class VaultService:
         salt = os.urandom(_KDF_SALT_SIZE)
         nonce = os.urandom(_NONCE_SIZE)
 
-        kek = _derive_kek(password, salt)
-        wrapped_dek = _aesgcm_encrypt(kek, nonce, dek)
+        kek = VaultService._derive_kek(password, salt)
+        wrapped_dek = VaultService._aesgcm_encrypt(kek, nonce, dek)
 
         from services.time_utils import utc_now
         now_iso = utc_now().isoformat()
@@ -236,9 +238,9 @@ class VaultService:
         wrapped_dek = bytes(cast(bytes, row["wrapped_dek"]))
         iterations = cast(int, row["kdf_iterations"])
 
-        kek = _derive_kek(password, salt, iterations)
+        kek = VaultService._derive_kek(password, salt, iterations)
         try:
-            dek = _aesgcm_decrypt(kek, nonce, wrapped_dek)
+            dek = VaultService._aesgcm_decrypt(kek, nonce, wrapped_dek)
         except InvalidTag:
             logger.warning(
                 "[Vault] unlock() failed — incorrect password "
@@ -357,7 +359,7 @@ class VaultService:
         if not self.is_unlocked():
             raise VaultLockedError("Vault is locked — call unlock() before encrypting")
         nonce = os.urandom(_NONCE_SIZE)
-        ciphertext_tag = _aesgcm_encrypt(cast(bytes, _vault_state.dek), nonce, plaintext)
+        ciphertext_tag = VaultService._aesgcm_encrypt(cast(bytes, _vault_state.dek), nonce, plaintext)
         return nonce + ciphertext_tag
 
     def decrypt(self, blob: bytes) -> bytes:
@@ -374,7 +376,7 @@ class VaultService:
         nonce = blob[:_NONCE_SIZE]
         ciphertext_tag = blob[_NONCE_SIZE:]
         try:
-            return _aesgcm_decrypt(cast(bytes, _vault_state.dek), nonce, ciphertext_tag)
+            return VaultService._aesgcm_decrypt(cast(bytes, _vault_state.dek), nonce, ciphertext_tag)
         except Exception as exc:
             raise ValueError(f"Decryption failed: {exc}") from exc
 
@@ -500,9 +502,9 @@ class VaultService:
                 )
                 continue
 
-            kek = _derive_kek(password, salt, kdf_iterations)
+            kek = VaultService._derive_kek(password, salt, kdf_iterations)
             try:
-                dek = _aesgcm_decrypt(kek, nonce, wrapped_dek)
+                dek = VaultService._aesgcm_decrypt(kek, nonce, wrapped_dek)
             except InvalidTag:
                 logger.warning(
                     "[Vault] Backup %s did not match the password — trying next",

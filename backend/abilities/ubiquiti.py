@@ -281,7 +281,31 @@ class UbiquitiAbility(CapabilityAbility):
             # not-connected / unknown-action / handler-unavailable already carry a
             # canonical code from the base — surface them untouched.
             return result
-        return _shape_result(action, result.body)
+        return self._shape_result(action, result.body)
+
+    @staticmethod
+    def _shape_result(action: str, body: dict[str, object]) -> ToolResult:
+        """A handler that surfaced its own ``error`` key (a backend failure or a target
+        that the controller did not find, NOT a bad input the pre-gate would catch) is
+        passed through as the success body — the contract reserves ``err()`` for
+        anticipated input failures the ability itself detects; the dispatcher wraps
+        the unexpected."""
+        if "error" in body:
+            return ToolResult.ok(body, action=action)
+
+        for row_key in _LIST_BODIES:
+            if row_key in body and isinstance(body[row_key], list):
+                rows = cast(list[object], body[row_key])
+                if not rows:
+                    return ToolResult.no_results(action=action)
+                return ToolResult.ok(
+                    {row_key: rows},
+                    action=action,
+                    count=body.get("count", len(rows)),
+                )
+
+        # device_status / site_health / control / write echoes: structured already.
+        return ToolResult.ok(body, action=action)
 
 
 # ---------------------------------------------------------------------------
@@ -296,27 +320,3 @@ _LIST_BODIES = {
     "wlans": "list_wifi",
     "rules": "list_port_forwards",
 }
-
-
-def _shape_result(action: str, body: dict[str, object]) -> ToolResult:
-    """A handler that surfaced its own ``error`` key (a backend failure or a target
-    that the controller did not find, NOT a bad input the pre-gate would catch) is
-    passed through as the success body — the contract reserves ``err()`` for
-    anticipated input failures the ability itself detects; the dispatcher wraps
-    the unexpected."""
-    if "error" in body:
-        return ToolResult.ok(body, action=action)
-
-    for row_key in _LIST_BODIES:
-        if row_key in body and isinstance(body[row_key], list):
-            rows = cast(list[object], body[row_key])
-            if not rows:
-                return ToolResult.no_results(action=action)
-            return ToolResult.ok(
-                {row_key: rows},
-                action=action,
-                count=body.get("count", len(rows)),
-            )
-
-    # device_status / site_health / control / write echoes: structured already.
-    return ToolResult.ok(body, action=action)

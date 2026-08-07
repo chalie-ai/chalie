@@ -43,194 +43,9 @@ from services.provider_api import (
     PROVIDER_CALL_TIMEOUT_S,
     ProviderApiRequest,
     ProviderApiResponse,
-    is_token_limit_message,
 )
 
 logger = logging.getLogger(__name__)
-
-
-# ── Module-level helpers (single source of truth) ────────────────────────────
-
-
-def _codex_home() -> Path:
-    """Return the ``CODEX_HOME`` directory (env override or ``~/.codex``)."""
-    return Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex"))
-
-
-def list_codex_models() -> list[dict[str, str | None]]:
-    """Return the list of models known to codex from its local cache.
-
-    Safe: returns ``[]`` on any error (missing file, malformed JSON, etc.).
-    """
-    try:
-        cache_path = _codex_home() / "models_cache.json"
-        if not cache_path.is_file():
-            return []
-        data = json.loads(cache_path.read_text())
-        if not isinstance(data, dict):
-            return []
-        models = data.get("models", [])
-        if not isinstance(models, list):
-            return []
-        return [
-            {"id": m["slug"], "display_name": m.get("display_name")}
-            for m in models
-            if isinstance(m, dict) and m.get("slug")
-        ]
-    except (OSError, json.JSONDecodeError, KeyError, TypeError):
-        return []
-
-
-def codex_model_context_window(slug: str | None) -> int | None:
-    """Return the context window (tokens) for a codex model slug.
-
-    Returns None when the local cache has no entry for the slug, instead of
-    guessing. The caller is responsible for falling back to a documented
-    default.
-    """
-    if not slug:
-        return None
-    try:
-        cache_path = _codex_home() / "models_cache.json"
-        if not cache_path.is_file():
-            return None
-        data = json.loads(cache_path.read_text())
-        if not isinstance(data, dict):
-            return None
-        for m in data.get("models", []):
-            if isinstance(m, dict) and m.get("slug") == slug:
-                ctx = m.get("context_window")
-                return int(ctx) if isinstance(ctx, int) else None
-        return None
-    except (OSError, json.JSONDecodeError, KeyError, TypeError):
-        return None
-
-
-# ── Prompt flattening ────────────────────────────────────────────────────────
-
-
-def _extract_text(content: object) -> str:
-    """Extract a plain-text string from a message's content field."""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        return "".join(
-            part.get("text", "") for part in content if isinstance(part, dict) and part.get("text")
-        )
-    return ""
-
-
-def _flatten_prompt(system: str, messages: list[dict[str, object]]) -> str:
-    """Flatten system + messages into a single prompt string for codex.
-
-    Images and tool_calls are dropped (chat-only) with a logged warning.
-    """
-    parts: list[str] = []
-    if system:
-        parts.append(f"System instructions:\n{system}\n")
-
-    for msg in messages:
-        role = str(msg.get("role", "user"))
-        content = msg.get("content", "")
-        text = _extract_text(content)
-
-        # Drop images — codex exec is chat-only.
-        if msg.get("image"):
-            logger.warning(
-                "[CodexCliClient] Dropping image from message (role=%s) — codex_cli is chat-only",
-                role,
-            )
-
-        # Drop tool_calls — codex exec does not return tool calls we can execute.
-        if msg.get("tool_calls"):
-            logger.warning(
-                "[CodexCliClient] Dropping tool_calls from message (role=%s) — codex_cli is chat-only",
-                role,
-            )
-
-        prefix = {"assistant": "Assistant: ", "user": "User: ", "tool": "Tool: "}.get(role, "")
-        if text:
-            parts.append(f"{prefix}{text}")
-
-    return "\n\n".join(parts)
-
-
-# ── JSONL parser ─────────────────────────────────────────────────────────────
-
-
-def _parse_jsonl(stdout: str) -> tuple[str, dict[str, Optional[int]], list[str], Optional[str]]:
-    """Parse codex JSONL stdout.
-
-    Returns (agent_text, usage, errors, thinking_block) where:
-      - agent_text: concatenated agent_message text (or empty string)
-      - usage: dict with keys tokens_input, tokens_output, tokens_thinking,
-        tokens_cache_read (values may be None)
-      - errors: list of error messages found (type==error or turn.failed)
-      - thinking_block: concatenated reasoning text from reasoning items
-        (or None when absent/empty)
-    """
-    agent_text = ""
-    usage: dict[str, Optional[int]] = {
-        "tokens_input": None,
-        "tokens_output": None,
-        "tokens_thinking": None,
-        "tokens_cache_read": None,
-    }
-    errors: list[str] = []
-    thinking_parts: list[str] = []
-
-    for line in stdout.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            obj = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-
-        if not isinstance(obj, dict):
-            continue
-
-        obj_type = obj.get("type")
-
-        # Agent message text
-        if obj_type == "item.completed":
-            item = obj.get("item")
-            if isinstance(item, dict) and item.get("type") == "agent_message":
-                text = item.get("text", "")
-                if isinstance(text, str) and text:
-                    agent_text += text
-            elif isinstance(item, dict) and item.get("type") == "reasoning":
-                text = item.get("text", "")
-                if isinstance(text, str) and text:
-                    thinking_parts.append(text)
-
-        # Turn completion → token usage (usage sits at the top level of the event)
-        elif obj_type == "turn.completed":
-            usage_data = obj.get("usage", {})
-            if isinstance(usage_data, dict):
-                usage["tokens_input"] = usage_data.get("input_tokens")
-                usage["tokens_output"] = usage_data.get("output_tokens")
-                usage["tokens_thinking"] = usage_data.get("reasoning_output_tokens")
-                usage["tokens_cache_read"] = usage_data.get("cached_input_tokens")
-
-        # Upstream errors
-        elif obj_type == "error":
-            msg = obj.get("message", "")
-            if isinstance(msg, str) and msg:
-                errors.append(msg)
-        elif obj_type == "turn.failed":
-            err = obj.get("error", {})
-            if isinstance(err, dict):
-                msg = err.get("message", "")
-                if isinstance(msg, str) and msg:
-                    errors.append(msg)
-
-    thinking_block = '\n'.join(thinking_parts) or None
-    return agent_text, usage, errors, thinking_block
-
-
-# ── Client ───────────────────────────────────────────────────────────────────
 
 
 class CodexCliClient(ProviderClient):
@@ -243,13 +58,185 @@ class CodexCliClient(ProviderClient):
     REQUIRES_KEY: ClassVar[bool] = False
     REQUIRES_HOST: ClassVar[bool] = False
 
+    @staticmethod
+    def _codex_home() -> Path:
+        """Return the ``CODEX_HOME`` directory (env override or ``~/.codex``)."""
+        return Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex"))
+
+    @classmethod
+    def list_codex_models(cls) -> list[dict[str, str | None]]:
+        """Return the list of models known to codex from its local cache.
+
+        Safe: returns ``[]`` on any error (missing file, malformed JSON, etc.).
+        """
+        try:
+            cache_path = CodexCliClient._codex_home() / "models_cache.json"
+            if not cache_path.is_file():
+                return []
+            data = json.loads(cache_path.read_text())
+            if not isinstance(data, dict):
+                return []
+            models = data.get("models", [])
+            if not isinstance(models, list):
+                return []
+            return [
+                {"id": m["slug"], "display_name": m.get("display_name")}
+                for m in models
+                if isinstance(m, dict) and m.get("slug")
+            ]
+        except (OSError, json.JSONDecodeError, KeyError, TypeError):
+            return []
+
+    @classmethod
+    def codex_model_context_window(cls, slug: str | None) -> int | None:
+        """Return the context window (tokens) for a codex model slug.
+
+        Returns None when the local cache has no entry for the slug, instead of
+        guessing. The caller is responsible for falling back to a documented
+        default.
+        """
+        if not slug:
+            return None
+        try:
+            cache_path = CodexCliClient._codex_home() / "models_cache.json"
+            if not cache_path.is_file():
+                return None
+            data = json.loads(cache_path.read_text())
+            if not isinstance(data, dict):
+                return None
+            for m in data.get("models", []):
+                if isinstance(m, dict) and m.get("slug") == slug:
+                    ctx = m.get("context_window")
+                    return int(ctx) if isinstance(ctx, int) else None
+            return None
+        except (OSError, json.JSONDecodeError, KeyError, TypeError):
+            return None
+
+    @staticmethod
+    def _extract_text(content: object) -> str:
+        """Extract a plain-text string from a message's content field."""
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return "".join(
+                part.get("text", "") for part in content if isinstance(part, dict) and part.get("text")
+            )
+        return ""
+
+    @staticmethod
+    def _flatten_prompt(system: str, messages: list[dict[str, object]]) -> str:
+        """Flatten system + messages into a single prompt string for codex.
+
+        Images and tool_calls are dropped (chat-only) with a logged warning.
+        """
+        parts: list[str] = []
+        if system:
+            parts.append(f"System instructions:\n{system}\n")
+
+        for msg in messages:
+            role = str(msg.get("role", "user"))
+            content = msg.get("content", "")
+            text = CodexCliClient._extract_text(content)
+
+            # Drop images — codex exec is chat-only.
+            if msg.get("image"):
+                logger.warning(
+                    "[CodexCliClient] Dropping image from message (role=%s) — codex_cli is chat-only",
+                    role,
+                )
+
+            # Drop tool_calls — codex exec does not return tool calls we can execute.
+            if msg.get("tool_calls"):
+                logger.warning(
+                    "[CodexCliClient] Dropping tool_calls from message (role=%s) — codex_cli is chat-only",
+                    role,
+                )
+
+            prefix = {"assistant": "Assistant: ", "user": "User: ", "tool": "Tool: "}.get(role, "")
+            if text:
+                parts.append(f"{prefix}{text}")
+
+        return "\n\n".join(parts)
+
+    @staticmethod
+    def _parse_jsonl(stdout: str) -> tuple[str, dict[str, Optional[int]], list[str], Optional[str]]:
+        """Parse codex JSONL stdout.
+
+        Returns (agent_text, usage, errors, thinking_block) where:
+          - agent_text: concatenated agent_message text (or empty string)
+          - usage: dict with keys tokens_input, tokens_output, tokens_thinking,
+            tokens_cache_read (values may be None)
+          - errors: list of error messages found (type==error or turn.failed)
+          - thinking_block: concatenated reasoning text from reasoning items
+            (or None when absent/empty)
+        """
+        agent_text = ""
+        usage: dict[str, Optional[int]] = {
+            "tokens_input": None,
+            "tokens_output": None,
+            "tokens_thinking": None,
+            "tokens_cache_read": None,
+        }
+        errors: list[str] = []
+        thinking_parts: list[str] = []
+
+        for line in stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            if not isinstance(obj, dict):
+                continue
+
+            obj_type = obj.get("type")
+
+            # Agent message text
+            if obj_type == "item.completed":
+                item = obj.get("item")
+                if isinstance(item, dict) and item.get("type") == "agent_message":
+                    text = item.get("text", "")
+                    if isinstance(text, str) and text:
+                        agent_text += text
+                elif isinstance(item, dict) and item.get("type") == "reasoning":
+                    text = item.get("text", "")
+                    if isinstance(text, str) and text:
+                        thinking_parts.append(text)
+
+            # Turn completion → token usage (usage sits at the top level of the event)
+            elif obj_type == "turn.completed":
+                usage_data = obj.get("usage", {})
+                if isinstance(usage_data, dict):
+                    usage["tokens_input"] = usage_data.get("input_tokens")
+                    usage["tokens_output"] = usage_data.get("output_tokens")
+                    usage["tokens_thinking"] = usage_data.get("reasoning_output_tokens")
+                    usage["tokens_cache_read"] = usage_data.get("cached_input_tokens")
+
+            # Upstream errors
+            elif obj_type == "error":
+                msg = obj.get("message", "")
+                if isinstance(msg, str) and msg:
+                    errors.append(msg)
+            elif obj_type == "turn.failed":
+                err = obj.get("error", {})
+                if isinstance(err, dict):
+                    msg = err.get("message", "")
+                    if isinstance(msg, str) and msg:
+                        errors.append(msg)
+
+        thinking_block = '\n'.join(thinking_parts) or None
+        return agent_text, usage, errors, thinking_block
+
     @classmethod
     def fetch_models(
         cls, host: str, api_key: str,
     ) -> tuple[list[dict[str, str | None]] | None, str | None]:
         """Asks the local binary — no network call, no credential."""
-        from services.provider_probe import fetch_codex_models  # noqa: PLC0415
-        return fetch_codex_models()
+        from services.provider_probe import ProviderProbe  # noqa: PLC0415
+        return ProviderProbe.fetch_codex_models()
 
     def __init__(self, config: dict[str, object]) -> None:
         self._config = config
@@ -260,7 +247,7 @@ class CodexCliClient(ProviderClient):
         start = time.time()
 
         # (a) Flatten system + messages into a single prompt.
-        prompt = _flatten_prompt(dto.system, dto.messages)
+        prompt = CodexCliClient._flatten_prompt(dto.system, dto.messages)
 
         # (b) Create an isolated working directory and output file.
         tmpdir = tempfile.mkdtemp(prefix="chalie-codex-")
@@ -319,7 +306,7 @@ class CodexCliClient(ProviderClient):
         # it here or the turn dies on retries instead of compacting.
         if proc is not None and proc.returncode != 0:
             err_text = (stderr or "").strip() or (stdout or "").strip() or f"codex exited {proc.returncode}"
-            if is_token_limit_message(err_text):
+            if ProviderApiRequest.is_token_limit_message(err_text):
                 raise ContextLimit(
                     f"codex rejected payload (token limit): {err_text}",
                     provider='codex_cli',
@@ -332,7 +319,7 @@ class CodexCliClient(ProviderClient):
             )
 
         # Always parse the JSONL stream for token usage (j) and upstream errors (i).
-        jsonl_text, usage, errors, thinking_block = _parse_jsonl(stdout or "")
+        jsonl_text, usage, errors, thinking_block = CodexCliClient._parse_jsonl(stdout or "")
 
         # (h) Prefer the -o output file for the agent text; fall back to JSONL.
         agent_text = ""
@@ -346,7 +333,7 @@ class CodexCliClient(ProviderClient):
 
         # (i) Surface an upstream error only when no assistant text was produced.
         if errors and not agent_text:
-            if is_token_limit_message(errors[0]):
+            if ProviderApiRequest.is_token_limit_message(errors[0]):
                 raise ContextLimit(
                     f"codex rejected payload (token limit): {errors[0]}",
                     provider='codex_cli',
@@ -397,7 +384,7 @@ class CodexCliClient(ProviderClient):
         reachability question to answer, and a family default beats the loud
         failure an unset window causes on every turn.
         """
-        cached = codex_model_context_window(self.model)
+        cached = CodexCliClient.codex_model_context_window(self.model)
         if cached is not None:
             return cached
         window = DEFAULT_WINDOW

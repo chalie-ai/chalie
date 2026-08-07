@@ -72,6 +72,17 @@ class BrowserPool:
 
     # -- Public API (called from any thread) -----------------------------------
 
+    @classmethod
+    def get_pool(cls) -> BrowserPool:
+        """Return the global BrowserPool singleton (lazy-created, atexit-registered)."""
+        global _pool
+        if _pool is None:
+            with _pool_lock:
+                if _pool is None:
+                    _pool = BrowserPool()
+                    atexit.register(BrowserPool.shutdown)
+        return _pool
+
     def submit(self, fn: Callable[..., object], *args: object, **kwargs: object) -> Future[object]:
         """Submit a callable to the browser thread.
 
@@ -98,11 +109,14 @@ class BrowserPool:
         """Submit + block until result.  Raises on timeout or exception."""
         return self.submit(fn, *args, **kwargs).result(timeout=timeout)
 
-    def shutdown(self) -> None:
+    @classmethod
+    def shutdown(cls) -> None:
         """Signal the browser thread to stop.  Blocks until drained."""
-        self._running = False
+        if _pool is None:
+            return
+        _pool._running = False
         try:
-            self._queue.put_nowait(None)
+            _pool._queue.put_nowait(None)
         except queue.Full:
             pass
 
@@ -204,19 +218,4 @@ class BrowserPool:
 _pool: BrowserPool | None = None
 _pool_lock = threading.Lock()
 
-
-def get_pool() -> BrowserPool:
-    """Return the global BrowserPool singleton (lazy-created, atexit-registered)."""
-    global _pool
-    if _pool is None:
-        with _pool_lock:
-            if _pool is None:
-                _pool = BrowserPool()
-                atexit.register(_pool.shutdown)
-    return _pool
-
-
-def shutdown() -> None:
-    """Module-level shutdown — safe to call even if pool was never created."""
-    if _pool is not None:
-        _pool.shutdown()
+shutdown = BrowserPool.shutdown

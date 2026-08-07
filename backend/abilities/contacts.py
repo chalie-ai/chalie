@@ -138,13 +138,13 @@ class ContactsAbility(Ability[ContactsParamsBag]):
     # ── list ────────────────────────────────────────────────────────────────
 
     def _list(self, params: ContactsListParams) -> ToolResult:
-        from capabilities.contact_resolver import _parse_contact_row, resolve
+        from capabilities.contact_resolver import ContactResolver
 
         limit = params.limit
         query = params.query
 
         if query:
-            contacts = resolve(query, limit=limit)
+            contacts = ContactResolver.resolve(query, limit=limit)
         else:
             rows = [
                 r.to_dict()
@@ -153,7 +153,7 @@ class ContactsAbility(Ability[ContactsParamsBag]):
             contacts = [
                 c
                 for c in (
-                    _parse_contact_row(cast(str, r.get("key", "")), cast(str, r.get("value", "")))
+                    ContactResolver._parse_contact_row(cast(str, r.get("key", "")), cast(str, r.get("value", "")))
                     for r in rows
                 )
                 if c is not None
@@ -180,10 +180,10 @@ class ContactsAbility(Ability[ContactsParamsBag]):
     # ── get — three-outcome precision contract ────────────────────────────────
 
     def _get(self, params: ContactsGetParams) -> ToolResult:
-        from capabilities.contact_resolver import resolve
+        from capabilities.contact_resolver import ContactResolver
 
         identifier = params.identifier
-        candidates = resolve(identifier, limit=5)
+        candidates = ContactResolver.resolve(identifier, limit=5)
 
         if not candidates:
             not_connected = self._not_connected("get")
@@ -196,14 +196,14 @@ class ContactsAbility(Ability[ContactsParamsBag]):
                 action="get",
             )
 
-        relevant = [c for c in candidates if _is_relevant(identifier, c)]
+        relevant = [c for c in candidates if self._is_relevant(identifier, c)]
 
         if len(relevant) == 1:
             body = {"action_performed": "get", "contact": relevant[0]}
             return ToolResult.ok(body, rich=dict(body), action="get")
 
         if len(relevant) >= 2:
-            rows = [{"id": _contact_id(c), "name": _contact_name(c)} for c in relevant]
+            rows = [{"id": self._contact_id(c), "name": _contact_name(c)} for c in relevant]
             return ToolResult.err(
                 f"Multiple contacts match {identifier!r}: {json.dumps(rows, ensure_ascii=False)}.",
                 code="ambiguous-match",
@@ -239,54 +239,51 @@ class ContactsAbility(Ability[ContactsParamsBag]):
             )
         return None
 
+    # ── Relevance predicate + contact field accessors ───────────────────────
 
-# ---------------------------------------------------------------------------
-# Relevance predicate + contact field accessors
-# ---------------------------------------------------------------------------
+    @staticmethod
+    def _is_relevant(identifier: str, contact: dict[str, object]) -> bool:
+        """A fuzzy candidate is *relevant* to *identifier* when the identifier
+        ci-equals the contact's fn / name / nickname or any email value, OR when every
+        word of the identifier appears as a ci word-prefix in the contact's fn (so
+        "Mike" matches "Mike Borg" but "Smith Family" does not match "John Smith").
 
+        This is the precision filter that turns the unthresholded FTS candidate set
+        into the three fixed get outcomes — without it ``resolve()`` would hand back a
+        near-arbitrary first hit for almost any query on a non-empty index."""
+        needle = identifier.strip().lower()
+        if not needle:
+            return False
 
-def _is_relevant(identifier: str, contact: dict[str, object]) -> bool:
-    """A fuzzy candidate is *relevant* to *identifier* when the identifier
-    ci-equals the contact's fn / name / nickname or any email value, OR when every
-    word of the identifier appears as a ci word-prefix in the contact's fn (so
-    "Mike" matches "Mike Borg" but "Smith Family" does not match "John Smith").
+        name = _contact_name(contact).strip().lower()
+        nickname = (cast(str, contact.get("nickname")) or "").strip().lower()
+        if needle in {name, nickname}:
+            return True
 
-    This is the precision filter that turns the unthresholded FTS candidate set
-    into the three fixed get outcomes — without it ``resolve()`` would hand back a
-    near-arbitrary first hit for almost any query on a non-empty index."""
-    needle = identifier.strip().lower()
-    if not needle:
+        for email in cast("list[dict[str, object]]", contact.get("emails") or []):
+            value = (cast(str, email.get("value")) or "").strip().lower()
+            if value and needle == value:
+                return True
+        legacy_email = (cast(str, contact.get("email")) or "").strip().lower()
+        if legacy_email and needle == legacy_email:
+            return True
+
+        if name:
+            name_words = name.split()
+            return all(
+                any(word.startswith(token) for word in name_words)
+                for token in needle.split()
+            )
         return False
 
-    name = _contact_name(contact).strip().lower()
-    nickname = (cast(str, contact.get("nickname")) or "").strip().lower()
-    if needle in {name, nickname}:
-        return True
-
-    for email in cast("list[dict[str, object]]", contact.get("emails") or []):
-        value = (cast(str, email.get("value")) or "").strip().lower()
-        if value and needle == value:
-            return True
-    legacy_email = (cast(str, contact.get("email")) or "").strip().lower()
-    if legacy_email and needle == legacy_email:
-        return True
-
-    if name:
-        name_words = name.split()
-        return all(
-            any(word.startswith(token) for word in name_words)
-            for token in needle.split()
+    @staticmethod
+    def _contact_id(contact: dict[str, object]) -> str:
+        return (
+            cast(str, contact.get("uid"))
+            or _contact_name(contact)
+            or cast(str, contact.get("email") or "")
         )
-    return False
 
 
 def _contact_name(contact: dict[str, object]) -> str:
     return (cast(str, contact.get("fn")) or cast(str, contact.get("name")) or "").strip()
-
-
-def _contact_id(contact: dict[str, object]) -> str:
-    return (
-        cast(str, contact.get("uid"))
-        or _contact_name(contact)
-        or cast(str, contact.get("email") or "")
-    )

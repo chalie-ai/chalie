@@ -49,79 +49,12 @@ _SEARCH_LIMIT = 10
 
 _IMAP_FETCH_HEADER = b"RFC822.HEADER"
 
-
 # ---------------------------------------------------------------------------
-# Module-level helpers
+# Module-level constants used by ImapHandler helpers
 # ---------------------------------------------------------------------------
 
-_SPAM_NAMES = {"junk", "spam", "[gmail]/spam", "bulk mail", "spamverdacht"}
-_DRAFTS_NAMES = {"drafts", "[gmail]/drafts", "draft", "entwürfe"}
-
-
-def _find_folder(client: "_ImapClient", names: set[str]) -> str | None:
-    folders = client.list_folders()
-    for _flags, _delim, name in folders:
-        if name.lower() in names:
-            return name
-    return None
-
-
-def _find_spam_folder(client: "_ImapClient") -> str | None:
-    return _find_folder(client, _SPAM_NAMES)
-
-
-def _find_drafts_folder(client: "_ImapClient") -> str | None:
-    return _find_folder(client, _DRAFTS_NAMES)
-
-
-def _imap_date(iso_str: str) -> str:
-    from datetime import datetime as _dt
-    try:
-        return _dt.strptime(iso_str[:10], "%Y-%m-%d").strftime(_IMAP_DATE_FMT)
-    except (ValueError, IndexError):
-        return iso_str
-
-
-def _hdr(msg: _email_mod.message.Message, name: str) -> str:
-    v = msg.get(name)
-    return str(v) if v else ""
-
-
-def _safe_date(s: str) -> str:
-    if not s:
-        return ""
-    try:
-        return _email_mod.utils.parsedate_to_datetime(s).isoformat()
-    except Exception:
-        return ""
-
-
-def parse_headers(uid: int, header_bytes: bytes) -> dict[str, object]:
-    msg = _email_mod.message_from_bytes(header_bytes, policy=_email_mod.policy.default)
-    from_name, from_addr = _email_mod.utils.parseaddr(_hdr(msg, "From"))
-    return {
-        "uid": uid,
-        "message_id": _hdr(msg, "Message-ID"),
-        "in_reply_to": _hdr(msg, "In-Reply-To"),
-        "subject": _hdr(msg, "Subject"),
-        "from_name": from_name,
-        "from_addr": from_addr,
-        "to": _hdr(msg, "To"),
-        "date": _safe_date(_hdr(msg, "Date")),
-        "has_unsubscribe": "List-Unsubscribe" in msg,
-    }
-
-
-def extract_body(raw_bytes: bytes) -> str:
-    msg = _email_mod.message_from_bytes(raw_bytes, policy=_email_mod.policy.default)
-    parts = list(msg.walk()) if msg.is_multipart() else [msg]
-    chunks: list[str] = []
-    for p in parts:
-        if p.get_content_type() == "text/plain":
-            c = p.get_content()
-            if isinstance(c, str):
-                chunks.append(c)
-    return "\n".join(chunks)
+_SPAM_NAMES: set[str] = {"junk", "spam", "[gmail]/spam", "bulk mail", "spamverdacht"}
+_DRAFTS_NAMES: set[str] = {"drafts", "[gmail]/drafts", "draft", "entwürfe"}
 
 
 # ---------------------------------------------------------------------------
@@ -160,7 +93,7 @@ class ImapHandler:
             results, max_uid = [], wm
             for u, d in raw.items():
                 if u > wm:
-                    results.append(parse_headers(u, d[_IMAP_FETCH_HEADER]))
+                    results.append(self.parse_headers(u, d[_IMAP_FETCH_HEADER]))
                     max_uid = max(max_uid, u)
             new_watermark = max_uid if max_uid > wm else (wm or None)
             return results, new_watermark
@@ -175,20 +108,20 @@ class ImapHandler:
     def understand(self, items: list[dict[str, object]]) -> None:
         if not items:
             return
-        from capabilities.contact_resolver import index_person
-        from capabilities.mail_capability.email_triage import classify_email
+        from capabilities.contact_resolver import ContactResolver
+        from capabilities.mail_capability.email_triage import EmailTriage
         for item in items:
-            item["triage"] = classify_email(item)
+            item["triage"] = EmailTriage.classify_email(item)
             item["is_thread"] = bool(item.get("in_reply_to"))
             if item.get("from_addr"):
-                index_person(cast(str, item["from_addr"]), cast("str | None", item.get("from_name")), source="imap")
+                ContactResolver.index_person(cast(str, item["from_addr"]), cast("str | None", item.get("from_name")), source="imap")
 
     # ------------------------------------------------------------------
     # WorldState inbox hint
     # ------------------------------------------------------------------
 
     def search(self, client: "_ImapClient", params: dict[str, object]) -> dict[str, object]:
-        from capabilities.mail_capability.email_triage import classify_email
+        from capabilities.mail_capability.email_triage import EmailTriage
         try:
             client.select_folder("INBOX", readonly=True)
             criteria: list[object] = []
@@ -208,10 +141,10 @@ class ImapHandler:
                 criteria.extend(["TEXT", keyword])
                 query["keyword"] = keyword
             if date_from:
-                criteria.extend(["SINCE", _imap_date(date_from)])
+                criteria.extend(["SINCE", self._imap_date(date_from)])
                 query["date_from"] = date_from
             if date_to:
-                criteria.extend(["BEFORE", _imap_date(date_to)])
+                criteria.extend(["BEFORE", self._imap_date(date_to)])
                 query["date_to"] = date_to
             if params.get("unanswered"):
                 criteria.append("UNANSWERED")
@@ -230,8 +163,8 @@ class ImapHandler:
             raw = client.fetch(uids, [_IMAP_FETCH_HEADER])
             results = []
             for u in sorted(raw.keys(), reverse=True):
-                item = parse_headers(u, raw[u][_IMAP_FETCH_HEADER])
-                item["triage"] = classify_email(item)
+                item = self.parse_headers(u, raw[u][_IMAP_FETCH_HEADER])
+                item["triage"] = EmailTriage.classify_email(item)
                 item["is_thread"] = bool(item.get("in_reply_to"))
                 if triage_filter and item["triage"] != triage_filter:
                     continue
@@ -268,7 +201,7 @@ class ImapHandler:
             if uid not in raw:
                 return {"error": f"Email UID {uid} not found"}
             raw_bytes = raw[uid][b"RFC822"]
-            headers = parse_headers(uid, raw_bytes)
+            headers = self.parse_headers(uid, raw_bytes)
             return {
                 "uid": uid,
                 "message_id": headers.get("message_id", ""),
@@ -276,7 +209,7 @@ class ImapHandler:
                 "from_name": headers.get("from_name", ""),
                 "from_addr": headers.get("from_addr", ""),
                 "date": headers.get("date", ""),
-                "body": extract_body(raw_bytes),
+                "body": self.extract_body(raw_bytes),
             }
         except Exception as exc:
             logger.exception("[imap_handler] read_email: %s", exc)
@@ -301,7 +234,7 @@ class ImapHandler:
         if in_reply_to:
             msg["In-Reply-To"] = in_reply_to
             msg["References"] = in_reply_to
-        drafts = _find_drafts_folder(client)
+        drafts = self._find_drafts_folder(client)
         if not drafts:
             return {"error": "No drafts folder found on this mail server"}
         try:
@@ -399,7 +332,7 @@ class ImapHandler:
                 return {"success": True, "uid": uid, "operation": "mark_important"}
             else:  # move_to_spam
                 client.select_folder("INBOX")
-                spam = _find_spam_folder(client)
+                spam = self._find_spam_folder(client)
                 if not spam:
                     return {"error": "No spam/junk folder found on this mail server"}
                 try:
@@ -412,3 +345,73 @@ class ImapHandler:
         except Exception as exc:
             logger.exception("[imap_handler] manage_email: %s", exc)
             return {"error": str(exc)}
+
+    # ------------------------------------------------------------------
+    # IMAP helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _find_folder(client: "_ImapClient", names: set[str]) -> str | None:
+        folders = client.list_folders()
+        for _flags, _delim, name in folders:
+            if name.lower() in names:
+                return name
+        return None
+
+    @staticmethod
+    def _find_spam_folder(client: "_ImapClient") -> str | None:
+        return ImapHandler._find_folder(client, _SPAM_NAMES)
+
+    @staticmethod
+    def _find_drafts_folder(client: "_ImapClient") -> str | None:
+        return ImapHandler._find_folder(client, _DRAFTS_NAMES)
+
+    @staticmethod
+    def _imap_date(iso_str: str) -> str:
+        from datetime import datetime as _dt
+        try:
+            return _dt.strptime(iso_str[:10], "%Y-%m-%d").strftime(_IMAP_DATE_FMT)
+        except (ValueError, IndexError):
+            return iso_str
+
+    @staticmethod
+    def _hdr(msg: _email_mod.message.Message, name: str) -> str:
+        v = msg.get(name)
+        return str(v) if v else ""
+
+    @staticmethod
+    def _safe_date(s: str) -> str:
+        if not s:
+            return ""
+        try:
+            return _email_mod.utils.parsedate_to_datetime(s).isoformat()
+        except Exception:
+            return ""
+
+    @staticmethod
+    def parse_headers(uid: int, header_bytes: bytes) -> dict[str, object]:
+        msg = _email_mod.message_from_bytes(header_bytes, policy=_email_mod.policy.default)
+        from_name, from_addr = _email_mod.utils.parseaddr(ImapHandler._hdr(msg, "From"))
+        return {
+            "uid": uid,
+            "message_id": ImapHandler._hdr(msg, "Message-ID"),
+            "in_reply_to": ImapHandler._hdr(msg, "In-Reply-To"),
+            "subject": ImapHandler._hdr(msg, "Subject"),
+            "from_name": from_name,
+            "from_addr": from_addr,
+            "to": ImapHandler._hdr(msg, "To"),
+            "date": ImapHandler._safe_date(ImapHandler._hdr(msg, "Date")),
+            "has_unsubscribe": "List-Unsubscribe" in msg,
+        }
+
+    @staticmethod
+    def extract_body(raw_bytes: bytes) -> str:
+        msg = _email_mod.message_from_bytes(raw_bytes, policy=_email_mod.policy.default)
+        parts = list(msg.walk()) if msg.is_multipart() else [msg]
+        chunks: list[str] = []
+        for p in parts:
+            if p.get_content_type() == "text/plain":
+                c = p.get_content()
+                if isinstance(c, str):
+                    chunks.append(c)
+        return "\n".join(chunks)

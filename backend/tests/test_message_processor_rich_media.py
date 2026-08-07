@@ -90,7 +90,7 @@ class TestRichMediaParserIntegration:
     """Parser round-trip: tool result → parse() → segments."""
 
     def test_parse_produces_rich_segment_for_london(self) -> None:
-        from services.rich_media_parser import parse
+        from services.rich_media_parser import RichMediaParser
 
         tool_result = (
             json.dumps(_MOCK_WEATHER_DICT)
@@ -101,7 +101,7 @@ class TestRichMediaParserIntegration:
         )
         tool_calls = [{"tool_name": "weather", "params": "{}", "result": tool_result, "ephemeral": 1}]
         content = "Here is the weather. <span id='weather_1'>Partly cloudy, 12°C.</span>"
-        segs = parse(content, tool_calls)
+        segs = RichMediaParser.parse(content, tool_calls)
 
         assert len(segs) == 2
         text_seg = segs[0]
@@ -117,7 +117,7 @@ class TestRichMediaParserIntegration:
         assert cast("dict[str, object]", rich_seg["payload"])["temperature_c"] == pytest.approx(12.4, abs=1e-9)
 
     def test_parse_two_cities_produces_two_rich_segments(self) -> None:
-        from services.rich_media_parser import parse
+        from services.rich_media_parser import RichMediaParser
 
         def _make_result(loc: str, ordinal: int) -> str:
             payload = dict(_MOCK_WEATHER_DICT, location=loc)
@@ -134,7 +134,7 @@ class TestRichMediaParserIntegration:
             "<span id='weather_1'>Rainy in Paris.</span> "
             "Meanwhile, <span id='weather_2'>Clear in Tokyo.</span>"
         )
-        segs = parse(content, tool_calls)
+        segs = RichMediaParser.parse(content, tool_calls)
         rich_segs = [s for s in segs if s["type"] == "rich"]
         assert len(rich_segs) == 2
         assert rich_segs[0]["tag"] == "weather_1"

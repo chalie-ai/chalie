@@ -42,7 +42,7 @@ from services.websocket import Websocket
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 
 # The LLM network boundary — the same seam test_context_usage_signal.py patches.
-_BUILD_CLIENT = "services.provider_service.build_client"
+_BUILD_CLIENT = "services.provider_service.Factory.build_client"
 
 _REPLY = "The kettle is on. It should be ready in about three minutes."
 

@@ -85,6 +85,6 @@ class SnapshotImportAction(Action):
         finally:
             shutil.rmtree(str(tmp_dir), ignore_errors=True)
 
-        from services.restart_service import request_restart
-        request_restart()
+        from services.restart_service import RestartService
+        RestartService.request_restart()
         return SnapshotImportResult(restarting=True).single(), 200

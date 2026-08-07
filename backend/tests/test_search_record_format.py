@@ -3,7 +3,7 @@
 # Licensed under the Apache License, Version 2.0 (the "License")
 
 """
-Feature tests for ``tools.search.render.render_records``.
+Feature tests for ``tools.search.render.SearchRenderer.render_records``.
 
 This is the ONE permitted deterministic pure-function test in the search
 redesign suite: ``render_records`` has no collaborators, no IO, and no state.
@@ -20,7 +20,7 @@ pytestmark = pytest.mark.unit
 
 # Import of the not-yet-existing module is intentionally at module scope so
 # that pytest reports a collection error (baseline-fail) on every test here.
-from tools.search.render import render_records  # noqa: E402
+from tools.search.render import SearchRenderer  # noqa: E402
 
 
 # ── Multi-result indexing 1..N ────────────────────────────────────────────────
@@ -32,7 +32,7 @@ def test_render_multi_result_indexes_are_1_based_and_sequential() -> None:
         {"title": "Beta",  "url": "https://b.example.com", "summary": "Second.", "score": 0.8, "date": None},
         {"title": "Gamma", "url": "https://c.example.com", "summary": "Third.", "score": None, "date": None},
     ]
-    rendered = render_records(results)
+    rendered = SearchRenderer.render_records(results)
 
     # 1-based indexing
     assert 'index="1"' in rendered
@@ -51,7 +51,7 @@ def test_render_preserves_list_order_first_result_is_index_1() -> None:
         {"title": "Winner",   "url": "https://win.example.com", "summary": "Top result.", "score": 0.95, "date": None},
         {"title": "Runner-up", "url": "https://run.example.com", "summary": "Second.",    "score": 0.70, "date": None},
     ]
-    rendered = render_records(results)
+    rendered = SearchRenderer.render_records(results)
 
     idx_winner   = rendered.index("Winner")
     idx_runnerup = rendered.index("Runner-up")
@@ -74,7 +74,7 @@ def test_render_score_attribute_is_2_decimal_places() -> None:
         {"title": "B", "url": "https://b.com", "summary": "Summary.", "score": 1.0,     "date": None},
         {"title": "C", "url": "https://c.com", "summary": "Summary.", "score": 0.5,     "date": None},
     ]
-    rendered = render_records(results)
+    rendered = SearchRenderer.render_records(results)
 
     assert 'score="0.88"' in rendered
     assert 'score="1.00"' in rendered
@@ -91,7 +91,7 @@ def test_render_score_attribute_omitted_when_score_is_none() -> None:
     results: list[dict[str, object]] = [
         {"title": "No score", "url": "https://example.com", "summary": "Body.", "score": None, "date": None},
     ]
-    rendered = render_records(results)
+    rendered = SearchRenderer.render_records(results)
 
     assert "<result " in rendered
     assert "score=" not in rendered
@@ -104,7 +104,7 @@ def test_render_date_attribute_omitted_when_date_is_none() -> None:
     results: list[dict[str, object]] = [
         {"title": "No date", "url": "https://example.com", "summary": "Body.", "score": 0.5, "date": None},
     ]
-    rendered = render_records(results)
+    rendered = SearchRenderer.render_records(results)
 
     assert "date=" not in rendered
 
@@ -113,7 +113,7 @@ def test_render_date_attribute_omitted_when_date_is_empty_string() -> None:
     results: list[dict[str, object]] = [
         {"title": "No date", "url": "https://example.com", "summary": "Body.", "score": 0.5, "date": ""},
     ]
-    rendered = render_records(results)
+    rendered = SearchRenderer.render_records(results)
 
     assert "date=" not in rendered
 
@@ -125,7 +125,7 @@ def test_render_date_attribute_present_when_date_is_set() -> None:
     results: list[dict[str, object]] = [
         {"title": "Dated", "url": "https://example.com", "summary": "Body.", "score": 0.7, "date": "2026-06-17"},
     ]
-    rendered = render_records(results)
+    rendered = SearchRenderer.render_records(results)
 
     assert 'date="2026-06-17"' in rendered
 
@@ -138,7 +138,7 @@ def test_render_very_long_summary_survives_in_full() -> None:
     results: list[dict[str, object]] = [
         {"title": "Long", "url": "https://example.com", "summary": long_summary, "score": 0.8, "date": None},
     ]
-    rendered = render_records(results)
+    rendered = SearchRenderer.render_records(results)
 
     # The full summary string must be present byte-for-byte
     assert long_summary in rendered
@@ -151,7 +151,7 @@ def test_render_very_long_summary_survives_in_full() -> None:
 
 
 def test_render_empty_list_returns_sentinel_without_result_tag() -> None:
-    rendered = render_records([])
+    rendered = SearchRenderer.render_records([])
 
     assert "<result index=" not in rendered
     # There must be some non-empty content
@@ -174,7 +174,7 @@ def test_render_neutralizes_result_tokens_in_content() -> None:
             "date": None,
         },
     ]
-    rendered = render_records(results)
+    rendered = SearchRenderer.render_records(results)
 
     # The content's tokens were defanged, leaving only the real delimiters.
     assert rendered.count("</result>") == 1
@@ -188,7 +188,7 @@ def test_render_preserves_non_result_angle_brackets() -> None:
         {"title": "Generics in C++", "url": "https://example.com",
          "summary": "Use std::vector<int> and assert a < b.", "score": 0.5, "date": None},
     ]
-    rendered = render_records(results)
+    rendered = SearchRenderer.render_records(results)
 
     assert "std::vector<int>" in rendered
     assert "a < b" in rendered

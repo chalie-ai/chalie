@@ -1,3 +1,3 @@
-from .rest_api_worker import rest_api_worker
+from .rest_api_worker import RestApiWorker
 
-__all__ = ['rest_api_worker']
+__all__ = ['RestApiWorker']

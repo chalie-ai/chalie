@@ -52,56 +52,6 @@ _CONTEXT_LIMIT_RE = re.compile(
 _OVERFLOW_TOKENS = 1_000_000_000
 
 
-def _window_from_error_message(message: str) -> int | None:
-    """The window a provider named while rejecting an over-large request.
-
-    Parses the OpenAI-style error string: ``"This model's maximum context
-    length is 16385 tokens. However, you requested 44366 tokens ..."``. The
-    captured group is accepted with commas and underscores stripped.
-    """
-    match = _CONTEXT_LIMIT_RE.search(message or "")
-    if match is None:
-        return None
-    text = match.group(1).replace(",", "").replace("_", "")
-    try:
-        value = int(text)
-        return value if value > 0 else None
-    except ValueError:
-        return None
-
-
-def _extract_window_from_error(exc: object) -> int | None:
-    """The window named inside a rejection, from either place it can appear.
-
-    ``str(exc)`` is always available; the SDK additionally parses the JSON body
-    onto ``exc.body``, where the message lives under ``error.message``. Either
-    is a real measurement — the server is stating its own limit.
-    """
-    window = _window_from_error_message(str(exc))
-    if window is not None:
-        return window
-    body = getattr(exc, 'body', None)
-    error = body.get('error') if isinstance(body, dict) else None
-    message = error.get('message') if isinstance(error, dict) else None
-    return _window_from_error_message(message) if isinstance(message, str) else None
-
-
-def _published_openai_window(model: str) -> int | None:
-    """Documented window for an official OpenAI model slug, or None if unknown.
-
-    Unknown means unknown: a new slug falls through to the probe rather than
-    borrowing a neighbouring family's number, which could be wrong by two
-    orders of magnitude.
-    """
-    slug = (model or '').lower()
-    for prefix, window in sorted(
-        _OPENAI_PUBLISHED_WINDOWS, key=lambda pair: len(pair[0]), reverse=True,
-    ):
-        if slug.startswith(prefix):
-            return window
-    return None
-
-
 class OpenAIClient(OpenAICompatibleClient):
     """api.openai.com — the SDK's own default base URL."""
 
@@ -119,6 +69,56 @@ class OpenAIClient(OpenAICompatibleClient):
     # field exists to read, which is why the probe below never consults one.
     WINDOW_FIELDS: ClassVar[tuple[str, ...]] = ()
 
+    @staticmethod
+    def _window_from_error_message(message: str) -> int | None:
+        """The window a provider named while rejecting an over-large request.
+
+        Parses the OpenAI-style error string: ``"This model's maximum context
+        length is 16385 tokens. However, you requested 44366 tokens ..."``. The
+        captured group is accepted with commas and underscores stripped.
+        """
+        match = _CONTEXT_LIMIT_RE.search(message or "")
+        if match is None:
+            return None
+        text = match.group(1).replace(",", "").replace("_", "")
+        try:
+            value = int(text)
+            return value if value > 0 else None
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _extract_window_from_error(exc: object) -> int | None:
+        """The window named inside a rejection, from either place it can appear.
+
+        ``str(exc)`` is always available; the SDK additionally parses the JSON body
+        onto ``exc.body``, where the message lives under ``error.message``. Either
+        is a real measurement — the server is stating its own limit.
+        """
+        window = OpenAIClient._window_from_error_message(str(exc))
+        if window is not None:
+            return window
+        body = getattr(exc, 'body', None)
+        error = body.get('error') if isinstance(body, dict) else None
+        message = error.get('message') if isinstance(error, dict) else None
+        return OpenAIClient._window_from_error_message(message) if isinstance(message, str) else None
+
+    @staticmethod
+    def _published_openai_window(model: str) -> int | None:
+        """Documented window for an official OpenAI model slug, or None if unknown.
+
+        Unknown means unknown: a new slug falls through to the probe rather than
+        borrowing a neighbouring family's number, which could be wrong by two
+        orders of magnitude.
+        """
+        slug = (model or '').lower()
+        for prefix, window in sorted(
+            _OPENAI_PUBLISHED_WINDOWS, key=lambda pair: len(pair[0]), reverse=True,
+        ):
+            if slug.startswith(prefix):
+                return window
+        return None
+
     @classmethod
     def fetch_models(
         cls, host: str, api_key: str,
@@ -128,8 +128,8 @@ class OpenAIClient(OpenAICompatibleClient):
         Overridden because the inherited implementation needs a base URL to
         call, and this platform deliberately has none to give.
         """
-        from services.provider_probe import fetch_openai_models  # noqa: PLC0415
-        return fetch_openai_models(api_key)
+        from services.provider_probe import ProviderProbe  # noqa: PLC0415
+        return ProviderProbe.fetch_openai_models(api_key)
 
     def _probe_context_window(self) -> int | None:
         """Documented figure first, then the number OpenAI quotes in a refusal.
@@ -138,7 +138,7 @@ class OpenAIClient(OpenAICompatibleClient):
         overflow probe covers the rest — a model released after this table was
         written still gets a real measurement rather than a default.
         """
-        window = _published_openai_window(self.model)
+        window = OpenAIClient._published_openai_window(self.model)
         if window is None:
             window = self._probe_via_overflow()
         if window is None:
@@ -181,7 +181,7 @@ class OpenAIClient(OpenAICompatibleClient):
                     max_completion_tokens=_OVERFLOW_TOKENS,
                 )
             except openai_mod.APIStatusError as first_err:
-                extracted = _extract_window_from_error(first_err)
+                extracted = OpenAIClient._extract_window_from_error(first_err)
                 if extracted is not None:
                     return extracted
                 # Older models reject max_completion_tokens but accept max_tokens — retry.
@@ -192,7 +192,7 @@ class OpenAIClient(OpenAICompatibleClient):
                         max_tokens=_OVERFLOW_TOKENS,
                     )
                 except openai_mod.APIStatusError as second_err:
-                    return _extract_window_from_error(second_err)
+                    return OpenAIClient._extract_window_from_error(second_err)
         except Exception as exc:
             logger.warning(
                 "[%s] Overflow probe failed for model=%s: %s",

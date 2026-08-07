@@ -135,7 +135,7 @@ class TestNoDoublePosting:
         ).fetchone()[0]
 
         svc = SearchExpanderService()
-        svc.enqueue("episodes", rowid)
+        svc._enqueue("episodes", rowid)
         item = svc._dequeue()
         while item is not None:
             svc._process(item)

@@ -33,7 +33,7 @@ Native size-rejection signal — VERIFIED (google-genai 1.65.0):
   ``ResourceExhausted``); ``'429' in str(exc)`` is the reliable catch and is kept.
 
 Depends on: services.provider_api (contract), services.llm_service
-(_app_user_agent, _resolve_api_key).
+(LlmService.app_user_agent, LlmService.resolve_api_key).
 Consumed by: services.llm_clients.factory (platform dispatch).
 """
 
@@ -107,44 +107,9 @@ from services.llm_clients.thinking_map import GEMINI_NONE_FALLBACK_BUDGET, GEMIN
 from services.provider_api import (
     ProviderApiRequest,
     ProviderApiResponse,
-    is_token_limit_message,
 )
 
 logger = logging.getLogger(__name__)
-
-def _gemini_tool_response(msg: dict[str, object]) -> dict[str, object]:
-    return {
-        "role": "user",
-        "parts": [{
-            "function_response": {
-                "name": msg.get('name', ''),
-                "response": {"content": msg.get('content', '')},
-            }
-        }],
-    }
-
-
-def _gemini_assistant_parts(msg: dict[str, object]) -> dict[str, object]:
-    parts: list[dict[str, object]] = []
-    text = msg.get('content', '')
-    if text:
-        parts.append({"text": text})
-    for tc in cast(list[dict[str, object]], msg['tool_calls']):
-        parts.append({
-            "function_call": {"name": tc['name'], "args": tc['input']},
-        })
-    return {"role": "model", "parts": parts}
-
-
-def _gemini_plain_parts(msg: dict[str, object], role: str) -> dict[str, object]:
-    parts: list[dict[str, object]] = [{"text": msg.get('content', '')}]
-    img = msg.get('image')
-    if img:
-        parts.append({
-            "inline_data": {"mime_type": cast(dict[str, object], img)['mime_type'], "data": cast(dict[str, object], img)['data']},
-        })
-    return {"role": role, "parts": parts}
-
 
 def _gemini_convert_messages(messages: list[dict[str, object]]) -> list[dict[str, object]]:
     """Convert normalised messages to Gemini content format."""
@@ -152,34 +117,12 @@ def _gemini_convert_messages(messages: list[dict[str, object]]) -> list[dict[str
     for msg in messages:
         role = "model" if msg['role'] == 'assistant' else cast(str, msg['role'])
         if msg['role'] == 'tool':
-            result.append(_gemini_tool_response(msg))
+            result.append(GeminiClient._gemini_tool_response(msg))
         elif msg['role'] == 'assistant' and msg.get('tool_calls'):
-            result.append(_gemini_assistant_parts(msg))
+            result.append(GeminiClient._gemini_assistant_parts(msg))
         else:
-            result.append(_gemini_plain_parts(msg, role))
+            result.append(GeminiClient._gemini_plain_parts(msg, role))
     return result
-
-
-def _accumulate_part(part: object, text_parts: list[str], tool_calls: list[dict[str, object]], thinking_parts: list[str]) -> None:
-    """Append text or a tool-call dict from a single Gemini response part.
-
-    Parts flagged thought=True are collected into thinking_parts and do NOT
-    leak into the visible text or get treated as function calls.
-    """
-    if getattr(part, 'thought', False):
-        text = getattr(part, 'text', None)
-        if text:
-            thinking_parts.append(text)
-        return
-    if getattr(part, 'text', None):
-        text_parts.append(cast("_Part", part).text)
-    fc = getattr(part, 'function_call', None)
-    if fc:
-        tool_calls.append({
-            'id': f"gemini_{cast('_FunctionCall', fc).name}_{uuid4().hex[:8]}",
-            'name': cast("_FunctionCall", fc).name,
-            'input': dict(cast("_FunctionCall", fc).args) if cast("_FunctionCall", fc).args else {},
-        })
 
 
 class GeminiClient(ProviderClient):
@@ -198,8 +141,64 @@ class GeminiClient(ProviderClient):
         cls, host: str, api_key: str,
     ) -> tuple[list[dict[str, str | None]] | None, str | None]:
         """Google publishes the list against the key; there is no host to give."""
-        from services.provider_probe import fetch_gemini_models  # noqa: PLC0415
-        return fetch_gemini_models(api_key)
+        from services.provider_probe import ProviderProbe  # noqa: PLC0415
+        return ProviderProbe.fetch_gemini_models(api_key)
+
+    @staticmethod
+    def _gemini_tool_response(msg: dict[str, object]) -> dict[str, object]:
+        return {
+            "role": "user",
+            "parts": [{
+                "function_response": {
+                    "name": msg.get('name', ''),
+                    "response": {"content": msg.get('content', '')},
+                }
+            }],
+        }
+
+    @staticmethod
+    def _gemini_assistant_parts(msg: dict[str, object]) -> dict[str, object]:
+        parts: list[dict[str, object]] = []
+        text = msg.get('content', '')
+        if text:
+            parts.append({"text": text})
+        for tc in cast(list[dict[str, object]], msg['tool_calls']):
+            parts.append({
+                "function_call": {"name": tc['name'], "args": tc['input']},
+            })
+        return {"role": "model", "parts": parts}
+
+    @staticmethod
+    def _gemini_plain_parts(msg: dict[str, object], role: str) -> dict[str, object]:
+        parts: list[dict[str, object]] = [{"text": msg.get('content', '')}]
+        img = msg.get('image')
+        if img:
+            parts.append({
+                "inline_data": {"mime_type": cast(dict[str, object], img)['mime_type'], "data": cast(dict[str, object], img)['data']},
+            })
+        return {"role": role, "parts": parts}
+
+    @staticmethod
+    def _accumulate_part(part: object, text_parts: list[str], tool_calls: list[dict[str, object]], thinking_parts: list[str]) -> None:
+        """Append text or a tool-call dict from a single Gemini response part.
+
+        Parts flagged thought=True are collected into thinking_parts and do NOT
+        leak into the visible text or get treated as function calls.
+        """
+        if getattr(part, 'thought', False):
+            text = getattr(part, 'text', None)
+            if text:
+                thinking_parts.append(text)
+            return
+        if getattr(part, 'text', None):
+            text_parts.append(cast("_Part", part).text)
+        fc = getattr(part, 'function_call', None)
+        if fc:
+            tool_calls.append({
+                'id': f"gemini_{cast('_FunctionCall', fc).name}_{uuid4().hex[:8]}",
+                'name': cast("_FunctionCall", fc).name,
+                'input': dict(cast("_FunctionCall", fc).args) if cast("_FunctionCall", fc).args else {},
+            })
 
     def __init__(self, config: dict[str, object]) -> None:
         self._config = config
@@ -216,14 +215,14 @@ class GeminiClient(ProviderClient):
             )
 
     def _get_client(self, genai: "_Genai") -> "_GenaiClient":
-        from services.llm_service import _resolve_api_key, _app_user_agent  # noqa: PLC0415
+        from services.llm_service import LlmService  # noqa: PLC0415
         from services.provider_api import PROVIDER_CALL_TIMEOUT_S  # noqa: PLC0415
         return genai.Client(
-            api_key=_resolve_api_key(self._config),
+            api_key=LlmService.resolve_api_key(self._config),
             # HttpOptions.timeout is in milliseconds.
             http_options={
                 "timeout": PROVIDER_CALL_TIMEOUT_S * 1000,
-                "headers": {"User-Agent": _app_user_agent()},
+                "headers": {"User-Agent": LlmService.app_user_agent()},
             },
         )
 
@@ -281,7 +280,7 @@ class GeminiClient(ProviderClient):
         candidate = response.candidates[0] if response.candidates else None
         if candidate is not None:
             for part in (cast("_Content", candidate.content).parts or []):
-                _accumulate_part(part, text_parts, tool_calls, thinking_parts)
+                GeminiClient._accumulate_part(part, text_parts, tool_calls, thinking_parts)
         finish_reason = str(candidate.finish_reason) if candidate and candidate.finish_reason else None
         thinking_block = '\n'.join(thinking_parts) or None
         return '\n'.join(text_parts), tool_calls or None, finish_reason, thinking_block
@@ -316,7 +315,7 @@ class GeminiClient(ProviderClient):
         # code==400 check would over-trigger (covers wrong params, regions, etc.).
         # If the string-match misses, log a WARNING so the set can be extended.
         if exc_code == 400 and exc_status == 'INVALID_ARGUMENT':
-            if is_token_limit_message(getattr(exc, 'message', None)):
+            if ProviderApiRequest.is_token_limit_message(getattr(exc, 'message', None)):
                 raise ContextLimit(
                     f"Gemini rejected payload (token limit): {exc}",
                     provider='gemini',
@@ -464,8 +463,8 @@ class GeminiClient(ProviderClient):
             return self._cached_context_limit
         try:
             genai = self._get_sdk()
-            from services.llm_service import _resolve_api_key  # noqa: PLC0415
-            client = genai.Client(api_key=_resolve_api_key(self._config))
+            from services.llm_service import LlmService  # noqa: PLC0415
+            client = genai.Client(api_key=LlmService.resolve_api_key(self._config))
             model_info = client.models.get(model=self.model)
             reported = model_info.input_token_limit
         except Exception as exc:

@@ -29,7 +29,7 @@ from typing import cast
 
 import pytest
 
-from configs.channels import SuperEpisodeConfig, _collect_transcript_ids
+from configs.channels import SuperEpisodeConfig
 from controllers.message_processor import MessageProcessor
 
 pytestmark = pytest.mark.unit
@@ -124,7 +124,7 @@ def test_provenance_is_the_sparse_union_not_a_filled_range() -> None:
         {"id": 2, "transcript_ids": [200, 201]},
     ]
 
-    ids = _collect_transcript_ids(children)
+    ids = SuperEpisodeConfig.collect_transcript_ids(children)
 
     assert ids == {100, 101, 102, 200, 201}
     assert 150 not in ids, "range-fill regressed — gap rows no child covered were re-introduced"

@@ -31,62 +31,6 @@ VALID_OPS = frozenset({OP_ADD, OP_UPDATE, OP_DELETE, OP_NOOP})
 FACT_KIND = "user_specific"
 
 
-def parse_fact_ops(text: str) -> list[dict[str, object]]:
-    """Parse the model's constrained output into a list of validated op dicts.
-
-    Returns the subset of ops that are structurally valid (known op verb; key
-    present for ADD/UPDATE/DELETE; value present for ADD/UPDATE). NOOP and any
-    malformed entry are dropped silently here — the worker treats an empty or
-    short list as "nothing to write", which is the safe default. A wholly
-    unparseable response raises ``ValueError`` so the caller can count it.
-
-    The accepted envelope is ``{"ops": [ {op, kind?, key, value}, ... ]}``.
-    """
-    if not text or not text.strip():
-        raise ValueError("empty fact-extraction response")
-
-    body = _strip_code_fence(text.strip())
-    parsed = json.loads(body)  # ValueError on malformed JSON — caller counts it.
-    if not isinstance(parsed, dict):
-        raise ValueError("fact-extraction response is not a JSON object")
-
-    raw_ops = parsed.get("ops")
-    if not isinstance(raw_ops, list):
-        raise ValueError("fact-extraction response missing 'ops' list")
-
-    return [op for op in (_clean_op(entry) for entry in raw_ops) if op is not None]
-
-
-def _clean_op(entry: object) -> dict[str, object] | None:
-    """Validate one op entry; return a normalised dict or None when unusable."""
-    if not isinstance(entry, dict):
-        return None
-    op = str(entry.get("op", "")).strip().upper()
-    if op not in VALID_OPS or op == OP_NOOP:
-        return None
-    key = (entry.get("key") or "").strip()
-    if not key:
-        return None
-    value = (entry.get("value") or "").strip()
-    if op in (OP_ADD, OP_UPDATE) and not value:
-        return None
-    return {"op": op, "kind": FACT_KIND, "key": key, "value": value}
-
-
-def _strip_code_fence(text: str) -> str:
-    """Remove a single markdown code-fence wrapper (```[lang]...```) from text."""
-    if not text.startswith("```"):
-        return text
-    open_end = text.find("```")
-    newline = text.find("\n", open_end)
-    if newline == -1:
-        return text
-    close_start = text.rfind("```", newline)
-    if close_start <= newline:
-        return text
-    return text[newline + 1 : close_start].strip()
-
-
 class FactExtractionConfig(ProcessorConfig):
     """Per-episode fact-extraction config — one tool-free constrained LLM call.
 
@@ -133,3 +77,59 @@ Rules:
 
 Example:
 {"ops": [{"op": "ADD", "key": "pet", "value": "dog named Rex"}, {"op": "DELETE", "key": "pet", "value": "cat named Tom"}]}"""
+
+    @classmethod
+    def parse_fact_ops(cls, text: str) -> list[dict[str, object]]:
+        """Parse the model's constrained output into a list of validated op dicts.
+
+        Returns the subset of ops that are structurally valid (known op verb; key
+        present for ADD/UPDATE/DELETE; value present for ADD/UPDATE). NOOP and any
+        malformed entry are dropped silently here — the worker treats an empty or
+        short list as "nothing to write", which is the safe default. A wholly
+        unparseable response raises ``ValueError`` so the caller can count it.
+
+        The accepted envelope is ``{"ops": [ {op, kind?, key, value}, ... ]}``.
+        """
+        if not text or not text.strip():
+            raise ValueError("empty fact-extraction response")
+
+        body = cls._strip_code_fence(text.strip())
+        parsed = json.loads(body)  # ValueError on malformed JSON — caller counts it.
+        if not isinstance(parsed, dict):
+            raise ValueError("fact-extraction response is not a JSON object")
+
+        raw_ops = parsed.get("ops")
+        if not isinstance(raw_ops, list):
+            raise ValueError("fact-extraction response missing 'ops' list")
+
+        return [op for op in (cls._clean_op(entry) for entry in raw_ops) if op is not None]
+
+    @staticmethod
+    def _clean_op(entry: object) -> dict[str, object] | None:
+        """Validate one op entry; return a normalised dict or None when unusable."""
+        if not isinstance(entry, dict):
+            return None
+        op = str(entry.get("op", "")).strip().upper()
+        if op not in VALID_OPS or op == OP_NOOP:
+            return None
+        key = (entry.get("key") or "").strip()
+        if not key:
+            return None
+        value = (entry.get("value") or "").strip()
+        if op in (OP_ADD, OP_UPDATE) and not value:
+            return None
+        return {"op": op, "kind": FACT_KIND, "key": key, "value": value}
+
+    @staticmethod
+    def _strip_code_fence(text: str) -> str:
+        """Remove a single markdown code-fence wrapper (```[lang]...```) from text."""
+        if not text.startswith("```"):
+            return text
+        open_end = text.find("```")
+        newline = text.find("\n", open_end)
+        if newline == -1:
+            return text
+        close_start = text.rfind("```", newline)
+        if close_start <= newline:
+            return text
+        return text[newline + 1 : close_start].strip()

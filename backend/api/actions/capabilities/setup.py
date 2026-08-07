@@ -23,7 +23,7 @@ from flask.typing import ResponseReturnValue
 
 from api.action import Action
 from api.endpoint import DocumentedResponse
-from api.endpoints.capabilities import _load_caps
+from api.endpoints.capabilities import CapabilitiesEndpoint
 from api.request import Request
 from api.request.capabilities import CapabilitySetupRequest
 from api.response.response import Response
@@ -66,7 +66,7 @@ class CapabilitiesSetup(Action):
         cap_id = cast(str, id)
         dto = cast(CapabilitySetupRequest, data)
         try:
-            caps = _load_caps()
+            caps = CapabilitiesEndpoint._load_caps()
             if cap_id not in caps:
                 raise NotFoundError(f"Capability not found: {cap_id}")
 

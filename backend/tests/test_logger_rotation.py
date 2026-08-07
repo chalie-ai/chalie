@@ -103,7 +103,7 @@ class TestCountCappedRotation:
         lg.error("late-error-2")
 
         monkeypatch.setattr(system_module, "_LOG_FILE_PATH", str(log_file))
-        monkeypatch.setattr("services.auth_session_service.validate_session", lambda *_a, **_k: True)
+        monkeypatch.setattr("services.auth_session_service.AuthSessionService.validate_session", lambda *_a, **_k: True)
         app = mount_namespace(health_ns, system_ns)
         app.config["TESTING"] = True
 

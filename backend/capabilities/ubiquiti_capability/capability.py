@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, cast
 import yaml
 
 from capabilities.base import AbstractCapability
-from capabilities.ubiquiti_capability import unifi_rest_handler as rest
+from capabilities.ubiquiti_capability.unifi_rest_handler import UnifiRestHandler
 from services.file_mapper_service import FileMapperService
 
 if TYPE_CHECKING:
@@ -105,7 +105,7 @@ class UbiquitiCapability(AbstractCapability):
             url, auth_method, site, verify_ssl, credentials.get("verify_ssl"),
         )
         try:
-            rest.probe(url, site, api_key=api_key, username=username,
+            UnifiRestHandler.probe(url, site, api_key=api_key, username=username,
                        password=password, verify_ssl=cast(bool, verify_ssl))
         except Exception as exc:
             logger.warning("[ubiquiti] probe error detail: %s %s", type(exc).__name__, exc)
@@ -145,7 +145,7 @@ class UbiquitiCapability(AbstractCapability):
         self._verify_ssl = self.load_credential(_K_VERIFY_SSL) == "1"
 
         try:
-            rest.probe(self._url, self._site, **self._auth)
+            UnifiRestHandler.probe(self._url, self._site, **self._auth)
             self._connected = True
         except Exception as exc:
             logger.warning("[ubiquiti] connect probe failed: %s", exc)
@@ -163,7 +163,7 @@ class UbiquitiCapability(AbstractCapability):
         if not self.is_connected():
             return []
         try:
-            return cast(list[object], rest.list_devices(self._url, self._site, **self._auth).get("devices", []))
+            return cast(list[object], UnifiRestHandler.list_devices(self._url, self._site, **self._auth).get("devices", []))
         except Exception as exc:
             logger.warning("[ubiquiti] ingest failed: %s", exc)
             return []
@@ -174,7 +174,7 @@ class UbiquitiCapability(AbstractCapability):
     def _do_monitor(self) -> None:
         if not self._url:
             return
-        rest.probe(self._url, self._site, **self._auth)
+        UnifiRestHandler.probe(self._url, self._site, **self._auth)
 
     # ── Tool handlers ────────────────────────────────────────────────
 
@@ -187,27 +187,27 @@ class UbiquitiCapability(AbstractCapability):
         err = self._require_connection()
         if err:
             return err
-        return rest.list_devices(self._url, self._site, **self._auth)
+        return UnifiRestHandler.list_devices(self._url, self._site, **self._auth)
 
     def _th_list_clients(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
         err = self._require_connection()
         if err:
             return err
-        return rest.list_clients(self._url, self._site, **self._auth,
+        return UnifiRestHandler.list_clients(self._url, self._site, **self._auth,
                                  active_only=cast(bool, params.get("active_only", True)))
 
     def _th_get_info(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
         err = self._require_connection()
         if err:
             return err
-        return rest.get_info(self._url, self._site, cast(str, params.get("target", "health")), **self._auth)
+        return UnifiRestHandler.get_info(self._url, self._site, cast(str, params.get("target", "health")), **self._auth)
 
     def _th_control_client(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
         err = self._require_connection() or self._require_mac_cmd(params, "control_client")
         if err:
             return err
         extra = {k: v for k, v in params.items() if k not in ("action", "mac", "command")}
-        return rest.control_client(self._url, self._site, cast(str, params["mac"]), cast(str, params["command"]),
+        return UnifiRestHandler.control_client(self._url, self._site, cast(str, params["mac"]), cast(str, params["command"]),
                                    **self._auth, **extra)
 
     def _th_control_device(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
@@ -215,7 +215,7 @@ class UbiquitiCapability(AbstractCapability):
         if err:
             return err
         extra = {k: v for k, v in params.items() if k not in ("action", "mac", "command")}
-        return rest.control_device(self._url, self._site, cast(str, params["mac"]), cast(str, params["command"]),
+        return UnifiRestHandler.control_device(self._url, self._site, cast(str, params["mac"]), cast(str, params["command"]),
                                    **self._auth, **extra)
 
     def _th_manage_wlan(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
@@ -224,10 +224,10 @@ class UbiquitiCapability(AbstractCapability):
             return err
         sub = params.get("sub_action", "list")
         if sub == "list":
-            return rest.list_wlans(self._url, self._site, **self._auth)
+            return UnifiRestHandler.list_wlans(self._url, self._site, **self._auth)
         if sub != "update":
             return {"status": "error", "error": f"manage_wlan supports 'list' and 'update', not '{sub}'"}
-        return rest.update_wlan(self._url, self._site, cast(str, params.get("wlan_id", "")),
+        return UnifiRestHandler.update_wlan(self._url, self._site, cast(str, params.get("wlan_id", "")),
                                 cast(dict[str, object], params.get("updates", {})), **self._auth)
 
     def _th_manage_port_forward(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
@@ -236,10 +236,10 @@ class UbiquitiCapability(AbstractCapability):
             return err
         sub = params.get("sub_action", "list")
         if sub == "list":
-            return rest.list_port_forwards(self._url, self._site, **self._auth)
+            return UnifiRestHandler.list_port_forwards(self._url, self._site, **self._auth)
         if sub == "create":
-            return rest.create_port_forward(self._url, self._site, cast(dict[str, object], params.get("rule", {})), **self._auth)
-        return rest.update_port_forward(self._url, self._site, cast(str, params.get("rule_id", "")),
+            return UnifiRestHandler.create_port_forward(self._url, self._site, cast(dict[str, object], params.get("rule", {})), **self._auth)
+        return UnifiRestHandler.update_port_forward(self._url, self._site, cast(str, params.get("rule_id", "")),
                                         cast(dict[str, object], params.get("updates", {})), **self._auth)
 
     def _th_manage_traffic_rule(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
@@ -248,10 +248,10 @@ class UbiquitiCapability(AbstractCapability):
             return err
         sub = params.get("sub_action", "list")
         if sub == "list":
-            return rest.list_traffic_rules(self._url, self._site, **self._auth)
+            return UnifiRestHandler.list_traffic_rules(self._url, self._site, **self._auth)
         if sub != "update":
             return {"status": "error", "error": f"manage_traffic_rule supports 'list' and 'update', not '{sub}'"}
-        return rest.update_traffic_rule(self._url, self._site, cast(str, params.get("rule_id", "")),
+        return UnifiRestHandler.update_traffic_rule(self._url, self._site, cast(str, params.get("rule_id", "")),
                                         cast(dict[str, object], params.get("updates", {})), **self._auth)
 
     def _th_authorize_guest(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
@@ -268,7 +268,7 @@ class UbiquitiCapability(AbstractCapability):
             extra["down"] = params["down_kbps"]
         if params.get("quota_mb") is not None:
             extra["bytes"] = params["quota_mb"]
-        return rest.control_client(self._url, self._site, cast(str, mac), "authorize-guest",
+        return UnifiRestHandler.control_client(self._url, self._site, cast(str, mac), "authorize-guest",
                                    **self._auth, minutes=params.get("minutes", 60), **extra)
 
     # ── Tool definitions ─────────────────────────────────────────────

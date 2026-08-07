@@ -21,28 +21,28 @@ PROVIDER_IN_USE_MSG = (
 )
 
 
-def missing_host_msg(platform: str) -> str:
-    """Rejection text for a row that supplied no base URL.
-
-    A function rather than a literal because the wording is also allowlisted in
-    provider_probe.SAFE_VALIDATION_MESSAGES, which echoes only messages it
-    recognises. Two copies of a per-platform string cannot be kept in step by
-    hand: the copies match today for the one platform that can trip this, and
-    would silently stop matching for the next one — turning a precise, fixable
-    complaint into the generic "invalid configuration".
-    """
-    return (
-        f"{platform} provider requires 'host' field "
-        "(base URL, e.g. 'https://api.minimax.io/v1')"
-    )
-
-
-def missing_key_msg(platform: str) -> str:
-    """Rejection text for a row that supplied no credential. See missing_host_msg."""
-    return f"{platform} provider requires 'api_key' field"
-
-
 class ProviderDbService:
+
+    @staticmethod
+    def missing_host_msg(platform: str) -> str:
+        """Rejection text for a row that supplied no base URL.
+
+        A function rather than a literal because the wording is also allowlisted in
+        provider_probe.SAFE_VALIDATION_MESSAGES, which echoes only messages it
+        recognises. Two copies of a per-platform string cannot be kept in step by
+        hand: the copies match today for the one platform that can trip this, and
+        would silently stop matching for the next one — turning a precise, fixable
+        complaint into the generic "invalid configuration".
+        """
+        return (
+            f"{platform} provider requires 'host' field "
+            "(base URL, e.g. 'https://api.minimax.io/v1')"
+        )
+
+    @staticmethod
+    def missing_key_msg(platform: str) -> str:
+        """Rejection text for a row that supplied no credential. See missing_host_msg."""
+        return f"{platform} provider requires 'api_key' field"
 
     @staticmethod
     def _seal_api_key(value: str) -> str:
@@ -125,16 +125,16 @@ class ProviderDbService:
         host points at no server, and no later edit short of supplying the host
         can make it mean anything.
         """
-        from services.llm_clients.registry import client_class_for  # noqa: PLC0415
+        from services.llm_clients.registry import Registry  # noqa: PLC0415
 
-        client = client_class_for(platform)
+        client = Registry.client_class_for(platform)
         if client is None or not client.REQUIRES_HOST or client.DEFAULT_BASE_URL:
             return
 
         if not data.get("host"):
-            raise ValueError(missing_host_msg(platform))
+            raise ValueError(ProviderDbService.missing_host_msg(platform))
         if client.REQUIRES_KEY and not data.get("api_key"):
-            raise ValueError(missing_key_msg(platform))
+            raise ValueError(ProviderDbService.missing_key_msg(platform))
 
     def create_provider(self, data: Dict[str, object]) -> Optional[Dict[str, object]]:
         default_model = data.get("model")
@@ -330,9 +330,9 @@ class ProviderDbService:
         if isinstance(provider_id, int):
             # Best-effort: a failed write costs one repeated probe, never the turn.
             try:
-                from services.provider_probe import invalidate_provider_cache  # noqa: PLC0415
+                from services.provider_probe import ProviderProbe  # noqa: PLC0415
                 self.update_provider(provider_id, {"context_window": window})
-                invalidate_provider_cache()
+                ProviderProbe.invalidate_provider_cache()
                 logger.info(
                     "[Provider] Pinned context window %d for id=%s (platform=%s model=%s)",
                     window, provider_id, platform, model,
@@ -364,8 +364,8 @@ class ProviderDbService:
         Never raises: a provider must remain creatable while its host is down.
         """
         try:
-            from services.llm_clients.factory import build_client  # noqa: PLC0415
-            client = build_client({
+            from services.llm_clients.factory import Factory  # noqa: PLC0415
+            client = Factory.build_client({
                 'platform': platform, 'model': model,
                 'host': host, 'api_key': api_key,
             })
@@ -476,9 +476,9 @@ class ProviderDbService:
         too. Skipping the vision probe and refusing a connectivity test are the
         same question, and answering it in two places is how they drift.
         """
-        from services.llm_clients.registry import platform_requires_key  # noqa: PLC0415
+        from services.llm_clients.registry import Registry  # noqa: PLC0415
 
-        return platform_requires_key(platform)
+        return Registry.platform_requires_key(platform)
 
     def _resolve_vision_provider(self) -> tuple[Optional[Dict[str, object]], str]:
         value = Setting.get_value('vision_provider_id')

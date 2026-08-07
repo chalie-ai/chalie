@@ -45,7 +45,7 @@ from models.turn_execution import TurnExecution
 
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 
-_BUILD_CLIENT = "services.provider_service.build_client"
+_BUILD_CLIENT = "services.provider_service.Factory.build_client"
 
 
 class _ScriptedProvider:

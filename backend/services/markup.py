@@ -65,45 +65,6 @@ _URL_SCHEMES = {"http", "https"}
 _MAX_CONTENT_LEN = 5_000_000
 
 
-# ── Public API ──────────────────────────────────────────────────────────────
-
-
-def _safe_img_src(tag: str, attr: str, value: str) -> str | None:
-    """Gate for ``<img src>``: only absolute ``http:``/``https:`` schemes survive.
-
-    Closes the scheme-less bypass that nh3's ``url_schemes`` alone leaves open.
-    nh3 rejects *present* non-allowlisted schemes (e.g. ``ftp:``), but a URL
-    with no scheme at all (relative ``/api/logout``, protocol-relative
-    ``//evil.com/track.gif``, ``data:`` URI, ``javascript:`` URI) slips through
-    the ``url_schemes`` gate — ``urlsplit().scheme`` is empty for those. This
-    helper drops the ``src`` attribute entirely for anything that isn't an
-    absolute http/https URL, leaving the ``<img>`` inert. All other tags and
-    attributes pass through unchanged (``<span>`` ``id``, etc.).
-    """
-    if tag != "img" or attr != "src":
-        return value
-    scheme = urlsplit(value).scheme.lower()
-    return value if scheme in {"http", "https"} else None
-
-
-def sanitize(html: str | None) -> str:
-    """Single chokepoint for LLM-emitted markup. Empty/None input returns ""."""
-    if not html:
-        return ""
-    bounded = html if len(html) <= _MAX_CONTENT_LEN else html[:_MAX_CONTENT_LEN]
-    return nh3.clean(
-        bounded,
-        # The model is only ever told about PROMPT_TAGS. Two more survive because
-        # Chalie injects them itself, never the LLM: <span id> pairs rich media at
-        # the WS-send boundary, and <img src> is gate-checked by _safe_img_src.
-        tags=set(PROMPT_TAGS) | {"span", "img"},
-        attributes=_ATTRIBUTES,
-        url_schemes=_URL_SCHEMES,
-        attribute_filter=_safe_img_src,  # drops scheme-less / non-http(s) img src
-        link_rel=None,  # we do not allow <a> from the LLM, so no rel injection needed
-    )
-
-
 # ── Heuristic markdown fallback ───────────────────────────────────────────────
 #
 # The system prompt instructs the LLM to emit Chalie's HTML subset directly, but
@@ -133,35 +94,77 @@ _UNDERLINE_RE = re.compile(r"(?<!\w)_(?=\S)([^_\n]+?)(?<=\S)_(?!\w)")
 _CODE_TOKEN_RE = re.compile("\x00C(\\d+)\x00")
 
 
-def markdown_to_html(text: str | None) -> str:
-    """Best-effort inline markdown→HTML pre-pass for ``sanitize()`` when the LLM leaks emphasis markers. NOT a full markdown parser."""
-    if not text:
-        return ""
+# ── Public API ──────────────────────────────────────────────────────────────
 
-    # 1. Mask inline code so emphasis markers inside it are preserved verbatim.
-    code_spans: list[str] = []
+class Markup:
+    """OOP wrapper for markup sanitisation and markdown helper functions."""
 
-    def _stash(m: re.Match[str]) -> str:
-        code_spans.append(m.group(1))
-        return f"\x00C{len(code_spans) - 1}\x00"
+    @staticmethod
+    def _safe_img_src(tag: str, attr: str, value: str) -> str | None:
+        """Gate for ``<img src>``: only absolute ``http:``/``https:`` schemes survive.
 
-    out = _CODE_SPAN_RE.sub(_stash, text)
+        Closes the scheme-less bypass that nh3's ``url_schemes`` alone leaves open.
+        nh3 rejects *present* non-allowlisted schemes (e.g. ``ftp:``), but a URL
+        with no scheme at all (relative ``/api/logout``, protocol-relative
+        ``//evil.com/track.gif``, ``data:`` URI, ``javascript:`` URI) slips through
+        the ``url_schemes`` gate — ``urlsplit().scheme`` is empty for those. This
+        helper drops the ``src`` attribute entirely for anything that isn't an
+        absolute http/https URL, leaving the ``<img>`` inert. All other tags and
+        attributes pass through unchanged (``<span>`` ``id``, etc.).
+        """
+        if tag != "img" or attr != "src":
+            return value
+        scheme = urlsplit(value).scheme.lower()
+        return value if scheme in {"http", "https"} else None
 
-    # 2. Emphasis — bold before italic so ``**`` is not eaten by the ``*`` rule.
-    out = _BOLD_RE.sub(r"<b>\1</b>", out)
-    out = _ITALIC_RE.sub(r"<i>\1</i>", out)
-    out = _UNDERLINE_RE.sub(r"<u>\1</u>", out)
+    @staticmethod
+    def sanitize(html: str | None) -> str:
+        """Single chokepoint for LLM-emitted markup. Empty/None input returns ""."""
+        if not html:
+            return ""
+        bounded = html if len(html) <= _MAX_CONTENT_LEN else html[:_MAX_CONTENT_LEN]
+        return nh3.clean(
+            bounded,
+            # The model is only ever told about PROMPT_TAGS. Two more survive because
+            # Chalie injects them itself, never the LLM: <span id> pairs rich media at
+            # the WS-send boundary, and <img src> is gate-checked by _safe_img_src.
+            tags=set(PROMPT_TAGS) | {"span", "img"},
+            attributes=_ATTRIBUTES,
+            url_schemes=_URL_SCHEMES,
+            attribute_filter=Markup._safe_img_src,  # drops scheme-less / non-http(s) img src
+            link_rel=None,  # we do not allow <a> from the LLM, so no rel injection needed
+        )
 
-    # 3. Restore masked code spans as <code> tags.
-    return _CODE_TOKEN_RE.sub(
-        lambda m: f"<code>{code_spans[int(m.group(1))]}</code>", out
-    )
+    @staticmethod
+    def markdown_to_html(text: str | None) -> str:
+        """Best-effort inline markdown→HTML pre-pass for ``sanitize()`` when the LLM leaks emphasis markers. NOT a full markdown parser."""
+        if not text:
+            return ""
 
+        # 1. Mask inline code so emphasis markers inside it are preserved verbatim.
+        code_spans: list[str] = []
 
-def extract_plaintext(html: str) -> str:
-    """Used by the TTS / speak button. Strips all HTML tags and normalises whitespace."""
-    if not html:
-        return ""
-    spaced = _BLOCK_BOUNDARY_RE.sub(" ", html)
-    stripped = nh3.clean(spaced, tags=set())
-    return " ".join(_html.unescape(stripped).split()).strip()
+        def _stash(m: re.Match[str]) -> str:
+            code_spans.append(m.group(1))
+            return f"\x00C{len(code_spans) - 1}\x00"
+
+        out = _CODE_SPAN_RE.sub(_stash, text)
+
+        # 2. Emphasis — bold before italic so ``**`` is not eaten by the ``*`` rule.
+        out = _BOLD_RE.sub(r"<b>\1</b>", out)
+        out = _ITALIC_RE.sub(r"<i>\1</i>", out)
+        out = _UNDERLINE_RE.sub(r"<u>\1</u>", out)
+
+        # 3. Restore masked code spans as <code> tags.
+        return _CODE_TOKEN_RE.sub(
+            lambda m: f"<code>{code_spans[int(m.group(1))]}</code>", out
+        )
+
+    @staticmethod
+    def extract_plaintext(html: str) -> str:
+        """Used by the TTS / speak button. Strips all HTML tags and normalises whitespace."""
+        if not html:
+            return ""
+        spaced = _BLOCK_BOUNDARY_RE.sub(" ", html)
+        stripped = nh3.clean(spaced, tags=set())
+        return " ".join(_html.unescape(stripped).split()).strip()

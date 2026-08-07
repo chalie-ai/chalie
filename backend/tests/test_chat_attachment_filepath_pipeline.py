@@ -27,14 +27,14 @@ from unittest.mock import patch
 import pytest
 
 from api.dto.attachment import Attachment
-from services.turn_serializer_service import _fetch_attachments_for_transcripts
+from services.turn_serializer_service import get_service as _serializer
 from configs.channels import UserConfig
 from controllers.message_processor import MessageProcessor
 from models.tool_call import ToolCall
 from services.file_index_service import FileIndexService
 from services.file_mapper_service import FileMapperService
 from services.provider_db_service import ProviderDbService
-from services.tmp_storage import new_tmp_path
+from services.tmp_storage import TmpStorage
 
 if TYPE_CHECKING:
     from flask.testing import FlaskClient
@@ -83,7 +83,7 @@ def _stage_attachment(name: str, content: bytes) -> str:
     """Stage exactly the way ``ThreadsEndpoint._stage_uploads`` does: a real
     tmp path under ``TMP_PATH_PREFIX`` with an 8-hex collision prefix on the
     basename, real bytes written to it."""
-    tmp_path = new_tmp_path(f"{uuid.uuid4().hex[:8]}_{name}")
+    tmp_path = TmpStorage.new_tmp_path(f"{uuid.uuid4().hex[:8]}_{name}")
     with open(tmp_path, "wb") as fh:
         fh.write(content)
     return tmp_path
@@ -139,7 +139,7 @@ def test_text_attachment_lands_in_uploads_indexed_linked_and_previewable(
     assert str(saved) in FileIndexService().search("Valletta")
 
     # the turn serializer projects it into the attachment pill the FE renders.
-    by_id = _fetch_attachments_for_transcripts(db_conn, [uid])
+    by_id = _serializer()._fetch_attachments_for_transcripts(db_conn, [uid])
     assert by_id[uid] == [{
         "filename": "brief.txt",
         "mime_type": "text/plain",
@@ -171,7 +171,7 @@ def test_deleted_attachment_file_is_omitted_from_the_pill_list(
     assert saved.is_file()
     saved.unlink()
 
-    by_id = _fetch_attachments_for_transcripts(db, [uid])
+    by_id = _serializer()._fetch_attachments_for_transcripts(db, [uid])
     assert by_id == {}
 
 
@@ -276,7 +276,7 @@ def test_link_rows_exist_before_the_working_frame_is_broadcast(
 
     mp = MessageProcessor(UserConfig(), -1, "Here's a file.", {"attachments": [staged]})
     provider = _ScriptedProvider(ProviderResponse(text="Noted.", model="scripted", tool_calls=None))
-    with patch("services.provider_service.build_client", return_value=provider):
+    with patch("services.provider_service.Factory.build_client", return_value=provider):
         mp.begin()
         mp.result()
         _drain_background_turns()

@@ -9,10 +9,10 @@ from flask_restx import Namespace, Resource
 from werkzeug.security import generate_password_hash
 
 from services.auth_service import AuthService
-from services.feature_flags import internal_dev_enabled
+from services.feature_flags import FeatureFlags
 from contracts.constants.auth import LOGIN_RATE_LIMIT, LOGIN_RATE_WINDOW_SECONDS
 from .auth import require_auth, _cookie_only, internal_only
-from .dto import Error, expects, responds, register_dto
+from .dto import Error, expects, responds, OpenApiRegistry
 from .dto.auth import AuthStatus, LoginRequest, RegisterRequest, Username, VaultResult
 
 
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 user_auth_ns = Namespace('user_auth', description='Master account authentication', path='/api/auth')
 
-register_dto(user_auth_ns, AuthStatus, Username, RegisterRequest, LoginRequest, VaultResult, Error)
+OpenApiRegistry.register_dto(user_auth_ns, AuthStatus, Username, RegisterRequest, LoginRequest, VaultResult, Error)
 
 _m = user_auth_ns.models
 
@@ -45,7 +45,7 @@ class AuthStatusResource(Resource):
         """
         try:
             from services.database import Database
-            from services.auth_session_service import validate_session
+            from services.auth_session_service import AuthSessionService
 
             conn = Database.conn()
             account_count = cast("tuple[int, ...]", conn.execute(
@@ -55,7 +55,7 @@ class AuthStatusResource(Resource):
                 "SELECT COUNT(*) FROM providers"
             ).fetchone())[0]
 
-            has_session = validate_session(request)
+            has_session = AuthSessionService.validate_session(request)
             vault_state = AuthService().vault_state()
             if has_session and vault_state == "locked":
                 has_session = False
@@ -75,7 +75,7 @@ class AuthStatusResource(Resource):
                 has_session=has_session,
                 vault_state=vault_state,
                 has_vision_provider=has_vision,
-                internal_dev=internal_dev_enabled(),
+                internal_dev=FeatureFlags.internal_dev_enabled(),
             )
         except Exception as e:
             logger.error(f"[REST API] Auth status error: {e}")
@@ -132,7 +132,7 @@ class RegisterResource(Resource):
         """
         try:
             from services.database import Database
-            from services.auth_session_service import create_session
+            from services.auth_session_service import AuthSessionService
             from services.vault_service import get_vault_service
             from flask import make_response
 
@@ -169,7 +169,7 @@ class RegisterResource(Resource):
                 }, 500
 
             resp = make_response(jsonify({"ok": True, "vault_state": "unlocked"}), 201)
-            create_session(resp)
+            AuthSessionService.create_session(resp)
             return resp
         except Exception as e:
             logger.error(f"[REST API] Register error: {e}")
@@ -193,7 +193,7 @@ class LoginResource(Resource):
         resulting vault state is returned in the response body.
         """
         try:
-            from services.auth_session_service import create_session
+            from services.auth_session_service import AuthSessionService
             from services.wrapper_rate_limiter import WrapperRateLimiter
             from flask import make_response
 
@@ -213,7 +213,7 @@ class LoginResource(Resource):
                 jsonify({"ok": True, "vault_state": vault_state}),
                 200,
             )
-            create_session(resp)
+            AuthSessionService.create_session(resp)
             return resp
         except Exception as e:
             logger.error(f"[REST API] Login error: {e}")
@@ -233,7 +233,7 @@ class LogoutResource(Resource):
         session destruction.
         """
         try:
-            from services.auth_session_service import destroy_session
+            from services.auth_session_service import AuthSessionService
             from services.vault_service import get_vault_service
             from flask import make_response
 
@@ -243,7 +243,7 @@ class LogoutResource(Resource):
                 logger.warning("[Auth] Vault lock on logout failed: %s", vault_exc)
 
             resp = make_response(jsonify({"ok": True}), 200)
-            destroy_session(request, resp)
+            AuthSessionService.destroy_session(request, resp)
             return resp
         except Exception as e:
             logger.error(f"[REST API] Logout error: {e}")

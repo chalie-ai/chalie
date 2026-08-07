@@ -53,7 +53,7 @@ def _render_rich(title: str, duration: int, ordinal: int = 1) -> str:
 
 
 def test_anchor_rides_the_segment_and_never_the_model_visible_payload() -> None:
-    from services.rich_media_parser import parse
+    from services.rich_media_parser import RichMediaParser
 
     raw = _render_rich("Pasta", 600)
 
@@ -64,7 +64,7 @@ def test_anchor_rides_the_segment_and_never_the_model_visible_payload() -> None:
         "ephemeral": 1,
         "created_at": "2026-05-03 14:30:00",
     }]
-    segments = parse("<span id='timer_1'>Started a 10-minute timer for the pasta.</span>", tool_calls)
+    segments = RichMediaParser.parse("<span id='timer_1'>Started a 10-minute timer for the pasta.</span>", tool_calls)
     assert len(segments) == 1
     seg = segments[0]
     assert seg["type"] == "rich"
@@ -84,7 +84,7 @@ def test_unparseable_row_timestamp_yields_no_anchor() -> None:
     """``parse_utc`` returns ``datetime.min`` (year 0001) on garbage rather than
     raising. The parser rejects that sentinel so the card falls through to its
     invalid-payload guard instead of counting down from year 0001."""
-    from services.rich_media_parser import parse
+    from services.rich_media_parser import RichMediaParser
 
     tool_calls = [{
         "tool_name": "timer",
@@ -93,12 +93,12 @@ def test_unparseable_row_timestamp_yields_no_anchor() -> None:
         "ephemeral": 1,
         "created_at": "this is not a date",
     }]
-    segments = parse("<span id='timer_1'>Started.</span>", tool_calls)
+    segments = RichMediaParser.parse("<span id='timer_1'>Started.</span>", tool_calls)
     assert segments[0]["created_at"] is None
 
 
 def test_missing_row_timestamp_yields_no_anchor() -> None:
-    from services.rich_media_parser import parse
+    from services.rich_media_parser import RichMediaParser
 
     tool_calls = [{
         "tool_name": "timer",
@@ -107,7 +107,7 @@ def test_missing_row_timestamp_yields_no_anchor() -> None:
         "ephemeral": 1,
         # created_at deliberately absent
     }]
-    segments = parse("<span id='timer_1'>Started.</span>", tool_calls)
+    segments = RichMediaParser.parse("<span id='timer_1'>Started.</span>", tool_calls)
     assert segments[0]["created_at"] is None
 
 
@@ -115,7 +115,7 @@ def test_anchor_is_generic_segment_metadata_not_a_timer_special_case() -> None:
     """Every rich segment carries the anchor — it is "when this tool call ran",
     not a timer field. Other cards simply ignore it, and no payload is mutated to
     carry it."""
-    from services.rich_media_parser import parse
+    from services.rich_media_parser import RichMediaParser
 
     weather_result = (
         '{"location": "Valletta", "temperature_c": 22}\n\n'
@@ -128,6 +128,6 @@ def test_anchor_is_generic_segment_metadata_not_a_timer_special_case() -> None:
         "ephemeral": 1,
         "created_at": "2026-05-03 14:30:00",
     }]
-    segments = parse("<span id='weather_1'>Sunny.</span>", tool_calls)
+    segments = RichMediaParser.parse("<span id='weather_1'>Sunny.</span>", tool_calls)
     assert segments[0]["created_at"] == "2026-05-03T14:30:00+00:00"
     assert set(cast(dict[str, object], segments[0]["payload"])) == {"location", "temperature_c"}

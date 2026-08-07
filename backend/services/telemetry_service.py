@@ -13,7 +13,7 @@ import threading
 from collections import deque, defaultdict
 from typing import Dict, List, Optional, cast
 
-from utils.logger import get_correlation_id
+from utils.logger import Logger
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +107,7 @@ class TelemetryCollector:
         """
         from services.time_utils import utc_now
         timestamp = utc_now().isoformat()
-        correlation_id: Optional[str] = get_correlation_id()
+        correlation_id: str | None = Logger.get_correlation_id()
 
         entry: Dict[str, object] = {
             "event_type": event_type,

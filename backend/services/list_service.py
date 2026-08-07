@@ -27,23 +27,23 @@ from services.write_queue_service import get_write_queue
 logger = logging.getLogger(__name__)
 
 
-def embed_list(list_id: str, name: str) -> None:
-    """Generate an embedding for the list name and store it in lists_vec. Non-fatal."""
-    try:
-        from services.embedding_service import EmbeddingService
-        from services.embedding_utils import pack_embedding
-        embedding = EmbeddingService().generate_embedding(name)
-        packed = pack_embedding(embedding)
-        if packed is None:
-            return
-        with Database.transaction():
-            List.set_embedding(list_id, packed)
-    except Exception as e:
-        logging.warning(f"[LISTS] Embedding failed (non-fatal): {e}")
-
-
 class ListService:
     """Deterministic, id-addressed list management."""
+
+    @staticmethod
+    def embed_list(list_id: str, name: str) -> None:
+        """Generate an embedding for the list name and store it in lists_vec. Non-fatal."""
+        try:
+            from services.embedding_service import EmbeddingService
+            from services.embedding_utils import pack_embedding
+            embedding = EmbeddingService().generate_embedding(name)
+            packed = pack_embedding(embedding)
+            if packed is None:
+                return
+            with Database.transaction():
+                List.set_embedding(list_id, packed)
+        except Exception as e:
+            logging.warning(f"[LISTS] Embedding failed (non-fatal): {e}")
 
     def __init__(self) -> None:
         self._write_queue = get_write_queue()
@@ -69,7 +69,7 @@ class ListService:
 
             list_id = cast(str, self._write_queue.submit_sync(_insert_list))
 
-            embed_list(list_id, name)
+            ListService.embed_list(list_id, name)
             logger.info("[LISTS] Created list '%s' (id=%s)", safe(name), list_id)
             return list_id
 
@@ -139,7 +139,7 @@ class ListService:
 
             updated = cast(int, self._write_queue.submit_sync(_rename)) > 0
             if updated:
-                embed_list(list_id, new_name)
+                ListService.embed_list(list_id, new_name)
                 logger.info(f"[LISTS] Renamed list '{old_name}' -> '{new_name}'")
             return updated
 
@@ -180,7 +180,7 @@ class ListService:
 
             self._write_queue.submit_sync(_update)
             if name is not None and name != list_row.name:
-                embed_list(list_id, name)
+                ListService.embed_list(list_id, name)
             logger.info("[LISTS] Updated list '%s' (id=%s)", safe(name or list_row.name), list_id)
             return self.get_list(list_id)
         except Exception:

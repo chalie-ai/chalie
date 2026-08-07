@@ -6,7 +6,7 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""MCP server built on the SDK's ``MCPServer`` — single ``talk_to_chalie`` tool for external agents.
+"""MCP server built on the SDK's ``FastMCP`` — single ``talk_to_chalie`` tool for external agents.
 
 Streamable HTTP on a dedicated port (default 8462). Bearer tokens validated by
 ASGI middleware against ``wrapper_tokens`` (same as the REST API).
@@ -19,7 +19,8 @@ import re
 import sqlite3
 
 import uvicorn
-from mcp.server import MCPServer
+from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
@@ -101,14 +102,18 @@ class BearerTokenMiddleware(BaseHTTPMiddleware):
         return wrapper_id
 
 
-def create_mcp_server() -> MCPServer:
+def create_mcp_server() -> FastMCP:
     """Create and configure the MCP server with the talk_to_chalie tool.
 
-    Bind host and port are not set here — the constructor no longer takes them
-    (they are applied where they matter: ``host`` in ``_build_app`` and ``port``
-    by ``uvicorn.run`` in ``run_mcp_server``).
+    DNS-rebinding protection is disabled so networked external agents can connect
+    — the permissive transport 1.x always ran. The SDK default is localhost-only
+    ``allowed_hosts``; do not "simplify" this back to it. The actual socket bind
+    (``host``/``port``) is applied by ``uvicorn.run`` in :meth:`McpServer.run`.
     """
-    mcp = MCPServer(name=_MCP_SERVER_NAME)
+    mcp = FastMCP(
+        name=_MCP_SERVER_NAME,
+        transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+    )
 
     @mcp.tool()
     async def talk_to_chalie(
@@ -163,69 +168,68 @@ def create_mcp_server() -> MCPServer:
     return mcp
 
 
-def _build_app(mcp: MCPServer) -> Starlette:
+def _build_app(mcp: FastMCP) -> Starlette:
     """Wrap the MCP Starlette app with bearer token auth middleware."""
-    # host="0.0.0.0" is load-bearing, not cosmetic: the SDK auto-enables
-    # DNS-rebinding protection (localhost-only allowed_hosts) ONLY when host is a
-    # loopback address. Passing the real bind host keeps that protection OFF, so
-    # networked external agents can connect — the permissive transport 1.x always
-    # ran. Do not "simplify" this back to the default.
-    app = mcp.streamable_http_app(host="0.0.0.0")
+    app = mcp.streamable_http_app()
     app.add_middleware(BearerTokenMiddleware)
     return app
 
 
-def run_mcp_server() -> None:
-    """Run the MCP server (blocking). Intended as a WorkerManager service."""
-    from models.setting import Setting
+class McpServer:
+    """MCP server bootstrap and configuration."""
 
-    enabled = Setting.get_value("mcp_server_enabled")
-    if enabled is not None and str(enabled).lower() in ("false", "0", "no"):
-        logger.info("[MCP] Server disabled via settings (mcp_server_enabled=false)")
-        return
+    @staticmethod
+    def run() -> None:
+        """Run the MCP server (blocking). Intended as a WorkerManager service."""
+        from models.setting import Setting
 
-    port_setting = Setting.get_value("mcp_server_port")
-    try:
-        port = int(port_setting) if port_setting else _DEFAULT_PORT
-    except (ValueError, TypeError):
-        port = _DEFAULT_PORT
-
-    _ensure_mcp_token()
-
-    logger.info("[MCP] Starting MCP server on port %d", port)
-    mcp = create_mcp_server()
-    app = _build_app(mcp)
-
-    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
-
-
-def _ensure_mcp_token() -> None:
-    """Generate an MCP auth token on first boot if none exists."""
-    from services.wrapper_auth_service import WrapperAuthService
-    from models.setting import Setting
-
-    existing = Setting.get_value("mcp_server_token_wrapper_id")
-    if existing:
-        auth_svc = WrapperAuthService()
-        wrapper = auth_svc.get_wrapper(existing)
-        if wrapper:
+        enabled = Setting.get_value("mcp_server_enabled")
+        if enabled is not None and str(enabled).lower() in ("false", "0", "no"):
+            logger.info("[MCP] Server disabled via settings (mcp_server_enabled=false)")
             return
 
-    auth_svc = WrapperAuthService()
-    try:
-        raw_token, wrapper_id = auth_svc.create_token(
-            name="MCP Server (External Agents)",
-            wrapper_id_override="__mcp_server__",
+        port_setting = Setting.get_value("mcp_server_port")
+        try:
+            port = int(port_setting) if port_setting else _DEFAULT_PORT
+        except (ValueError, TypeError):
+            port = _DEFAULT_PORT
+
+        McpServer._ensure_token()
+
+        logger.info("[MCP] Starting MCP server on port %d", port)
+        mcp = create_mcp_server()
+        app = _build_app(mcp)
+
+        uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
+
+    @staticmethod
+    def _ensure_token() -> None:
+        """Generate an MCP auth token on first boot if none exists."""
+        from services.wrapper_auth_service import WrapperAuthService
+        from models.setting import Setting
+
+        existing = Setting.get_value("mcp_server_token_wrapper_id")
+        if existing:
+            auth_svc = WrapperAuthService()
+            wrapper = auth_svc.get_wrapper(existing)
+            if wrapper:
+                return
+
+        auth_svc = WrapperAuthService()
+        try:
+            raw_token, wrapper_id = auth_svc.create_token(
+                name="MCP Server (External Agents)",
+                wrapper_id_override="__mcp_server__",
+            )
+        except sqlite3.IntegrityError:
+            logger.info("[MCP] Token already exists (concurrent boot); skipping")
+            return
+
+        Setting.set("mcp_server_token_wrapper_id", wrapper_id)
+
+        logger.info(
+            "[MCP] Generated MCP auth token (wrapper_id=%s). "
+            "Retrieve via: Settings > MCP Server in the brain dashboard.",
+            wrapper_id,
         )
-    except sqlite3.IntegrityError:
-        logger.info("[MCP] Token already exists (concurrent boot); skipping")
-        return
-
-    Setting.set("mcp_server_token_wrapper_id", wrapper_id)
-
-    logger.info(
-        "[MCP] Generated MCP auth token (wrapper_id=%s). "
-        "Retrieve via: Settings > MCP Server in the brain dashboard.",
-        wrapper_id,
-    )
-    logger.info("[MCP] Token (shown once): %s", raw_token)
+        logger.info("[MCP] Token (shown once): %s", raw_token)

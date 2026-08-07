@@ -17,13 +17,13 @@ from flask.typing import ResponseReturnValue
 from api.action import Action
 from api.endpoint import DocumentedResponse
 from exceptions import NotFoundError
-from api.endpoints.skills import _index_new_skill
+from api.endpoints.skills import Skills
 from api.request import Request
 from api.response.skills import SkillResponse
 from models.skill import Skill as SkillModel
 from services.database import Database
 from services.file_mapper_service import FileMapperService
-from utils.skills_io import DEFAULT_VERSION, ensure_user_skills_dir, skill_yaml_path, write_skill_file
+from utils.skills_io import DEFAULT_VERSION, SkillsIO
 
 logger = logging.getLogger(__name__)
 
@@ -82,11 +82,11 @@ class SkillCopy(Action):
             skill.enabled = 0
             skill.save()
 
-            _index_new_skill(conn, new_id, copy_title, skill.use_for, tags)
+            Skills._index_new_skill(conn, new_id, copy_title, skill.use_for, tags)
 
-        ensure_user_skills_dir()
-        write_skill_file(
-            skill_yaml_path(copy_title),
+        SkillsIO.ensure_user_skills_dir()
+        SkillsIO.write_skill_file(
+            SkillsIO.skill_yaml_path(copy_title),
             {
                 "title": copy_title,
                 "use_for": skill.use_for,

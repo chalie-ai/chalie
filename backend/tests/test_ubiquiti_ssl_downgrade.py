@@ -31,7 +31,7 @@ from typing import cast
 import pytest
 import requests.exceptions
 
-from capabilities.ubiquiti_capability import unifi_rest_handler as rest
+from capabilities.ubiquiti_capability.unifi_rest_handler import UnifiRestHandler
 
 pytestmark = pytest.mark.unit
 
@@ -105,11 +105,11 @@ def test_verify_true_raises_on_untrusted_cert(untrusted_https_server: object) ->
     """When the user opts into verify_ssl=True, an untrusted cert must raise — not silently downgrade."""
     url = cast("str", getattr(untrusted_https_server, "url"))
     with pytest.raises(requests.exceptions.SSLError):
-        rest.list_devices(url, "default", api_key="k", verify_ssl=True)
+        UnifiRestHandler.list_devices(url, "default", api_key="k", verify_ssl=True)
 
 
 def test_verify_false_still_connects(untrusted_https_server: object) -> None:
     """The explicit opt-out path (verify_ssl=False) must still connect to the untrusted server."""
     url = cast("str", getattr(untrusted_https_server, "url"))
-    result = rest.list_devices(url, "default", api_key="k", verify_ssl=False)
+    result = UnifiRestHandler.list_devices(url, "default", api_key="k", verify_ssl=False)
     assert result["count"] == 0

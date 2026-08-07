@@ -22,7 +22,7 @@ Native size-rejection signal:
   self-hosted server would surface as a generic 400 and never compact.
 
 Depends on: services.provider_api (contract), services.llm_service
-(_app_user_agent, _resolve_api_key, _strip_think_blocks — utilities).
+(LlmService.app_user_agent, LlmService.resolve_api_key, LlmService.strip_think_blocks — utilities).
 Consumed by: services.llm_clients.registry (platform dispatch), and by every
 OpenAI-protocol subclass in this package.
 """
@@ -70,7 +70,6 @@ from services.llm_clients.thinking_map import (
 from services.provider_api import (
     ProviderApiRequest,
     ProviderApiResponse,
-    is_token_limit_message,
 )
 
 logger = logging.getLogger(__name__)
@@ -85,113 +84,6 @@ _APP_TITLE = "Chalie"
 _UNAUTHENTICATED_PLACEHOLDER_KEY = "EMPTY"
 
 _COMPLETION_USAGE: TypeAlias = "_openai_mod.types.CompletionUsage"
-
-def _as_dict(entry: object) -> dict[str, object]:
-    """A ``/models`` listing entry as a plain dict, whatever the SDK returned.
-
-    The OpenAI SDK types only the fields OpenAI itself serves, so every vendor
-    size field arrives as an untyped extra. Flattening once here keeps every
-    lookup below an ordinary dict lookup instead of a getattr/model_extra dance
-    repeated per key.
-    """
-    if isinstance(entry, dict):
-        return dict(entry)
-    data: dict[str, object] = {}
-    dump = getattr(entry, 'model_dump', None)
-    if callable(dump):
-        try:
-            dumped = dump()
-        except Exception:  # noqa: BLE001 - a vendor extra must never break a probe
-            dumped = None
-        if isinstance(dumped, dict):
-            data.update(dumped)
-    extra = getattr(entry, 'model_extra', None)
-    if isinstance(extra, dict):
-        data.update(extra)
-    return data
-
-
-def _positive_int(value: object) -> int | None:
-    """*value* if it is a usable token count, else None (bools are not ints here)."""
-    if isinstance(value, bool) or not isinstance(value, int):
-        return None
-    return value if value > 0 else None
-
-
-def _resolve_path(data: dict[str, object], path: str) -> object | None:
-    """The value at a dotted *path* in *data*, or None if any hop is missing.
-
-    Keeps ``WINDOW_FIELDS`` a single ordered list: a vendor that publishes both
-    a nested and a top-level figure declares which it trusts by ordering, with
-    no second list and no precedence rule to remember.
-    """
-    current: object = data
-    for key in path.split('.'):
-        if not isinstance(current, dict):
-            return None
-        current = cast(dict[str, object], current).get(key)
-    return current
-
-
-def _select_models_entry(entries: "Sequence[object]", target: str) -> object | None:
-    """The listing entry describing *target*, or None when it is ambiguous.
-
-    Matches on ``id``, then on ``root`` — a server started from a local file
-    reports the path in one and the alias in the other, and which way round
-    varies by server. A single-entry listing matches unconditionally: one served
-    model is the norm for a self-hosted host, and there is nothing to confuse it
-    with.
-    """
-    slug = (target or '').strip().lower()
-    for entry in entries:
-        data = _as_dict(entry)
-        for field in ('id', 'root'):
-            value = data.get(field)
-            if isinstance(value, str) and value.strip().lower() == slug:
-                return entry
-    return entries[0] if len(entries) == 1 else None
-
-
-def _openai_convert_messages(messages: "list[_Msg]") -> "list[_Msg]":
-    """Convert normalised messages to OpenAI format."""
-    result: "list[_Msg]" = []
-    for msg in messages:
-        if msg['role'] == 'assistant' and msg.get('tool_calls'):
-            result.append({
-                "role": "assistant",
-                "content": msg.get('content') or None,
-                "tool_calls": [
-                    {
-                        "id": cast(str, tc['id']),
-                        "type": "function",
-                        "function": {
-                            "name": cast(str, tc['name']),
-                            "arguments": json.dumps(tc['input']),
-                        },
-                    }
-                    for tc in cast("list[_Msg]", msg['tool_calls'])
-                ],
-            })
-        elif msg['role'] == 'tool':
-            result.append({
-                "role": "tool",
-                "tool_call_id": msg['tool_call_id'],
-                "content": msg.get('content', ''),
-            })
-        else:
-            img = cast("_Msg", msg.get('image'))
-            if img:
-                parts: "list[_Msg]" = []
-                if msg.get('content'):
-                    parts.append({"type": "text", "text": msg['content']})
-                parts.append({
-                    "type": "image_url",
-                    "image_url": {"url": f"data:{img['mime_type']};base64,{img['data']}"},
-                })
-                result.append({"role": msg['role'], "content": parts})
-            else:
-                result.append(msg)
-    return result
 
 
 class OpenAICompatibleClient(ProviderClient):
@@ -240,13 +132,121 @@ class OpenAICompatibleClient(ProviderClient):
         'meta.n_ctx',                   # llama.cpp
     )
 
+    @staticmethod
+    def _as_dict(entry: object) -> dict[str, object]:
+        """A ``/models`` listing entry as a plain dict, whatever the SDK returned.
+
+        The OpenAI SDK types only the fields OpenAI itself serves, so every vendor
+        size field arrives as an untyped extra. Flattening once here keeps every
+        lookup below an ordinary dict lookup instead of a getattr/model_extra dance
+        repeated per key.
+        """
+        if isinstance(entry, dict):
+            return dict(entry)
+        data: dict[str, object] = {}
+        dump = getattr(entry, 'model_dump', None)
+        if callable(dump):
+            try:
+                dumped = dump()
+            except Exception:  # noqa: BLE001 - a vendor extra must never break a probe
+                dumped = None
+            if isinstance(dumped, dict):
+                data.update(dumped)
+        extra = getattr(entry, 'model_extra', None)
+        if isinstance(extra, dict):
+            data.update(extra)
+        return data
+
+    @staticmethod
+    def _positive_int(value: object) -> int | None:
+        """*value* if it is a usable token count, else None (bools are not ints here)."""
+        if isinstance(value, bool) or not isinstance(value, int):
+            return None
+        return value if value > 0 else None
+
+    @staticmethod
+    def _resolve_path(data: dict[str, object], path: str) -> object | None:
+        """The value at a dotted *path* in *data*, or None if any hop is missing.
+
+        Keeps ``WINDOW_FIELDS`` a single ordered list: a vendor that publishes both
+        a nested and a top-level figure declares which it trusts by ordering, with
+        no second list and no precedence rule to remember.
+        """
+        current: object = data
+        for key in path.split('.'):
+            if not isinstance(current, dict):
+                return None
+            current = cast(dict[str, object], current).get(key)
+        return current
+
+    @staticmethod
+    def _select_models_entry(entries: "Sequence[object]", target: str) -> object | None:
+        """The listing entry describing *target*, or None when it is ambiguous.
+
+        Matches on ``id``, then on ``root`` — a server started from a local file
+        reports the path in one and the alias in the other, and which way round
+        varies by server. A single-entry listing matches unconditionally: one served
+        model is the norm for a self-hosted host, and there is nothing to confuse it
+        with.
+        """
+        slug = (target or '').strip().lower()
+        for entry in entries:
+            data = OpenAICompatibleClient._as_dict(entry)
+            for field in ('id', 'root'):
+                value = data.get(field)
+                if isinstance(value, str) and value.strip().lower() == slug:
+                    return entry
+        return entries[0] if len(entries) == 1 else None
+
+    @staticmethod
+    def _openai_convert_messages(messages: "list[_Msg]") -> "list[_Msg]":
+        """Convert normalised messages to OpenAI format."""
+        result: "list[_Msg]" = []
+        for msg in messages:
+            if msg['role'] == 'assistant' and msg.get('tool_calls'):
+                result.append({
+                    "role": "assistant",
+                    "content": msg.get('content') or None,
+                    "tool_calls": [
+                        {
+                            "id": cast(str, tc['id']),
+                            "type": "function",
+                            "function": {
+                                "name": cast(str, tc['name']),
+                                "arguments": json.dumps(tc['input']),
+                            },
+                        }
+                        for tc in cast("list[_Msg]", msg['tool_calls'])
+                    ],
+                })
+            elif msg['role'] == 'tool':
+                result.append({
+                    "role": "tool",
+                    "tool_call_id": msg['tool_call_id'],
+                    "content": msg.get('content', ''),
+                })
+            else:
+                img = cast("_Msg", msg.get('image'))
+                if img:
+                    parts: "list[_Msg]" = []
+                    if msg.get('content'):
+                        parts.append({"type": "text", "text": msg['content']})
+                    parts.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{img['mime_type']};base64,{img['data']}"},
+                    })
+                    result.append({"role": msg['role'], "content": parts})
+                else:
+                    result.append(msg)
+        return result
+
     @classmethod
     def fetch_models(
         cls, host: str, api_key: str,
     ) -> tuple[list[dict[str, str | None]] | None, str | None]:
         """Every OpenAI-protocol host answers ``GET {base_url}/models``."""
-        from services.provider_probe import fetch_openai_compatible_models  # noqa: PLC0415
-        return fetch_openai_compatible_models(host or cls.DEFAULT_BASE_URL, api_key)
+        from services.provider_probe import ProviderProbe  # noqa: PLC0415
+        return ProviderProbe.fetch_openai_compatible_models(host or cls.DEFAULT_BASE_URL, api_key)
 
     def __init__(self, config: dict[str, object]) -> None:
         self._config = config
@@ -266,15 +266,15 @@ class OpenAICompatibleClient(ProviderClient):
         A configured key always wins, whatever the platform's default: opting
         in to authentication is the operator's call, not ours.
         """
-        from services.llm_service import _resolve_api_key  # noqa: PLC0415
+        from services.llm_service import LlmService  # noqa: PLC0415
 
         if not self.REQUIRES_KEY and not self._config.get('api_key'):
             return _UNAUTHENTICATED_PLACEHOLDER_KEY
-        return _resolve_api_key(self._config)
+        return LlmService.resolve_api_key(self._config)
 
     def _get_client(self) -> "_openai_mod.OpenAI":
         from openai import OpenAI  # noqa: PLC0415
-        from services.llm_service import _app_user_agent  # noqa: PLC0415
+        from services.llm_service import LlmService  # noqa: PLC0415
         from services.provider_api import PROVIDER_CALL_TIMEOUT_S  # noqa: PLC0415
         kwargs: dict[str, object] = {
             'api_key': self._api_key(),
@@ -282,7 +282,7 @@ class OpenAICompatibleClient(ProviderClient):
             'default_headers': {
                 "HTTP-Referer": _APP_URL,
                 "X-Title": _APP_TITLE,
-                "User-Agent": _app_user_agent(),
+                "User-Agent": LlmService.app_user_agent(),
             },
         }
         base_url = self._config.get('host')
@@ -329,7 +329,7 @@ class OpenAICompatibleClient(ProviderClient):
     def _invoke_create(self, client: "_openai_mod.OpenAI", create_kwargs: dict[str, object]) -> "_openai_mod.types.chat.ChatCompletion":
         """Call chat.completions.create, mapping SDK errors with a thinking-retry fallback."""
         import openai as openai_mod  # noqa: PLC0415
-        from services.llm_service import _is_thinking_rejection  # noqa: PLC0415
+        from services.llm_service import LlmService  # noqa: PLC0415
         try:
             return cast("Callable[..., _openai_mod.types.chat.ChatCompletion]", client.chat.completions.create)(**create_kwargs)
         except openai_mod.RateLimitError as exc:
@@ -346,14 +346,14 @@ class OpenAICompatibleClient(ProviderClient):
             if (
                 err_code == 'context_length_exceeded'
                 or 'context_length_exceeded' in str(exc).lower()
-                or is_token_limit_message(str(exc))
+                or ProviderApiRequest.is_token_limit_message(str(exc))
             ):
                 raise ContextLimit(
                     f"Provider rejected payload (context length): {exc}",
                     provider=cast(str, self._config.get('platform') or 'openai'),
                     model=self.model,
                 ) from exc
-            if _is_thinking_rejection(exc, create_kwargs):
+            if LlmService.is_thinking_rejection(exc, create_kwargs):
                 # Ladder: only when we sent reasoning_effort='none' do we try
                 # fallback steps; otherwise strip and retry once.
                 if create_kwargs.get('reasoning_effort') == 'none':
@@ -367,7 +367,7 @@ class OpenAICompatibleClient(ProviderClient):
                     try:
                         return cast("Callable[..., _openai_mod.types.chat.ChatCompletion]", client.chat.completions.create)(**fallback1)
                     except Exception as retry_exc:
-                        if _is_thinking_rejection(retry_exc, fallback1):
+                        if LlmService.is_thinking_rejection(retry_exc, fallback1):
                             # Step 2: retry bare — no reasoning_effort, no extra_body
                             logger.info(
                                 "[THINKING] native flag rejected by provider=openai model=%s — retried without",
@@ -389,12 +389,12 @@ class OpenAICompatibleClient(ProviderClient):
 
     def send(self, dto: ProviderApiRequest) -> ProviderApiResponse:
         """Transform DTO → OpenAI Chat Completions API → ProviderApiResponse."""
-        from services.llm_service import _strip_think_blocks  # noqa: PLC0415
+        from services.llm_service import LlmService  # noqa: PLC0415
 
         client = self._get_client()
         start = time.time()
 
-        api_messages = _openai_convert_messages(dto.messages)
+        api_messages = OpenAICompatibleClient._openai_convert_messages(dto.messages)
         create_kwargs: dict[str, object] = {
             'model': self.model,
             'messages': [{"role": "system", "content": dto.system}] + api_messages,
@@ -415,7 +415,7 @@ class OpenAICompatibleClient(ProviderClient):
         latency_ms = int((time.time() - start) * 1000)
 
         msg = response.choices[0].message
-        text, think_trace = _strip_think_blocks(msg.content or "")
+        text, think_trace = LlmService.strip_think_blocks(msg.content or "")
         # Priority: explicit reasoning field on the message, else the extracted
         # <think> content.  Leave thinking_block None when neither source is
         # present.
@@ -522,9 +522,9 @@ class OpenAICompatibleClient(ProviderClient):
         with; trusting it over-promises the window and gets payloads rejected
         mid-turn — the exact failure this probe exists to prevent.
         """
-        data = _as_dict(entry)
+        data = OpenAICompatibleClient._as_dict(entry)
         for path in self.WINDOW_FIELDS:
-            window = _positive_int(_resolve_path(data, path))
+            window = OpenAICompatibleClient._positive_int(OpenAICompatibleClient._resolve_path(data, path))
             if window is not None:
                 return window
         return None
@@ -551,7 +551,7 @@ class OpenAICompatibleClient(ProviderClient):
             )
             return None
 
-        entry = _select_models_entry(entries, self.model)
+        entry = OpenAICompatibleClient._select_models_entry(entries, self.model)
         return self._window_from_models_entry(entry) if entry is not None else None
 
     def _probe_via_ping(self) -> int | None:
@@ -642,3 +642,11 @@ class OpenAICompatibleClient(ProviderClient):
             if isinstance(val, int) and val > 0:
                 return val
         return None
+
+
+# Backward-compat aliases for callers that import the module-level helpers directly.
+_as_dict = OpenAICompatibleClient._as_dict
+_positive_int = OpenAICompatibleClient._positive_int
+_resolve_path = OpenAICompatibleClient._resolve_path
+_select_models_entry = OpenAICompatibleClient._select_models_entry
+_openai_convert_messages = OpenAICompatibleClient._openai_convert_messages

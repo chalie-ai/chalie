@@ -14,7 +14,7 @@ it.  Confirmed via:
   → 413 True
 
 Depends on: services.provider_api (contract), services.llm_service
-(_app_user_agent, _resolve_api_key — utilities kept in llm_service during migration).
+(LlmService.app_user_agent, LlmService.resolve_api_key — utilities kept in llm_service during migration).
 Consumed by: services.llm_clients.factory (platform dispatch).
 """
 
@@ -56,37 +56,6 @@ from services.provider_api import (
 logger = logging.getLogger(__name__)
 
 
-def _assistant_tool_block(msg: "_Msg") -> "_Msg":
-    content: "list[_Msg]" = []
-    text = msg.get('content', '')
-    if text:
-        content.append({"type": "text", "text": text})
-    for tc in cast("list[_Msg]", msg['tool_calls']):
-        content.append({
-            "type": "tool_use",
-            "id": tc['id'],
-            "name": tc['name'],
-            "input": tc['input'],
-        })
-    return {"role": "assistant", "content": content}
-
-
-def _image_block(msg: "_Msg") -> "_Msg":
-    img = cast("_Msg", msg.get('image'))
-    blocks: "list[_Msg]" = []
-    if msg.get('content'):
-        blocks.append({"type": "text", "text": msg['content']})
-    blocks.append({
-        "type": "image",
-        "source": {
-            "type": "base64",
-            "media_type": img['mime_type'],
-            "data": img['data'],
-        },
-    })
-    return {"role": msg['role'], "content": blocks}
-
-
 def _anthropic_convert_messages(messages: "list[_Msg]") -> "list[_Msg]":
     """Convert normalised messages to Anthropic's content-block format.
 
@@ -98,7 +67,7 @@ def _anthropic_convert_messages(messages: "list[_Msg]") -> "list[_Msg]":
     while i < len(messages):
         msg = messages[i]
         if msg['role'] == 'assistant' and msg.get('tool_calls'):
-            result.append(_assistant_tool_block(msg))
+            result.append(AnthropicClient._assistant_tool_block(msg))
         elif msg['role'] == 'tool':
             tool_results: "list[_Msg]" = []
             while i < len(messages) and messages[i]['role'] == 'tool':
@@ -112,28 +81,11 @@ def _anthropic_convert_messages(messages: "list[_Msg]") -> "list[_Msg]":
             result.append({"role": "user", "content": tool_results})
             continue
         elif msg.get('image'):
-            result.append(_image_block(msg))
+            result.append(AnthropicClient._image_block(msg))
         else:
             result.append(msg)
         i += 1
     return result
-
-
-def _parse_content_blocks(content: Sequence[object]) -> tuple[str, Optional[list[dict[str, object]]], Optional[str]]:
-    """Extract (text, tool_calls, thinking_block) from an Anthropic response content list."""
-    text_parts: list[str] = []
-    tool_calls: list[dict[str, object]] = []
-    thinking_block: Optional[str] = None
-    for block in (content or []):
-        block_type = getattr(block, 'type', None)
-        if block_type == 'tool_use':
-            tool_calls.append({'id': cast("_Block", block).id, 'name': cast("_Block", block).name, 'input': cast("_Block", block).input})
-        elif block_type == 'thinking':
-            thinking_block = getattr(block, 'thinking', None)
-            logger.debug("[AnthropicClient] thinking block present")
-        elif hasattr(block, 'text') and cast("_Block", block).text:
-            text_parts.append(cast("_Block", block).text)
-    return '\n'.join(text_parts), tool_calls or None, thinking_block
 
 
 class AnthropicClient(ProviderClient):
@@ -152,8 +104,56 @@ class AnthropicClient(ProviderClient):
         cls, host: str, api_key: str,
     ) -> tuple[list[dict[str, str | None]] | None, str | None]:
         """Anthropic publishes the list against the key; there is no host to give."""
-        from services.provider_probe import fetch_anthropic_models  # noqa: PLC0415
-        return fetch_anthropic_models(api_key)
+        from services.provider_probe import ProviderProbe  # noqa: PLC0415
+        return ProviderProbe.fetch_anthropic_models(api_key)
+
+    @staticmethod
+    def _assistant_tool_block(msg: "_Msg") -> "_Msg":
+        content: "list[_Msg]" = []
+        text = msg.get('content', '')
+        if text:
+            content.append({"type": "text", "text": text})
+        for tc in cast("list[_Msg]", msg['tool_calls']):
+            content.append({
+                "type": "tool_use",
+                "id": tc['id'],
+                "name": tc['name'],
+                "input": tc['input'],
+            })
+        return {"role": "assistant", "content": content}
+
+    @staticmethod
+    def _image_block(msg: "_Msg") -> "_Msg":
+        img = cast("_Msg", msg.get('image'))
+        blocks: "list[_Msg]" = []
+        if msg.get('content'):
+            blocks.append({"type": "text", "text": msg['content']})
+        blocks.append({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": img['mime_type'],
+                "data": img['data'],
+            },
+        })
+        return {"role": msg['role'], "content": blocks}
+
+    @staticmethod
+    def _parse_content_blocks(content: Sequence[object]) -> tuple[str, Optional[list[dict[str, object]]], Optional[str]]:
+        """Extract (text, tool_calls, thinking_block) from an Anthropic response content list."""
+        text_parts: list[str] = []
+        tool_calls: list[dict[str, object]] = []
+        thinking_block: Optional[str] = None
+        for block in (content or []):
+            block_type = getattr(block, 'type', None)
+            if block_type == 'tool_use':
+                tool_calls.append({'id': cast("_Block", block).id, 'name': cast("_Block", block).name, 'input': cast("_Block", block).input})
+            elif block_type == 'thinking':
+                thinking_block = getattr(block, 'thinking', None)
+                logger.debug("[AnthropicClient] thinking block present")
+            elif hasattr(block, 'text') and cast("_Block", block).text:
+                text_parts.append(cast("_Block", block).text)
+        return '\n'.join(text_parts), tool_calls or None, thinking_block
 
     def __init__(self, config: dict[str, object]) -> None:
         """Initialise from provider config dict (platform, model, api_key)."""
@@ -162,12 +162,12 @@ class AnthropicClient(ProviderClient):
 
     def _get_client(self) -> "_anthropic_mod.Anthropic":
         import anthropic
-        from services.llm_service import _resolve_api_key, _app_user_agent  # noqa: PLC0415
+        from services.llm_service import LlmService  # noqa: PLC0415
         from services.provider_api import PROVIDER_CALL_TIMEOUT_S  # noqa: PLC0415
         return anthropic.Anthropic(
-            api_key=_resolve_api_key(self._config),
+            api_key=LlmService.resolve_api_key(self._config),
             timeout=PROVIDER_CALL_TIMEOUT_S,
-            default_headers={"User-Agent": _app_user_agent()},
+            default_headers={"User-Agent": LlmService.app_user_agent()},
         )
 
     def _thinking_native(self, level: ThinkingLevel, max_tokens: int) -> dict[str, object]:
@@ -256,7 +256,7 @@ class AnthropicClient(ProviderClient):
 
         response = self._invoke_create(client, create_kwargs)
         latency_ms = int((time.time() - start) * 1000)
-        text, tool_calls, thinking_block = _parse_content_blocks(response.content)
+        text, tool_calls, thinking_block = AnthropicClient._parse_content_blocks(response.content)
         stop_reason = response.stop_reason
 
         logger.info(

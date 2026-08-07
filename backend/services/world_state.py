@@ -47,24 +47,6 @@ _TELEMETRY_HIDDEN_GROUPS = {"behavioral", "location"}
 _LOCAL_TIME_FORMAT = "%a %d %b %Y %H:%M"
 
 
-def _format_telemetry_value(value: object) -> str | None:
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, (int, float)):
-        return str(value)
-    if isinstance(value, str):
-        return value if value else None
-    if isinstance(value, (list, tuple)):
-        return ",".join(str(v) for v in value) if value else None
-    if isinstance(value, dict):
-        # Nested dicts should have been split into separate rows by the
-        # flattener; if one slips through, JSON-encode as a fallback.
-        return json.dumps(value, separators=(",", ":")) if value else None
-    return str(value)
-
-
 def _is_hidden_telemetry_key(key: str) -> bool:
     return key in _TELEMETRY_HIDDEN_KEYS or key.startswith("_")
 
@@ -74,7 +56,7 @@ def _render_dict_subfields(d: dict[str, object]) -> list[str]:
     for sub_key, sub_value in d.items():
         if _is_hidden_telemetry_key(sub_key):
             continue
-        rendered = _format_telemetry_value(sub_value)
+        rendered = WorldState._format_telemetry_value(sub_value)
         if rendered is not None:
             sub_fields.append(f"{sub_key}:{rendered}")
     return sub_fields
@@ -94,7 +76,7 @@ def _group_telemetry(ctx: dict[str, object]) -> list[tuple[str, list[str]]]:
             if sub_fields:
                 grouped[key] = sub_fields
             continue
-        rendered = _format_telemetry_value(value)
+        rendered = WorldState._format_telemetry_value(value)
         if rendered is not None:
             user_fields.append(f"{key}:{rendered}")
 
@@ -104,17 +86,6 @@ def _group_telemetry(ctx: dict[str, object]) -> list[tuple[str, list[str]]]:
     for group_name in sorted(grouped.keys()):
         out.append((group_name, grouped[group_name]))
     return out
-
-
-def _compute_local_time() -> str | None:
-    """Return wall-clock time formatted as ``Sat 02 May 2026 11:35``."""
-    try:
-        from services.locale_service import format_date
-        from services.time_utils import utc_now
-        return format_date(utc_now(), _LOCAL_TIME_FORMAT, for_ui=True)
-    except Exception as exc:
-        logger.debug("[WorldState] local_time compute failed: %s", exc)
-        return None
 
 
 @dataclass(frozen=True)
@@ -267,7 +238,7 @@ class WorldState:
         if not ctx:
             return []
 
-        fresh_local_time = _compute_local_time()
+        fresh_local_time = WorldState._compute_local_time()
         if fresh_local_time:
             ctx["local_time"] = fresh_local_time
 
@@ -275,5 +246,37 @@ class WorldState:
         for group_name, fields in _group_telemetry(ctx):
             lines.append(f"* **{group_name}**;" + ",".join(fields))
         return lines
+
+    # ── Static render helpers ──────────────────────────────────────────────
+
+    @staticmethod
+    def _format_telemetry_value(value: object) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if isinstance(value, (int, float)):
+            return str(value)
+        if isinstance(value, str):
+            return value if value else None
+        if isinstance(value, (list, tuple)):
+            return ",".join(str(v) for v in value) if value else None
+        if isinstance(value, dict):
+            # Nested dicts should have been split into separate rows by the
+            # flattener; if one slips through, JSON-encode as a fallback.
+            return json.dumps(value, separators=(",", ":")) if value else None
+        return str(value)
+
+    @staticmethod
+    def _compute_local_time() -> str | None:
+        """Return wall-clock time formatted as ``Sat 02 May 2026 11:35``."""
+        try:
+            from services.locale_service import LocaleService
+            from services.time_utils import utc_now
+            return LocaleService.format_date(utc_now(), _LOCAL_TIME_FORMAT, for_ui=True)
+        except Exception as exc:
+            logger.debug("[WorldState] local_time compute failed: %s", exc)
+            return None
+
 
 world_state = WorldState()

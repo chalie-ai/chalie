@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from flask import request
 
-from configs.channels import ProcessorConfig, config_for
+from configs.channels import ChannelConfig, ProcessorConfig
 from exceptions import EndpointError
 
 
@@ -30,7 +30,7 @@ class ThreadScope:
 
     def __init__(self, config_type: str) -> None:
         try:
-            self.config: ProcessorConfig = config_for(config_type)
+            self.config: ProcessorConfig = ChannelConfig.config_for(config_type)
         except ValueError as exc:
             raise EndpointError("Invalid type") from exc
         self.type = config_type

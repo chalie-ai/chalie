@@ -20,7 +20,7 @@ from exceptions import EndpointError
 from api.response.memory import MemoryHitResponse
 from models.episode import Episode
 from services.episodic_service import EpisodicService
-from services.memory_recall_service import recall
+from services.memory_recall_service import MemoryRecallService
 from services.time_utils import parse_utc
 
 logger = logging.getLogger(__name__)
@@ -30,32 +30,32 @@ _RECALL_KINDS = ["user_specific", "system"]
 _RECALL_LIMIT = 5
 
 
-def _episode_hit(ep: Episode) -> MemoryHitResponse:
-    """Build a hit DTO from an episodic-retrieval :class:`Episode`."""
-    return MemoryHitResponse(
-        type="episode",
-        content=ep.gist,
-        score=getattr(ep, "composite_score", 0.0),
-        created_at=parse_utc(ep.created_at or ""),
-    )
-
-
-def _concept_hit(row: dict[str, object]) -> MemoryHitResponse:
-    """Build a hit DTO from a data-graph concept row."""
-    return MemoryHitResponse(
-        type="concept",
-        content=f"{cast(str, row.get('key', ''))}: {cast(str, row.get('value', ''))}",
-        score=cast(float, row.get("composite_score", row.get("retrieval_weight", 0))),
-        confidence=cast(float, row.get("retrieval_weight", 0)),
-    )
-
-
 class MemorySearch(Action):
     """Action searching episodic memory + the data graph and returning ranked, merged hits."""
 
     # id is ignored — there is no per-id resource here, only a query-driven
     # search, so this handler can never 404.
     response_dto = {"get": DocumentedResponse(MemoryHitResponse, listing=True, not_found=False)}
+
+    @staticmethod
+    def _episode_hit(ep: Episode) -> MemoryHitResponse:
+        """Build a hit DTO from an episodic-retrieval :class:`Episode`."""
+        return MemoryHitResponse(
+            type="episode",
+            content=ep.gist,
+            score=getattr(ep, "composite_score", 0.0),
+            created_at=parse_utc(ep.created_at or ""),
+        )
+
+    @staticmethod
+    def _concept_hit(row: dict[str, object]) -> MemoryHitResponse:
+        """Build a hit DTO from a data-graph concept row."""
+        return MemoryHitResponse(
+            type="concept",
+            content=f"{cast(str, row.get('key', ''))}: {cast(str, row.get('value', ''))}",
+            score=cast(float, row.get("composite_score", row.get("retrieval_weight", 0))),
+            confidence=cast(float, row.get("retrieval_weight", 0)),
+        )
 
     def get(self, id: int | str) -> ResponseReturnValue:
         """Search episodic memory + the data graph and return ranked, merged hits.
@@ -74,7 +74,7 @@ class MemorySearch(Action):
 
         try:
             results.extend(
-                _episode_hit(ep)
+                MemorySearch._episode_hit(ep)
                 for ep in cast(
                     "list[Episode]",
                     EpisodicService().retrieve(query_text=q, channel=None),
@@ -85,7 +85,7 @@ class MemorySearch(Action):
 
         try:
             results.extend(
-                _concept_hit(c) for c in recall(q, kinds=_RECALL_KINDS, limit=_RECALL_LIMIT)
+                MemorySearch._concept_hit(c) for c in MemoryRecallService.recall(q, kinds=_RECALL_KINDS, limit=_RECALL_LIMIT)
             )
         except Exception as exc:
             logger.warning("[Memory] Data graph search failed: %s", exc)

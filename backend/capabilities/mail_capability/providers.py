@@ -110,36 +110,46 @@ PROVIDERS: dict[str, UnifiedProvider] = {
 # ---------------------------------------------------------------------------
 
 
-def discover_provider(email: str) -> UnifiedProvider | None:
-    if not email or "@" not in email:
-        return None
-    domain = Email.get_domain(email)
-    if not domain:
-        return None
-    return PROVIDERS.get(domain)
+class MailProviderRegistry:
+    """Static namespace for mail-provider resolution helpers."""
+
+    @staticmethod
+    def discover_provider(email: str) -> UnifiedProvider | None:
+        if not email or "@" not in email:
+            return None
+        domain = Email.get_domain(email)
+        if not domain:
+            return None
+        return PROVIDERS.get(domain)
+
+    @staticmethod
+    def list_supported_providers() -> list[str]:
+        return sorted({p.name for p in PROVIDERS.values()})
+
+    @staticmethod
+    def build_custom_provider(
+        *,
+        imap_host: str | None = None,
+        imap_port: int = 993,
+        imap_tls: bool = True,
+        smtp_host: str | None = None,
+        smtp_port: int = 587,
+        smtp_tls: bool = False,
+        caldav_url: str | None = None,
+        carddav_url: str | None = None,
+    ) -> UnifiedProvider:
+        return UnifiedProvider(
+            name="Custom",
+            imap=ServerSettings(imap_host, imap_port, imap_tls) if imap_host else None,
+            smtp=ServerSettings(smtp_host, smtp_port, smtp_tls) if smtp_host else None,
+            caldav_url=caldav_url,
+            caldav_principal_template=None,
+            carddav_url=carddav_url,
+            requires_app_password=False,
+        )
 
 
-def list_supported_providers() -> list[str]:
-    return sorted({p.name for p in PROVIDERS.values()})
-
-
-def build_custom_provider(
-    *,
-    imap_host: str | None = None,
-    imap_port: int = 993,
-    imap_tls: bool = True,
-    smtp_host: str | None = None,
-    smtp_port: int = 587,
-    smtp_tls: bool = False,
-    caldav_url: str | None = None,
-    carddav_url: str | None = None,
-) -> UnifiedProvider:
-    return UnifiedProvider(
-        name="Custom",
-        imap=ServerSettings(imap_host, imap_port, imap_tls) if imap_host else None,
-        smtp=ServerSettings(smtp_host, smtp_port, smtp_tls) if smtp_host else None,
-        caldav_url=caldav_url,
-        caldav_principal_template=None,
-        carddav_url=carddav_url,
-        requires_app_password=False,
-    )
+# Backwards-compatible module-level aliases so existing imports keep working.
+discover_provider = MailProviderRegistry.discover_provider
+list_supported_providers = MailProviderRegistry.list_supported_providers
+build_custom_provider = MailProviderRegistry.build_custom_provider

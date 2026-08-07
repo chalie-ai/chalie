@@ -25,7 +25,7 @@ from typing import cast
 
 import pytest
 
-from abilities.email import _READ_BODY_LIMIT, _REAL_SENDER_NOTE, _record_sent, _shape_result
+from abilities.email import EmailAbility, _READ_BODY_LIMIT, _REAL_SENDER_NOTE
 from models.email_sent import EmailSent
 
 pytestmark = pytest.mark.unit
@@ -55,7 +55,7 @@ def test_search_rows_are_lean_and_echo_the_query(db: sqlite3.Connection) -> None
         "emails": [_handler_row(101), _handler_row(102)],
         "query": {"sender": "owner@example.com", "date_from": "2026-07-25"},
     }
-    result = _shape_result("search", body)
+    result = EmailAbility._shape_result("search", body)
 
     assert result.status == "success"
     assert result.meta["count"] == 2
@@ -78,7 +78,7 @@ def test_search_rows_are_lean_and_echo_the_query(db: sqlite3.Connection) -> None
 def test_search_empty_is_a_loud_no_results_error_naming_the_criteria(
     db: sqlite3.Connection,
 ) -> None:
-    result = _shape_result("search", {"emails": [], "query": {"sender": "nobody@x.com"}})
+    result = EmailAbility._shape_result("search", {"emails": [], "query": {"sender": "nobody@x.com"}})
 
     assert result.status == "error"
     assert result.code == "no-results"
@@ -99,7 +99,7 @@ def test_read_returns_body_only(db: sqlite3.Connection) -> None:
         "body": "plain text body",
         "message_id": "<not-in-ledger@example.com>",
     }
-    result = _shape_result("read", body)
+    result = EmailAbility._shape_result("read", body)
 
     assert result.status == "success"
     assert result.body == "plain text body"  # nothing re-sent around it
@@ -107,7 +107,7 @@ def test_read_returns_body_only(db: sqlite3.Connection) -> None:
 
 
 def test_read_clips_at_20k_and_reports_the_truncation(db: sqlite3.Connection) -> None:
-    result = _shape_result("read", {"body": "x" * (_READ_BODY_LIMIT + 1)})
+    result = EmailAbility._shape_result("read", {"body": "x" * (_READ_BODY_LIMIT + 1)})
 
     assert isinstance(result.body, str)
     assert len(result.body) == _READ_BODY_LIMIT == 20_000
@@ -121,7 +121,7 @@ def test_read_clips_at_20k_and_reports_the_truncation(db: sqlite3.Connection) ->
 
 @pytest.mark.parametrize("action", ["send", "reply", "forward"])
 def test_send_envelope_never_exposes_the_message_id(action: str) -> None:
-    result = _shape_result(
+    result = EmailAbility._shape_result(
         action,
         {
             "success": True,
@@ -161,8 +161,8 @@ def test_sent_ids_returns_the_matching_subset(db: sqlite3.Connection) -> None:
 
 
 def test_record_sent_writes_the_ledger_from_a_send_body(db: sqlite3.Connection) -> None:
-    _record_sent({"success": True, "to": "x@y.com", "subject": "s", "message_id": "<s@l>"})
-    _record_sent({"success": True, "to": "x@y.com", "subject": "s"})  # no id → no row
+    EmailAbility._record_sent({"success": True, "to": "x@y.com", "subject": "s", "message_id": "<s@l>"})
+    EmailAbility._record_sent({"success": True, "to": "x@y.com", "subject": "s"})  # no id → no row
 
     keys = [r[0] for r in db.execute("SELECT key FROM emails_sent").fetchall()]
     assert keys == ["<s@l>"]
@@ -177,7 +177,7 @@ def test_own_sends_are_annotated_in_search_rows(db: sqlite3.Connection) -> None:
         ],
         "query": {"sender": "owner@example.com"},
     }
-    result = _shape_result("search", body)
+    result = EmailAbility._shape_result("search", body)
 
     assert isinstance(result.body, dict)
     mine, theirs = cast(list[dict[str, object]], result.body["emails"])
@@ -188,8 +188,8 @@ def test_own_sends_are_annotated_in_search_rows(db: sqlite3.Connection) -> None:
 def test_own_send_is_annotated_on_read(db: sqlite3.Connection) -> None:
     EmailSent.record("<mine@local>")
 
-    annotated = _shape_result("read", {"body": "hi", "message_id": "<mine@local>"})
-    plain = _shape_result("read", {"body": "hi", "message_id": "<theirs@remote>"})
+    annotated = EmailAbility._shape_result("read", {"body": "hi", "message_id": "<mine@local>"})
+    plain = EmailAbility._shape_result("read", {"body": "hi", "message_id": "<theirs@remote>"})
 
     assert annotated.meta["real_sender"] == _REAL_SENDER_NOTE
     assert "real_sender" not in plain.meta

@@ -41,24 +41,24 @@ _SHADOW_SUFFIXES = (
 )
 
 
-def _destructive_allowed() -> bool:
-    """Return True unless the operator has explicitly opted out via env var."""
-    return os.environ.get("CHALIE_SCHEMA_ALLOW_DESTRUCTIVE", "1").lower() not in (
-        "0", "false", "no", "off",
-    )
-
-
-def _load_sqlite_vec(conn: sqlite3.Connection) -> None:
-    """Load the sqlite-vec extension into a connection. No-op if unavailable."""
-    try:
-        conn.enable_load_extension(True)
-        import sqlite_vec
-        sqlite_vec.load(conn)
-    except Exception as exc:
-        logger.debug(f"[convergence] sqlite-vec not available: {exc}")
-
-
 class SchemaConvergenceService:
+
+    @staticmethod
+    def _destructive_allowed() -> bool:
+        """Return True unless the operator has explicitly opted out via env var."""
+        return os.environ.get("CHALIE_SCHEMA_ALLOW_DESTRUCTIVE", "1").lower() not in (
+            "0", "false", "no", "off",
+        )
+
+    @staticmethod
+    def _load_sqlite_vec(conn: sqlite3.Connection) -> None:
+        """Load the sqlite-vec extension into a connection. No-op if unavailable."""
+        try:
+            conn.enable_load_extension(True)
+            import sqlite_vec
+            sqlite_vec.load(conn)
+        except Exception as exc:
+            logger.debug(f"[convergence] sqlite-vec not available: {exc}")
 
     def __init__(self) -> None:
         self._schema_path = FileMapperService.get_schema_path()
@@ -84,7 +84,7 @@ class SchemaConvergenceService:
             desired_conn.close()
 
         with Database.transaction() as conn:
-            _load_sqlite_vec(conn)
+            self._load_sqlite_vec(conn)
 
             is_fresh = self._is_fresh_db(conn)
 
@@ -111,7 +111,7 @@ class SchemaConvergenceService:
             destructive_safe = self._destructive_safety_check(
                 desired_tables, live_tables
             )
-            if _destructive_allowed() and destructive_safe:
+            if self._destructive_allowed() and destructive_safe:
                 # Order: virtual tables first (cascades shadow tables) → indexes
                 # (some auto-drop with their owning table) → columns within
                 # surviving tables → stale regular tables last.
@@ -210,7 +210,7 @@ class SchemaConvergenceService:
 
     def _load_desired_state(self, schema_sql: str) -> sqlite3.Connection:
         conn = sqlite3.connect(":memory:")
-        _load_sqlite_vec(conn)
+        self._load_sqlite_vec(conn)
         # Strip single-line comments, then split respecting BEGIN...END blocks.
         sql_no_comments = re.sub(_RE_SQL_COMMENTS, "",schema_sql)
         for stmt in self._split_statements(sql_no_comments):

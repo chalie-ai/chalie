@@ -102,7 +102,7 @@ class SkillAssociationService:
                 logger.exception(f"{LOG_PREFIX} LLM call failed: {exc}")
             return None
 
-        return _parse_associations(text)
+        return self._parse_associations(text)
 
     def _write_associations(
         self,
@@ -128,27 +128,27 @@ class SkillAssociationService:
 
         return written
 
+    def _parse_associations(self, text: str) -> list[dict[str, object]] | None:
+        """Parse the LLM's JSON response into a list of association dicts."""
+        if not text:
+            return None
+        try:
+            payload = text.strip()
+            if '```' in payload:
+                parts = payload.split('```')
+                if len(parts) >= 3:
+                    payload = parts[1]
+                else:
+                    payload = parts[1]
+                if payload.startswith('json'):
+                    payload = payload[4:]
+            result = json.loads(payload.strip())
+        except (json.JSONDecodeError, IndexError) as exc:
+            logger.warning(f"{LOG_PREFIX} failed to parse LLM response: {exc}")
+            return None
 
-def _parse_associations(text: str) -> list[dict[str, object]] | None:
-    if not text:
-        return None
-    try:
-        payload = text.strip()
-        if '```' in payload:
-            parts = payload.split('```')
-            if len(parts) >= 3:
-                payload = parts[1]
-            else:
-                payload = parts[1]
-            if payload.startswith('json'):
-                payload = payload[4:]
-        result = json.loads(payload.strip())
-    except (json.JSONDecodeError, IndexError) as exc:
-        logger.warning(f"{LOG_PREFIX} failed to parse LLM response: {exc}")
-        return None
+        if not isinstance(result, list):
+            logger.warning(f"{LOG_PREFIX} LLM returned non-list: {type(result)}")
+            return None
 
-    if not isinstance(result, list):
-        logger.warning(f"{LOG_PREFIX} LLM returned non-list: {type(result)}")
-        return None
-
-    return cast(list[dict[str, object]], result)
+        return cast(list[dict[str, object]], result)

@@ -163,9 +163,9 @@ class TestCodexCliProvider:
 
     def test_build_client_returns_codex_client_without_credentials(self) -> None:
         from services.llm_clients.codex_cli import CodexCliClient
-        from services.llm_clients.factory import build_client
+        from services.llm_clients.factory import Factory
 
-        client = build_client({'platform': 'codex_cli', 'model': 'gpt-5.5'})
+        client = Factory.build_client({'platform': 'codex_cli', 'model': 'gpt-5.5'})
         assert isinstance(client, CodexCliClient)
         assert client.CONTENT_FIELD_LABEL == 'item.completed.text'
 
@@ -194,12 +194,12 @@ class TestCodexCliProvider:
     # ------------------------------------------------------------------
 
     def test_list_codex_models_reads_local_cache(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        from services.llm_clients.codex_cli import list_codex_models
+        from services.llm_clients.codex_cli import CodexCliClient
 
         home = _install_codex_home(tmp_path)
         monkeypatch.setenv('CODEX_HOME', str(home))
 
-        models = list_codex_models()
+        models = CodexCliClient.list_codex_models()
         ids = {m['id'] for m in models}
         assert ids == {'gpt-5.5', 'gpt-5.4-mini', 'codex-auto-review'}
         assert any(m['display_name'] == 'GPT-5.5' for m in models)

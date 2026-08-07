@@ -15,25 +15,28 @@ from models.scheduled_item import ScheduledItem
 from services.embedding_utils import pack_embedding
 
 logger = logging.getLogger(__name__)
-
 LOG_PREFIX = "[SCHEDULER]"
 
 
-def embed_scheduled_item(item_id: int, message: str) -> None:
-    """Non-fatal: logs a warning and returns silently on any failure."""
-    try:
-        from services.embedding_service import get_embedding_service
+class SchedulerService:
+    """Embedding helper for scheduled_items rows."""
 
-        emb_service = get_embedding_service()
-        embedding = emb_service.generate_embedding(message)
-        if not embedding:
-            return
+    @staticmethod
+    def embed_scheduled_item(item_id: int, message: str) -> None:
+        """Non-fatal: logs a warning and returns silently on any failure."""
+        try:
+            from services.embedding_service import get_embedding_service
 
-        packed = pack_embedding(embedding)
-        if packed is None:
-            return
-        ScheduledItem.write_embedding(item_id, packed)
+            emb_service = get_embedding_service()
+            embedding = emb_service.generate_embedding(message)
+            if not embedding:
+                return
 
-        logger.debug(f"{LOG_PREFIX} Embedded scheduled item {item_id}")
-    except Exception as e:
-        logger.warning(f"{LOG_PREFIX} Failed to embed scheduled item {item_id}: {e}")
+            packed = pack_embedding(embedding)
+            if packed is None:
+                return
+            ScheduledItem.write_embedding(item_id, packed)
+
+            logger.debug(f"{LOG_PREFIX} Embedded scheduled item {item_id}")
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} Failed to embed scheduled item {item_id}: {e}")
