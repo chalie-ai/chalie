@@ -20,56 +20,60 @@ from exceptions import RateLimitException
 logger = logging.getLogger(__name__)
 
 
-def fetch(query: str, limit: int = 5) -> list[dict[str, str]]:
-    """Search DDG images for ``query``.
+class ImageSearchFetcher:
+    """DDG image search fetcher."""
 
-    Args:
-        query: Text query to search for.
-        limit: Maximum number of results (clamped to 1..5).
+    @staticmethod
+    def fetch(query: str, limit: int = 5) -> list[dict[str, str]]:
+        """Search DDG images for ``query``.
 
-    Returns:
-        Up to ``limit`` de-duplicated dicts shaped
-        ``{url, title, source}``. An empty list means the engine
-        succeeded but found nothing.
+        Args:
+            query: Text query to search for.
+            limit: Maximum number of results (clamped to 1..5).
 
-    Raises:
-        RateLimitException: The DDG engine enforced a rate limit.
-        RuntimeError: The DDG engine failed (network, parse).
-            Engine failure is loud so the caller can distinguish it from an
-            empty result set.
-    """
-    if not query or not query.strip():
-        return []
+        Returns:
+            Up to ``limit`` de-duplicated dicts shaped
+            ``{url, title, source}``. An empty list means the engine
+            succeeded but found nothing.
 
-    limit = max(1, min(5, limit))
+        Raises:
+            RateLimitException: The DDG engine enforced a rate limit.
+            RuntimeError: The DDG engine failed (network, parse).
+                Engine failure is loud so the caller can distinguish it from an
+                empty result set.
+        """
+        if not query or not query.strip():
+            return []
 
-    seen: set[str] = set()
-    results: list[dict[str, str]] = []
+        limit = max(1, min(5, limit))
 
-    try:
-        from ddgs import DDGS
+        seen: set[str] = set()
+        results: list[dict[str, str]] = []
 
-        raw = list(DDGS().images(query, max_results=limit))
+        try:
+            from ddgs import DDGS
 
-        # Parsing is inside the try on purpose: a malformed item (e.g. a future
-        # ddgs shape change) is an engine failure too, and must raise the same
-        # loud RuntimeError the docstring promises — never leak an AttributeError.
-        for item in raw:
-            url = item.get("image") or ""
-            if not url or url in seen:
-                continue
-            seen.add(url)
-            results.append(
-                {
-                    "url": url,
-                    "title": item.get("title") or "",
-                    "source": item.get("url") or "",
-                }
-            )
-    except DDGRatelimitException:
-        raise RateLimitException("DDG image search rate-limited")
-    except Exception as e:
-        logger.warning("[IMAGE_SEARCH] DDG engine error for %r: %s", query, e)
-        raise RuntimeError(f"image search engine failed: {e}") from e
+            raw = list(DDGS().images(query, max_results=limit))
 
-    return results[:limit]
+            # Parsing is inside the try on purpose: a malformed item (e.g. a future
+            # ddgs shape change) is an engine failure too, and must raise the same
+            # loud RuntimeError the docstring promises — never leak an AttributeError.
+            for item in raw:
+                url = item.get("image") or ""
+                if not url or url in seen:
+                    continue
+                seen.add(url)
+                results.append(
+                    {
+                        "url": url,
+                        "title": item.get("title") or "",
+                        "source": item.get("url") or "",
+                    }
+                )
+        except DDGRatelimitException:
+            raise RateLimitException("DDG image search rate-limited")
+        except Exception as e:
+            logger.warning("[IMAGE_SEARCH] DDG engine error for %r: %s", query, e)
+            raise RuntimeError(f"image search engine failed: {e}") from e
+
+        return results[:limit]

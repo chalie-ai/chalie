@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from abilities._delegate import DelegateAbility, delegate_result
+from abilities._delegate import DelegateAbility
 from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 from configs.channels.pim import PimConfig
@@ -118,6 +118,6 @@ class PimAbility(DelegateAbility[DelegateParamsBag]):
             PimConfig(mp.config.policy_channel),
             raw_input=params.instructions,
         ).result()
-        return delegate_result(
+        return DelegateAbility.delegate_result(
             result, hint="Rephrase the instruction or split it into smaller PIM tasks, then retry."
         )

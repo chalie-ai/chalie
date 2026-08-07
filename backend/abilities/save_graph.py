@@ -4,7 +4,7 @@ from typing import ClassVar
 
 from abilities._ability import Ability
 from configs.enums.param_key import Keys
-from abilities._pattern_provenance import pattern_provenance
+from abilities._pattern_provenance import PatternProvenance
 from abilities._result import ToolResult
 from contracts.params.param_bag import ParamBag
 from contracts.params.save_graph_params_bag import ALLOWED_KINDS, SaveGraphParamsBag
@@ -105,7 +105,7 @@ class SaveGraph(Ability[SaveGraphParamsBag]):
 
         # Every ALLOWED_KIND routes to its vertical (rich status →
         # reinforced-dedup; place = supersede).
-        source = pattern_provenance(proc)
+        source = PatternProvenance.pattern_provenance(proc)
         if kind == "user_specific":
             from services.fact_service import FactService
             status = FactService().store(key, value, source=source)["status"]

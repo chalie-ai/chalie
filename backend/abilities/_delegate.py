@@ -80,25 +80,25 @@ class DelegateAbility(Ability[B], ABC):
             properties["async"] = dict(_ASYNC_PROPERTY)
         return schema
 
+    @staticmethod
+    def delegate_result(result: str, *, hint: str) -> ToolResult:
+        """An empty body is NOT success — mapped to ``code=delegate-no-answer`` so a
+        weak outer model self-corrects instead of trusting the silence."""
+        if not result.strip():
+            return ToolResult.err(
+                "The delegate finished without producing an answer "
+                "(it exhausted its iteration budget or was cancelled).",
+                code="delegate-no-answer",
+                hint=hint,
+            )
+        return ToolResult.ok(result)
 
-def delegate_result(result: str, *, hint: str) -> ToolResult:
-    """An empty body is NOT success — mapped to ``code=delegate-no-answer`` so a
-    weak outer model self-corrects instead of trusting the silence."""
-    if not result.strip():
-        return ToolResult.err(
-            "The delegate finished without producing an answer "
-            "(it exhausted its iteration budget or was cancelled).",
-            code="delegate-no-answer",
-            hint=hint,
-        )
-    return ToolResult.ok(result)
-
-
-def render_trail(mp: object) -> str:
-    """Render the current act-trail for a delegate's user prompt, or '' on miss."""
-    try:
-        trail = cast("_ActTrailRenderer", mp)._render_act_trail()
-        return trail or ""
-    except Exception:
-        logger.warning("[DELEGATE] act-trail render failed", exc_info=True)
-        return ""
+    @staticmethod
+    def render_trail(mp: object) -> str:
+        """Render the current act-trail for a delegate's user prompt, or '' on miss."""
+        try:
+            trail = cast("_ActTrailRenderer", mp)._render_act_trail()
+            return trail or ""
+        except Exception:
+            logger.warning("[DELEGATE] act-trail render failed", exc_info=True)
+            return ""

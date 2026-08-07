@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from abilities._delegate import DelegateAbility, delegate_result
+from abilities._delegate import DelegateAbility
 from abilities._result import ToolResult
 from configs.channels.code_agent import CodeAgentConfig
 from configs.enums.param_key import Keys
@@ -115,7 +115,7 @@ class CodeAgentAbility(DelegateAbility[DelegateParamsBag]):
             CodeAgentConfig(mp.config.policy_channel),
             raw_input=params.instructions,
         )
-        return delegate_result(
+        return DelegateAbility.delegate_result(
             agent_mp.result(),
             hint="Break the task into smaller steps or clarify the requirements, then retry.",
         )

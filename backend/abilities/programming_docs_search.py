@@ -30,7 +30,7 @@ from typing import ClassVar, cast
 import requests
 
 from abilities._ability import Ability
-from abilities._result import ToolResult, truncate
+from abilities._result import ToolResult
 from configs.enums.param_key import Keys
 from contracts.params.param_bag import ParamBag
 from contracts.params.programming_docs_search_params_bag import ProgrammingDocsSearchParamsBag
@@ -465,7 +465,7 @@ def lookup(language: str, query: str) -> ToolResult:
         excerpt = TextExtractor.extract_html(html, url=cast(str, candidate["url"]))
         if not excerpt:
             continue
-        excerpt, _ = truncate(excerpt, _MAX_CHARS)
+        excerpt, _ = ToolResult.truncate(excerpt, _MAX_CHARS)
         # We landed on the base/landing page rather than a symbol candidate, or
         # the only thing that resolved was the base row → real, but imprecise.
         degraded = candidate is base_row or (not candidates)

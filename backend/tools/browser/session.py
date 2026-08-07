@@ -102,72 +102,74 @@ _SESSIONS: dict[int, "PageSession"] = {}
 _WHITESPACE_RE = re.compile(r"\n{3,}")
 
 
-# ── Cross-thread entry points ────────────────────────────────────────────────
-
-def run_verb(key: int, verb: str, kwargs: dict[str, object]) -> dict[str, object]:
-    """Execute one verb on *key*'s session via the pool thread. Returns the envelope."""
-    if verb != "open" and key not in _SESSIONS:
-        return error_envelope("No page is open. Use action='open' with a url first.")
-    from tools.browser.pool import get_pool  # noqa: PLC0415
-    return cast("dict[str, object]", get_pool().execute(_dispatch, key, verb, kwargs, timeout=90))
-
-
-def close_session(key: int) -> None:
-    """End-of-run cleanup: close the tab (if any)."""
-    if key in _SESSIONS:
-        from tools.browser.pool import get_pool  # noqa: PLC0415
-        get_pool().submit(_close_on_thread, key)
-
-
-def error_envelope(message: str) -> dict[str, object]:
-    """A full envelope carrying only an error — same shape as every success."""
-    return {"page": {}, "data": None, "changed": _no_change(), "error": message}
-
-
-def _no_change() -> dict[str, object]:
-    return {"navigated": False, "dialog": None, "popup": None, "summary": ""}
-
-
-# ── Pool-thread internals ────────────────────────────────────────────────────
-
-def _dispatch(browser: object, key: int, verb: str, kwargs: dict[str, object]) -> dict[str, object]:
-    session = _SESSIONS.get(key)
-    if session and not session.alive():
-        session.close()
-        _SESSIONS.pop(key, None)
-        session = None
-    if verb == "open":
-        if session is None:
-            session = PageSession(browser)
-            _SESSIONS[key] = session
-        return session.open(**cast("dict[str, str]", kwargs))
-    if session is None:
-        return error_envelope("No page is open. Use action='open' with a url first.")
-    return cast("dict[str, object]", getattr(session, verb)(**kwargs))
-
-
-def _close_on_thread(browser: object, key: int) -> None:  # noqa: ARG001 — pool always passes browser
-    session = _SESSIONS.pop(key, None)
-    if session:
-        session.close()
-
-
-def _trim(value: object, cap: int = READ_CAP) -> object:
-    """Recursively cap every string in the envelope — the hard token-bomb guard."""
-    if isinstance(value, str) and len(value) > cap:
-        return value[:cap] + "…[truncated]"
-    if isinstance(value, list):
-        return [_trim(v, cap) for v in value]
-    if isinstance(value, dict):
-        return {k: _trim(v, cap) for k, v in value.items()}
-    return value
-
-
 class PageSession:
     """One browser context + page. Constructed and driven ONLY on the pool thread."""
 
     _CLICK_ROLES = ("button", "link", "tab", "menuitem", "checkbox", "radio")
     _FILL_ROLES = ("textbox", "searchbox", "combobox", "spinbutton")
+
+    # ── Cross-thread entry points ──────────────────────────────────────────────
+
+    @staticmethod
+    def run_verb(key: int, verb: str, kwargs: dict[str, object]) -> dict[str, object]:
+        """Execute one verb on *key*'s session via the pool thread. Returns the envelope."""
+        if verb != "open" and key not in _SESSIONS:
+            return PageSession.error_envelope("No page is open. Use action='open' with a url first.")
+        from tools.browser.pool import BrowserPool  # noqa: PLC0415
+        return cast("dict[str, object]", BrowserPool.get_pool().execute(PageSession._dispatch, key, verb, kwargs, timeout=90))
+
+    @staticmethod
+    def close_session(key: int) -> None:
+        """End-of-run cleanup: close the tab (if any)."""
+        if key in _SESSIONS:
+            from tools.browser.pool import BrowserPool  # noqa: PLC0415
+            BrowserPool.get_pool().submit(PageSession._close_on_thread, key)
+
+    @staticmethod
+    def error_envelope(message: str) -> dict[str, object]:
+        """A full envelope carrying only an error — same shape as every success."""
+        return {"page": {}, "data": None, "changed": PageSession._no_change(), "error": message}
+
+    @staticmethod
+    def _no_change() -> dict[str, object]:
+        return {"navigated": False, "dialog": None, "popup": None, "summary": ""}
+
+    # ── Pool-thread internals ────────────────────────────────────────────────────
+
+    @staticmethod
+    def _dispatch(browser: object, key: int, verb: str, kwargs: dict[str, object]) -> dict[str, object]:
+        session = _SESSIONS.get(key)
+        if session and not session.alive():
+            session.close()
+            _SESSIONS.pop(key, None)
+            session = None
+        if verb == "open":
+            if session is None:
+                session = PageSession(browser)
+                _SESSIONS[key] = session
+            return session.open(**cast("dict[str, str]", kwargs))
+        if session is None:
+            return PageSession.error_envelope("No page is open. Use action='open' with a url first.")
+        return cast("dict[str, object]", getattr(session, verb)(**kwargs))
+
+    @staticmethod
+    def _close_on_thread(browser: object, key: int) -> None:  # noqa: ARG004 — pool always passes browser
+        session = _SESSIONS.pop(key, None)
+        if session:
+            session.close()
+
+    @staticmethod
+    def _trim(value: object, cap: int = READ_CAP) -> object:
+        """Recursively cap every string in the envelope — the hard token-bomb guard."""
+        if isinstance(value, str) and len(value) > cap:
+            return value[:cap] + "…[truncated]"
+        if isinstance(value, list):
+            return [PageSession._trim(v, cap) for v in value]
+        if isinstance(value, dict):
+            return {k: PageSession._trim(v, cap) for k, v in value.items()}
+        return value
+
+    # ── Instance construction / lifecycle ───────────────────────────────────────
 
     def __init__(self, browser: object) -> None:
         self._context = cast("_Browser", browser).new_context(
@@ -417,10 +419,10 @@ class PageSession:
             page: object = {"url": self.page.url, "title": self.page.title(), "status": status}
         except Exception:
             page = {}
-        return cast("dict[str, object]", _trim({
+        return cast("dict[str, object]", PageSession._trim({
             "page": page,
             "data": data,
-            "changed": changed or _no_change(),
+            "changed": changed or PageSession._no_change(),
             "error": error,
         }))
 

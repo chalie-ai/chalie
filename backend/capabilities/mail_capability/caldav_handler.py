@@ -203,10 +203,10 @@ class CaldavHandler:
                 )
 
         try:
-            from capabilities.contact_resolver import index_person
+            from capabilities.contact_resolver import ContactResolver
             for event in all_events:
                 for attendee in cast("list[str]", event.get("attendees", [])):
-                    index_person(attendee, source="caldav")
+                    ContactResolver.index_person(attendee, source="caldav")
         except Exception as exc:
             logger.debug("[caldav_handler] contact indexing skipped: %s", exc)
 

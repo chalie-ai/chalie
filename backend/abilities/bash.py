@@ -15,7 +15,7 @@ if TYPE_CHECKING:
         truncated: bool
 
 from abilities._ability import Ability
-from abilities._result import ToolResult, truncate
+from abilities._result import ToolResult
 from abilities.delete import DeleteAbility
 from abilities.edit_file import EditFileAbility
 from abilities.make_dir import MakeDirAbility
@@ -337,13 +337,13 @@ class BashAbility(Ability[BashParamsBag]):
         # Clip combined output to the budget via the shared truncate primitive, giving
         # stdout priority and reporting clipping uniformly through meta truncated=true.
         truncated = False
-        stdout_str, clipped_out = truncate(stdout_str, _MAX_OUTPUT_CHARS)
+        stdout_str, clipped_out = ToolResult.truncate(stdout_str, _MAX_OUTPUT_CHARS)
         if clipped_out:
             truncated = True
             stdout_str += _TRUNCATION_NOTICE
             stderr_str = ""
         else:
-            stderr_str, clipped_err = truncate(stderr_str, _MAX_OUTPUT_CHARS - len(stdout_str))
+            stderr_str, clipped_err = ToolResult.truncate(stderr_str, _MAX_OUTPUT_CHARS - len(stdout_str))
             if clipped_err:
                 truncated = True
                 stderr_str += _TRUNCATION_NOTICE

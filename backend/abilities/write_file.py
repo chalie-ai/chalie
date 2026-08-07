@@ -21,8 +21,8 @@ Returns a sealed :class:`abilities._result.ToolResult` (never a wire envelope):
 from typing import ClassVar
 
 from abilities._ability import Ability
-from abilities._paths import absolute_target
-from abilities._read_guard import read_guard
+from abilities._paths import Paths
+from abilities._read_guard import ReadGuard
 from abilities._result import ToolResult
 from configs.enums.param_key import Keys
 from contracts.params.write_file_params_bag import WriteFileParamsBag
@@ -107,13 +107,13 @@ class WriteFileAbility(Ability[WriteFileParamsBag]):
         path_str = params.path
         contents = params.contents
 
-        target = absolute_target(path_str)
+        target = Paths.absolute_target(path_str)
         if isinstance(target, ToolResult):
             return target
 
         existed = target.exists()
         if existed:
-            refusal = read_guard(self.mp, target, refuse_partial=True)
+            refusal = ReadGuard.read_guard(self.mp, target, refuse_partial=True)
             if refusal is not None:
                 return refusal
 

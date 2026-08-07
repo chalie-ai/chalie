@@ -42,7 +42,7 @@ from contracts.params.browser_params_bag import (
     BrowserStyleParams,
 )
 from contracts.params.param_bag import ParamBag
-from tools.browser.session import run_verb
+from tools.browser.session import PageSession
 
 logger = logging.getLogger(__name__)
 
@@ -253,7 +253,7 @@ class BrowserAbility(Ability[BrowserParamsBag]):
 
     def _run_verb(self, verb: str, kwargs: dict[str, object]) -> dict[str, object]:
         try:
-            return run_verb(self._session_key(), verb, kwargs)
+            return PageSession.run_verb(self._session_key(), verb, kwargs)
         except TimeoutError:
             return {"_code": "browser-timeout",
                     "_hint": "Retry, or simplify the action (a busy page can take >90s).",

@@ -47,7 +47,7 @@ from unittest.mock import patch
 
 import pytest
 
-from abilities._read_guard import read_guard
+from abilities._read_guard import ReadGuard
 from configs.channels.user import UserConfig
 from controllers.message_processor import MessageProcessor
 from models.provider_response import ProviderResponse
@@ -504,13 +504,13 @@ def test_guard_bypasses_when_the_act_trail_cannot_be_inspected(
     target.write_text(_EDITABLE_CONTENT, encoding="utf-8")
 
     # No processor at all — e.g. an ability invoked outside the ACT loop.
-    assert read_guard(None, target, refuse_partial=True) is None
+    assert ReadGuard.read_guard(None, target, refuse_partial=True) is None
 
     # A processor whose turn was never allocated: turn_id is the -1 sentinel
     # MessageProcessor.__init__ sets, and begin() would replace.
     inert = MessageProcessor(UserConfig(), raw_input="never begun")  # inert (I2)
     assert inert.turn_id == -1
-    assert read_guard(inert, target, refuse_partial=True) is None
+    assert ReadGuard.read_guard(inert, target, refuse_partial=True) is None
 
 
 # ── Case 11: an ERRORED read does not satisfy the guard ───────────────────────

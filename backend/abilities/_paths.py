@@ -28,18 +28,22 @@ from pathlib import Path
 from abilities._result import ToolResult
 
 
-def absolute_target(path_str: str) -> Path | ToolResult:
-    """Resolve *path_str* to an absolute :class:`pathlib.Path`, or refuse.
+class Paths:
+    """Shared absolute-path gate for file-operation abilities."""
 
-    A non-absolute path is rejected with ``code=invalid-path`` and a hint that
-    names the fix. The blank-path case cannot happen here: the caller's bag
-    rejects a missing or blank ``path`` before this function is reached.
-    """
-    candidate = Path(path_str)
-    if not candidate.is_absolute():
-        return ToolResult.err(
-            f"Path is not absolute: {path_str!r}.",
-            code="invalid-path",
-            hint="pass an absolute path (one starting from the filesystem root).",
-        )
-    return candidate.resolve()
+    @staticmethod
+    def absolute_target(path_str: str) -> Path | ToolResult:
+        """Resolve *path_str* to an absolute :class:`pathlib.Path`, or refuse.
+
+        A non-absolute path is rejected with ``code=invalid-path`` and a hint that
+        names the fix. The blank-path case cannot happen here: the caller's bag
+        rejects a missing or blank ``path`` before this function is reached.
+        """
+        candidate = Path(path_str)
+        if not candidate.is_absolute():
+            return ToolResult.err(
+                f"Path is not absolute: {path_str!r}.",
+                code="invalid-path",
+                hint="pass an absolute path (one starting from the filesystem root).",
+            )
+        return candidate.resolve()

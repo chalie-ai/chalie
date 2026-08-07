@@ -34,7 +34,7 @@ from typing import ClassVar, cast
 
 from abilities._capability import CapabilityAbility
 from configs.enums.param_key import Keys
-from abilities._result import ToolResult, truncate
+from abilities._result import ToolResult
 from contracts.params.capability_params_bag import CapabilityParamsBag
 from models.email_sent import EmailSent
 
@@ -269,7 +269,7 @@ class EmailAbility(CapabilityAbility):
         if action == "read":
             # Body only: the model supplied the uid, so it already holds the
             # from/subject/date metadata from the search it just ran.
-            clipped, truncated = truncate(str(body.get("body", "")), _READ_BODY_LIMIT)
+            clipped, truncated = ToolResult.truncate(str(body.get("body", "")), _READ_BODY_LIMIT)
             message_id = str(body.get("message_id") or "")
             if message_id and message_id in EmailSent.sent_ids((message_id,)):
                 return ToolResult.ok(

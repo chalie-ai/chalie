@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import ClassVar
 
 from abilities._ability import Ability
-from abilities._read_guard import read_guard
+from abilities._read_guard import ReadGuard
 from abilities._result import ToolResult
 from configs.enums.param_key import Keys
 from contracts.params.edit_file_params_bag import EditFileParamsBag
@@ -145,7 +145,7 @@ class EditFileAbility(Ability[EditFileParamsBag]):
         # model as "try again" rather than "look again". Refuse once here instead
         # of letting it retry into the runaway backstop. ``partial-read`` is NOT
         # opted into: an anchored edit only touches text the model quoted back.
-        refusal = read_guard(self.mp, target.resolve(), refuse_partial=False)
+        refusal = ReadGuard.read_guard(self.mp, target.resolve(), refuse_partial=False)
         if refusal is not None:
             return refusal
 

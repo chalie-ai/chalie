@@ -21,10 +21,14 @@ from __future__ import annotations
 from services.source_profiles import PROVENANCE_PATTERN_MATCH
 
 
-def pattern_provenance(proc: object) -> str:
-    """Reads ``proc.config.channel`` — ``pattern_match`` for the pattern pass,
-    ``geo_pattern`` for the geo pass — and falls back to the shared pattern-match
-    default (the historic literal) when no config/channel is present, so an
-    unscoped call is indistinguishable from the pattern pass.
-    """
-    return getattr(getattr(proc, "config", None), "channel", None) or PROVENANCE_PATTERN_MATCH
+class PatternProvenance:
+    """Shared provenance derivation for the pattern-write abilities."""
+
+    @staticmethod
+    def pattern_provenance(proc: object) -> str:
+        """Reads ``proc.config.channel`` — ``pattern_match`` for the pattern pass,
+        ``geo_pattern`` for the geo pass — and falls back to the shared pattern-match
+        default (the historic literal) when no config/channel is present, so an
+        unscoped call is indistinguishable from the pattern pass.
+        """
+        return getattr(getattr(proc, "config", None), "channel", None) or PROVENANCE_PATTERN_MATCH

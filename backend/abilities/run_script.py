@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
 
 from abilities._ability import Ability
-from abilities._result import ToolResult, truncate
+from abilities._result import ToolResult
 from configs.enums.param_key import Keys
 from contracts.params.param_bag import ParamBag
 from contracts.params.run_script_params_bag import RunScriptParamsBag
@@ -213,8 +213,8 @@ class RunScriptAbility(Ability[RunScriptParamsBag]):
         file-system side effects without printing anything, so no no-output
         guard is applied.
         """
-        stdout, clipped_out = truncate(stdout, _MAX_OUTPUT_CHARS)
-        stderr, clipped_err = truncate(stderr, _MAX_OUTPUT_CHARS)
+        stdout, clipped_out = ToolResult.truncate(stdout, _MAX_OUTPUT_CHARS)
+        stderr, clipped_err = ToolResult.truncate(stderr, _MAX_OUTPUT_CHARS)
 
         meta: "_TruncMeta" = {"truncated": True} if (clipped_out or clipped_err) else {}
         return ToolResult.ok(

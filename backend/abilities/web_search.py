@@ -40,7 +40,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from abilities._delegate import DelegateAbility, delegate_result
+from abilities._delegate import DelegateAbility
 from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 from configs.channels.web_search import WebSearchConfig
@@ -120,6 +120,6 @@ class WebSearchAbility(DelegateAbility[DelegateParamsBag]):
             WebSearchConfig(mp.config.policy_channel),
             raw_input=params.instructions,
         ).result()
-        return delegate_result(
+        return DelegateAbility.delegate_result(
             result, hint="Narrow the query or split it into smaller searches, then retry."
         )

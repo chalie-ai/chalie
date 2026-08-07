@@ -25,7 +25,7 @@ import shutil
 from typing import ClassVar
 
 from abilities._ability import Ability
-from abilities._paths import absolute_target
+from abilities._paths import Paths
 from abilities._result import ToolResult
 from configs.enums.param_key import Keys
 from contracts.params.delete_params_bag import DeleteParamsBag
@@ -90,7 +90,7 @@ class DeleteAbility(Ability[DeleteParamsBag]):
         return self._PARAMETERS
 
     def run(self, params: DeleteParamsBag) -> ToolResult:
-        target = absolute_target(params.path)
+        target = Paths.absolute_target(params.path)
         if isinstance(target, ToolResult):
             return target
 

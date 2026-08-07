@@ -20,58 +20,61 @@ Result contract:
   ``<result index=``.
 """
 
-
 from typing import cast
 
 
-def _neutralize(text: str) -> str:
-    """Defang record-boundary tokens in a free-text field.
+class SearchRenderer:
+    """Pure formatter for search result dicts to XML-like strings."""
 
-    A search result whose own ``title`` or ``summary`` contains the literal
-    ``<result …>`` or ``</result>`` token could otherwise be mistaken by the
-    model for a record delimiter, corrupting its parse of the block. We escape
-    only those two tokens — every other ``<``/``>`` (code snippets, math,
-    ``List<int>``) is left intact so the summary stays readable.
-    """
-    return text.replace("</result>", "<\\/result>").replace("<result", "<\\result")
+    @staticmethod
+    def _neutralize(text: str) -> str:
+        """Defang record-boundary tokens in a free-text field.
 
+        A search result whose own ``title`` or ``summary`` contains the literal
+        ``<result …>`` or ``</result>`` token could otherwise be mistaken by the
+        model for a record delimiter, corrupting its parse of the block. We escape
+        only those two tokens — every other ``<``/``>`` (code snippets, math,
+        ``List<int>``) is left intact so the summary stays readable.
+        """
+        return text.replace("</result>", "<\\/result>").replace("<result", "<\\result")
 
-def render_records(results: list[dict[str, object]]) -> str:
-    """Render *results* to a string of XML-like ``<result>`` blocks.
+    @staticmethod
+    def render_records(results: list[dict[str, object]]) -> str:
+        """Render *results* to a string of XML-like ``<result>`` blocks.
 
-    Args:
-        results: Pre-sorted (best-first) list of result dicts.  Each dict must
-            have ``title``, ``url``, ``summary``, ``score`` (float or None),
-            and ``date`` (str or None).
+        Args:
+            results: Pre-sorted (best-first) list of result dicts.  Each dict must
+                have ``title``, ``url``, ``summary``, ``score`` (float or None),
+                and ``date`` (str or None).
 
-    Returns:
-        A multi-block string with one ``<result …>…</result>`` block per item,
-        joined by ``"\\n"``; or a short sentinel when *results* is empty.
-    """
-    if not results:
-        return "No results found."
+        Returns:
+            A multi-block string with one ``<result …>…</result>`` block per item,
+            joined by ``"\\n"``; or a short sentinel when *results* is empty.
+        """
+        if not results:
+            return "No results found."
 
-    blocks: list[str] = []
-    for index, r in enumerate(results, start=1):
-        score: float | None = cast("float | None", r.get("score"))
-        date: str | None = cast("str | None", r.get("date")) or None
+        blocks: list[str] = []
+        for index, r in enumerate(results, start=1):
+            score: float | None = cast("float | None", r.get("score"))
+            date: str | None = cast("str | None", r.get("date")) or None
 
-        # Build open-tag attributes
-        attrs = f'index="{index}"'
-        if score is not None:
-            attrs += f' score="{score:.2f}"'
-        if date:
-            attrs += f' date="{date}"'
+            # Build open-tag attributes
+            attrs = f'index="{index}"'
+            if score is not None:
+                attrs += f' score="{score:.2f}"'
+            if date:
+                attrs += f' date="{date}"'
 
-        title = _neutralize(str(r.get("title", "")))
-        summary = _neutralize(str(r.get("summary", "")))
-        block = (
-            f"<result {attrs}>\n"
-            f"title: {title}\n"
-            f"url: {r.get('url', '')}\n"
-            f"summary: {summary}\n"
-            f"</result>"
-        )
-        blocks.append(block)
+            title = SearchRenderer._neutralize(str(r.get("title", "")))
+            summary = SearchRenderer._neutralize(str(r.get("summary", "")))
+            block = (
+                f"<result {attrs}>\n"
+                f"title: {title}\n"
+                f"url: {r.get('url', '')}\n"
+                f"summary: {summary}\n"
+                f"</result>"
+            )
+            blocks.append(block)
 
-    return "\n".join(blocks)
+        return "\n".join(blocks)

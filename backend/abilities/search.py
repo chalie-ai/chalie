@@ -150,11 +150,11 @@ class SearchAbility(Ability[SearchParamsBag]):
 
         items = items[:_MAX_RESULTS]
 
-        from tools.search.enrich import enrich_missing_summaries
-        items = enrich_missing_summaries(items)
+        from tools.search.enrich import SearchEnricher
+        items = SearchEnricher.enrich_missing_summaries(items)
 
-        from tools.search.render import render_records
-        body = render_records(items)
+        from tools.search.render import SearchRenderer
+        body = SearchRenderer.render_records(items)
 
         if not items:
             if fell_back or meta.get("ddg_supplement"):

@@ -138,13 +138,13 @@ class ContactsAbility(Ability[ContactsParamsBag]):
     # ── list ────────────────────────────────────────────────────────────────
 
     def _list(self, params: ContactsListParams) -> ToolResult:
-        from capabilities.contact_resolver import _parse_contact_row, resolve
+        from capabilities.contact_resolver import ContactResolver
 
         limit = params.limit
         query = params.query
 
         if query:
-            contacts = resolve(query, limit=limit)
+            contacts = ContactResolver.resolve(query, limit=limit)
         else:
             rows = [
                 r.to_dict()
@@ -153,7 +153,7 @@ class ContactsAbility(Ability[ContactsParamsBag]):
             contacts = [
                 c
                 for c in (
-                    _parse_contact_row(cast(str, r.get("key", "")), cast(str, r.get("value", "")))
+                    ContactResolver._parse_contact_row(cast(str, r.get("key", "")), cast(str, r.get("value", "")))
                     for r in rows
                 )
                 if c is not None
@@ -180,10 +180,10 @@ class ContactsAbility(Ability[ContactsParamsBag]):
     # ── get — three-outcome precision contract ────────────────────────────────
 
     def _get(self, params: ContactsGetParams) -> ToolResult:
-        from capabilities.contact_resolver import resolve
+        from capabilities.contact_resolver import ContactResolver
 
         identifier = params.identifier
-        candidates = resolve(identifier, limit=5)
+        candidates = ContactResolver.resolve(identifier, limit=5)
 
         if not candidates:
             not_connected = self._not_connected("get")

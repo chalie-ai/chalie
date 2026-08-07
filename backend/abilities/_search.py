@@ -59,32 +59,6 @@ _STOPWORDS = frozenset(
 _TERM_RE = re.compile(r"[^a-z0-9_]")
 
 
-def search_terms(raw: str) -> list[str]:
-    """Stopword-stripped, punctuation-normalised terms for one cascade query row."""
-    return [
-        term
-        for token in raw.split()
-        if (term := _TERM_RE.sub("", token.lower())) and term not in _STOPWORDS
-    ]
-
-
-def segment_match(term: str, name: str) -> bool:
-    """True when ``term`` aligns to a name SEGMENT — it equals a full segment or
-    strongly prefixes one (≥ ``_MIN_FTS_LEN`` chars). The name is split on any
-    non-alphanumeric run, so it spans both underscored tool names (``web_search``
-    → {web, search}) and spaced skill titles (``Competitive Teardown`` →
-    {competitive, teardown}).
-
-    This gate, NOT a bm25 score floor, is the sole discriminator for the name
-    rung: it accepts ``search`` ⊂ ``web_search`` / ``docs`` ⊂ ``chalie_docs`` while
-    rejecting incidental substrings like ``all`` ⊂ ``review_tool_calls`` that raw
-    trigram matching would wrongly admit. Fine-tuned 2026-06-23 — do not add a floor."""
-    return any(
-        term == seg or (len(term) >= _MIN_FTS_LEN and seg.startswith(term))
-        for seg in re.split(r"[^a-z0-9]+", name.lower())
-    )
-
-
 class SearchableAbility(Ability, ABC):
     _DB_PATH: ClassVar[Path]
     _LOG_PREFIX: ClassVar[str] = ""
@@ -94,6 +68,32 @@ class SearchableAbility(Ability, ABC):
     # so the model can fetch every tool it needs in one pass; the final result is
     # only deduped, never truncated.
     _RESULT_CAP: ClassVar[int] = 3
+
+    @staticmethod
+    def search_terms(raw: str) -> list[str]:
+        """Stopword-stripped, punctuation-normalised terms for one cascade query row."""
+        return [
+            term
+            for token in raw.split()
+            if (term := _TERM_RE.sub("", token.lower())) and term not in _STOPWORDS
+        ]
+
+    @staticmethod
+    def segment_match(term: str, name: str) -> bool:
+        """True when ``term`` aligns to a name SEGMENT — it equals a full segment or
+        strongly prefixes one (≥ ``_MIN_FTS_LEN`` chars). The name is split on any
+        non-alphanumeric run, so it spans both underscored tool names (``web_search``
+        → {web, search}) and spaced skill titles (``Competitive Teardown`` →
+        {competitive, teardown}).
+
+        This gate, NOT a bm25 score floor, is the sole discriminator for the name
+        rung: it accepts ``search`` ⊂ ``web_search`` / ``docs`` ⊂ ``chalie_docs`` while
+        rejecting incidental substrings like ``all`` ⊂ ``review_tool_calls`` that raw
+        trigram matching would wrongly admit. Fine-tuned 2026-06-23 — do not add a floor."""
+        return any(
+            term == seg or (len(term) >= _MIN_FTS_LEN and seg.startswith(term))
+            for seg in re.split(r"[^a-z0-9]+", name.lower())
+        )
 
     @staticmethod
     def _norm(text: str) -> str:
@@ -141,7 +141,7 @@ class SearchableAbility(Ability, ABC):
         discovered: list[object] = []
         not_found: list[str] = []
         for raw in rows:
-            terms = search_terms(raw)
+            terms = self.search_terms(raw)
             if not terms:
                 continue
             key, ambiguous = exact_fn(self._norm(" ".join(terms)))
@@ -168,7 +168,7 @@ class SearchableAbility(Ability, ABC):
         to a query term, per-key dedup (``row[0]``), return the top RESULT_CAP keys.
         The segment gate — NOT a score floor — is the discriminator (fine-tuned
         2026-06-23, do not add a floor)."""
-        gated = [r for r in rows if any(segment_match(t, str(r[1])) for t in terms)]
+        gated = [r for r in rows if any(self.segment_match(t, str(r[1])) for t in terms)]
         return [r[0] for r in self._best_per_key(gated)[: self._RESULT_CAP]]
 
     def _ceiling(self, rows: "list[tuple[object, object, float]]") -> list[object]:

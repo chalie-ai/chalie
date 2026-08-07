@@ -38,7 +38,7 @@ if TYPE_CHECKING:
 import requests
 
 from abilities._ability import Ability
-from abilities._result import ToolResult, truncate
+from abilities._result import ToolResult
 from configs.enums.param_key import Keys
 from contracts.params.chalie_docs_params_bag import ChalieDocsParamsBag
 from contracts.params.param_bag import ParamBag
@@ -173,7 +173,7 @@ class ChalieDocsAbility(Ability[ChalieDocsParamsBag]):
             )
 
         body = "\n\n".join(sections)
-        clipped, was_clipped = truncate(body, _MAX_CHARS)
+        clipped, was_clipped = ToolResult.truncate(body, _MAX_CHARS)
         meta: "_DocsMeta" = {
             "source": " & ".join(urls),
             "version": _read_version(),

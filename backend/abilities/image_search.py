@@ -28,7 +28,7 @@ from configs.enums.param_key import Keys
 from contracts.params.image_search_params_bag import ImageSearchParamsBag
 from contracts.params.param_bag import ParamBag
 from exceptions import DownloadTooLarge
-from tools.image_search import fetcher
+from tools.image_search.fetcher import ImageSearchFetcher
 from configs.enums.ability_category import AbilityCategory
 
 logger = logging.getLogger(__name__)
@@ -98,7 +98,7 @@ class ImageSearchAbility(Ability[ImageSearchParamsBag]):
         query = params.query
 
         try:
-            results = fetcher.fetch(query, limit=5)
+            results = ImageSearchFetcher.fetch(query, limit=5)
         except Exception as exc:  # noqa: BLE001 — surfaced, never swallowed
             logger.exception("[IMAGE_SEARCH] engine failed")
             return ToolResult.err(

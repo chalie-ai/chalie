@@ -6,7 +6,7 @@ from typing import cast
 import yaml
 
 from capabilities.base import AbstractCapability
-from capabilities.home_capability import ha_rest_handler as rest
+from capabilities.home_capability.ha_rest_handler import HaRestHandler
 from capabilities.home_capability.ha_ws_handler import HaWebSocketHandler
 from models.ws_message import WsMessage
 from services.file_mapper_service import FileMapperService
@@ -70,7 +70,7 @@ class HomeCapability(AbstractCapability):
             verify_ssl = verify_ssl.lower() not in ("0", "false", "no")
 
         try:
-            rest.probe(url, token, cast(bool, verify_ssl))
+            HaRestHandler.probe(url, token, cast(bool, verify_ssl))
         except Exception as exc:
             raise ValueError(f"[home] Connection probe failed: {exc}") from exc
 
@@ -96,7 +96,7 @@ class HomeCapability(AbstractCapability):
         self._verify_ssl = ssl_raw != "0"
 
         try:
-            rest.probe(self._url, self._token, self._verify_ssl)
+            HaRestHandler.probe(self._url, self._token, self._verify_ssl)
             self._connected = True
         except Exception as exc:
             logger.warning("[home] connect probe failed: %s", exc)
@@ -116,7 +116,7 @@ class HomeCapability(AbstractCapability):
         if not self.is_connected():
             return []
         try:
-            return cast("list[object]", rest.list_devices(
+            return cast("list[object]", HaRestHandler.list_devices(
                 self._url, self._token, self._verify_ssl, limit=200
             ).get("devices", []))
         except Exception as exc:
@@ -145,7 +145,7 @@ class HomeCapability(AbstractCapability):
         err = self._require_connection()
         if err:
             return err
-        return rest.list_devices(
+        return HaRestHandler.list_devices(
             self._url, self._token, self._verify_ssl,
             domain=cast("str | None", params.get("domain")),
             area=cast("str | None", params.get("area")),
@@ -159,7 +159,7 @@ class HomeCapability(AbstractCapability):
         eid = params.get("entity_id")
         if not eid:
             return {"error": "entity_id is required"}
-        return rest.get_state(self._url, self._token, self._verify_ssl, cast(str, eid))
+        return HaRestHandler.get_state(self._url, self._token, self._verify_ssl, cast(str, eid))
 
     def _tool_control(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
         err = self._require_connection()
@@ -169,7 +169,7 @@ class HomeCapability(AbstractCapability):
         svc = params.get("service")
         if not eid or not svc:
             return {"error": "entity_id and service are required"}
-        return rest.control(
+        return HaRestHandler.control(
             self._url, self._token, self._verify_ssl,
             cast(str, eid), cast(str, svc), cast("dict[str, object] | None", params.get("service_data")),
         )
@@ -178,7 +178,7 @@ class HomeCapability(AbstractCapability):
         err = self._require_connection()
         if err:
             return err
-        return rest.list_automations(self._url, self._token, self._verify_ssl)
+        return HaRestHandler.list_automations(self._url, self._token, self._verify_ssl)
 
     def _tool_trigger_automation(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
         err = self._require_connection()
@@ -187,7 +187,7 @@ class HomeCapability(AbstractCapability):
         aid = params.get("automation_id")
         if not aid:
             return {"error": "automation_id is required"}
-        return rest.trigger_automation(self._url, self._token, self._verify_ssl, cast(str, aid))
+        return HaRestHandler.trigger_automation(self._url, self._token, self._verify_ssl, cast(str, aid))
 
     def _tool_subscribe_events(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
         err = self._require_connection()
