@@ -645,8 +645,8 @@ class MessageProcessor:
             return
         rendered = self.prompt_service.act_trail()
         act_trail = rendered.split("\n") if rendered else []
-        from services.skill_suggestion_message_processor import maybe_suggest_skill  # noqa: PLC0415
-        maybe_suggest_skill(act_trail, self.raw_input, self.channel, self.turn_id)
+        from services.skill_suggestion_message_processor import SkillSuggestionProcessor  # noqa: PLC0415
+        SkillSuggestionProcessor.maybe_suggest_skill(act_trail, self.raw_input, self.channel, self.turn_id)
 
     def _pattern_skill_sync(self) -> None:
         """Decay untouched patterns, then run the skill-association pass over the

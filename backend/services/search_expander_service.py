@@ -46,16 +46,16 @@ def _get_service() -> "SearchExpanderService":
     return _service_instance
 
 
-def enqueue(table: str, rowid: int) -> None:
-    if SearchConfig.config_for_table(table) is None:
-        logger.warning("[SES] enqueue: unknown table '%s', ignoring", table)
-        return
-    _get_service().enqueue(table, rowid)
-
-
 # ── Service ───────────────────────────────────────────────────────────────────
 
 class SearchExpanderService:
+
+    @classmethod
+    def enqueue(cls, table: str, rowid: int) -> None:
+        if SearchConfig.config_for_table(table) is None:
+            logger.warning("[SES] enqueue: unknown table '%s', ignoring", table)
+            return
+        cls()._enqueue(table, rowid)
 
     def __init__(self) -> None:
         self._event = threading.Event()
@@ -66,7 +66,7 @@ class SearchExpanderService:
 
     # ── Public interface ──────────────────────────────────────────────────────
 
-    def enqueue(self, table: str, rowid: int) -> None:
+    def _enqueue(self, table: str, rowid: int) -> None:
         item = json.dumps({"table": table, "rowid": rowid})
         self._store.rpush(_QUEUE_KEY, item)
         self._event.set()
@@ -297,12 +297,13 @@ class SearchExpanderService:
 
 # ── Worker entry point ────────────────────────────────────────────────────────
 
-def search_expander_worker() -> None:
-    """Entry point registered in run.py: creates the singleton and enters the
-    blocking run loop."""
-    service = SearchExpanderService()
-    # Share the singleton so module-level enqueue() calls reach the same instance.
-    global _service_instance
-    with _instance_lock:
-        _service_instance = service
-    service.run()
+    @classmethod
+    def search_expander_worker(cls) -> None:
+        """Entry point registered in run.py: creates the singleton and enters the
+        blocking run loop."""
+        service = cls()
+        # Share the singleton so module-level enqueue() calls reach the same instance.
+        global _service_instance
+        with _instance_lock:
+            _service_instance = service
+        service.run()

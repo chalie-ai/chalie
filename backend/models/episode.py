@@ -36,7 +36,7 @@ from models.query import Query
 from services._fts_delete import FtsDelete
 from services._vec_upsert import VecUpsert
 from services.episodic_constants import NOVELTY_ACTIVATION_LIMIT, NOVELTY_RECENT_LIMIT
-from services.search_expander_service import enqueue
+from services.search_expander_service import SearchExpanderService
 from services.time_utils import PARSE_SENTINEL, parse_utc, utc_now
 
 logger = logging.getLogger(__name__)
@@ -147,7 +147,7 @@ class Episode(Model):
         )
         if self.__search__ is not None and cursor.lastrowid is not None:
             try:
-                enqueue(self.get_table(), cursor.lastrowid)
+                SearchExpanderService.enqueue(self.get_table(), cursor.lastrowid)
             except Exception:
                 logger.warning(
                     "[EPISODE] search-index enqueue failed for id=%s", self.id, exc_info=True

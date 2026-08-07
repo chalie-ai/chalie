@@ -70,13 +70,6 @@ _QUERY_URLS: dict[str, list[str]] = {
 }
 
 
-def _read_version() -> str:
-    try:
-        return _VERSION_FILE.read_text().strip()
-    except OSError:
-        return "unknown"
-
-
 class ChalieDocsAbility(Ability[ChalieDocsParamsBag]):
     #: Action-less tool: the canonical ``query`` is the one required input. The
     #: dispatcher's ACTION_REQUIRED pre-gate rejects a call with no query as
@@ -91,6 +84,13 @@ class ChalieDocsAbility(Ability[ChalieDocsParamsBag]):
 
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("chalie documentation", "own documentation", "harness documentation", "self reference", "about chalie")
 
+
+    @classmethod
+    def _read_version(cls) -> str:
+        try:
+            return _VERSION_FILE.read_text().strip()
+        except OSError:
+            return "unknown"
 
     def get_summary(self) -> str:
         return "Look up Chalie's own documentation — what it is, its tools, release history, or codebase."
@@ -176,7 +176,7 @@ class ChalieDocsAbility(Ability[ChalieDocsParamsBag]):
         clipped, was_clipped = ToolResult.truncate(body, _MAX_CHARS)
         meta: "_DocsMeta" = {
             "source": " & ".join(urls),
-            "version": _read_version(),
+            "version": self._read_version(),
         }
         if was_clipped:
             meta["truncated"] = True

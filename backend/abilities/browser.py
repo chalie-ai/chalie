@@ -280,11 +280,11 @@ class BrowserAbility(Ability[BrowserParamsBag]):
             return self._reply(grabbed)
 
         from services.file_parser_service import FileParserService  # noqa: PLC0415
-        from services.tmp_storage import new_tmp_path  # noqa: PLC0415
+        from services.tmp_storage import TmpStorage  # noqa: PLC0415
 
         page: dict[str, object] = cast("dict[str, object]", grabbed["page"])
         host = urlparse(cast("str", page["url"])).hostname or "page"
-        tmp = new_tmp_path(f"{token_hex(4)}.png")
+        tmp = TmpStorage.new_tmp_path(f"{token_hex(4)}.png")
         try:
             with open(tmp, "wb") as fh:
                 fh.write(cast("bytes", grabbed["png"]))
@@ -324,6 +324,22 @@ class BrowserAbility(Ability[BrowserParamsBag]):
         return self.mp.uid or 0
 
     @staticmethod
+    def _classify_error(message: str) -> str:
+        """The session layer (tools/browser/session.py) returns its failures as the
+        envelope ``error`` string; this is the single place those strings are mapped
+        to a self-correction code. Anything unrecognised falls back to the generic —
+        but still stable, never ``code=error`` — ``browser-action-failed``.
+        """
+        lowered = message.lower()
+        if "no page is open" in lowered:
+            return "no-open-page"
+        if "matches" in lowered and "element" in lowered:
+            return "ambiguous-target"
+        if "no element matching" in lowered:
+            return "element-not-found"
+        return "browser-action-failed"
+
+    @staticmethod
     def _reply(envelope: dict[str, object]) -> ToolResult:
         """A successful envelope (``error`` is None) becomes ``ok`` with the DICT
         body — the dispatcher renders compact JSON. An error envelope becomes
@@ -336,7 +352,7 @@ class BrowserAbility(Ability[BrowserParamsBag]):
         if not error:
             return ToolResult.ok(envelope)
 
-        code: str = cast("str", envelope.get("_code")) or _classify_error(cast("str", error))
+        code: str = cast("str", envelope.get("_code")) or BrowserAbility._classify_error(cast("str", error))
         hint: str | None = cast("str | None", envelope.get("_hint")) or _HINTS.get(code)
         page: dict[str, object] = cast("dict[str, object]", envelope.get("page") or {})
         url = str(page["url"]) if page.get("url") else None
@@ -348,22 +364,6 @@ class BrowserAbility(Ability[BrowserParamsBag]):
         if title:
             return ToolResult.err(str(error), code=code, hint=hint, title=title)
         return ToolResult.err(str(error), code=code, hint=hint)
-
-
-def _classify_error(message: str) -> str:
-    """The session layer (tools/browser/session.py) returns its failures as the
-    envelope ``error`` string; this is the single place those strings are mapped
-    to a self-correction code. Anything unrecognised falls back to the generic —
-    but still stable, never ``code=error`` — ``browser-action-failed``.
-    """
-    lowered = message.lower()
-    if "no page is open" in lowered:
-        return "no-open-page"
-    if "matches" in lowered and "element" in lowered:
-        return "ambiguous-target"
-    if "no element matching" in lowered:
-        return "element-not-found"
-    return "browser-action-failed"
 
 
 _HINTS = {

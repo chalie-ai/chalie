@@ -81,6 +81,14 @@ class ReviewToolCallsAbility(ReviewWindowAbility[ReviewWindowParamsBag]):
     def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
+    @staticmethod
+    def _result_ok(result: object) -> bool:
+        """A recorded result is now a dispatcher envelope whose first line is
+        ``[<tool>(status=…)]``. The call failed iff that first line carries
+        ``status=error``."""
+        first_line = str(result or "").splitlines()[0] if result else ""
+        return "status=error" not in first_line
+
     # ── ReviewWindowAbility hooks ──────────────────────────────────────────────
 
     def _fetch(self, lo: str, hi: str, params: ReviewWindowParamsBag) -> list[dict[str, object]]:
@@ -108,7 +116,7 @@ class ReviewToolCallsAbility(ReviewWindowAbility[ReviewWindowParamsBag]):
             "ts": self._ts(rec.get("created_at")),
             "tool": rec.get("tool_name") or "unknown",
             "params_summary": params_str,
-            "ok": _result_ok(rec.get("result")),
+            "ok": self._result_ok(rec.get("result")),
         }
 
     def _empty_hint(self, date_time: str, buffer: int) -> str:
@@ -116,11 +124,3 @@ class ReviewToolCallsAbility(ReviewWindowAbility[ReviewWindowParamsBag]):
             f"No tool calls found within ±{buffer} minutes of {date_time}. "
             "Try a different timestamp."
         )
-
-
-def _result_ok(result: object) -> bool:
-    """A recorded result is now a dispatcher envelope whose first line is
-    ``[<tool>(status=…)]``. The call failed iff that first line carries
-    ``status=error``."""
-    first_line = str(result or "").splitlines()[0] if result else ""
-    return "status=error" not in first_line

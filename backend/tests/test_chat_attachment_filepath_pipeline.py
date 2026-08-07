@@ -34,7 +34,7 @@ from models.tool_call import ToolCall
 from services.file_index_service import FileIndexService
 from services.file_mapper_service import FileMapperService
 from services.provider_db_service import ProviderDbService
-from services.tmp_storage import new_tmp_path
+from services.tmp_storage import TmpStorage
 
 if TYPE_CHECKING:
     from flask.testing import FlaskClient
@@ -83,7 +83,7 @@ def _stage_attachment(name: str, content: bytes) -> str:
     """Stage exactly the way ``ThreadsEndpoint._stage_uploads`` does: a real
     tmp path under ``TMP_PATH_PREFIX`` with an 8-hex collision prefix on the
     basename, real bytes written to it."""
-    tmp_path = new_tmp_path(f"{uuid.uuid4().hex[:8]}_{name}")
+    tmp_path = TmpStorage.new_tmp_path(f"{uuid.uuid4().hex[:8]}_{name}")
     with open(tmp_path, "wb") as fh:
         fh.write(content)
     return tmp_path

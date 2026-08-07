@@ -37,7 +37,7 @@ from models.model import Model
 from models.query import Query
 from services._fts_delete import FtsDelete
 from services.embedding_utils import pack_embedding
-from services.search_expander_service import enqueue
+from services.search_expander_service import SearchExpanderService
 from services.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
@@ -139,7 +139,7 @@ class DataGraphRow(Model):
         if self.__search__ is None:
             return
         try:
-            enqueue("data_graph", cast("int", self.id))
+            SearchExpanderService.enqueue("data_graph", cast("int", self.id))
         except Exception:
             logger.warning(
                 "[DATA GRAPH] search-index enqueue failed for id=%s", self.id, exc_info=True

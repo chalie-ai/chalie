@@ -26,11 +26,357 @@ if TYPE_CHECKING:
     from consumer import WorkerManager as _WorkerManager
 
 
-def _parse_cli() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Chalie — personal intelligence layer")
-    parser.add_argument("--port", type=int, default=31025, help="Server port (default: 31025)")
-    parser.add_argument("--host", default="0.0.0.0", help="Bind address (default: 0.0.0.0)")
-    return parser.parse_args()
+class ChalieBoot:
+    """All boot-time helpers for Chalie, grouped as staticmethods on a single class."""
+
+    @staticmethod
+    def _parse_cli() -> argparse.Namespace:
+        parser = argparse.ArgumentParser(description="Chalie — personal intelligence layer")
+        parser.add_argument("--port", type=int, default=31025, help="Server port (default: 31025)")
+        parser.add_argument("--host", default="0.0.0.0", help="Bind address (default: 0.0.0.0)")
+        return parser.parse_args()
+
+    @staticmethod
+    def _start_model_preload() -> None:
+        """Kick off background model preloading (embedding + ONNX classifiers)."""
+        def _preload_models() -> None:
+            try:
+                logger.info("[System] Preloading embedding model (background)...")
+                from services.embedding_service import get_embedding_service
+                svc: "EmbeddingService | OnnxInferenceService | None" = get_embedding_service()
+                cast("EmbeddingService", svc).generate_embedding("warmup")
+                logger.info("[System] Embedding model ready (inference warm)")
+            except Exception as e:
+                logger.exception(f"[System] Embedding model preload failed: {e}")
+
+            svc = None
+            try:
+                logger.info("[System] Registering ONNX classifier heads (background)...")
+                from services.onnx_inference_service import get_onnx_inference_service
+                svc = get_onnx_inference_service()
+                from services.onnx_inference_service import MODEL_REGISTRY as _CLASSIFIER_REGISTRY
+                _failures: list[tuple[str, str]] = []
+                for _task, _ in _CLASSIFIER_REGISTRY:
+                    try:
+                        svc._get_head(_task)
+                    except RuntimeError as _reg_err:
+                        logger.exception(
+                            f"[System] CLASSIFIER REGISTRATION FAILED — task={_task} "
+                            f"reason={_reg_err}"
+                        )
+                        _failures.append((_task, str(_reg_err)))
+                svc._failed_registrations = _failures
+                svc._ready = True
+                if _failures:
+                    logger.error(
+                        f"[System] ONNX classifier DEGRADED — {len(_failures)} task(s) "
+                        f"failed registration: {[t for t, _ in _failures]} — health "
+                        f"endpoint will report not-ready until resolved"
+                    )
+                else:
+                    logger.info("[System] ONNX classifier heads registered")
+            except Exception as e:
+                if svc is not None:
+                    svc._failed_registrations = [("preload", str(e))]
+                    svc._ready = True
+                logger.exception("[System] ONNX preload failed")
+
+            try:
+                logger.info("[System] Preloading Moonshine STT model (background)...")
+                from services.speech_to_text_service import get_service as _get_stt_service
+                if _get_stt_service().ensure_loaded():
+                    logger.info("[System] Moonshine STT ready")
+                else:
+                    logger.error("[System] Moonshine STT preload failed — loader returned False (see [Voice] logs)")
+            except Exception as e:
+                logger.exception(f"[System] Moonshine STT preload failed: {e}")
+
+            try:
+                logger.info("[System] Preloading Kokoro TTS model (background)...")
+                from services.voice_transcript_service import VoiceTranscriptService
+                if VoiceTranscriptService.instance().ensure_loaded():
+                    logger.info("[System] Kokoro TTS ready")
+                else:
+                    logger.error("[System] Kokoro TTS preload failed — loader returned False (see [VoiceTranscript] logs)")
+            except Exception as e:
+                logger.exception(f"[System] Kokoro TTS preload failed: {e}")
+        import threading as _threading
+        _threading.stack_size(2 * 1024 * 1024)
+        _threading.Thread(target=_preload_models, name="model-preload", daemon=True).start()
+
+    @staticmethod
+    def _init_database() -> None:
+        from services.schema_convergence_service import SchemaConvergenceService
+
+        # Provider deletion is permanent — there is no longer a soft-delete flag.
+        # Any rows still parked at is_active=0 are previously-deleted providers;
+        # purge them BEFORE convergence drops the column, otherwise they resurface
+        # as active providers (and collide on the UNIQUE name index). Self-disabled:
+        # once convergence removes is_active this block is a no-op.
+        try:
+            with Database.transaction() as _conn:
+                _cols = [r[1] for r in _conn.execute("PRAGMA table_info(providers)").fetchall()]
+                if 'is_active' in _cols:
+                    _purged = _conn.execute("DELETE FROM providers WHERE is_active = 0").rowcount
+                    _conn.commit()
+                    if _purged:
+                        logger.info("[Startup] Purged %d soft-deleted provider row(s)", _purged)
+        except Exception as _prov_err:
+            logger.warning(f"[Startup] soft-deleted provider purge skipped: {_prov_err}")
+
+        convergence = SchemaConvergenceService()
+        convergence.converge()
+        # Separate deterministic value backfill — convergence applies only static
+        # column DEFAULTs, never derived values (last_relevant_at, valid_from, etc.).
+        convergence.backfill_redesign_columns()
+
+        # Policy: apply the declarative seed (idempotent) AFTER convergence has created
+        # the policy table.  INSERT OR IGNORE preserves any copied/user rows.
+        try:
+            from services.policy_manager import PolicyManager
+            inserted = PolicyManager().apply_seed()
+            logger.info("[Startup] Policy seed applied (%d new rows)", inserted)
+        except Exception as _seed_err:
+            logger.warning(f"[Startup] policy seed skipped: {_seed_err}")
+
+    @staticmethod
+    def _run_startup_migrations() -> None:
+        """Every-boot data upkeep, then the one-time migrations.
+
+        One-time migrations live in the ``migrations`` package: each module
+        self-checks via ``needed()`` (no-op on databases already in target shape)
+        and ``migrations.runner`` records outcomes in the ``schema_migrations``
+        ledger, so nothing here changes when a migration is added or retired.
+        """
+        ChalieBoot._run_transcript_rebuild()
+        ChalieBoot._purge_stale_adaptive_layer_rows()
+
+        from migrations.runner import run_all
+        from services.file_mapper_service import FileMapperService
+        run_all(str(FileMapperService.get_db_path()))
+
+    @staticmethod
+    def _run_transcript_rebuild() -> None:
+        """One-time transcript rebuild."""
+        try:
+            from migrate_transcript_rebuild import TranscriptRebuildMigration
+            from services.file_mapper_service import FileMapperService
+            TranscriptRebuildMigration().run_once_on_boot(db_path=str(FileMapperService.get_db_path()))
+        except Exception as _mig_err:
+            logger.warning(f"[Startup] Transcript migration skipped: {_mig_err}")
+
+    @staticmethod
+    def _purge_stale_adaptive_layer_rows() -> None:
+        """Purge stale AdaptiveLayer data_graph rows."""
+        try:
+            _adaptive_keys = (
+                'prefers_concise', 'prefers_depth', 'enjoys_challenge',
+                'prefers_bullet_format', 'challenge_tolerance',
+            )
+            with Database.transaction() as _conn:
+                _placeholders = ','.join('?' * len(_adaptive_keys))
+                _conn.execute(
+                    f"DELETE FROM data_graph WHERE kind='user_specific' AND key IN ({_placeholders})",
+                    _adaptive_keys,
+                )
+                _conn.commit()
+        except Exception as _adl_err:
+            logger.warning(f"[Startup] AdaptiveLayer data_graph purge skipped: {_adl_err}")
+
+    @staticmethod
+    def _init_services() -> None:
+        """Initialize singleton services and seed default configuration."""
+        # Clean up expired auth sessions
+        try:
+            from services.auth_session_service import AuthSessionService
+            AuthSessionService.cleanup_expired_sessions()
+        except Exception:
+            pass
+
+        logger.info("[Startup] Encryption key deferred to post-login (vault mode)")
+        logger.info("[Startup] Capability reconnection deferred to post-login (vault mode)")
+
+        # Initialize API key
+        try:
+            from models.setting import Setting
+            api_key = Setting.get_api_key_or_generate()
+            logger.info(f"[Settings] API key initialized (key: ...{api_key[-8:]})")
+        except Exception as e:
+            logger.warning(f"Settings initialization failed: {e}")
+
+        from services.write_queue_service import get_write_queue as _get_write_queue
+        _get_write_queue()
+        logger.info("[Startup] WriteQueueService started")
+
+        from services.telemetry_service import get_telemetry_collector as _get_telemetry_collector
+        _get_telemetry_collector()
+        logger.info("[Startup] TelemetryCollector initialized")
+
+    @staticmethod
+    def _register_workers(manager: "_WorkerManager", host: str, port: int) -> None:
+        """Register all service workers with the WorkerManager.
+
+        The user-schedule poller (``scheduler_service``) and the idle-gated
+        cognition loop (``subconscious_worker``) were unified into the ``cron``
+        package: ``cron-runner`` fires every registered ``ScheduledJob`` on its own
+        schedule (``ScheduledItemsDispatcherJob`` folds in the schedule poller; the
+        nine idle-gated cognition jobs fold in the subconscious tick).
+        """
+        from workers.tmp_cleanup_worker import TmpCleanupWorker
+        manager.register_service("tmp-cleanup-service", TmpCleanupWorker.run)
+
+        from cron.runner import CronRunner
+        manager.register_service("cron-runner", CronRunner.cron_runner)
+        ChalieBoot._bootstrap_capability_sync()
+        ChalieBoot._try_register(manager, "search-expander-service",
+                  "services.search_expander_service", "SearchExpanderService.search_expander_worker")
+        from workers.file_index_worker import FileIndexWorker
+        manager.register_service("file-index-service", FileIndexWorker.run)
+        from mcp_server.server import McpServer
+        manager.register_service("mcp-server", McpServer.run)
+        from workers.mcp_client_worker import McpClientWorker
+        manager.register_service("mcp-client-heartbeat", McpClientWorker.run)
+
+        def _flask_worker() -> None:
+            from api import create_app
+            app = create_app()
+            if _boot_screen is not None:
+                _boot_screen.stop()  # release the port for the bind below
+            ssl_context = ChalieBoot._resolve_ssl_context()
+            scheme = "https" if ssl_context else "http"
+            logger.info(f"[Chalie] Starting on {scheme}://{host}:{port}")
+            app.run(host=host, port=port, debug=False, threaded=True, ssl_context=ssl_context)
+
+        manager.register_service("rest-api-worker-1", _flask_worker)
+
+    @staticmethod
+    def _disable_ssl_setting() -> None:
+        """Clear ``ssl_enabled`` after a TLS fallback so the cookie Secure-scope tracks the real scheme.
+
+        Without this a vanished cert leaves ``ssl_enabled=true`` in the DB while the
+        server runs HTTP — issuing ``Secure`` cookies the browser drops, locking out login.
+        """
+        try:
+            from models.setting import Setting
+            Setting.set_bool(Setting.SSL_ENABLED, False)
+        except Exception:
+            logger.exception("[SSL] could not clear ssl_enabled after TLS fallback")
+
+    @staticmethod
+    def _resolve_ssl_context() -> "ssl.SSLContext | None":
+        """Build the server TLS context when SSL is enabled and a valid cert/key exist.
+
+        Returns ``None`` (plain HTTP) when SSL is off. If SSL is enabled but the cert/key
+        are missing or fail to load, clears ``ssl_enabled`` and serves HTTP — degrading
+        rather than crash-looping, and keeping the cookie Secure-scope honest.
+        """
+        try:
+            from models.setting import Setting
+            if not Setting.get_bool(Setting.SSL_ENABLED):
+                return None
+            from services.file_mapper_service import FileMapperService
+            cert = FileMapperService.get_ssl_cert_path()
+            key = FileMapperService.get_ssl_key_path()
+            if cert.is_file() and key.is_file():
+                import ssl
+                context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+                context.load_cert_chain(str(cert), str(key))
+                return context
+            logger.warning("[SSL] enabled but certificate/key missing — disabling SSL, serving HTTP")
+        except Exception:
+            logger.exception("[SSL] context load failed — disabling SSL, serving HTTP")
+        ChalieBoot._disable_ssl_setting()
+        return None
+
+    @staticmethod
+    def _check_asset_caches() -> None:
+        """Verify search routing and concept LUT assets are present."""
+        import sqlite3 as _sql
+        from services.file_mapper_service import FileMapperService
+
+        try:
+            _search_db = FileMapperService.get_search_providers_db_path()
+            if _search_db.exists():
+                _c = _sql.connect(str(_search_db))
+                _tables = [r[0] for r in _c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+                _c.close()
+                if "example_embeddings" in _tables:
+                    logger.info("[Startup] Search router cache ready")
+                else:
+                    logger.warning("[Startup] Search embeddings missing — run 'cd backend && python -m utils.generate_search_cache'")
+            else:
+                logger.warning("[Startup] search_tool_providers.sqlite not found")
+        except Exception as e:
+            logger.warning(f"[Startup] Search cache check failed: {e}")
+
+        try:
+            _lut_db = FileMapperService.get_concept_lut_db_path()
+            if _lut_db.exists():
+                _c = _sql.connect(str(_lut_db))
+                _tables = [r[0] for r in _c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+                _c.close()
+                if "lut_embeddings" in _tables:
+                    logger.info("[Startup] Concept LUT ready: %s", _lut_db)
+                else:
+                    logger.warning("[Startup] Concept LUT embeddings missing — run 'cd backend && python -m utils.generate_concept_lut'")
+            else:
+                logger.warning("[Startup] concept_lut.sqlite not found — run 'cd backend && python -m utils.generate_concept_lut'")
+        except Exception as e:
+            logger.warning(f"[Startup] Concept LUT check failed: {e}")
+
+    @staticmethod
+    def _warmup_models() -> None:
+        """Warm up voice and embedding models in background daemon threads."""
+        import threading as _t
+        try:
+            from services.speech_to_text_service import get_service as stt_service
+            from services.voice_transcript_service import VoiceTranscriptService
+            _t.Thread(
+                target=VoiceTranscriptService.instance().ensure_loaded,
+                name="voice-tts-warmup", daemon=True,
+            ).start()
+            _t.Thread(target=stt_service().ensure_loaded, name="voice-stt-warmup", daemon=True).start()
+        except Exception as e:
+            logger.warning(f"[Startup] Voice warm-up skipped: {e}")
+        try:
+            from services.embedding_service import EmbeddingService
+            _t.Thread(target=EmbeddingService._get_session_and_tokenizer, name="embed-warmup", daemon=True).start()
+        except Exception as e:
+            logger.warning(f"[Startup] Embedding warm-up skipped: {e}")
+
+    @staticmethod
+    def _bootstrap_capability_sync() -> None:
+        """Bootstrap connected capabilities at startup.
+
+        For each capability, call connect() — it checks credentials internally and
+        registers its sync handler + ensures recurring scheduled_items exist.
+        Capability tools are surfaced to the LLM via Ability subclasses (email,
+        calendar, contacts) which are auto-discovered by AbilityRegistry.
+        """
+        try:
+            from capabilities import load_capabilities
+            all_caps = load_capabilities()
+            for cap_id, cap in all_caps.items():
+                try:
+                    if not cap.is_connected():
+                        cap.connect()
+                    if cap.is_connected():
+                        logger.info("[bootstrap] Auto-connected capability: %s", cap_id)
+                except Exception as exc:
+                    logger.warning("[bootstrap] Failed to auto-connect %s: %s", cap_id, exc)
+        except Exception as exc:
+            logger.warning("[bootstrap] Capability sync bootstrap failed: %s", exc)
+
+    @staticmethod
+    def _try_register(manager: "_WorkerManager", name: str, module_path: str, func_name: str) -> None:
+        """Try to import and register a service, logging failure gracefully."""
+        try:
+            import importlib
+            mod = importlib.import_module(module_path)
+            func = getattr(mod, func_name)
+            manager.register_service(name, func)
+        except Exception as e:
+            logger.warning(f"[Startup] {name} registration failed: {e}")
 
 
 # Own the public port from the first moment of boot. Docker publishes the port
@@ -43,7 +389,7 @@ def _parse_cli() -> argparse.Namespace:
 _boot_screen: "_BootScreen | None" = None
 if __name__ == "__main__":
     from boot_screen import BootScreen
-    _cli = _parse_cli()
+    _cli = ChalieBoot._parse_cli()
     _boot_screen = BootScreen(_cli.host, _cli.port)
     _boot_screen.start()
 
@@ -94,319 +440,8 @@ Logger.start()
 logger = logging.getLogger(__name__)
 
 
-
-
-def _start_model_preload() -> None:
-    """Kick off background model preloading (embedding + ONNX classifiers)."""
-    def _preload_models() -> None:
-        try:
-            logger.info("[System] Preloading embedding model (background)...")
-            from services.embedding_service import get_embedding_service
-            svc: "EmbeddingService | OnnxInferenceService | None" = get_embedding_service()
-            cast("EmbeddingService", svc).generate_embedding("warmup")
-            logger.info("[System] Embedding model ready (inference warm)")
-        except Exception as e:
-            logger.exception(f"[System] Embedding model preload failed: {e}")
-
-        svc = None
-        try:
-            logger.info("[System] Registering ONNX classifier heads (background)...")
-            from services.onnx_inference_service import get_onnx_inference_service
-            svc = get_onnx_inference_service()
-            from services.onnx_inference_service import MODEL_REGISTRY as _CLASSIFIER_REGISTRY
-            _failures: list[tuple[str, str]] = []
-            for _task, _ in _CLASSIFIER_REGISTRY:
-                try:
-                    svc._get_head(_task)
-                except RuntimeError as _reg_err:
-                    logger.exception(
-                        f"[System] CLASSIFIER REGISTRATION FAILED — task={_task} "
-                        f"reason={_reg_err}"
-                    )
-                    _failures.append((_task, str(_reg_err)))
-            svc._failed_registrations = _failures
-            svc._ready = True
-            if _failures:
-                logger.error(
-                    f"[System] ONNX classifier DEGRADED — {len(_failures)} task(s) "
-                    f"failed registration: {[t for t, _ in _failures]} — health "
-                    f"endpoint will report not-ready until resolved"
-                )
-            else:
-                logger.info("[System] ONNX classifier heads registered")
-        except Exception as e:
-            if svc is not None:
-                svc._failed_registrations = [("preload", str(e))]
-                svc._ready = True
-            logger.exception("[System] ONNX preload failed")
-
-        try:
-            logger.info("[System] Preloading Moonshine STT model (background)...")
-            from services.speech_to_text_service import get_service as _get_stt_service
-            if _get_stt_service().ensure_loaded():
-                logger.info("[System] Moonshine STT ready")
-            else:
-                logger.error("[System] Moonshine STT preload failed — loader returned False (see [Voice] logs)")
-        except Exception as e:
-            logger.exception(f"[System] Moonshine STT preload failed: {e}")
-
-        try:
-            logger.info("[System] Preloading Kokoro TTS model (background)...")
-            from services.voice_transcript_service import VoiceTranscriptService
-            if VoiceTranscriptService.instance().ensure_loaded():
-                logger.info("[System] Kokoro TTS ready")
-            else:
-                logger.error("[System] Kokoro TTS preload failed — loader returned False (see [VoiceTranscript] logs)")
-        except Exception as e:
-            logger.exception(f"[System] Kokoro TTS preload failed: {e}")
-    import threading as _threading
-    _threading.stack_size(2 * 1024 * 1024)
-    _threading.Thread(target=_preload_models, name="model-preload", daemon=True).start()
-
-
-def _init_database() -> None:
-    from services.schema_convergence_service import SchemaConvergenceService
-
-    # Provider deletion is permanent — there is no longer a soft-delete flag.
-    # Any rows still parked at is_active=0 are previously-deleted providers;
-    # purge them BEFORE convergence drops the column, otherwise they resurface
-    # as active providers (and collide on the UNIQUE name index). Self-disabling:
-    # once convergence removes is_active this block is a no-op.
-    try:
-        with Database.transaction() as _conn:
-            _cols = [r[1] for r in _conn.execute("PRAGMA table_info(providers)").fetchall()]
-            if 'is_active' in _cols:
-                _purged = _conn.execute("DELETE FROM providers WHERE is_active = 0").rowcount
-                _conn.commit()
-                if _purged:
-                    logger.info("[Startup] Purged %d soft-deleted provider row(s)", _purged)
-    except Exception as _prov_err:
-        logger.warning(f"[Startup] soft-deleted provider purge skipped: {_prov_err}")
-
-    convergence = SchemaConvergenceService()
-    convergence.converge()
-    # Separate deterministic value backfill — convergence applies only static
-    # column DEFAULTs, never derived values (last_relevant_at, valid_from, etc.).
-    convergence.backfill_redesign_columns()
-
-    # Policy: apply the declarative seed (idempotent) AFTER convergence has created
-    # the policy table.  INSERT OR IGNORE preserves any copied/user rows.
-    try:
-        from services.policy_manager import PolicyManager
-        inserted = PolicyManager().apply_seed()
-        logger.info("[Startup] Policy seed applied (%d new rows)", inserted)
-    except Exception as _seed_err:
-        logger.warning(f"[Startup] policy seed skipped: {_seed_err}")
-
-
-def _run_startup_migrations() -> None:
-    """Every-boot data upkeep, then the one-time migrations.
-
-    One-time migrations live in the ``migrations`` package: each module
-    self-checks via ``needed()`` (no-op on databases already in target shape)
-    and ``migrations.runner`` records outcomes in the ``schema_migrations``
-    ledger, so nothing here changes when a migration is added or retired.
-    """
-    _run_transcript_rebuild()
-    _purge_stale_adaptive_layer_rows()
-
-    from migrations.runner import run_all
-    from services.file_mapper_service import FileMapperService
-    run_all(str(FileMapperService.get_db_path()))
-
-
-
-def _run_transcript_rebuild() -> None:
-    """One-time transcript rebuild."""
-    try:
-        from migrate_transcript_rebuild import TranscriptRebuildMigration
-        from services.file_mapper_service import FileMapperService
-        TranscriptRebuildMigration().run_once_on_boot(db_path=str(FileMapperService.get_db_path()))
-    except Exception as _mig_err:
-        logger.warning(f"[Startup] Transcript migration skipped: {_mig_err}")
-
-
-def _purge_stale_adaptive_layer_rows() -> None:
-    """Purge stale AdaptiveLayer data_graph rows."""
-    try:
-        _adaptive_keys = (
-            'prefers_concise', 'prefers_depth', 'enjoys_challenge',
-            'prefers_bullet_format', 'challenge_tolerance',
-        )
-        with Database.transaction() as _conn:
-            _placeholders = ','.join('?' * len(_adaptive_keys))
-            _conn.execute(
-                f"DELETE FROM data_graph WHERE kind='user_specific' AND key IN ({_placeholders})",
-                _adaptive_keys,
-            )
-            _conn.commit()
-    except Exception as _adl_err:
-        logger.warning(f"[Startup] AdaptiveLayer data_graph purge skipped: {_adl_err}")
-
-
-def _init_services() -> None:
-    """Initialize singleton services and seed default configuration."""
-    # Clean up expired auth sessions
-    try:
-        from services.auth_session_service import AuthSessionService
-        AuthSessionService.cleanup_expired_sessions()
-    except Exception:
-        pass
-
-    logger.info("[Startup] Encryption key deferred to post-login (vault mode)")
-    logger.info("[Startup] Capability reconnection deferred to post-login (vault mode)")
-
-    # Initialize API key
-    try:
-        from models.setting import Setting
-        api_key = Setting.get_api_key_or_generate()
-        logger.info(f"[Settings] API key initialized (key: ...{api_key[-8:]})")
-    except Exception as e:
-        logger.warning(f"Settings initialization failed: {e}")
-
-    from services.write_queue_service import get_write_queue as _get_write_queue
-    _get_write_queue()
-    logger.info("[Startup] WriteQueueService started")
-
-    from services.telemetry_service import get_telemetry_collector as _get_telemetry_collector
-    _get_telemetry_collector()
-    logger.info("[Startup] TelemetryCollector initialized")
-
-
-def _register_workers(manager: "_WorkerManager", host: str, port: int) -> None:
-    """Register all service workers with the WorkerManager.
-
-    The user-schedule poller (``scheduler_service``) and the idle-gated
-    cognition loop (``subconscious_worker``) were unified into the ``cron``
-    package: ``cron-runner`` fires every registered ``ScheduledJob`` on its own
-    schedule (``ScheduledItemsDispatcherJob`` folds in the schedule poller; the
-    nine idle-gated cognition jobs fold in the subconscious tick).
-    """
-    from workers.tmp_cleanup_worker import TmpCleanupWorker
-    manager.register_service("tmp-cleanup-service", TmpCleanupWorker.run)
-
-    from cron.runner import CronRunner
-    manager.register_service("cron-runner", CronRunner.cron_runner)
-    _bootstrap_capability_sync()
-    _try_register(manager, "search-expander-service",
-                  "services.search_expander_service", "search_expander_worker")
-    from workers.file_index_worker import FileIndexWorker
-    manager.register_service("file-index-service", FileIndexWorker.run)
-    from mcp_server.server import McpServer
-    manager.register_service("mcp-server", McpServer.run)
-    from workers.mcp_client_worker import McpClientWorker
-    manager.register_service("mcp-client-heartbeat", McpClientWorker.run)
-
-    def _flask_worker() -> None:
-        from api import create_app
-        app = create_app()
-        if _boot_screen is not None:
-            _boot_screen.stop()  # release the port for the bind below
-        ssl_context = _resolve_ssl_context()
-        scheme = "https" if ssl_context else "http"
-        logger.info(f"[Chalie] Starting on {scheme}://{host}:{port}")
-        app.run(host=host, port=port, debug=False, threaded=True, ssl_context=ssl_context)
-
-    manager.register_service("rest-api-worker-1", _flask_worker)
-
-
-def _disable_ssl_setting() -> None:
-    """Clear ``ssl_enabled`` after a TLS fallback so the cookie Secure-scope tracks the real scheme.
-
-    Without this a vanished cert leaves ``ssl_enabled=true`` in the DB while the
-    server runs HTTP — issuing ``Secure`` cookies the browser drops, locking out login.
-    """
-    try:
-        from models.setting import Setting
-        Setting.set_bool(Setting.SSL_ENABLED, False)
-    except Exception:
-        logger.exception("[SSL] could not clear ssl_enabled after TLS fallback")
-
-
-def _resolve_ssl_context() -> "ssl.SSLContext | None":
-    """Build the server TLS context when SSL is enabled and a valid cert/key exist.
-
-    Returns ``None`` (plain HTTP) when SSL is off. If SSL is enabled but the cert/key
-    are missing or fail to load, clears ``ssl_enabled`` and serves HTTP — degrading
-    rather than crash-looping, and keeping the cookie Secure-scope honest.
-    """
-    try:
-        from models.setting import Setting
-        if not Setting.get_bool(Setting.SSL_ENABLED):
-            return None
-        from services.file_mapper_service import FileMapperService
-        cert = FileMapperService.get_ssl_cert_path()
-        key = FileMapperService.get_ssl_key_path()
-        if cert.is_file() and key.is_file():
-            import ssl
-            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-            context.load_cert_chain(str(cert), str(key))
-            return context
-        logger.warning("[SSL] enabled but certificate/key missing — disabling SSL, serving HTTP")
-    except Exception:
-        logger.exception("[SSL] context load failed — disabling SSL, serving HTTP")
-    _disable_ssl_setting()
-    return None
-
-
-def _check_asset_caches() -> None:
-    """Verify search routing and concept LUT assets are present."""
-    import sqlite3 as _sql
-    from services.file_mapper_service import FileMapperService
-
-    try:
-        _search_db = FileMapperService.get_search_providers_db_path()
-        if _search_db.exists():
-            _c = _sql.connect(str(_search_db))
-            _tables = [r[0] for r in _c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
-            _c.close()
-            if "example_embeddings" in _tables:
-                logger.info("[Startup] Search router cache ready")
-            else:
-                logger.warning("[Startup] Search embeddings missing — run 'cd backend && python -m utils.generate_search_cache'")
-        else:
-            logger.warning("[Startup] search_tool_providers.sqlite not found")
-    except Exception as e:
-        logger.warning(f"[Startup] Search cache check failed: {e}")
-
-    try:
-        _lut_db = FileMapperService.get_concept_lut_db_path()
-        if _lut_db.exists():
-            _c = _sql.connect(str(_lut_db))
-            _tables = [r[0] for r in _c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
-            _c.close()
-            if "lut_embeddings" in _tables:
-                logger.info("[Startup] Concept LUT ready: %s", _lut_db)
-            else:
-                logger.warning("[Startup] Concept LUT embeddings missing — run 'cd backend && python -m utils.generate_concept_lut'")
-        else:
-            logger.warning("[Startup] concept_lut.sqlite not found — run 'cd backend && python -m utils.generate_concept_lut'")
-    except Exception as e:
-        logger.warning(f"[Startup] Concept LUT check failed: {e}")
-
-
-def _warmup_models() -> None:
-    """Warm up voice and embedding models in background daemon threads."""
-    import threading as _t
-    try:
-        from services.speech_to_text_service import get_service as stt_service
-        from services.voice_transcript_service import VoiceTranscriptService
-        _t.Thread(
-            target=VoiceTranscriptService.instance().ensure_loaded,
-            name="voice-tts-warmup", daemon=True,
-        ).start()
-        _t.Thread(target=stt_service().ensure_loaded, name="voice-stt-warmup", daemon=True).start()
-    except Exception as e:
-        logger.warning(f"[Startup] Voice warm-up skipped: {e}")
-    try:
-        from services.embedding_service import EmbeddingService
-        _t.Thread(target=EmbeddingService._get_session_and_tokenizer, name="embed-warmup", daemon=True).start()
-    except Exception as e:
-        logger.warning(f"[Startup] Embedding warm-up skipped: {e}")
-
-
 def main() -> None:
-    args = _parse_cli()
+    args = ChalieBoot._parse_cli()
     port = args.port
     host = args.host
 
@@ -422,9 +457,9 @@ def main() -> None:
     from services.snapshot_service import SnapshotService
     SnapshotService.apply_pending()
 
-    _start_model_preload()
+    ChalieBoot._start_model_preload()
 
-    _init_database()
+    ChalieBoot._init_database()
 
     # Bind the active-record spine's connection getter onto Model once, here,
     # at boot (services/database.py::Database.bind) — every Model subclass
@@ -445,51 +480,17 @@ def main() -> None:
     if _closed:
         logger.info("[Startup] Closed %d orphaned turn_executions row(s)", _closed)
 
-    _run_startup_migrations()
-    _init_services()
+    ChalieBoot._run_startup_migrations()
+    ChalieBoot._init_services()
 
-    _check_asset_caches()
-    _warmup_models()
+    ChalieBoot._check_asset_caches()
+    ChalieBoot._warmup_models()
 
     from consumer import WorkerManager
     manager = WorkerManager()
-    _register_workers(manager, host, port)
+    ChalieBoot._register_workers(manager, host, port)
 
     manager.run()
-
-
-def _bootstrap_capability_sync() -> None:
-    """Bootstrap connected capabilities at startup.
-
-    For each capability, call connect() — it checks credentials internally and
-    registers its sync handler + ensures recurring scheduled_items exist.
-    Capability tools are surfaced to the LLM via Ability subclasses (email,
-    calendar, contacts) which are auto-discovered by AbilityRegistry.
-    """
-    try:
-        from capabilities import load_capabilities
-        all_caps = load_capabilities()
-        for cap_id, cap in all_caps.items():
-            try:
-                if not cap.is_connected():
-                    cap.connect()
-                if cap.is_connected():
-                    logger.info("[bootstrap] Auto-connected capability: %s", cap_id)
-            except Exception as exc:
-                logger.warning("[bootstrap] Failed to auto-connect %s: %s", cap_id, exc)
-    except Exception as exc:
-        logger.warning("[bootstrap] Capability sync bootstrap failed: %s", exc)
-
-
-def _try_register(manager: "_WorkerManager", name: str, module_path: str, func_name: str) -> None:
-    """Try to import and register a service, logging failure gracefully."""
-    try:
-        import importlib
-        mod = importlib.import_module(module_path)
-        func = getattr(mod, func_name)
-        manager.register_service(name, func)
-    except Exception as e:
-        logger.warning(f"[Startup] {name} registration failed: {e}")
 
 
 if __name__ == "__main__":

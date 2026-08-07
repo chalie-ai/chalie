@@ -149,7 +149,7 @@ class PlaceAbility(Ability[PlaceParamsBag]):
     # ── Action handlers ───────────────────────────────────────────────────────
 
     def _handle_save(self, name: str, telemetry: dict[str, object] | None) -> ToolResult:
-        lat, lon, location_name = _extract_location(telemetry)
+        lat, lon, location_name = self._extract_location(telemetry)
         if lat is None or lon is None:
             return ToolResult.err(_ERR_NO_LOCATION, code="no-location", hint=_HINT_NO_LOCATION)
 
@@ -178,7 +178,7 @@ class PlaceAbility(Ability[PlaceParamsBag]):
 
     def _handle_list(self) -> ToolResult:
         rows = [r.to_dict() for r in PlaceRow.live().get()]
-        places = [_row_to_place(r) for r in rows if r]
+        places = [self._row_to_place(r) for r in rows if r]
         if not places:
             return ToolResult.no_results()
         return ToolResult.ok(places, count=len(places))
@@ -188,7 +188,7 @@ class PlaceAbility(Ability[PlaceParamsBag]):
         matched = next((r for r in rows if r and cast(str, r.get("key", "")).lower() == name), None)
         if matched is None:
             return ToolResult.err(_ERR_NOT_FOUND, code="not-found", hint=_HINT_NOT_FOUND, name=name)
-        return ToolResult.ok(_row_to_place(matched))
+        return ToolResult.ok(self._row_to_place(matched))
 
     def _handle_delete(self, name: str) -> ToolResult:
         rows = [r.to_dict() for r in PlaceRow.live().get()]
@@ -216,38 +216,38 @@ class PlaceAbility(Ability[PlaceParamsBag]):
         logger.info("%s deleted place name=%s id=%s", LOG_PREFIX, name, row_id)
         return ToolResult.ok({"name": name, "deleted": True}, deleted=name)
 
+    # ── Module-level helpers ──────────────────────────────────────────────────────
 
-# ── Module-level helpers ──────────────────────────────────────────────────────
+    @staticmethod
+    def _extract_location(telemetry: dict[str, object] | None) -> tuple[float | None, float | None, str | None]:
+        if not telemetry:
+            return None, None, None
+        lat = telemetry.get("lat")
+        lon = telemetry.get("lon")
+        location_name = cast(str | None, telemetry.get("location_name") or None)
+        if lat is None or lon is None:
+            return None, None, location_name
+        try:
+            return float(cast(float, lat)), float(cast(float, lon)), location_name
+        except (TypeError, ValueError):
+            return None, None, location_name
+
+    @staticmethod
+    def _row_to_place(row: dict[str, object]) -> dict[str, object]:
+        key = row.get("key", "")
+        raw_value = cast(str, row.get("value") or "{}")
+        try:
+            payload = json.loads(raw_value)
+        except (json.JSONDecodeError, TypeError):
+            payload = {}
+        return {
+            "name": key,
+            "lat": payload.get("lat"),
+            "lon": payload.get("lon"),
+            "location_name": payload.get("name", key),
+            "radius_m": payload.get("radius_m", _DEFAULT_RADIUS_M),
+            "saved_at": row.get("first_seen_at"),
+        }
+
 
 _DEFAULT_RADIUS_M = 200
-
-
-def _extract_location(telemetry: dict[str, object] | None) -> tuple[float | None, float | None, str | None]:
-    if not telemetry:
-        return None, None, None
-    lat = telemetry.get("lat")
-    lon = telemetry.get("lon")
-    location_name = cast(str | None, telemetry.get("location_name") or None)
-    if lat is None or lon is None:
-        return None, None, location_name
-    try:
-        return float(cast(float, lat)), float(cast(float, lon)), location_name
-    except (TypeError, ValueError):
-        return None, None, location_name
-
-
-def _row_to_place(row: dict[str, object]) -> dict[str, object]:
-    key = row.get("key", "")
-    raw_value = cast(str, row.get("value") or "{}")
-    try:
-        payload = json.loads(raw_value)
-    except (json.JSONDecodeError, TypeError):
-        payload = {}
-    return {
-        "name": key,
-        "lat": payload.get("lat"),
-        "lon": payload.get("lon"),
-        "location_name": payload.get("name", key),
-        "radius_m": payload.get("radius_m", _DEFAULT_RADIUS_M),
-        "saved_at": row.get("first_seen_at"),
-    }

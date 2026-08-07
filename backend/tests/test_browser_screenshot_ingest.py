@@ -28,7 +28,7 @@ from services.file_index_service import FileIndexService
 from services.file_mapper_service import FileMapperService
 from services.file_parser_service import FileParserService
 from services.provider_db_service import ProviderDbService
-from services.tmp_storage import new_tmp_path
+from services.tmp_storage import TmpStorage
 
 pytestmark = pytest.mark.unit
 
@@ -50,7 +50,7 @@ def _invoice_png_path() -> str:
     draw.text((20, 40), "INVOICE", fill="black", font=font)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
-    path = new_tmp_path("shot.png")
+    path = TmpStorage.new_tmp_path("shot.png")
     with open(path, "wb") as fh:
         fh.write(buf.getvalue())
     return path

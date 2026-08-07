@@ -109,9 +109,9 @@ class ImapHandler:
         if not items:
             return
         from capabilities.contact_resolver import ContactResolver
-        from capabilities.mail_capability.email_triage import classify_email
+        from capabilities.mail_capability.email_triage import EmailTriage
         for item in items:
-            item["triage"] = classify_email(item)
+            item["triage"] = EmailTriage.classify_email(item)
             item["is_thread"] = bool(item.get("in_reply_to"))
             if item.get("from_addr"):
                 ContactResolver.index_person(cast(str, item["from_addr"]), cast("str | None", item.get("from_name")), source="imap")
@@ -121,7 +121,7 @@ class ImapHandler:
     # ------------------------------------------------------------------
 
     def search(self, client: "_ImapClient", params: dict[str, object]) -> dict[str, object]:
-        from capabilities.mail_capability.email_triage import classify_email
+        from capabilities.mail_capability.email_triage import EmailTriage
         try:
             client.select_folder("INBOX", readonly=True)
             criteria: list[object] = []
@@ -164,7 +164,7 @@ class ImapHandler:
             results = []
             for u in sorted(raw.keys(), reverse=True):
                 item = self.parse_headers(u, raw[u][_IMAP_FETCH_HEADER])
-                item["triage"] = classify_email(item)
+                item["triage"] = EmailTriage.classify_email(item)
                 item["is_thread"] = bool(item.get("in_reply_to"))
                 if triage_filter and item["triage"] != triage_filter:
                     continue

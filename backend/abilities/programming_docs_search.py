@@ -156,6 +156,8 @@ def _html_search(
 
 
 def _query_vars(query: str) -> dict[str, str]:
+    """Module-level shim for ``_templates`` — called during SOURCES init before
+    the class is defined. The class method delegates back here."""
     q = query.strip()
     lower = q.lower()
     last = re.split(r"[.\\/:#]+", q)[-1] or q
@@ -415,91 +417,6 @@ def _alias_map() -> dict[str, Source]:
 _ALIAS_MAP = _alias_map()
 
 
-def resolve_source(language: str) -> "Source | None":
-    return _ALIAS_MAP.get(language.strip().lower())
-
-
-# ── The single generic lookup engine ────────────────────────────────────────────
-
-def lookup(language: str, query: str) -> ToolResult:
-    """Truthful failure modes (NEVER fabrication):
-      * unknown language → ``code=unknown-source`` + valid= the table's ids.
-      * no candidate AND base_url unfetchable → ``code=source-unavailable``.
-      * top candidate fetch/extract fails → ``code=source-unavailable``.
-
-    Degraded-but-real: when no symbol candidate yields content but the source's
-    real base/landing page does, succeed with ``meta degraded=true`` — a true
-    page, just less precise than the symbol the model asked for.
-    """
-    from abilities.search import SearchAbility  # noqa: PLC0415
-
-    source = resolve_source(language)
-    if source is None:
-        return ToolResult.err(
-            f"Unknown language/framework: {language}.",
-            code="unknown-source",
-            hint=f"pick a supported language id, or use the {SearchAbility.NAME} tool",
-            valid=tuple(s.id for s in SOURCES),
-        )
-
-    try:
-        candidates = source.resolve(query)
-    except (requests.RequestException, ValueError):
-        # A search-API/HTML-search resolver failed to reach its endpoint; we still
-        # try the source's real base page below before giving up — never invent.
-        candidates = []
-
-    # Fetch candidates in order; the first that yields real content wins. Fall
-    # back to the source's real base/landing page (a TRUE page) marked degraded.
-    degraded = False
-    ordered = list(candidates)
-    base_row: dict[str, object] = {"url": source.base_url, "title": source.name}
-    if base_row["url"] and base_row["url"] not in {c["url"] for c in ordered}:
-        ordered.append(base_row)
-
-    for index, candidate in enumerate(ordered):
-        try:
-            html = _fetch(cast(str, candidate["url"]))
-        except requests.RequestException:
-            continue
-        excerpt = TextExtractor.extract_html(html, url=cast(str, candidate["url"]))
-        if not excerpt:
-            continue
-        excerpt, _ = ToolResult.truncate(excerpt, _MAX_CHARS)
-        # We landed on the base/landing page rather than a symbol candidate, or
-        # the only thing that resolved was the base row → real, but imprecise.
-        degraded = candidate is base_row or (not candidates)
-        rows = [{
-            "source": source.name,
-            "title": candidate["title"],
-            "url": candidate["url"],
-            "excerpt": excerpt,
-        }]
-        # Surface remaining candidates (url/title only) so the model can read on.
-        for other in ordered[index + 1:]:
-            if other["url"] == candidate["url"]:
-                continue
-            rows.append({
-                "source": source.name,
-                "title": other["title"],
-                "url": other["url"],
-                "excerpt": "",
-            })
-            if len(rows) >= _MAX_RESULTS:
-                break
-        meta: dict[str, object] = {"source": source.id, "count": len(rows)}
-        if degraded:
-            meta["degraded"] = True
-        return ToolResult.ok(rows, **cast("dict[str, dict[str, object] | None]", meta))
-
-    return ToolResult.err(
-        f"Could not reach {source.name} documentation for '{query}'.",
-        code="source-unavailable",
-        hint=f"try another source or the {SearchAbility.NAME} tool",
-        source=source.id,
-    )
-
-
 # ── Ability class ────────────────────────────────────────────────────────────────
 
 class ProgrammingDocsSearchAbility(Ability[ProgrammingDocsSearchParamsBag]):
@@ -576,4 +493,89 @@ class ProgrammingDocsSearchAbility(Ability[ProgrammingDocsSearchParamsBag]):
         return self._PARAMETERS
 
     def run(self, params: ProgrammingDocsSearchParamsBag) -> ToolResult:
-        return lookup(params.language, params.query)
+        return self.lookup(params.language, params.query)
+
+    @staticmethod
+    def _query_vars(query: str) -> dict[str, str]:
+        return _query_vars(query)
+
+    def resolve_source(self, language: str) -> "Source | None":
+        return _ALIAS_MAP.get(language.strip().lower())
+
+    def lookup(self, language: str, query: str) -> ToolResult:
+        """Truthful failure modes (NEVER fabrication):
+          * unknown language → ``code=unknown-source`` + valid= the table's ids.
+          * no candidate AND base_url unfetchable → ``code=source-unavailable``.
+          * top candidate fetch/extract fails → ``code=source-unavailable``.
+
+        Degraded-but-real: when no symbol candidate yields content but the source's
+        real base/landing page does, succeed with ``meta degraded=true`` — a true
+        page, just less precise than the symbol the model asked for.
+        """
+        from abilities.search import SearchAbility  # noqa: PLC0415
+
+        source = self.resolve_source(language)
+        if source is None:
+            return ToolResult.err(
+                f"Unknown language/framework: {language}.",
+                code="unknown-source",
+                hint=f"pick a supported language id, or use the {SearchAbility.NAME} tool",
+                valid=tuple(s.id for s in SOURCES),
+            )
+
+        try:
+            candidates = source.resolve(query)
+        except (requests.RequestException, ValueError):
+            # A search-API/HTML-search resolver failed to reach its endpoint; we still
+            # try the source's real base page below before giving up — never invent.
+            candidates = []
+
+        # Fetch candidates in order; the first that yields real content wins. Fall
+        # back to the source's real base/landing page (a TRUE page) marked degraded.
+        degraded = False
+        ordered = list(candidates)
+        base_row: dict[str, object] = {"url": source.base_url, "title": source.name}
+        if base_row["url"] and base_row["url"] not in {c["url"] for c in ordered}:
+            ordered.append(base_row)
+
+        for index, candidate in enumerate(ordered):
+            try:
+                html = _fetch(cast(str, candidate["url"]))
+            except requests.RequestException:
+                continue
+            excerpt = TextExtractor.extract_html(html, url=cast(str, candidate["url"]))
+            if not excerpt:
+                continue
+            excerpt, _ = ToolResult.truncate(excerpt, _MAX_CHARS)
+            # We landed on the base/landing page rather than a symbol candidate, or
+            # the only thing that resolved was the base row → real, but imprecise.
+            degraded = candidate is base_row or (not candidates)
+            rows = [{
+                "source": source.name,
+                "title": candidate["title"],
+                "url": candidate["url"],
+                "excerpt": excerpt,
+            }]
+            # Surface remaining candidates (url/title only) so the model can read on.
+            for other in ordered[index + 1:]:
+                if other["url"] == candidate["url"]:
+                    continue
+                rows.append({
+                    "source": source.name,
+                    "title": other["title"],
+                    "url": other["url"],
+                    "excerpt": "",
+                })
+                if len(rows) >= _MAX_RESULTS:
+                    break
+            meta: dict[str, object] = {"source": source.id, "count": len(rows)}
+            if degraded:
+                meta["degraded"] = True
+            return ToolResult.ok(rows, **cast("dict[str, dict[str, object] | None]", meta))
+
+        return ToolResult.err(
+            f"Could not reach {source.name} documentation for '{query}'.",
+            code="source-unavailable",
+            hint=f"try another source or the {SearchAbility.NAME} tool",
+            source=source.id,
+        )

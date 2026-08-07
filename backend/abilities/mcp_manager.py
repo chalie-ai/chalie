@@ -69,13 +69,6 @@ _LOG_PREFIX = "[MCP MANAGER]"
 _AUTH_MARKERS = ("401", "403", "unauthorized", "forbidden")
 
 
-def _classify_sync_error(error: str) -> str:
-    lowered = (error or "").lower()
-    if any(marker in lowered for marker in _AUTH_MARKERS):
-        return "auth-failed"
-    return "mcp-unreachable"
-
-
 class McpManagerAbility(Ability[McpManagerParamsBag]):
     # The typed input contract: the dispatch seam builds the bag via
     # McpManagerParamsBag.from_params before run() is called.
@@ -102,6 +95,13 @@ class McpManagerAbility(Ability[McpManagerParamsBag]):
     # to "what am I connected to?", so the model never spends a `list` call to
     # learn there is nothing there.
     _NONE_CONNECTED: ClassVar[str] = "No MCP servers are connected."
+
+    @staticmethod
+    def _classify_sync_error(error: str) -> str:
+        lowered = (error or "").lower()
+        if any(marker in lowered for marker in _AUTH_MARKERS):
+            return "auth-failed"
+        return "mcp-unreachable"
 
     def get_summary(self) -> str:
         inventory = self._inventory_line()
@@ -297,7 +297,7 @@ class McpManagerAbility(Ability[McpManagerParamsBag]):
                 count=sync["tool_count"],
             )
 
-        code = _classify_sync_error(cast("str", sync.get("error") or ""))
+        code = self._classify_sync_error(cast("str", sync.get("error") or ""))
         logger.info(
             "%s Added server %r — registered but %s (%s)",
             _LOG_PREFIX, name, code, sync.get("error"),
@@ -327,7 +327,7 @@ class McpManagerAbility(Ability[McpManagerParamsBag]):
                 "tool_count": sync["tool_count"],
             })
 
-        code = _classify_sync_error(cast("str", sync.get("error") or ""))
+        code = self._classify_sync_error(cast("str", sync.get("error") or ""))
         logger.info("%s Enabled server %r — %s (%s)",
                     _LOG_PREFIX, name, code, sync.get("error"))
         return self._unreachable_error(code, name, enabled=True)

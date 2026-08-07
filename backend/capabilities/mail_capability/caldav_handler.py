@@ -127,22 +127,22 @@ _ERR_OP_UNSUPPORTED = "This calendar operation is not currently supported."
 # ---------------------------------------------------------------------------
 
 
-def _make_date_utc(d: object) -> _dt_module.datetime:
-    if isinstance(d, _dt_module.datetime):
-        if d.tzinfo is not None:
-            return d.astimezone(_dt_module.timezone.utc)
-        return parse_utc(d)
-    if isinstance(d, _dt_module.date):
-        return parse_utc(_dt_module.datetime(d.year, d.month, d.day, 0, 0, 0))
-    return parse_utc(cast("_dt_module.datetime | str", d))
-
-
 # ---------------------------------------------------------------------------
 # Handler class
 # ---------------------------------------------------------------------------
 
 
 class CaldavHandler:
+
+    @staticmethod
+    def _make_date_utc(d: object) -> _dt_module.datetime:
+        if isinstance(d, _dt_module.datetime):
+            if d.tzinfo is not None:
+                return d.astimezone(_dt_module.timezone.utc)
+            return parse_utc(d)
+        if isinstance(d, _dt_module.date):
+            return parse_utc(_dt_module.datetime(d.year, d.month, d.day, 0, 0, 0))
+        return parse_utc(cast("_dt_module.datetime | str", d))
 
     # ------------------------------------------------------------------
     # Server connection
@@ -243,11 +243,11 @@ class CaldavHandler:
                 isinstance(dt_raw, _dt_module.date)
                 and not isinstance(dt_raw, _dt_module.datetime)
             )
-            dtstart = _make_date_utc(dt_raw)
+            dtstart = self._make_date_utc(dt_raw)
 
             dtend_prop = component.get("DTEND")
             if dtend_prop is not None:
-                dtend = _make_date_utc(cast("_ICalProp", dtend_prop).dt)
+                dtend = self._make_date_utc(cast("_ICalProp", dtend_prop).dt)
             else:
                 dur_prop = component.get("DURATION")
                 if dur_prop is not None:

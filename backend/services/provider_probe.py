@@ -30,8 +30,7 @@ from configs.enums.provider_type import ProviderType
 from configs.enums.thinking_level import ThinkingLevel
 from services.provider_db_service import (
     PROVIDER_IN_USE_MSG,
-    missing_host_msg,
-    missing_key_msg,
+    ProviderDbService,
 )
 
 logger = logging.getLogger(__name__)
@@ -51,8 +50,8 @@ def _build_safe_validation_messages() -> set[str]:
 
     messages = {"'model' is required", PROVIDER_IN_USE_MSG}
     for platform in PROVIDERS_BY_PLATFORM:
-        messages.add(missing_host_msg(platform))
-        messages.add(missing_key_msg(platform))
+        messages.add(ProviderDbService.missing_host_msg(platform))
+        messages.add(ProviderDbService.missing_key_msg(platform))
     return messages
 
 

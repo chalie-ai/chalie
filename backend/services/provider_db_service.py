@@ -21,28 +21,28 @@ PROVIDER_IN_USE_MSG = (
 )
 
 
-def missing_host_msg(platform: str) -> str:
-    """Rejection text for a row that supplied no base URL.
-
-    A function rather than a literal because the wording is also allowlisted in
-    provider_probe.SAFE_VALIDATION_MESSAGES, which echoes only messages it
-    recognises. Two copies of a per-platform string cannot be kept in step by
-    hand: the copies match today for the one platform that can trip this, and
-    would silently stop matching for the next one — turning a precise, fixable
-    complaint into the generic "invalid configuration".
-    """
-    return (
-        f"{platform} provider requires 'host' field "
-        "(base URL, e.g. 'https://api.minimax.io/v1')"
-    )
-
-
-def missing_key_msg(platform: str) -> str:
-    """Rejection text for a row that supplied no credential. See missing_host_msg."""
-    return f"{platform} provider requires 'api_key' field"
-
-
 class ProviderDbService:
+
+    @staticmethod
+    def missing_host_msg(platform: str) -> str:
+        """Rejection text for a row that supplied no base URL.
+
+        A function rather than a literal because the wording is also allowlisted in
+        provider_probe.SAFE_VALIDATION_MESSAGES, which echoes only messages it
+        recognises. Two copies of a per-platform string cannot be kept in step by
+        hand: the copies match today for the one platform that can trip this, and
+        would silently stop matching for the next one — turning a precise, fixable
+        complaint into the generic "invalid configuration".
+        """
+        return (
+            f"{platform} provider requires 'host' field "
+            "(base URL, e.g. 'https://api.minimax.io/v1')"
+        )
+
+    @staticmethod
+    def missing_key_msg(platform: str) -> str:
+        """Rejection text for a row that supplied no credential. See missing_host_msg."""
+        return f"{platform} provider requires 'api_key' field"
 
     @staticmethod
     def _seal_api_key(value: str) -> str:
@@ -132,9 +132,9 @@ class ProviderDbService:
             return
 
         if not data.get("host"):
-            raise ValueError(missing_host_msg(platform))
+            raise ValueError(ProviderDbService.missing_host_msg(platform))
         if client.REQUIRES_KEY and not data.get("api_key"):
-            raise ValueError(missing_key_msg(platform))
+            raise ValueError(ProviderDbService.missing_key_msg(platform))
 
     def create_provider(self, data: Dict[str, object]) -> Optional[Dict[str, object]]:
         default_model = data.get("model")

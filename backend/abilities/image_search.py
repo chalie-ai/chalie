@@ -211,7 +211,7 @@ class ImageSearchAbility(Ability[ImageSearchParamsBag]):
         from services.web_fetch import WebFetch  # noqa: PLC0415
         from services.image_description import ImageDescription  # noqa: PLC0415
 
-        dest = tmp_storage.new_tmp_path(f"imgsearch_{uuid.uuid4().hex[:8]}")
+        dest = tmp_storage.TmpStorage.new_tmp_path(f"imgsearch_{uuid.uuid4().hex[:8]}")
         try:
             try:
                 _, content_type = WebFetch.stream_to_file(

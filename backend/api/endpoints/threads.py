@@ -225,14 +225,14 @@ class ThreadsEndpoint(Endpoint):
         (everything else). No file blob ever reaches the act-trail — only the
         extracted text or vision description does."""
         from services.filename_utils import safe_filename  # noqa: PLC0415
-        from services.tmp_storage import new_tmp_path  # noqa: PLC0415
+        from services.tmp_storage import TmpStorage  # noqa: PLC0415
 
         paths: list[object] = []
         for f in files:
             if not f or not getattr(f, "filename", None):
                 continue
             name = safe_filename(getattr(f, "filename")) or "attachment"
-            tmp_path = new_tmp_path(f"{uuid.uuid4().hex[:8]}_{name}")
+            tmp_path = TmpStorage.new_tmp_path(f"{uuid.uuid4().hex[:8]}_{name}")
             getattr(f, "save")(tmp_path)
             paths.append(tmp_path)
         return paths
