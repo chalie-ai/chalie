@@ -19,100 +19,111 @@ import logging
 import threading
 
 from configs.channels import ThreadGistConfig
+from controllers.message_processor import MessageProcessor
 from models.turn_signal import TurnSignal
-from services.llm_service import _strip_think_blocks
+from services.llm_service import LlmService
 from services.websocket import Websocket
 
 logger = logging.getLogger(__name__)
 _LOG_PREFIX = "[THREAD GIST]"
 
 
-def maybe_ingest_gist(
-    trigger_channel: str, trigger_turn_id: int, trigger_type: str | None
-) -> None:
-    """Fire the gist delegate MP for one thread (daemon, non-blocking).
+class ThreadGistMessageProcessor(MessageProcessor):
+    """Thread-gist daemon that launches a delegate MP and persists the result."""
 
-    ``trigger_channel`` is the DB storage key (channel value, e.g. ``schedule``);
-    ``trigger_type`` is the trigger thread's frontend routing identity (config-type
-    value, e.g. ``scheduled``, or ``None`` for an internal channel). The two are NOT
-    interchangeable — deriving one from the other is what the caller passes both."""
-    if trigger_channel is None or trigger_turn_id is None:
-        return
-    logger.info("%s firing for %s turn=%s", _LOG_PREFIX, trigger_channel, trigger_turn_id)
-    t = threading.Thread(
-        target=_run_gist_processor,
-        args=(trigger_channel, trigger_turn_id, trigger_type),
-        daemon=True,
-        name="thread-gist",
-    )
-    t.start()
+    @classmethod
+    def maybe_ingest_gist(
+        cls,
+        trigger_channel: str,
+        trigger_turn_id: int,
+        trigger_type: str | None,
+    ) -> None:
+        """Fire the gist delegate MP for one thread (daemon, non-blocking).
 
-
-def generate_gist(trigger_channel: str, trigger_turn_id: int) -> str | None:
-    """Build + run the gist delegate MP for one thread; return its label or None.
-
-    The trigger thread's identity travels on ``metadata`` (``trigger_channel``/
-    ``trigger_turn_id``) — the controller lifts it onto ``mp._trigger_channel``/
-    ``mp._trigger_turn_id`` at construction, which is what ``PromptService``
-    reads to assemble this delegate's user prompt from the DB."""
-    from controllers.message_processor import MessageProcessor
-
-    mp = MessageProcessor.process(
-        ThreadGistConfig(),
-        metadata={"trigger_channel": trigger_channel, "trigger_turn_id": trigger_turn_id},
-    )
-    return mp.result() or None
-
-
-def _persist_gist(trigger_channel: str, trigger_turn_id: int, raw_gist: str) -> bool:
-    """Strip reasoning noise and upsert the label; return True when stored.
-
-    This is the single point the gist becomes persisted, user-facing data —
-    strip here so no provider path can leak ``<think>`` chain-of-thought into
-    the label. A gist that strips to empty (an unclosed think block swallows
-    everything after its opener) is dropped loudly, never stored."""
-    from controllers.message_processor import MessageProcessor
-
-    label = _strip_think_blocks(raw_gist)[0]
-    if not label:
-        logger.warning(
-            "%s gist for %s turn=%s dropped — think-stripping emptied it: %r",
-            _LOG_PREFIX, trigger_channel, trigger_turn_id, raw_gist[:120],
+        ``trigger_channel`` is the DB storage key (channel value, e.g. ``schedule``);
+        ``trigger_type`` is the trigger thread's frontend routing identity (config-type
+        value, e.g. ``scheduled``, or ``None`` for an internal channel). The two are NOT
+        interchangeable — deriving one from the other is what the caller passes both.
+        """
+        if trigger_channel is None or trigger_turn_id is None:
+            return
+        logger.info("%s firing for %s turn=%s", _LOG_PREFIX, trigger_channel, trigger_turn_id)
+        t = threading.Thread(
+            target=cls._run_gist_processor,
+            args=(trigger_channel, trigger_turn_id, trigger_type),
+            daemon=True,
+            name="thread-gist",
         )
-        return False
-    # Inert construction only (I2) — no .process(), purely to reach
-    # gist_service for the upsert.
-    inert = MessageProcessor(ThreadGistConfig())
-    inert.gist_service.upsert(trigger_channel, trigger_turn_id, label)
-    return True
+        t.start()
 
+    @classmethod
+    def generate_gist(cls, trigger_channel: str, trigger_turn_id: int) -> str | None:
+        """Build + run the gist delegate MP for one thread; return its label or None.
 
-def _run_gist_processor(
-    trigger_channel: str, trigger_turn_id: int, trigger_type: str | None
-) -> None:
-    try:
-        gist = generate_gist(trigger_channel, trigger_turn_id)
-        if gist and _persist_gist(trigger_channel, trigger_turn_id, gist):
-            _broadcast_updated(trigger_turn_id, trigger_type)
-    except Exception as exc:
-        logger.warning("%s processor failed: %s", _LOG_PREFIX, exc)
+        The trigger thread's identity travels on ``metadata`` (``trigger_channel``/
+        ``trigger_turn_id``) — the controller lifts it onto ``mp._trigger_channel``/
+        ``mp._trigger_turn_id`` at construction, which is what ``PromptService``
+        reads to assemble this delegate's user prompt from the DB.
+        """
+        mp = MessageProcessor.process(
+            ThreadGistConfig(),
+            metadata={"trigger_channel": trigger_channel, "trigger_turn_id": trigger_turn_id},
+        )
+        return mp.result() or None
 
+    @classmethod
+    def _persist_gist(cls, trigger_channel: str, trigger_turn_id: int, raw_gist: str) -> bool:
+        """Strip reasoning noise and upsert the label; return True when stored.
 
-def _broadcast_updated(trigger_turn_id: int, trigger_type: str | None) -> None:
-    """Emit a ``turn_signal {status: 'updated'}`` frame carrying the trigger
-    thread's routing identity so the frontend spine refetches its collapsed block.
+        This is the single point the gist becomes persisted, user-facing data —
+        strip here so no provider path can leak ``<think>`` chain-of-thought into
+        the label. A gist that strips to empty (an unclosed think block swallows
+        everything after its opener) is dropped loudly, never stored.
+        """
+        label = LlmService.strip_think_blocks(raw_gist)[0]
+        if not label:
+            logger.warning(
+                "%s gist for %s turn=%s dropped — think-stripping emptied it: %r",
+                _LOG_PREFIX, trigger_channel, trigger_turn_id, raw_gist[:120],
+            )
+            return False
+        # Inert construction only (I2) — no .process(), purely to reach
+        # gist_service for the upsert.
+        inert = MessageProcessor(ThreadGistConfig())
+        inert.gist_service.upsert(trigger_channel, trigger_turn_id, label)
+        return True
 
-    The gist delegate MP is internal (``ThreadGistConfig``), which has no
-    ``BROADCASTS_STATE`` and no ``type_value`` — it would silently drop any frame
-    through ``mp.push_websocket``. So the caller hands down the *trigger* thread's
-    own ``type_value()`` (the routing type the user's surface listens on) and we
-    build the frame with it, straight to ``Websocket.broadcast``. ``None`` means an
-    internal channel with no addressable frontend — nothing to poke."""
-    if trigger_type is None:
-        return
-    frame = TurnSignal(
-        status="updated",
-        turn_id=trigger_turn_id,
-        type=trigger_type,
-    )
-    Websocket.broadcast(frame)
+    @classmethod
+    def _run_gist_processor(
+        cls,
+        trigger_channel: str,
+        trigger_turn_id: int,
+        trigger_type: str | None,
+    ) -> None:
+        try:
+            gist = cls.generate_gist(trigger_channel, trigger_turn_id)
+            if gist and cls._persist_gist(trigger_channel, trigger_turn_id, gist):
+                cls._broadcast_updated(trigger_turn_id, trigger_type)
+        except Exception as exc:
+            logger.warning("%s processor failed: %s", _LOG_PREFIX, exc)
+
+    @classmethod
+    def _broadcast_updated(cls, trigger_turn_id: int, trigger_type: str | None) -> None:
+        """Emit a ``turn_signal {status: 'updated'}`` frame carrying the trigger
+        thread's routing identity so the frontend spine refetches its collapsed block.
+
+        The gist delegate MP is internal (``ThreadGistConfig``), which has no
+        ``BROADCASTS_STATE`` and no ``type_value`` — it would silently drop any frame
+        through ``mp.push_websocket``. So the caller hands down the *trigger* thread's
+        own ``type_value()`` (the routing type the user's surface listens on) and we
+        build the frame with it, straight to ``Websocket.broadcast``. ``None`` means an
+        internal channel with no addressable frontend — nothing to poke.
+        """
+        if trigger_type is None:
+            return
+        frame = TurnSignal(
+            status="updated",
+            turn_id=trigger_turn_id,
+            type=trigger_type,
+        )
+        Websocket.broadcast(frame)

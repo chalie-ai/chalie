@@ -1,11 +1,6 @@
 import pytest
 
-from abilities.bash import (
-    _check_destructive,
-    _classify_heuristic,
-    _has_recursive_flag,
-    _is_rm_rf,
-)
+from abilities.bash import BashAbility
 
 pytestmark = pytest.mark.unit
 
@@ -36,7 +31,7 @@ _BLOCKED = (
     ],
 )
 def test_has_recursive_flag_returns_true(tokens: list[str]) -> None:
-    assert _has_recursive_flag(tokens) is True
+    assert BashAbility._has_recursive_flag(tokens) is True
 
 
 @pytest.mark.parametrize(
@@ -52,7 +47,7 @@ def test_has_recursive_flag_returns_true(tokens: list[str]) -> None:
     ],
 )
 def test_has_recursive_flag_returns_false(tokens: list[str]) -> None:
-    assert _has_recursive_flag(tokens) is False
+    assert BashAbility._has_recursive_flag(tokens) is False
 
 
 # ---------------------------------------------------------------------------
@@ -75,7 +70,7 @@ def test_has_recursive_flag_returns_false(tokens: list[str]) -> None:
     ],
 )
 def test_is_rm_rf_returns_true(command: str) -> None:
-    assert _is_rm_rf(command) is True
+    assert BashAbility._is_rm_rf(command) is True
 
 
 @pytest.mark.parametrize(
@@ -95,7 +90,7 @@ def test_is_rm_rf_returns_true(command: str) -> None:
     ],
 )
 def test_is_rm_rf_returns_false(command: str) -> None:
-    assert _is_rm_rf(command) is False
+    assert BashAbility._is_rm_rf(command) is False
 
 
 # ---------------------------------------------------------------------------
@@ -122,7 +117,7 @@ def test_is_rm_rf_returns_false(command: str) -> None:
     ],
 )
 def test_classify_heuristic_returns_compound(command: str) -> None:
-    assert _classify_heuristic(command) == "compound"
+    assert BashAbility._classify_heuristic(command) == "compound"
 
 
 @pytest.mark.parametrize(
@@ -134,7 +129,7 @@ def test_classify_heuristic_returns_compound(command: str) -> None:
     ],
 )
 def test_classify_heuristic_quoted_operators_not_compound(command: str) -> None:
-    assert _classify_heuristic(command) is None
+    assert BashAbility._classify_heuristic(command) is None
 
 
 @pytest.mark.parametrize(
@@ -148,7 +143,7 @@ def test_classify_heuristic_quoted_operators_not_compound(command: str) -> None:
     ],
 )
 def test_classify_heuristic_returns_remote_execution(command: str) -> None:
-    assert _classify_heuristic(command) == "remote_execution"
+    assert BashAbility._classify_heuristic(command) == "remote_execution"
 
 
 @pytest.mark.parametrize(
@@ -161,7 +156,7 @@ def test_classify_heuristic_returns_remote_execution(command: str) -> None:
     ],
 )
 def test_classify_heuristic_returns_web_fetch(command: str) -> None:
-    assert _classify_heuristic(command) == "web_fetch"
+    assert BashAbility._classify_heuristic(command) == "web_fetch"
 
 
 @pytest.mark.parametrize(
@@ -179,7 +174,7 @@ def test_classify_heuristic_returns_web_fetch(command: str) -> None:
     ],
 )
 def test_classify_heuristic_returns_installation(command: str) -> None:
-    assert _classify_heuristic(command) == "installation"
+    assert BashAbility._classify_heuristic(command) == "installation"
 
 
 @pytest.mark.parametrize(
@@ -200,7 +195,7 @@ def test_classify_heuristic_returns_installation(command: str) -> None:
     ],
 )
 def test_classify_heuristic_returns_modify_file(command: str) -> None:
-    assert _classify_heuristic(command) == "modify_file"
+    assert BashAbility._classify_heuristic(command) == "modify_file"
 
 
 @pytest.mark.parametrize(
@@ -219,7 +214,7 @@ def test_classify_heuristic_returns_modify_file(command: str) -> None:
     ],
 )
 def test_classify_heuristic_returns_none(command: str) -> None:
-    assert _classify_heuristic(command) is None
+    assert BashAbility._classify_heuristic(command) is None
 
 
 # ---------------------------------------------------------------------------
@@ -253,7 +248,7 @@ def test_classify_heuristic_returns_none(command: str) -> None:
     ],
 )
 def test_check_destructive_returns_blocked(command: str) -> None:
-    assert _check_destructive(command) == _BLOCKED
+    assert BashAbility._check_destructive(command) == _BLOCKED
 
 
 @pytest.mark.parametrize(
@@ -270,4 +265,4 @@ def test_check_destructive_returns_blocked(command: str) -> None:
     ],
 )
 def test_check_destructive_returns_none(command: str) -> None:
-    assert _check_destructive(command) is None
+    assert BashAbility._check_destructive(command) is None

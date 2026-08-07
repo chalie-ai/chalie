@@ -20,7 +20,7 @@ from api.request import Request
 from api.request.policies import PolicyUpsertRequest
 from api.response.policies import PolicyResponse
 from api.response.response import Response
-from services.mcp_client_service import McpClientService, humanize_segment
+from services.mcp_client_service import McpClientService
 from services.policy_manager import PolicyManager
 
 logger = logging.getLogger(__name__)
@@ -75,5 +75,5 @@ class PoliciesEndpoint(Endpoint):
                 r["label"] = info["label"]
             else:
                 _base, _, action = r["permission"].partition(".")
-                r["label"] = humanize_segment(action or _base)
+                r["label"] = McpClientService.humanize_segment(action or _base)
         return rows

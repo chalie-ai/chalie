@@ -33,7 +33,7 @@ Native size-rejection signal — VERIFIED (google-genai 1.65.0):
   ``ResourceExhausted``); ``'429' in str(exc)`` is the reliable catch and is kept.
 
 Depends on: services.provider_api (contract), services.llm_service
-(_app_user_agent, _resolve_api_key).
+(LlmService.app_user_agent, LlmService.resolve_api_key).
 Consumed by: services.llm_clients.factory (platform dispatch).
 """
 
@@ -216,14 +216,14 @@ class GeminiClient(ProviderClient):
             )
 
     def _get_client(self, genai: "_Genai") -> "_GenaiClient":
-        from services.llm_service import _resolve_api_key, _app_user_agent  # noqa: PLC0415
+        from services.llm_service import LlmService  # noqa: PLC0415
         from services.provider_api import PROVIDER_CALL_TIMEOUT_S  # noqa: PLC0415
         return genai.Client(
-            api_key=_resolve_api_key(self._config),
+            api_key=LlmService.resolve_api_key(self._config),
             # HttpOptions.timeout is in milliseconds.
             http_options={
                 "timeout": PROVIDER_CALL_TIMEOUT_S * 1000,
-                "headers": {"User-Agent": _app_user_agent()},
+                "headers": {"User-Agent": LlmService.app_user_agent()},
             },
         )
 
@@ -464,8 +464,8 @@ class GeminiClient(ProviderClient):
             return self._cached_context_limit
         try:
             genai = self._get_sdk()
-            from services.llm_service import _resolve_api_key  # noqa: PLC0415
-            client = genai.Client(api_key=_resolve_api_key(self._config))
+            from services.llm_service import LlmService  # noqa: PLC0415
+            client = genai.Client(api_key=LlmService.resolve_api_key(self._config))
             model_info = client.models.get(model=self.model)
             reported = model_info.input_token_limit
         except Exception as exc:

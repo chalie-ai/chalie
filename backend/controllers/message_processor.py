@@ -848,7 +848,7 @@ class MessageProcessor:
             return
         try:
             if not self.gist_service.bulk_get(self.channel, [self.turn_id]):
-                from services.thread_gist_message_processor import maybe_ingest_gist  # noqa: PLC0415
-                maybe_ingest_gist(self.channel, self.turn_id, self.config.type_value())
+                from services.thread_gist_message_processor import ThreadGistMessageProcessor  # noqa: PLC0415
+                ThreadGistMessageProcessor.maybe_ingest_gist(self.channel, self.turn_id, self.config.type_value())
         except Exception as exc:  # noqa: BLE001 — gist ingest is best-effort context
             logger.debug("[MessageProcessor] gist ingest skipped for turn %s: %s", self.turn_id, exc)

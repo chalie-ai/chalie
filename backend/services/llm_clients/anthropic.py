@@ -14,7 +14,7 @@ it.  Confirmed via:
   → 413 True
 
 Depends on: services.provider_api (contract), services.llm_service
-(_app_user_agent, _resolve_api_key — utilities kept in llm_service during migration).
+(LlmService.app_user_agent, LlmService.resolve_api_key — utilities kept in llm_service during migration).
 Consumed by: services.llm_clients.factory (platform dispatch).
 """
 
@@ -162,12 +162,12 @@ class AnthropicClient(ProviderClient):
 
     def _get_client(self) -> "_anthropic_mod.Anthropic":
         import anthropic
-        from services.llm_service import _resolve_api_key, _app_user_agent  # noqa: PLC0415
+        from services.llm_service import LlmService  # noqa: PLC0415
         from services.provider_api import PROVIDER_CALL_TIMEOUT_S  # noqa: PLC0415
         return anthropic.Anthropic(
-            api_key=_resolve_api_key(self._config),
+            api_key=LlmService.resolve_api_key(self._config),
             timeout=PROVIDER_CALL_TIMEOUT_S,
-            default_headers={"User-Agent": _app_user_agent()},
+            default_headers={"User-Agent": LlmService.app_user_agent()},
         )
 
     def _thinking_native(self, level: ThinkingLevel, max_tokens: int) -> dict[str, object]:

@@ -76,41 +76,6 @@ _DESTRUCTIVE_PATTERNS: tuple[re.Pattern[str], ...] = (
 )
 
 
-def _has_recursive_flag(tokens: list[str]) -> bool:
-    for t in tokens[1:]:
-        if t == "--recursive":
-            return True
-        if t.startswith("-") and not t.startswith("--") and ("r" in t or "R" in t):
-            return True
-        if not t.startswith("-"):
-            break
-    return False
-
-
-def _is_rm_rf(command: str) -> bool:
-    try:
-        tokens = shlex.split(command)
-    except ValueError:
-        return False
-    if not tokens or tokens[0] != "rm":
-        return False
-    has_r = False
-    has_f = False
-    for t in tokens[1:]:
-        if t == "--recursive":
-            has_r = True
-        elif t == "--force":
-            has_f = True
-        elif t.startswith("-") and not t.startswith("--"):
-            if "r" in t or "R" in t:
-                has_r = True
-            if "f" in t:
-                has_f = True
-        elif not t.startswith("-"):
-            break
-    return has_r and has_f
-
-
 _SECRET_SUFFIXES: tuple[str, ...] = (
     "KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "PRIVATE",
 )
@@ -207,11 +172,11 @@ class BashAbility(Ability[BashParamsBag]):
         command = str(params.get(Keys.command) or "").strip()
         if not command:
             return _DEFAULT_ACTION
-        return _classify_heuristic(command) or _DEFAULT_ACTION
+        return self._classify_heuristic(command) or _DEFAULT_ACTION
 
     def run(self, params: BashParamsBag) -> ToolResult:
         command = params.command
-        destructive_error = _check_destructive(command)
+        destructive_error = self._check_destructive(command)
         if destructive_error:
             return ToolResult.err(
                 destructive_error,
@@ -219,180 +184,204 @@ class BashAbility(Ability[BashParamsBag]):
                 hint="this command is blocked outright; it cannot be run.",
             )
 
-        safe_env = _build_safe_env()
-        return _run_command(command, params.timeout_s, safe_env)
+        safe_env = self._build_safe_env()
+        return self._run_command(command, params.timeout_s, safe_env)
 
 
-# ── Classification ─────────────────────────────────────────────────────────
+    @staticmethod
+    def _has_recursive_flag(tokens: list[str]) -> bool:
+        for t in tokens[1:]:
+            if t == "--recursive":
+                return True
+            if t.startswith("-") and not t.startswith("--") and ("r" in t or "R" in t):
+                return True
+            if not t.startswith("-"):
+                break
+        return False
 
+    @staticmethod
+    def _is_rm_rf(command: str) -> bool:
+        try:
+            tokens = shlex.split(command)
+        except ValueError:
+            return False
+        if not tokens or tokens[0] != "rm":
+            return False
+        has_r = False
+        has_f = False
+        for t in tokens[1:]:
+            if t == "--recursive":
+                has_r = True
+            elif t == "--force":
+                has_f = True
+            elif t.startswith("-") and not t.startswith("--"):
+                if "r" in t or "R" in t:
+                    has_r = True
+                if "f" in t:
+                    has_f = True
+            elif not t.startswith("-"):
+                break
+        return has_r and has_f
 
-def _classify_heuristic(command: str) -> str | None:
-    for op in _COMPOUND_OPERATORS:
-        if _has_unquoted(command, op):
+    @staticmethod
+    def _classify_heuristic(command: str) -> str | None:
+        for op in _COMPOUND_OPERATORS:
+            if BashAbility._has_unquoted(command, op):
+                return "compound"
+
+        try:
+            tokens = shlex.split(command)
+        except ValueError:
             return "compound"
 
-    try:
-        tokens = shlex.split(command)
-    except ValueError:
-        return "compound"
+        if not tokens:
+            return None
 
-    if not tokens:
+        if tokens[0] in _COMPOUND_KEYWORDS:
+            return "compound"
+
+        first_word = tokens[0]
+        if first_word in _REMOTE_WORDS:
+            return "remote_execution"
+        if first_word in _WEB_FETCH_WORDS:
+            return "web_fetch"
+        if first_word in _INSTALL_WORDS:
+            return "installation"
+        if first_word == "rm" and BashAbility._has_recursive_flag(tokens):
+            return "compound"
+        if first_word in _FILE_MOD_WORDS:
+            return "modify_file"
+
+        if BashAbility._has_redirect(command):
+            return "modify_file"
+
         return None
 
-    if tokens[0] in _COMPOUND_KEYWORDS:
-        return "compound"
-
-    first_word = tokens[0]
-    if first_word in _REMOTE_WORDS:
-        return "remote_execution"
-    if first_word in _WEB_FETCH_WORDS:
-        return "web_fetch"
-    if first_word in _INSTALL_WORDS:
-        return "installation"
-    if first_word == "rm" and _has_recursive_flag(tokens):
-        return "compound"
-    if first_word in _FILE_MOD_WORDS:
-        return "modify_file"
-
-    if _has_redirect(command):
-        return "modify_file"
-
-    return None
-
-
-def _has_unquoted(command: str, needle: str) -> bool:
-    in_single = False
-    in_double = False
-    i = 0
-    while i < len(command) - len(needle) + 1:
-        ch = command[i]
-        if ch == "'" and not in_double:
-            in_single = not in_single
-        elif ch == '"' and not in_single:
-            in_double = not in_double
-        elif ch == "\\" and in_double and i + 1 < len(command):
+    @staticmethod
+    def _has_unquoted(command: str, needle: str) -> bool:
+        in_single = False
+        in_double = False
+        i = 0
+        while i < len(command) - len(needle) + 1:
+            ch = command[i]
+            if ch == "'" and not in_double:
+                in_single = not in_single
+            elif ch == '"' and not in_single:
+                in_double = not in_double
+            elif ch == "\\" and in_double and i + 1 < len(command):
+                i += 1
+            elif not in_single and not in_double:
+                if command[i:i + len(needle)] == needle:
+                    return True
             i += 1
-        elif not in_single and not in_double:
-            if command[i:i + len(needle)] == needle:
-                return True
-        i += 1
-    return False
+        return False
 
+    @staticmethod
+    def _has_redirect(command: str) -> bool:
+        return BashAbility._has_unquoted(command, ">")
 
-def _has_redirect(command: str) -> bool:
-    return _has_unquoted(command, ">")
-
-
-# ── Destructive detection ──────────────────────────────────────────────────
-
-
-def _check_destructive(command: str) -> str | None:
-    if _is_rm_rf(command):
-        return (
-            "BLOCKED: Destructive command pattern detected. "
-            "This command cannot be executed."
-        )
-    for pattern in _DESTRUCTIVE_PATTERNS:
-        if pattern.search(command):
+    @staticmethod
+    def _check_destructive(command: str) -> str | None:
+        if BashAbility._is_rm_rf(command):
             return (
                 "BLOCKED: Destructive command pattern detected. "
                 "This command cannot be executed."
             )
-    return None
+        for pattern in _DESTRUCTIVE_PATTERNS:
+            if pattern.search(command):
+                return (
+                    "BLOCKED: Destructive command pattern detected. "
+                    "This command cannot be executed."
+                )
+        return None
 
+    @staticmethod
+    def _run_command(command: str, timeout_s: int, env: dict[str, str]) -> ToolResult:
+        try:
+            proc = subprocess.run(
+                ["bash", "-c", command],
+                capture_output=True,
+                timeout=timeout_s,
+                cwd=str(_WORKING_DIR),
+                env=env,
+            )
+        except subprocess.TimeoutExpired:
+            return ToolResult.err(
+                f"Command timed out after {timeout_s}s and was killed.",
+                code="command-timeout",
+                hint="raise timeout_s (max 300) or run a shorter command.",
+            )
+        except OSError as exc:
+            return ToolResult.err(
+                f"Failed to execute command: {exc}",
+                code="exec-failed",
+            )
 
-# ── Subprocess execution ──────────────────────────────────────────────────
+        stdout_raw = proc.stdout or b""
+        stderr_raw = proc.stderr or b""
 
+        if BashAbility._is_binary(stdout_raw) or BashAbility._is_binary(stderr_raw):
+            return ToolResult.ok(
+                {
+                    "exit_code": proc.returncode,
+                    "stdout": f"(binary output, {len(stdout_raw)} bytes)",
+                    "stderr": f"(binary output, {len(stderr_raw)} bytes)" if stderr_raw else "",
+                    "binary": True,
+                },
+                total_bytes=len(stdout_raw) + len(stderr_raw),
+            )
 
-def _run_command(command: str, timeout_s: int, env: dict[str, str]) -> ToolResult:
-    try:
-        proc = subprocess.run(
-            ["bash", "-c", command],
-            capture_output=True,
-            timeout=timeout_s,
-            cwd=str(_WORKING_DIR),
-            env=env,
-        )
-    except subprocess.TimeoutExpired:
-        return ToolResult.err(
-            f"Command timed out after {timeout_s}s and was killed.",
-            code="command-timeout",
-            hint="raise timeout_s (max 300) or run a shorter command.",
-        )
-    except OSError as exc:
-        return ToolResult.err(
-            f"Failed to execute command: {exc}",
-            code="exec-failed",
-        )
+        stdout_str = stdout_raw.decode("utf-8", errors="replace")
+        stderr_str = stderr_raw.decode("utf-8", errors="replace")
 
-    stdout_raw = proc.stdout or b""
-    stderr_raw = proc.stderr or b""
+        # Clip combined output to the budget via the shared truncate primitive, giving
+        # stdout priority and reporting clipping uniformly through meta truncated=true.
+        truncated = False
+        stdout_str, clipped_out = truncate(stdout_str, _MAX_OUTPUT_CHARS)
+        if clipped_out:
+            truncated = True
+            stdout_str += _TRUNCATION_NOTICE
+            stderr_str = ""
+        else:
+            stderr_str, clipped_err = truncate(stderr_str, _MAX_OUTPUT_CHARS - len(stdout_str))
+            if clipped_err:
+                truncated = True
+                stderr_str += _TRUNCATION_NOTICE
 
-    if _is_binary(stdout_raw) or _is_binary(stderr_raw):
+        if not stdout_str and not stderr_str and proc.returncode == 0:
+            stdout_str = _EMPTY_SUCCESS_MSG
+
+        meta: "_TruncMeta" = {"truncated": True} if truncated else {}
         return ToolResult.ok(
             {
                 "exit_code": proc.returncode,
-                "stdout": f"(binary output, {len(stdout_raw)} bytes)",
-                "stderr": f"(binary output, {len(stderr_raw)} bytes)" if stderr_raw else "",
-                "binary": True,
+                "stdout": stdout_str,
+                "stderr": stderr_str,
             },
-            total_bytes=len(stdout_raw) + len(stderr_raw),
+            **meta,
         )
 
-    stdout_str = stdout_raw.decode("utf-8", errors="replace")
-    stderr_str = stderr_raw.decode("utf-8", errors="replace")
+    @staticmethod
+    def _is_binary(data: bytes) -> bool:
+        if not data:
+            return False
+        if b"\x00" in data:
+            return True
+        sample = data[:8192]
+        non_printable = sum(
+            1 for b in sample
+            if b < 0x20 and b not in (0x09, 0x0A, 0x0D)
+        )
+        return (non_printable / len(sample)) > _NONPRINTABLE_THRESHOLD
 
-    # Clip combined output to the budget via the shared truncate primitive, giving
-    # stdout priority and reporting clipping uniformly through meta truncated=true.
-    truncated = False
-    stdout_str, clipped_out = truncate(stdout_str, _MAX_OUTPUT_CHARS)
-    if clipped_out:
-        truncated = True
-        stdout_str += _TRUNCATION_NOTICE
-        stderr_str = ""
-    else:
-        stderr_str, clipped_err = truncate(stderr_str, _MAX_OUTPUT_CHARS - len(stdout_str))
-        if clipped_err:
-            truncated = True
-            stderr_str += _TRUNCATION_NOTICE
-
-    if not stdout_str and not stderr_str and proc.returncode == 0:
-        stdout_str = _EMPTY_SUCCESS_MSG
-
-    meta: "_TruncMeta" = {"truncated": True} if truncated else {}
-    return ToolResult.ok(
-        {
-            "exit_code": proc.returncode,
-            "stdout": stdout_str,
-            "stderr": stderr_str,
-        },
-        **meta,
-    )
-
-
-# ── Helpers ────────────────────────────────────────────────────────────────
-
-
-def _is_binary(data: bytes) -> bool:
-    if not data:
-        return False
-    if b"\x00" in data:
-        return True
-    sample = data[:8192]
-    non_printable = sum(
-        1 for b in sample
-        if b < 0x20 and b not in (0x09, 0x0A, 0x0D)
-    )
-    return (non_printable / len(sample)) > _NONPRINTABLE_THRESHOLD
-
-
-def _build_safe_env() -> dict[str, str]:
-    safe: dict[str, str] = {}
-    for key, value in os.environ.items():
-        upper = key.upper()
-        if any(upper.startswith(p) for p in _SECRET_PREFIXES):
-            continue
-        if any(upper.endswith(s) for s in _SECRET_SUFFIXES):
-            continue
-        safe[key] = value
-    return safe
+    @staticmethod
+    def _build_safe_env() -> dict[str, str]:
+        safe: dict[str, str] = {}
+        for key, value in os.environ.items():
+            upper = key.upper()
+            if any(upper.startswith(p) for p in _SECRET_PREFIXES):
+                continue
+            if any(upper.endswith(s) for s in _SECRET_SUFFIXES):
+                continue
+            safe[key] = value
+        return safe

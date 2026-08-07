@@ -10,7 +10,7 @@ for the on/off decision; only MEDIUM/HIGH/MAX enable the think flag at all,
 but whether it actually appears in the payload depends on the model.
 
 Depends on: services.provider_api (contract), services.llm_service
-(_app_user_agent).
+(LlmService.app_user_agent).
 Consumed by: services.llm_clients.factory (platform dispatch).
 """
 
@@ -170,8 +170,8 @@ class OllamaClient(ProviderClient):
         self._thinking_supported: Optional[bool] = None
 
     def _user_agent(self) -> dict[str, str]:
-        from services.llm_service import _app_user_agent  # noqa: PLC0415
-        return {"User-Agent": _app_user_agent()}
+        from services.llm_service import LlmService  # noqa: PLC0415
+        return {"User-Agent": LlmService.app_user_agent()}
 
     def _model_supports_thinking(self) -> bool:
         """Return True if the configured model advertises thinking capability.

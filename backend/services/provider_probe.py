@@ -341,8 +341,8 @@ def fetch_openai_compatible_models(
 
 
 def fetch_codex_models() -> tuple[list[dict[str, str | None]] | None, str | None]:
-    from services.llm_clients.codex_cli import list_codex_models  # noqa: PLC0415
-    models = list_codex_models()
+    from services.llm_clients.codex_cli import CodexCliClient  # noqa: PLC0415
+    models = CodexCliClient.list_codex_models()
     if not models:
         return None, "Codex CLI not initialised — install the codex CLI and run `codex login`"
     return models, None
@@ -462,7 +462,7 @@ def test_codex_provider(model: str, start: float) -> ProviderTestOutcome:
     import subprocess
     import time
 
-    from services.llm_clients.codex_cli import _codex_home
+    from services.llm_clients.codex_cli import CodexCliClient
     binary = os.environ.get("CODEX_BIN", "codex")
     try:
         proc = subprocess.run(
@@ -481,7 +481,7 @@ def test_codex_provider(model: str, start: float) -> ProviderTestOutcome:
             hint="Install the codex CLI and ensure it is on PATH",
         )
 
-    if not (_codex_home() / "auth.json").exists():
+    if not (CodexCliClient._codex_home() / "auth.json").exists():
         return ProviderTestOutcome(
             success=False,
             error="Codex CLI is not logged in",
