@@ -15,6 +15,8 @@ model is stubbed deterministically (same seam as test_memory_v3_recall.py).
 """
 
 import json
+import sqlite3
+from typing import TypeVar, cast
 
 import pytest
 
@@ -24,6 +26,7 @@ from abilities.save_graph import SaveGraph
 from abilities.save_map import SaveMap
 from abilities._result import ToolResult
 from contracts.params.delete_graph_params_bag import DeleteGraphParamsBag
+from contracts.params.param_bag import ParamBag
 from contracts.params.recall_params_bag import RecallParamsBag
 from contracts.params.save_graph_params_bag import SaveGraphParamsBag
 from contracts.params.save_map_params_bag import SaveMapParamsBag
@@ -61,16 +64,21 @@ def fixed_embedder(monkeypatch: pytest.MonkeyPatch) -> _FixedEmbedder:
 
 
 def _index(table: str, rowid: int) -> None:
-    SearchExpanderService()._process_row(table, rowid, config_for_table(table))
+    cfg = config_for_table(table)
+    assert cfg is not None
+    SearchExpanderService()._process_row(table, rowid, cfg)
 
 
-def _bag(bag_cls, params):
+_T = TypeVar("_T", bound=ParamBag)
+
+
+def _bag(bag_cls: type[_T], params: dict[str, object]) -> _T:
     bag = bag_cls.from_params(params)
     assert not isinstance(bag, ToolResult)
-    return bag
+    return cast("_T", bag)
 
 
-def test_save_graph_writes_subject_keyed_upsert(fixed_embedder, db) -> None:
+def test_save_graph_writes_subject_keyed_upsert(fixed_embedder: _FixedEmbedder, db: sqlite3.Connection) -> None:
     SaveGraph().run(_bag(SaveGraphParamsBag, {"subject": "user.residence", "contents": "Lisbon"}))
     row = MemoryGraphRow.by_subject("user.residence")
     assert row is not None and row.contents == "Lisbon"
@@ -82,7 +90,7 @@ def test_save_graph_writes_subject_keyed_upsert(fixed_embedder, db) -> None:
     assert rows[0].contents == "Porto"
 
 
-def test_save_map_computes_iteration_from_derived_parents(fixed_embedder, db) -> None:
+def test_save_map_computes_iteration_from_derived_parents(fixed_embedder: _FixedEmbedder, db: sqlite3.Connection) -> None:
     SaveMap().run(_bag(SaveMapParamsBag, {"contents": "first episode"}))
     first = MemoryMapRow.recent(limit=1)[0]
     assert first.iteration == 1
@@ -96,7 +104,7 @@ def test_save_map_computes_iteration_from_derived_parents(fixed_embedder, db) ->
     assert json.loads(derived.derived_from) == [first.id]
 
 
-def test_delete_graph_removes_a_fact(fixed_embedder, db) -> None:
+def test_delete_graph_removes_a_fact(fixed_embedder: _FixedEmbedder, db: sqlite3.Connection) -> None:
     SaveGraph().run(_bag(SaveGraphParamsBag, {"subject": "pet", "contents": "cat Tom"}))
     assert MemoryGraphRow.by_subject("pet") is not None
 
@@ -104,12 +112,13 @@ def test_delete_graph_removes_a_fact(fixed_embedder, db) -> None:
     assert MemoryGraphRow.by_subject("pet") is None
 
 
-def test_recall_tool_returns_readable_summary(fixed_embedder, db) -> None:
+def test_recall_tool_returns_readable_summary(fixed_embedder: _FixedEmbedder, db: sqlite3.Connection) -> None:
     SaveGraph().run(
         _bag(SaveGraphParamsBag, {"subject": "user.residence", "contents": "Lisbon"})
     )
     g = MemoryGraphRow.by_subject("user.residence")
-    assert g is not None and g.id is not None
+    assert g is not None
+    assert isinstance(g.id, int)
     _index("memory_graph", g.id)
 
     res = Recall().run(_bag(RecallParamsBag, {"query": "residence"}))

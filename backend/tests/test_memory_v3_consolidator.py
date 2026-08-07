@@ -95,7 +95,7 @@ def test_build_window_formats_rows_oldest_first(db: sqlite3.Connection) -> None:
 def test_build_window_truncates_at_budget(db: sqlite3.Connection) -> None:
     """A budget smaller than the corpus drops the newest overflow rows but keeps
     at least the oldest (the first row is always included)."""
-    big = [
+    big: list[tuple[int, str, str, str, str | None]] = [
         (i, "user", "y" * 80, "2026-01-01T09:00:00+00:00", None)
         for i in range(1, 30)
     ]

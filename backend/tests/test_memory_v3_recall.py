@@ -17,6 +17,7 @@ synchronous and deterministic.
 """
 
 import json
+import sqlite3
 
 import pytest
 
@@ -60,13 +61,15 @@ def fixed_embedder(monkeypatch: pytest.MonkeyPatch) -> _FixedEmbedder:
 
 def _index(table: str, rowid: int) -> None:
     """Drive the real SearchExpanderService indexing for one row, synchronously."""
-    SearchExpanderService()._process_row(table, rowid, config_for_table(table))
+    cfg = config_for_table(table)
+    assert cfg is not None
+    SearchExpanderService()._process_row(table, rowid, cfg)
 
 
-def test_graph_fts_lane_returns_subject_match(fixed_embedder, db) -> None:
+def test_graph_fts_lane_returns_subject_match(fixed_embedder: _FixedEmbedder, db: sqlite3.Connection) -> None:
     g = MemoryGraphRow(subject="user.residence", contents="Lisbon")
     g.save()
-    assert g.id is not None
+    assert isinstance(g.id, int)
     _index("memory_graph", g.id)
 
     result = MemoryV3RecallService().recall("residence", k_graph=3, k_map=0)
@@ -77,7 +80,7 @@ def test_graph_fts_lane_returns_subject_match(fixed_embedder, db) -> None:
 
 
 def test_map_vector_lane_excludes_retired_rows_and_ranks_by_iteration(
-    fixed_embedder, db
+    fixed_embedder: _FixedEmbedder, db: sqlite3.Connection
 ) -> None:
     # A has the HIGHEST iteration; if it weren't retired it would rank first.
     a = MemoryMapRow(contents="moved to Lisbon years ago", iteration=5)
@@ -90,7 +93,7 @@ def test_map_vector_lane_excludes_retired_rows_and_ranks_by_iteration(
     )
     c.save()
     for row in (a, b, c):
-        assert row.id is not None
+        assert isinstance(row.id, int)
         _index("memory_map", row.id)
 
     hits = MemoryV3RecallService().recall("Lisbon", k_graph=0, k_map=3)["map"]
@@ -103,6 +106,6 @@ def test_map_vector_lane_excludes_retired_rows_and_ranks_by_iteration(
     assert hits[0]["contents"] == "settled in Lisbon"
 
 
-def test_recall_returns_empty_on_miss_without_raising(fixed_embedder, db) -> None:
+def test_recall_returns_empty_on_miss_without_raising(fixed_embedder: _FixedEmbedder, db: sqlite3.Connection) -> None:
     result = MemoryV3RecallService().recall("nothing matches this query")
     assert result == {"graph": [], "map": []}
