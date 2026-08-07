@@ -106,16 +106,8 @@ class MoveAbility(Ability[MoveParamsBag]):
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(src), str(dst))
         except PermissionError as exc:
-            return ToolResult.err(
-                f"Permission denied moving {src}: {exc}",
-                code="permission-denied",
-                hint="you do not have the required permissions to move this item.",
-            )
+            return ToolResult.permission_denied("moving", src, exc, hint="you do not have the required permissions to move this item.")
         except OSError as exc:
-            return ToolResult.err(
-                f"Could not move {src}: {exc}",
-                code="invalid-path",
-                hint="check the path shape and that its parent can hold the destination.",
-            )
+            return ToolResult.path_os_error("move", src, exc, code="invalid-path", hint="check the path shape and that its parent can hold the destination.")
 
         return ToolResult.ok({"from": str(src), "to": str(dst), "moved": True})

@@ -6,8 +6,6 @@ import json
 import logging
 from typing import TYPE_CHECKING, cast
 
-import yaml
-
 from capabilities.base import AbstractCapability
 from capabilities.mail_capability.caldav_handler import CaldavHandler
 from capabilities.mail_capability.carddav_handler import CarddavHandler
@@ -66,8 +64,7 @@ _K_WATERMARK = _K_IMAP_WATERMARK  # alias used by MailCapability
 class MailCapability(AbstractCapability):
 
     def __init__(self) -> None:
-        super().__init__()
-        self._manifest_cache: dict[str, object] | None = None
+        super().__init__(_MANIFEST_PATH)
         self._imap_handler = ImapHandler()
         self._caldav_handler = CaldavHandler()
         self._carddav_handler = CarddavHandler()
@@ -82,12 +79,6 @@ class MailCapability(AbstractCapability):
 
     def get_id(self) -> str:
         return "mail"
-
-    def get_manifest(self) -> dict[str, object]:
-        if self._manifest_cache is None:
-            with open(_MANIFEST_PATH, "r", encoding="utf-8") as fh:
-                self._manifest_cache = yaml.safe_load(fh)
-        return self._manifest_cache
 
     # ------------------------------------------------------------------
     # Provider resolution

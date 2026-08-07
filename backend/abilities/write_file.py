@@ -123,17 +123,9 @@ class WriteFileAbility(Ability[WriteFileParamsBag]):
                 f.write(contents)
             bytes_written = target.stat().st_size
         except PermissionError as exc:
-            return ToolResult.err(
-                f"Permission denied writing to {target}: {exc}",
-                code="permission-denied",
-                hint=f"you do not have write access to {target} or its parent directory.",
-            )
+            return ToolResult.permission_denied("writing to", target, exc, hint=f"you do not have write access to {target} or its parent directory.")
         except OSError as exc:
-            return ToolResult.err(
-                f"Could not write to {target}: {exc}",
-                code="invalid-path",
-                hint="check the path shape and that its parent can hold a file.",
-            )
+            return ToolResult.path_os_error("write to", target, exc, code="invalid-path", hint="check the path shape and that its parent can hold a file.")
 
         return ToolResult.ok(
             {"path": str(target), "bytes": bytes_written, "created": not existed}

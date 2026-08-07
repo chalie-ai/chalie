@@ -119,17 +119,12 @@ class MakeDirAbility(Ability[MakeDirParamsBag]):
                 hint="choose a different path, or delete the existing one first.",
             )
         except PermissionError as exc:
-            return ToolResult.err(
-                f"Permission denied creating {target}: {exc}",
-                code="permission-denied",
-                hint=f"you do not have write access to {target.parent}.",
-            )
+            return ToolResult.permission_denied("creating", target, exc, hint=f"you do not have write access to {target.parent}.")
         except OSError as exc:
             # NotADirectoryError lands here: a path component is a file, so no
             # directory can be created below it.
-            return ToolResult.err(
-                f"Could not create {target}: {exc}",
-                code="invalid-path",
+            return ToolResult.path_os_error(
+                "create", target, exc, code="invalid-path",
                 hint="check the path shape and that its parent can hold a directory.",
             )
 

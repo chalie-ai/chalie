@@ -19,6 +19,9 @@ operations can succeed.
 
 import logging
 from abc import ABC, abstractmethod
+from pathlib import Path
+
+import yaml
 
 from models.tool_config import ToolConfig
 from exceptions import VaultLockedError
@@ -29,8 +32,10 @@ logger = logging.getLogger(__name__)
 class AbstractCapability(ABC):
     """Abstract base class that every capability plugin must subclass."""
 
-    def __init__(self) -> None:
+    def __init__(self, manifest_path: Path) -> None:
+        self._manifest_path = manifest_path
         self._connected: bool = False
+        self._manifest_cache: dict[str, object] | None = None
 
     # ------------------------------------------------------------------
     # Abstract interface — must be implemented by every subclass
@@ -38,10 +43,6 @@ class AbstractCapability(ABC):
 
     @abstractmethod
     def get_id(self) -> str:
-        ...
-
-    @abstractmethod
-    def get_manifest(self) -> dict[str, object]:
         ...
 
     @abstractmethod
@@ -99,6 +100,12 @@ class AbstractCapability(ABC):
     # ------------------------------------------------------------------
     # Concrete helpers — credential management & connection state
     # ------------------------------------------------------------------
+
+    def get_manifest(self) -> dict[str, object]:
+        if self._manifest_cache is None:
+            with open(self._manifest_path, encoding="utf-8") as fh:
+                self._manifest_cache = yaml.safe_load(fh)
+        return self._manifest_cache
 
     def store_credential(self, key: str, value: str) -> None:
         """Encrypt *value* with AES-256-GCM via VaultService and persist

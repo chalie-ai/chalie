@@ -105,11 +105,7 @@ class SetPermissionsAbility(Ability[SetPermissionsParamsBag]):
             return target
 
         if not target.exists():
-            return ToolResult.err(
-                f"No such file or directory: {target}",
-                code="not-found",
-                hint="pass an absolute path to an existing file or directory.",
-            )
+            return ToolResult.not_found(target)
 
         mode = self._parse_octal(params.permission_code)
         if mode is None:
@@ -122,27 +118,15 @@ class SetPermissionsAbility(Ability[SetPermissionsParamsBag]):
         try:
             before = target.stat().st_mode & 0o7777
         except PermissionError as exc:
-            return ToolResult.err(
-                f"Permission denied reading {target}: {exc}",
-                code="permission-denied",
-                hint=f"you do not own {target} or cannot stat it.",
-            )
+            return ToolResult.permission_denied("reading", target, exc, hint=f"you do not own {target} or cannot stat it.")
 
         try:
             os.chmod(target, mode)
             after = target.stat().st_mode & 0o7777
         except PermissionError as exc:
-            return ToolResult.err(
-                f"Permission denied changing {target}: {exc}",
-                code="permission-denied",
-                hint=f"you must own {target} to change its permissions.",
-            )
+            return ToolResult.permission_denied("changing", target, exc, hint=f"you must own {target} to change its permissions.")
         except OSError as exc:
-            return ToolResult.err(
-                f"Could not change permissions on {target}: {exc}",
-                code="invalid-param",
-                hint="check the path exists and is a regular file or directory.",
-            )
+            return ToolResult.path_os_error("change permissions on", target, exc, code="invalid-param", hint="check the path exists and is a regular file or directory.")
 
         return ToolResult.ok(
             {"path": str(target), "mode_octal": self._format_octal(after)},
