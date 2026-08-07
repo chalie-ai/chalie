@@ -189,6 +189,19 @@ class MemoryMapRow(Model):
             )
             return {}
 
+    @classmethod
+    def max_iteration(cls, ids: list[int]) -> int:
+        """Highest ``iteration`` among the given map ids (0 if none/missing).
+        ``save_map`` uses this to set a new row's iteration = max(parents) + 1."""
+        if not ids:
+            return 0
+        placeholders = ", ".join("?" for _ in ids)
+        row = cls._bound_connection().execute(
+            f"SELECT COALESCE(MAX(iteration), 0) FROM memory_map WHERE id IN ({placeholders})",
+            ids,
+        ).fetchone()
+        return int(row[0]) if row is not None else 0
+
     # ── Projection ────────────────────────────────────────────────────────
 
     def to_dict(self) -> dict[str, object]:

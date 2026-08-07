@@ -152,6 +152,16 @@ class MemoryGraphRow(Model):
             return []
 
     @classmethod
+    def delete_by_subject(cls, subject: str) -> int:
+        """Hard-delete the live row for ``subject``. Returns rows deleted (0/1).
+        FTS external-content postings are orphaned harmlessly — recall JOINs the
+        base table, so a dangling posting surfaces nothing."""
+        cur = cls._bound_connection().execute(
+            "DELETE FROM memory_graph WHERE subject = ?", (subject,)
+        )
+        return int(cur.rowcount or 0)
+
+    @classmethod
     def records_page(
         cls, q: str, limit: int, offset: int
     ) -> list[dict[str, object]]:
