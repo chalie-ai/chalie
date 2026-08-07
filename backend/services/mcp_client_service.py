@@ -134,7 +134,7 @@ class McpClientService:
         from mcp.shared._httpx_utils import create_mcp_http_client
 
         async with create_mcp_http_client(headers=headers) as client:
-            async with streamable_http_client(host, http_client=client) as (read, write):
+            async with streamable_http_client(host, http_client=client) as (read, write, _):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
                     result = await session.list_tools()
@@ -142,9 +142,7 @@ class McpClientService:
                         {
                             "name": t.name,
                             "description": t.description or "",
-                            "inputSchema": (
-                                t.input_schema if isinstance(t.input_schema, dict) else {}
-                            ),
+                            "inputSchema": t.inputSchema,
                         }
                         for t in result.tools
                     ]
@@ -165,7 +163,7 @@ class McpClientService:
         from mcp.shared._httpx_utils import create_mcp_http_client
 
         async with create_mcp_http_client(headers=headers) as client:
-            async with streamable_http_client(host, http_client=client) as (read, write):
+            async with streamable_http_client(host, http_client=client) as (read, write, _):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
                     return await session.call_tool(remote_tool, params)
