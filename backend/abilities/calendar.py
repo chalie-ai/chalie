@@ -227,7 +227,7 @@ class CalendarAbility(CapabilityAbility):
         # list_events: resolve the natural-language window to clean ISO before it
         # reaches the handler's parse_utc (which would sentinel an unparseable value).
         if action == "list_events":
-            err = _normalise_datetimes(handler_params, (Keys.date_from, Keys.date_to))
+            err = self._normalise_datetimes(handler_params, (Keys.date_from, Keys.date_to))
             if err is not None:
                 return err
             result = self._dispatch(action, handler_params)
@@ -247,86 +247,82 @@ class CalendarAbility(CapabilityAbility):
         # the base's connected gate, so a malformed dtstart errors loudly even when
         # CalDAV is not wired up — and a clean UTC ISO string is what reaches the
         # server. Live title→uid resolution happens in the handler.
-        err = _normalise_datetimes(handler_params, (Keys.dtstart, Keys.dtend))
+        err = self._normalise_datetimes(handler_params, (Keys.dtstart, Keys.dtend))
         if err is not None:
             return err
 
         if action in _TARGET_ADDRESSED_WRITES:
-            err = _require_target(handler_params)
+            err = self._require_target(handler_params)
             if err is not None:
                 return err
 
         return self._dispatch(action, handler_params)
 
+    # ── Datetime validation — the data-corruption fix ───────────────────────────
 
-# ---------------------------------------------------------------------------
-# Datetime validation — the data-corruption fix
-# ---------------------------------------------------------------------------
+    @staticmethod
+    def _parse_dt(value: str) -> datetime | None:
+        """Returns ``None`` when the string is unparseable — the caller maps ``None`` to
+        ``code=invalid-time`` and NEVER persists the ``parse_utc`` ``datetime.min``
+        sentinel.
+        """
+        import dateparser
+        from services.locale_service import LocaleService
 
-def _parse_dt(value: str) -> datetime | None:
-    """Returns ``None`` when the string is unparseable — the caller maps ``None`` to
-    ``code=invalid-time`` and NEVER persists the ``parse_utc`` ``datetime.min``
-    sentinel.
-    """
-    import dateparser
-    from services.locale_service import LocaleService
+        parsed = dateparser.parse(
+            value,
+            settings={
+                "TIMEZONE": LocaleService.get_timezone_name(),
+                "TO_TIMEZONE": "UTC",
+                "RETURN_AS_TIMEZONE_AWARE": True,
+                "RELATIVE_BASE": LocaleService.local_now(),
+                "PREFER_DATES_FROM": "future",
+            },
+        )
+        if parsed is None:
+            return None
+        return cast(datetime, parsed).astimezone(timezone.utc)
 
-    parsed = dateparser.parse(
-        value,
-        settings={
-            "TIMEZONE": LocaleService.get_timezone_name(),
-            "TO_TIMEZONE": "UTC",
-            "RETURN_AS_TIMEZONE_AWARE": True,
-            "RELATIVE_BASE": LocaleService.local_now(),
-            "PREFER_DATES_FROM": "future",
-        },
-    )
-    if parsed is None:
+    @staticmethod
+    def _normalise_datetimes(
+        params: dict[str, object], fields: tuple[str, ...]
+    ) -> ToolResult | None:
+        """Resolve any supplied ``fields`` (write endpoints or a list window) to clean
+        UTC ISO strings on ``params``. Returns an ``invalid-time`` ToolResult (and
+        leaves params untouched) when a value is present but unparseable — so the
+        CalDAV handler only ever sees a valid ISO string, never the datetime.min
+        sentinel."""
+        for field in fields:
+            raw = params.get(field)
+            if raw is None:
+                continue
+            text = str(raw).strip()
+            if not text:
+                continue
+            resolved = CalendarAbility._parse_dt(text)
+            if resolved is None:
+                return ToolResult.err(
+                    f"Could not understand the {field} {text!r}.",
+                    code="invalid-time",
+                    hint=f"pass a time like {_DT_EXAMPLES}.",
+                )
+            params[field] = resolved.isoformat()
         return None
-    return cast(datetime, parsed).astimezone(timezone.utc)
 
+    # ── Target addressing — uid OR title (title resolved live by the CalDAV handler) ──
 
-def _normalise_datetimes(
-    params: dict[str, object], fields: tuple[str, ...]
-) -> ToolResult | None:
-    """Resolve any supplied ``fields`` (write endpoints or a list window) to clean
-    UTC ISO strings on ``params``. Returns an ``invalid-time`` ToolResult (and
-    leaves params untouched) when a value is present but unparseable — so the
-    CalDAV handler only ever sees a valid ISO string, never the datetime.min
-    sentinel."""
-    for field in fields:
-        raw = params.get(field)
-        if raw is None:
-            continue
-        text = str(raw).strip()
-        if not text:
-            continue
-        resolved = _parse_dt(text)
-        if resolved is None:
-            return ToolResult.err(
-                f"Could not understand the {field} {text!r}.",
-                code="invalid-time",
-                hint=f"pass a time like {_DT_EXAMPLES}.",
-            )
-        params[field] = resolved.isoformat()
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Target addressing — uid OR title (title resolved live by the CalDAV handler)
-# ---------------------------------------------------------------------------
-
-def _require_target(params: dict[str, object]) -> ToolResult | None:
-    """update_event / delete_event must name an event by ``uid`` or ``title``.
-    Both pass through to the handler, which resolves a title to a unique uid over
-    the live CalDAV window (and reports ambiguity). Returns ``None`` when a target
-    is present."""
-    if (cast(str, params.get(Keys.uid)) or "").strip():
-        return None
-    if (cast(str, params.get(Keys.title_)) or "").strip():
-        return None
-    return ToolResult.err(
-        "uid or title is required to address the event.",
-        code="missing-target",
-        hint="pass the event's uid, or a title to match.",
-    )
+    @staticmethod
+    def _require_target(params: dict[str, object]) -> ToolResult | None:
+        """update_event / delete_event must name an event by ``uid`` or ``title``.
+        Both pass through to the handler, which resolves a title to a unique uid over
+        the live CalDAV window (and reports ambiguity). Returns ``None`` when a target
+        is present."""
+        if (cast(str, params.get(Keys.uid)) or "").strip():
+            return None
+        if (cast(str, params.get(Keys.title_)) or "").strip():
+            return None
+        return ToolResult.err(
+            "uid or title is required to address the event.",
+            code="missing-target",
+            hint="pass the event's uid, or a title to match.",
+        )

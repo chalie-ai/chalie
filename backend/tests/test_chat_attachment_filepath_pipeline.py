@@ -27,7 +27,7 @@ from unittest.mock import patch
 import pytest
 
 from api.dto.attachment import Attachment
-from services.turn_serializer_service import _fetch_attachments_for_transcripts
+from services.turn_serializer_service import get_service as _serializer
 from configs.channels import UserConfig
 from controllers.message_processor import MessageProcessor
 from models.tool_call import ToolCall
@@ -139,7 +139,7 @@ def test_text_attachment_lands_in_uploads_indexed_linked_and_previewable(
     assert str(saved) in FileIndexService().search("Valletta")
 
     # the turn serializer projects it into the attachment pill the FE renders.
-    by_id = _fetch_attachments_for_transcripts(db_conn, [uid])
+    by_id = _serializer()._fetch_attachments_for_transcripts(db_conn, [uid])
     assert by_id[uid] == [{
         "filename": "brief.txt",
         "mime_type": "text/plain",
@@ -171,7 +171,7 @@ def test_deleted_attachment_file_is_omitted_from_the_pill_list(
     assert saved.is_file()
     saved.unlink()
 
-    by_id = _fetch_attachments_for_transcripts(db, [uid])
+    by_id = _serializer()._fetch_attachments_for_transcripts(db, [uid])
     assert by_id == {}
 
 

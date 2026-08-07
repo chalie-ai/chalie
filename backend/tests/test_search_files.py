@@ -196,13 +196,13 @@ def test_cache_serves_later_pages_without_rewalking(tmp_path: Path) -> None:
     assert len(_grep_rows(p2)) == 5
 
     root = Path(str(tmp_path)).resolve()
-    assert os.path.exists(search_files._cache_path("grep", "hit", 0, root))
+    assert os.path.exists(SearchFilesAbility._cache_path("grep", "hit", 0, root))
 
 
 def test_stale_cache_is_discarded_and_rebuilt(tmp_path: Path) -> None:
     (tmp_path / "log.txt").write_text("hit one\n")
     _run("grep", "hit", str(tmp_path), context_lines=0)  # writes cache (1 row)
-    cache_file = search_files._cache_path("grep", "hit", 0, Path(str(tmp_path)).resolve())
+    cache_file = SearchFilesAbility._cache_path("grep", "hit", 0, Path(str(tmp_path)).resolve())
     assert os.path.exists(cache_file)
 
     # age the cache past its 10-minute TTL, then grow the tree
@@ -218,12 +218,12 @@ def test_stale_cache_is_discarded_and_rebuilt(tmp_path: Path) -> None:
 
 
 def test_skip_prunes_special_filesystem_prefixes() -> None:
-    assert search_files._skip("/proc")
-    assert search_files._skip("/proc/123/maps")
-    assert search_files._skip("/sys/kernel")
-    assert search_files._skip("/dev/null")
-    assert not search_files._skip("/home/user/proc_notes")  # substring, not a prefix
-    assert not search_files._skip("/etc/hosts")
+    assert SearchFilesAbility._skip("/proc")
+    assert SearchFilesAbility._skip("/proc/123/maps")
+    assert SearchFilesAbility._skip("/sys/kernel")
+    assert SearchFilesAbility._skip("/dev/null")
+    assert not SearchFilesAbility._skip("/home/user/proc_notes")  # substring, not a prefix
+    assert not SearchFilesAbility._skip("/etc/hosts")
 
 
 def test_grep_skips_non_regular_files_without_hanging(tmp_path: Path) -> None:

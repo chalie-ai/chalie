@@ -216,7 +216,7 @@ class EmailAbility(CapabilityAbility):
         action = self._resolve_action(params)
 
         if action in _RECIPIENT_ACTIONS:
-            err = _validate_recipient(params.extra)
+            err = self._validate_recipient(params.extra)
             if err is not None:
                 return err
 
@@ -226,110 +226,109 @@ class EmailAbility(CapabilityAbility):
             # canonical code from the base — surface them untouched.
             return result
         if action in _SEND_ACTIONS and "error" not in result.body:
-            _record_sent(result.body)
-        return _shape_result(action, result.body)
+            self._record_sent(result.body)
+        return self._shape_result(action, result.body)
+
+    # ── Result shaping — a trimmed, model-friendly body per action family ───────
+
+    @staticmethod
+    def _shape_result(action: str, body: dict[str, object]) -> ToolResult:
+        """Reshape a successful handler dict into the contract body for *action*.
+
+        A handler that surfaced its own ``error`` key (a backend failure, NOT a bad
+        input) is passed through as the success body unchanged — the contract
+        reserves ``err()`` for anticipated input failures; the dispatcher wraps
+        the unexpected."""
+        if "error" in body:
+            return ToolResult.ok(body, action=action)
+
+        if action == "search":
+            handler_rows = cast(list[dict[str, object]], body.get("emails", []))
+            own_ids = EmailSent.sent_ids(
+                str(e["message_id"]) for e in handler_rows if e.get("message_id")
+            )
+            rows: list[dict[str, object]] = []
+            for e in handler_rows:
+                row: dict[str, object] = {
+                    "id": e.get("uid"),
+                    "from": e.get("from_name") or e.get("from_addr", ""),
+                    "subject": e.get("subject", ""),
+                    "date": e.get("date", ""),
+                }
+                if str(e.get("message_id") or "") in own_ids:
+                    row["real-sender"] = _REAL_SENDER_NOTE
+                rows.append(row)
+            query = body.get("query", {})
+            if not rows:
+                return ToolResult.no_results(
+                    action=action,
+                    hint=f"no emails matched {json.dumps(query, ensure_ascii=False)}.",
+                )
+            return ToolResult.ok({"emails": rows, "query": query}, action=action, count=len(rows))
+
+        if action == "read":
+            # Body only: the model supplied the uid, so it already holds the
+            # from/subject/date metadata from the search it just ran.
+            clipped, truncated = truncate(str(body.get("body", "")), _READ_BODY_LIMIT)
+            message_id = str(body.get("message_id") or "")
+            if message_id and message_id in EmailSent.sent_ids((message_id,)):
+                return ToolResult.ok(
+                    clipped,
+                    action=action,
+                    truncated=truncated,
+                    real_sender=_REAL_SENDER_NOTE,
+                )
+            return ToolResult.ok(clipped, action=action, truncated=truncated)
+
+        if action in _RECIPIENT_ACTIONS or action == "reply":
+            # to/subject only: the stamped Message-ID is emails_sent ledger
+            # bookkeeping, not part of the model-facing contract.
+            return ToolResult.ok(
+                {"to": body.get("to", ""), "subject": body.get("subject", "")},
+                action=action,
+            )
+
+        # manage and any future read-only action: echo the handler body.
+        return ToolResult.ok(body, action=action)
+
+    @staticmethod
+    def _record_sent(body: dict[str, object]) -> None:
+        """Write the stamped Message-ID of a transmitted send to the emails_sent ledger.
+
+        Deliberate exception to loud failures: by the time this runs the email has
+        already left the SMTP server, so surfacing a ledger error would report a
+        delivered send as failed — and the model's natural correction is to send
+        again (the duplicate-send incident the ledger exists to prevent). Log the
+        failure loudly; keep the success."""
+        message_id = str(body.get("message_id") or "")
+        if not message_id:
+            return
+        try:
+            EmailSent.record(message_id)
+        except Exception:
+            logger.exception(
+                "%s emails_sent ledger write failed for %s", LOG_PREFIX, message_id
+            )
+
+    @staticmethod
+    def _validate_recipient(params: dict[str, object]) -> ToolResult | None:
+        """Runs ahead of the base's connected gate so the error fires regardless of SMTP state."""
+        to = cast(str, params.get(Keys.to) or "").strip()
+        if not to:
+            return None
+        if not re.match(_RECIPIENT_RE, to):
+            return ToolResult.err(
+                f"{to!r} does not look like an email address.",
+                code="invalid-recipient",
+                hint="pass a recipient like 'name@example.com'.",
+            )
+        return None
 
 
 # ---------------------------------------------------------------------------
-# Result shaping — a trimmed, model-friendly body per action family
+# Constants — kept at module level for test imports
 # ---------------------------------------------------------------------------
 
 # Cap on the read body so a giant email cannot blow the context window; the
 # shared truncate primitive reports the clip as meta truncated=true.
 _READ_BODY_LIMIT = 20_000
-
-
-def _shape_result(action: str, body: dict[str, object]) -> ToolResult:
-    """Reshape a successful handler dict into the contract body for *action*.
-
-    A handler that surfaced its own ``error`` key (a backend failure, NOT a bad
-    input) is passed through as the success body unchanged — the contract reserves
-    ``err()`` for anticipated input failures; the dispatcher wraps the unexpected."""
-    if "error" in body:
-        return ToolResult.ok(body, action=action)
-
-    if action == "search":
-        handler_rows = cast(list[dict[str, object]], body.get("emails", []))
-        own_ids = EmailSent.sent_ids(
-            str(e["message_id"]) for e in handler_rows if e.get("message_id")
-        )
-        rows: list[dict[str, object]] = []
-        for e in handler_rows:
-            row: dict[str, object] = {
-                "id": e.get("uid"),
-                "from": e.get("from_name") or e.get("from_addr", ""),
-                "subject": e.get("subject", ""),
-                "date": e.get("date", ""),
-            }
-            if str(e.get("message_id") or "") in own_ids:
-                row["real-sender"] = _REAL_SENDER_NOTE
-            rows.append(row)
-        query = body.get("query", {})
-        if not rows:
-            return ToolResult.no_results(
-                action=action,
-                hint=f"no emails matched {json.dumps(query, ensure_ascii=False)}.",
-            )
-        return ToolResult.ok({"emails": rows, "query": query}, action=action, count=len(rows))
-
-    if action == "read":
-        # Body only: the model supplied the uid, so it already holds the
-        # from/subject/date metadata from the search it just ran.
-        clipped, truncated = truncate(str(body.get("body", "")), _READ_BODY_LIMIT)
-        message_id = str(body.get("message_id") or "")
-        if message_id and message_id in EmailSent.sent_ids((message_id,)):
-            return ToolResult.ok(
-                clipped,
-                action=action,
-                truncated=truncated,
-                real_sender=_REAL_SENDER_NOTE,
-            )
-        return ToolResult.ok(clipped, action=action, truncated=truncated)
-
-    if action in _RECIPIENT_ACTIONS or action == "reply":
-        # to/subject only: the stamped Message-ID is emails_sent ledger
-        # bookkeeping, not part of the model-facing contract.
-        return ToolResult.ok(
-            {"to": body.get("to", ""), "subject": body.get("subject", "")},
-            action=action,
-        )
-
-    # manage and any future read-only action: echo the handler body.
-    return ToolResult.ok(body, action=action)
-
-
-def _record_sent(body: dict[str, object]) -> None:
-    """Write the stamped Message-ID of a transmitted send to the emails_sent ledger.
-
-    Deliberate exception to loud failures: by the time this runs the email has
-    already left the SMTP server, so surfacing a ledger error would report a
-    delivered send as failed — and the model's natural correction is to send
-    again (the duplicate-send incident the ledger exists to prevent). Log the
-    failure loudly; keep the success."""
-    message_id = str(body.get("message_id") or "")
-    if not message_id:
-        return
-    try:
-        EmailSent.record(message_id)
-    except Exception:
-        logger.exception(
-            "%s emails_sent ledger write failed for %s", LOG_PREFIX, message_id
-        )
-
-
-# ---------------------------------------------------------------------------
-# Guardrail — recipient shape validated pre-send
-# ---------------------------------------------------------------------------
-
-def _validate_recipient(params: dict[str, object]) -> ToolResult | None:
-    """Runs ahead of the base's connected gate so the error fires regardless of SMTP state."""
-    to = cast(str, params.get(Keys.to) or "").strip()
-    if not to:
-        return None
-    if not re.match(_RECIPIENT_RE, to):
-        return ToolResult.err(
-            f"{to!r} does not look like an email address.",
-            code="invalid-recipient",
-            hint="pass a recipient like 'name@example.com'.",
-        )
-    return None
