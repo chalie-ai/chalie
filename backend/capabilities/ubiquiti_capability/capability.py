@@ -5,8 +5,6 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, cast
 
-import yaml
-
 from capabilities.base import AbstractCapability
 from capabilities.ubiquiti_capability import unifi_rest_handler as rest
 from services.file_mapper_service import FileMapperService
@@ -36,8 +34,7 @@ _K_VERIFY_SSL = "ubiquiti:verify_ssl"
 class UbiquitiCapability(AbstractCapability):
 
     def __init__(self) -> None:
-        super().__init__()
-        self._manifest_cache: dict[str, object] | None = None
+        super().__init__(_MANIFEST_PATH)
         self._url: str = ""
         self._auth_method: str = "api_key"
         self._api_key: str | None = None
@@ -50,12 +47,6 @@ class UbiquitiCapability(AbstractCapability):
 
     def get_id(self) -> str:
         return "ubiquiti"
-
-    def get_manifest(self) -> dict[str, object]:
-        if self._manifest_cache is None:
-            with open(_MANIFEST_PATH, encoding="utf-8") as fh:
-                self._manifest_cache = cast(dict[str, object], yaml.safe_load(fh))
-        return self._manifest_cache
 
     # ── Auth helpers ─────────────────────────────────────────────────
 

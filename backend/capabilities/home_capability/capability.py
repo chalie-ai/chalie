@@ -3,8 +3,6 @@ from __future__ import annotations
 import logging
 from typing import cast
 
-import yaml
-
 from capabilities.base import AbstractCapability
 from capabilities.home_capability import ha_rest_handler as rest
 from capabilities.home_capability.ha_ws_handler import HaWebSocketHandler
@@ -24,8 +22,7 @@ _K_VERIFY_SSL = "home:verify_ssl"
 class HomeCapability(AbstractCapability):
 
     def __init__(self) -> None:
-        super().__init__()
-        self._manifest_cache: dict[str, object] | None = None
+        super().__init__(_MANIFEST_PATH)
         self._ws_handler = HaWebSocketHandler(on_event=self._on_ha_event)
         self._url: str = ""
         self._token: str = ""
@@ -48,12 +45,6 @@ class HomeCapability(AbstractCapability):
 
     def get_id(self) -> str:
         return "home"
-
-    def get_manifest(self) -> dict[str, object]:
-        if self._manifest_cache is None:
-            with open(_MANIFEST_PATH, encoding="utf-8") as fh:
-                self._manifest_cache = yaml.safe_load(fh)
-        return self._manifest_cache
 
     # ── Lifecycle ────────────────────────────────────────────────────
 
