@@ -73,6 +73,11 @@ if TYPE_CHECKING:
     class _SuperEpisodeConfig(Protocol):
         _sources: list[object]
 
+    class _MemoryConsolidatorConfig(Protocol):
+        _compaction: str
+        _window: str
+        _prior_map: str
+
 logger = logging.getLogger(__name__)
 
 _CHANNEL_USER = Channel.USER
@@ -94,6 +99,7 @@ _CHANNEL_SUPER_EPISODE = Channel.SUPER_EPISODE_ENCODER
 _CHANNEL_GEO_PATTERN = Channel.GEO_PATTERN
 _CHANNEL_DMN = Channel.DMN
 _CHANNEL_EPISODE_ENCODER = Channel.EPISODE_ENCODER
+_CHANNEL_MEMORY_CONSOLIDATOR = Channel.MEMORY_CONSOLIDATOR
 
 _USER_DEFINITION_FALLBACK = (
     "The user is a real human. Treat this conversation as peer-to-peer dialogue."
@@ -233,6 +239,8 @@ class PromptService:
             return self._external_agent_prompt()
         if channel == _CHANNEL_SUPER_EPISODE:
             return self._super_episode_prompt()
+        if channel == _CHANNEL_MEMORY_CONSOLIDATOR:
+            return self._memory_consolidator_prompt()
         if channel == _CHANNEL_GEO_PATTERN:
             return self._geo_pattern_prompt()
         if channel == _CHANNEL_DMN:
@@ -749,6 +757,26 @@ class PromptService:
             for e in config._sources
         )
         return f"Source episodes:\n\n{src}"
+
+    def _memory_consolidator_prompt(self) -> str:
+        """The consolidator's self-contained input window: prior compaction (if
+        any), the turn's transcript rows, then any map rows previously written
+        for this turn (re-fire lineage). All carried on the config."""
+        config = cast("_MemoryConsolidatorConfig", self.mp.config)
+        parts: list[str] = []
+        if config._compaction:
+            parts.append(f"Prior compaction:\n{config._compaction}")
+            parts.append("")
+        parts.append("Transcript window — each line is `[id] role: content`:")
+        parts.append("")
+        parts.append(config._window)
+        if config._prior_map:
+            parts.append("")
+            parts.append(
+                "Map rows you previously wrote for this turn (derive/retire as needed):"
+            )
+            parts.append(config._prior_map)
+        return "\n".join(parts)
 
     # ── EpisodeEncoderConfig (channel="episode_encoder") ─────────────────────
 

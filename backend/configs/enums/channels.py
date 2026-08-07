@@ -45,6 +45,9 @@ class Channel(str, Enum):
     FACT_EXTRACTION = "fact_extraction"
     COMPACTION      = "compaction"
 
+    # ── Memory v3 ─────────────────────────────────────────────────────────────
+    MEMORY_CONSOLIDATOR = "memory_consolidator"
+
     # ── Delegates (tool-driven sub-loops) ────────────────────────────────────
     DELEGATE_PIM        = "delegate:pim"
     DELEGATE_THREAD_GIST = "delegate:thread_gist"

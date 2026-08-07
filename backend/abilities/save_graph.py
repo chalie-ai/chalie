@@ -7,6 +7,7 @@ recalls; it never writes memory.
 
 from __future__ import annotations
 
+import json
 from typing import ClassVar
 
 from abilities._ability import Ability
@@ -14,6 +15,15 @@ from abilities._result import ToolResult
 from contracts.params.param_bag import ParamBag
 from contracts.params.save_graph_params_bag import SaveGraphParamsBag
 from models.memory_graph import MemoryGraphRow
+
+
+def _source_transcript_ids(mp: object) -> list[int]:
+    """Provenance transcript ids the consolidator stamps on its writes, carried
+    on the invoking processor's config (``_source_transcript_ids``). Empty for
+    non-consolidator callers (e.g. build-time introspection)."""
+    cfg = getattr(mp, "config", None) if mp is not None else None
+    ids = getattr(cfg, "_source_transcript_ids", None)
+    return list(ids) if ids else []
 
 
 class SaveGraph(Ability[SaveGraphParamsBag]):
@@ -54,5 +64,9 @@ class SaveGraph(Ability[SaveGraphParamsBag]):
         return self._PARAMETERS
 
     def run(self, params: SaveGraphParamsBag) -> ToolResult:
-        MemoryGraphRow(subject=params.subject, contents=params.contents).save()
+        row = MemoryGraphRow(subject=params.subject, contents=params.contents)
+        ids = _source_transcript_ids(self.mp)
+        if ids:
+            row.sourced_from = json.dumps(ids)
+        row.save()
         return ToolResult.ok({"subject": params.subject, "saved": 1})

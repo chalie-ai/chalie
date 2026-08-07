@@ -12,6 +12,7 @@ from typing import ClassVar
 
 from abilities._ability import Ability
 from abilities._result import ToolResult
+from abilities.save_graph import _source_transcript_ids
 from contracts.params.param_bag import ParamBag
 from contracts.params.save_map_params_bag import SaveMapParamsBag
 from models.memory_map import MemoryMapRow
@@ -56,11 +57,15 @@ class SaveMap(Ability[SaveMapParamsBag]):
     def run(self, params: SaveMapParamsBag) -> ToolResult:
         derived = list(params.derived_from)
         iteration = MemoryMapRow.max_iteration(derived) + 1 if derived else 1
-        MemoryMapRow(
+        row = MemoryMapRow(
             contents=params.contents,
             derived_from=json.dumps(derived) if derived else "[]",
             iteration=iteration,
-        ).save()
+        )
+        ids = _source_transcript_ids(self.mp)
+        if ids:
+            row.sourced_from = json.dumps(ids)
+        row.save()
         return ToolResult.ok(
             {"saved": 1, "iteration": iteration, "derived_from": derived}
         )
