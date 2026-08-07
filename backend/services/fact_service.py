@@ -43,121 +43,6 @@ _lut_lock = threading.Lock()
 _lut_loaded = False
 
 
-def _l2_dist_to_cosine(distance: float) -> float:
-    """sqlite-vec returns squared L2 for unit-norm vectors: cos = 1 - dist^2/2."""
-    return max(0.0, 1.0 - (distance ** 2 / 2.0))
-
-
-def _get_lut_conn() -> sqlite3.Connection | None:
-    """Read-only sqlite connection to the concept LUT, loaded once (double-checked
-    lock). Returns None when the asset is absent or fails to open — the store path
-    then treats every key as a LUT miss rather than crashing."""
-    global _lut_conn, _lut_loaded
-    if _lut_loaded:
-        return _lut_conn
-    with _lut_lock:
-        if _lut_loaded:
-            return _lut_conn
-        if not os.path.exists(_CONCEPT_LUT_PATH):
-            logger.warning("[FACTS] concept_lut.sqlite not found at %s", _CONCEPT_LUT_PATH)
-            _lut_loaded = True
-            return None
-        try:
-            conn = sqlite3.connect(
-                f"file:{_CONCEPT_LUT_PATH}?mode=ro", uri=True, check_same_thread=False
-            )
-            conn.row_factory = sqlite3.Row
-            conn.enable_load_extension(True)
-            try:
-                import sqlite_vec
-                sqlite_vec.load(conn)
-            except Exception:
-                conn.load_extension("vec0")
-            count = conn.execute("SELECT count(*) FROM lut_concepts").fetchone()[0]
-            logger.info("[FACTS] LUT loaded: %s (concepts=%d)", _CONCEPT_LUT_PATH, count)
-            _lut_conn = conn
-        except Exception as exc:
-            logger.warning("[FACTS] Failed to open concept LUT: %s", exc)
-            _lut_conn = None
-        _lut_loaded = True
-        return _lut_conn
-
-
-def _lookup_concept_lut(key_embedding: list[float] | None) -> dict[str, object] | None:
-    """KNN a key embedding against the concept LUT; return
-    ``{canonical_key, rule, cos}`` for the nearest concept, or None when the LUT
-    is unavailable, the embedding is unusable, or the top match is below the
-    cosine threshold (a LUT miss)."""
-    lut = _get_lut_conn()
-    if lut is None:
-        return None
-    blob = pack_embedding(key_embedding)
-    if blob is None:
-        return None
-    try:
-        hits = lut.execute(
-            "SELECT rowid, distance FROM lut_embeddings "
-            "WHERE embedding MATCH ? AND k = ? ORDER BY distance",
-            (blob, _LUT_K),
-        ).fetchall()
-    except Exception as exc:
-        logger.debug("[FACTS] LUT KNN failed: %s", exc)
-        return None
-    if not hits:
-        return None
-    rowid, distance = hits[0]
-    cos = _l2_dist_to_cosine(distance)
-    if cos < _CONCEPT_LUT_THRESHOLD:
-        return None
-    row = lut.execute(
-        "SELECT canonical_key, rule FROM lut_concepts WHERE id = ?", (rowid,)
-    ).fetchone()
-    if row is None:
-        return None
-    return {"canonical_key": row[0], "rule": row[1], "cos": cos}
-
-
-def _get_lut_miss_top_cos(key_embedding: list[float] | None) -> float:
-    """Top cosine from the LUT KNN even when below threshold — the miss-logging
-    signal (how close the miss was to a canonical concept)."""
-    lut = _get_lut_conn()
-    if lut is None or key_embedding is None:
-        return 0.0
-    blob = pack_embedding(key_embedding)
-    if blob is None:
-        return 0.0
-    try:
-        hits = lut.execute(
-            "SELECT rowid, distance FROM lut_embeddings "
-            "WHERE embedding MATCH ? AND k = 1 ORDER BY distance",
-            (blob,),
-        ).fetchall()
-        if hits:
-            return _l2_dist_to_cosine(hits[0][1])
-    except Exception:
-        pass
-    return 0.0
-
-
-def _record_lut_miss(kind: str, key: str, value: str, top_cos: float) -> None:
-    """Log a LUT miss and upsert a monitoring row into ``concept_lut_misses``
-    (repeat misses bump ``count``). Best-effort: a write failure is logged at
-    debug and never breaks the store."""
-    logger.info("[FACTS] LUT miss: kind=%s key='%s' top_cos=%.4f", kind, key, top_cos)
-    now_iso = utc_now().isoformat()
-    value_preview = (value or "")[:100]
-    try:
-        from services.database import Database
-        Database.conn().execute(
-            "INSERT INTO concept_lut_misses(kind, key, value_preview, first_seen, last_seen) "
-            "VALUES (?, ?, ?, ?, ?) "
-            "ON CONFLICT(kind, key) DO UPDATE SET count=count+1, last_seen=excluded.last_seen",
-            (kind, key, value_preview, now_iso, now_iso),
-        )
-    except Exception as exc:
-        logger.debug("[FACTS] concept_lut_misses upsert failed: %s", exc)
-
-
 class FactService:
     """Store, forget, read and decay the FACTS (user_specific) lane."""
 
@@ -196,11 +81,11 @@ class FactService:
 
         from services.embedding_service import get_embedding_service
         key_embedding = get_embedding_service().generate_embedding(key)  # RAISES → fail loud
-        hit = _lookup_concept_lut(key_embedding)
+        hit = self._lookup_concept_lut(key_embedding)
 
         if hit is None:
-            top_cos = _get_lut_miss_top_cos(key_embedding)
-            _record_lut_miss(FactRow.KIND, key, value, top_cos)
+            top_cos = self._get_lut_miss_top_cos(key_embedding)
+            self._record_lut_miss(FactRow.KIND, key, value, top_cos)
             row = FactRow.store(key, value, source=source)[0]
             return self._store_envelope("lut_miss_created", key, key, value, None, None, None, row)
 
@@ -247,6 +132,121 @@ class FactService:
     def decay(self) -> int:
         """Off-turn Decayable entry point: power-law rw-decay of live FACTS."""
         return FactRow.decay()
+
+    @staticmethod
+    def _l2_dist_to_cosine(distance: float) -> float:
+        """sqlite-vec returns squared L2 for unit-norm vectors: cos = 1 - dist^2/2."""
+        return max(0.0, 1.0 - (distance ** 2 / 2.0))
+
+    @staticmethod
+    def _get_lut_conn() -> sqlite3.Connection | None:
+        """Read-only sqlite connection to the concept LUT, loaded once (double-checked
+        lock). Returns None when the asset is absent or fails to open — the store path
+        then treats every key as a LUT miss rather than crashing."""
+        global _lut_conn, _lut_loaded
+        if _lut_loaded:
+            return _lut_conn
+        with _lut_lock:
+            if _lut_loaded:
+                return _lut_conn
+            if not os.path.exists(_CONCEPT_LUT_PATH):
+                logger.warning("[FACTS] concept_lut.sqlite not found at %s", _CONCEPT_LUT_PATH)
+                _lut_loaded = True
+                return None
+            try:
+                conn = sqlite3.connect(
+                    f"file:{_CONCEPT_LUT_PATH}?mode=ro", uri=True, check_same_thread=False
+                )
+                conn.row_factory = sqlite3.Row
+                conn.enable_load_extension(True)
+                try:
+                    import sqlite_vec
+                    sqlite_vec.load(conn)
+                except Exception:
+                    conn.load_extension("vec0")
+                count = conn.execute("SELECT count(*) FROM lut_concepts").fetchone()[0]
+                logger.info("[FACTS] LUT loaded: %s (concepts=%d)", _CONCEPT_LUT_PATH, count)
+                _lut_conn = conn
+            except Exception as exc:
+                logger.warning("[FACTS] Failed to open concept LUT: %s", exc)
+                _lut_conn = None
+            _lut_loaded = True
+            return _lut_conn
+
+    @staticmethod
+    def _lookup_concept_lut(key_embedding: list[float] | None) -> dict[str, object] | None:
+        """KNN a key embedding against the concept LUT; return
+        ``{canonical_key, rule, cos}`` for the nearest concept, or None when the LUT
+        is unavailable, the embedding is unusable, or the top match is below the
+        cosine threshold (a LUT miss)."""
+        lut = FactService._get_lut_conn()
+        if lut is None:
+            return None
+        blob = pack_embedding(key_embedding)
+        if blob is None:
+            return None
+        try:
+            hits = lut.execute(
+                "SELECT rowid, distance FROM lut_embeddings "
+                "WHERE embedding MATCH ? AND k = ? ORDER BY distance",
+                (blob, _LUT_K),
+            ).fetchall()
+        except Exception as exc:
+            logger.debug("[FACTS] LUT KNN failed: %s", exc)
+            return None
+        if not hits:
+            return None
+        rowid, distance = hits[0]
+        cos = FactService._l2_dist_to_cosine(distance)
+        if cos < _CONCEPT_LUT_THRESHOLD:
+            return None
+        row = lut.execute(
+            "SELECT canonical_key, rule FROM lut_concepts WHERE id = ?", (rowid,)
+        ).fetchone()
+        if row is None:
+            return None
+        return {"canonical_key": row[0], "rule": row[1], "cos": cos}
+
+    @staticmethod
+    def _get_lut_miss_top_cos(key_embedding: list[float] | None) -> float:
+        """Top cosine from the LUT KNN even when below threshold — the miss-logging
+        signal (how close the miss was to a canonical concept)."""
+        lut = FactService._get_lut_conn()
+        if lut is None or key_embedding is None:
+            return 0.0
+        blob = pack_embedding(key_embedding)
+        if blob is None:
+            return 0.0
+        try:
+            hits = lut.execute(
+                "SELECT rowid, distance FROM lut_embeddings "
+                "WHERE embedding MATCH ? AND k = 1 ORDER BY distance",
+                (blob,),
+            ).fetchall()
+            if hits:
+                return FactService._l2_dist_to_cosine(hits[0][1])
+        except Exception:
+            pass
+        return 0.0
+
+    @staticmethod
+    def _record_lut_miss(kind: str, key: str, value: str, top_cos: float) -> None:
+        """Log a LUT miss and upsert a monitoring row into ``concept_lut_misses``
+        (repeat misses bump ``count``). Best-effort: a write failure is logged at
+        debug and never breaks the store."""
+        logger.info("[FACTS] LUT miss: kind=%s key='%s' top_cos=%.4f", kind, key, top_cos)
+        now_iso = utc_now().isoformat()
+        value_preview = (value or "")[:100]
+        try:
+            from services.database import Database
+            Database.conn().execute(
+                "INSERT INTO concept_lut_misses(kind, key, value_preview, first_seen, last_seen) "
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(kind, key) DO UPDATE SET count=count+1, last_seen=excluded.last_seen",
+                (kind, key, value_preview, now_iso, now_iso),
+            )
+        except Exception as exc:
+            logger.debug("[FACTS] concept_lut_misses upsert failed: %s", exc)
 
     @staticmethod
     def _store_envelope(status: str, provided_key: str, canonical_key: str, value: str,

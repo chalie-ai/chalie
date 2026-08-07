@@ -156,20 +156,20 @@ def _register_preflight_login(app: Flask) -> None:
     def _preflight_login() -> None:
         from flask import request
         from services.auth_service import AuthService
-        from services.auth_session_service import validate_session
+        from services.auth_session_service import AuthSessionService
         from services.vault_service import get_vault_service
 
         g.preflight_login = False
-        if get_vault_service().is_unlocked() and validate_session(request):
+        if get_vault_service().is_unlocked() and AuthSessionService.validate_session(request):
             return
         if AuthService().try_login():
-            g.preflight_login = not validate_session(request)
+            g.preflight_login = not AuthSessionService.validate_session(request)
 
     @app.after_request
     def _attach_preflight_session(response: Response) -> Response:
         if getattr(g, "preflight_login", False):
-            from services.auth_session_service import create_session
-            create_session(response)
+            from services.auth_session_service import AuthSessionService
+            AuthSessionService.create_session(response)
         return response
 
 
@@ -218,17 +218,17 @@ def _register_static_routes(app: Flask) -> None:
 
     @app.route('/brain/', methods=["GET"])
     def brain_index() -> ResponseReturnValue:
-        from services.auth_session_service import validate_session
+        from services.auth_session_service import AuthSessionService
         from flask import request
-        if not validate_session(request):
+        if not AuthSessionService.validate_session(request):
             return redirect('/login/?next=/brain/')
         return _send_index(brain_dir)
 
     @app.route('/brain/<path:filename>', methods=["GET"])
     def brain_static(filename: str) -> ResponseReturnValue:
-        from services.auth_session_service import validate_session
+        from services.auth_session_service import AuthSessionService
         from flask import request
-        if not validate_session(request):
+        if not AuthSessionService.validate_session(request):
             return redirect(f'/login/?next=/brain/{filename}')
         candidate = brain_dir / filename
         if candidate.is_file():

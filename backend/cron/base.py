@@ -17,7 +17,7 @@ import threading
 from datetime import datetime, timedelta
 from typing import Protocol, runtime_checkable
 
-from services.cron_schedule import matches
+from services.cron_schedule import CronSchedule
 from services.durable_timestamp import DurableTimestamp
 from services.time_utils import parse_utc, utc_now
 
@@ -80,7 +80,7 @@ class ScheduledJob:
 
     def should_run(self) -> bool:
         """True when the five cron fields match the current local minute."""
-        return matches(
+        return CronSchedule.matches(
             utc_now(), self.minute, self.hour, self.dom, self.month, self.dow
         )
 

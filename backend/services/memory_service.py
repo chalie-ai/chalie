@@ -46,6 +46,7 @@ from abilities._result import ToolResult
 from abilities.find_tools import FindToolsAbility
 from models.episode import Episode
 from models.memory_recall_log import MemoryRecallLog
+from services.memory_recall_service import MemoryRecallService
 
 if TYPE_CHECKING:
     from contracts.params.memory_params_bag import (
@@ -607,9 +608,7 @@ class MemoryService:
     @staticmethod
     def _search_data_graph(query: str, limit: int) -> tuple[list[dict[str, object]], str]:
         try:
-            from services.memory_recall_service import recall
-
-            rows = recall(query, kinds=_DG_RECALL_KINDS, limit=limit)
+            rows = MemoryRecallService.recall(query, kinds=_DG_RECALL_KINDS, limit=limit)
             if not rows:
                 return [], "0 matches"
 

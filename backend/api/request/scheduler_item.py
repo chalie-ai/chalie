@@ -21,7 +21,7 @@ from typing import Self
 from pydantic import Field, model_validator
 from pydantic_core import PydanticCustomError
 
-from services.cron_schedule import validate_cron
+from services.cron_schedule import CronSchedule
 from .request import Request
 
 
@@ -41,7 +41,7 @@ class SchedulerItemRequest(Request):
     @model_validator(mode="after")
     def _validate_cron_fields(self) -> Self:
         try:
-            validate_cron(self.minute, self.hour, self.day, self.month, self.weekday)
+            CronSchedule.validate_cron(self.minute, self.hour, self.day, self.month, self.weekday)
         except ValueError as exc:
             raise PydanticCustomError("value_error", str(exc), None) from exc
         return self

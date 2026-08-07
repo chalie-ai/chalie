@@ -26,7 +26,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[Fl
     # Bypass session auth — the cookie/session mechanism is not the subject
     # of these tests and requires a full app context to work correctly.
     monkeypatch.setattr(
-        "services.auth_session_service.validate_session",
+        "services.auth_session_service.AuthSessionService.validate_session",
         lambda *_args, **_kwargs: True,
     )
 

@@ -204,7 +204,7 @@ def authed_client(db: sqlite3.Connection) -> Iterator[tuple[object, sqlite3.Conn
 
     real_store = MemoryStore()
 
-    with patch('services.auth_session_service.validate_session', return_value=True), \
+    with patch('services.auth_session_service.AuthSessionService.validate_session', return_value=True), \
          patch('services.memory_store.get_shared_store', return_value=real_store), \
          patch('services.memory_client.MemoryClientService.create_connection', return_value=real_store):
         app = create_app()

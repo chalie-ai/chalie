@@ -52,10 +52,10 @@ def require_auth(f: Callable[..., "ResponseReturnValue"]) -> Callable[..., "Resp
     """
     @wraps(f)
     def decorated(*args: object, **kwargs: object) -> "ResponseReturnValue":
-        from services.auth_session_service import validate_session
+        from services.auth_session_service import AuthSessionService
 
         # Try cookie session first
-        if validate_session(request):
+        if AuthSessionService.validate_session(request):
             g.wrapper_id = None
             return f(*args, **kwargs)
 

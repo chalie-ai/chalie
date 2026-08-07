@@ -23,7 +23,7 @@ class TestSystemAPI:
 
     @pytest.fixture(autouse=True)
     def bypass_auth(self) -> Iterator[None]:
-        with patch('services.auth_session_service.validate_session', return_value=True):
+        with patch('services.auth_session_service.AuthSessionService.validate_session', return_value=True):
             yield
 
     # GET /health

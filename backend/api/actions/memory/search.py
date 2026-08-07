@@ -20,7 +20,7 @@ from exceptions import EndpointError
 from api.response.memory import MemoryHitResponse
 from models.episode import Episode
 from services.episodic_service import EpisodicService
-from services.memory_recall_service import recall
+from services.memory_recall_service import MemoryRecallService
 from services.time_utils import parse_utc
 
 logger = logging.getLogger(__name__)
@@ -85,7 +85,7 @@ class MemorySearch(Action):
 
         try:
             results.extend(
-                _concept_hit(c) for c in recall(q, kinds=_RECALL_KINDS, limit=_RECALL_LIMIT)
+                _concept_hit(c) for c in MemoryRecallService.recall(q, kinds=_RECALL_KINDS, limit=_RECALL_LIMIT)
             )
         except Exception as exc:
             logger.warning("[Memory] Data graph search failed: %s", exc)

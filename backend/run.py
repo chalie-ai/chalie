@@ -248,8 +248,8 @@ def _init_services() -> None:
     """Initialize singleton services and seed default configuration."""
     # Clean up expired auth sessions
     try:
-        from services.auth_session_service import cleanup_expired_sessions
-        cleanup_expired_sessions()
+        from services.auth_session_service import AuthSessionService
+        AuthSessionService.cleanup_expired_sessions()
     except Exception:
         pass
 

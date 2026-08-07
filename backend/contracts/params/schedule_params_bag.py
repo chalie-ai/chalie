@@ -28,7 +28,7 @@ from typing import Self
 from abilities._result import ToolResult
 from configs.enums.param_key import Keys
 from contracts.params.param_bag import ParamBag
-from services.cron_schedule import validate_cron
+from services.cron_schedule import CronSchedule
 from services.locale_service import LocaleService
 from services.time_utils import utc_now
 
@@ -122,7 +122,7 @@ class ScheduleParamsBag(ParamBag):
         weekday = ScheduleParamsBag._cron_field(params, Keys.weekday)
 
         try:
-            validate_cron(minute, hour, day, month, weekday)
+            CronSchedule.validate_cron(minute, hour, day, month, weekday)
         except ValueError as cron_err:
             return ToolResult.err(
                 str(cron_err),

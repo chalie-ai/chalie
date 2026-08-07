@@ -25,7 +25,7 @@ from typing import cast
 from configs.channels import ScheduledConfig
 from cron.base import ScheduledJob
 from models.scheduled_item import ScheduledItem
-from services.cron_schedule import matches
+from services.cron_schedule import CronSchedule
 from services.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
@@ -69,7 +69,7 @@ class ScheduledItemsDispatcherJob(ScheduledJob):
         checked = 0
         for row in rows:
             checked += 1
-            if matches(
+            if CronSchedule.matches(
                 now,
                 cast(str, row["cron_minute"]),
                 cast(str, row["cron_hour"]),

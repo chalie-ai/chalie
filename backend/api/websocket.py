@@ -18,9 +18,9 @@ logger = logging.getLogger(__name__)
 def _validate_cookie_session(flask_request: object) -> bool:
     """The browser path: a signed session cookie rides the HTTP upgrade."""
     from flask import Request
-    from services.auth_session_service import validate_session
+    from services.auth_session_service import AuthSessionService
 
-    return validate_session(cast(Request, flask_request))
+    return AuthSessionService.validate_session(cast(Request, flask_request))
 
 
 def _validate_bearer_frame(token: str) -> bool:

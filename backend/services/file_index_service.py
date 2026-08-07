@@ -88,98 +88,6 @@ _INDEXABLE_EXTENSIONS: tuple[str, ...] = (
 )
 
 
-def _is_supported_extension(path: str) -> bool:
-    """Return True if *path* has an extension the index accepts."""
-    ext = Path(path).suffix.lower()
-    return ext in _INDEXABLE_EXTENSIONS
-
-def _is_dot_directory(name: str) -> bool:
-    """Return True if *name* is a dot-directory (e.g. '.git', '.venv')."""
-    return name.startswith(".")
-
-
-def _is_in_skip_subtree(path: str) -> bool:
-    """Return True if *path* is under one of the skipped subtrees."""
-    for subtree in _SKIP_SUBTREES:
-        if path == subtree or path.startswith(subtree + "/"):
-            return True
-    return False
-
-
-def _is_in_skip_dirs(path: str) -> bool:
-    """Return True if any component of *path* matches a pruned directory name."""
-    parts = Path(path).parts
-    for part in parts:
-        if part in _SKIP_DIR_NAMES:
-            return True
-    return False
-
-
-def _is_chalie_path(path: str) -> bool:
-    """Return True if *path* is one of Chalie's own databases or sensitive dirs."""
-    for entry in _SKIP_CHALIE_PATHS:
-        if path == entry or path.startswith(entry + "/"):
-            return True
-    return False
-
-
-def _is_parser_owned(path: str) -> bool:
-    """Return True if *path* is a row only FileParserService creates.
-
-    A file under the documents root whose extension the walk itself would
-    never index (e.g. an image): its content column holds the vision/OCR
-    description upserted at ingest. Reconcile keeps the row while the file
-    exists and never re-extracts it — only FileParserService creates them.
-    """
-    root = str(FileMapperService.get_documents_path())
-    return path.startswith(root + os.sep) and not _is_supported_extension(path)
-
-
-def _is_library_caches(path: str) -> bool:
-    """Return True if *path* is a directory named 'Caches' whose parent is 'Library'.
-
-    This is a parent/child rule — the literal string ``'Library/Caches'`` can
-    never be a single path component, so it is handled here instead of in
-    ``_SKIP_DIR_NAMES``.
-    """
-    parent = os.path.dirname(path.rstrip(os.sep))
-    return os.path.basename(path) == "Caches" and os.path.basename(parent) == "Library"
-
-
-def _should_index(path: str) -> bool:
-    """Return True if *path* should be indexed.
-
-    Applies all the should_index rules:
-    - Not under a skipped subtree.
-    - No component matches a pruned directory name.
-    - No path component starts with a dot.
-    - Not inside a Library/Caches tree.
-    - Not a Chalie internal path.
-    - Has a supported extension.
-    - File size <= 50 MB.
-    """
-    if _is_in_skip_subtree(path):
-        return False
-    if _is_in_skip_dirs(path):
-        return False
-    parts = Path(path).parts
-    if any(part.startswith(".") for part in parts):
-        return False
-    if any(parts[i] == "Caches" and parts[i - 1] == "Library" for i in range(1, len(parts))):
-        return False
-    if _is_chalie_path(path):
-        return False
-    if not _is_supported_extension(path):
-        return False
-    try:
-        size = os.path.getsize(path)
-        if size > _MAX_FILE_SIZE:
-            return False
-    except OSError:
-        return False
-    return True
-
-
 # ── FTS5 schema ───────────────────────────────────────────────────────────────
 
 _FILE_INDEX_FTS_SCHEMA = """
@@ -362,12 +270,105 @@ class FileIndexService:
             logger.error("[FileIndexService] Search failed: %s", exc)
             return []
 
+    @staticmethod
+    def _is_supported_extension(path: str) -> bool:
+        """Return True if *path* has an extension the index accepts."""
+        ext = Path(path).suffix.lower()
+        return ext in _INDEXABLE_EXTENSIONS
+
+    @staticmethod
+    def _is_dot_directory(name: str) -> bool:
+        """Return True if *name* is a dot-directory (e.g. '.git', '.venv')."""
+        return name.startswith(".")
+
+    @staticmethod
+    def _is_in_skip_subtree(path: str) -> bool:
+        """Return True if *path* is under one of the skipped subtrees."""
+        for subtree in _SKIP_SUBTREES:
+            if path == subtree or path.startswith(subtree + "/"):
+                return True
+        return False
+
+    @staticmethod
+    def _is_in_skip_dirs(path: str) -> bool:
+        """Return True if any component of *path* matches a pruned directory name."""
+        parts = Path(path).parts
+        for part in parts:
+            if part in _SKIP_DIR_NAMES:
+                return True
+        return False
+
+    @staticmethod
+    def _is_chalie_path(path: str) -> bool:
+        """Return True if *path* is one of Chalie's own databases or sensitive dirs."""
+        for entry in _SKIP_CHALIE_PATHS:
+            if path == entry or path.startswith(entry + "/"):
+                return True
+        return False
+
+    @staticmethod
+    def _is_parser_owned(path: str) -> bool:
+        """Return True if *path* is a row only FileParserService creates.
+
+        A file under the documents root whose extension the walk itself would
+        never index (e.g. an image): its content column holds the vision/OCR
+        description upserted at ingest. Reconcile keeps the row while the file
+        exists and never re-extracts it — only FileParserService creates them.
+        """
+        root = str(FileMapperService.get_documents_path())
+        return path.startswith(root + os.sep) and not FileIndexService._is_supported_extension(path)
+
+    @staticmethod
+    def _is_library_caches(path: str) -> bool:
+        """Return True if *path* is a directory named 'Caches' whose parent is 'Library'.
+
+        This is a parent/child rule — the literal string ``'Library/Caches'`` can
+        never be a single path component, so it is handled here instead of in
+        ``_SKIP_DIR_NAMES``.
+        """
+        parent = os.path.dirname(path.rstrip(os.sep))
+        return os.path.basename(path) == "Caches" and os.path.basename(parent) == "Library"
+
+    @staticmethod
+    def _should_index(path: str) -> bool:
+        """Return True if *path* should be indexed.
+
+        Applies all the should_index rules:
+        - Not under a skipped subtree.
+        - No component matches a pruned directory name.
+        - No path component starts with a dot.
+        - Not inside a Library/Caches tree.
+        - Not a Chalie internal path.
+        - Has a supported extension.
+        - File size <= 50 MB.
+        """
+        if FileIndexService._is_in_skip_subtree(path):
+            return False
+        if FileIndexService._is_in_skip_dirs(path):
+            return False
+        parts = Path(path).parts
+        if any(part.startswith(".") for part in parts):
+            return False
+        if any(parts[i] == "Caches" and parts[i - 1] == "Library" for i in range(1, len(parts))):
+            return False
+        if FileIndexService._is_chalie_path(path):
+            return False
+        if not FileIndexService._is_supported_extension(path):
+            return False
+        try:
+            size = os.path.getsize(path)
+            if size > _MAX_FILE_SIZE:
+                return False
+        except OSError:
+            return False
+        return True
+
     def should_index(self, path: str) -> bool:
         """Return True if *path* should be indexed.
 
         Applies all the should_index rules (see module-level constants).
         """
-        return _should_index(path)
+        return self._should_index(path)
 
     def reconcile(self) -> None:
         """Reconcile the index with the filesystem.
@@ -398,16 +399,16 @@ class FileIndexService:
                 dirnames[:] = [
                     d
                     for d in dirnames
-                    if not _is_dot_directory(d)
+                    if not self._is_dot_directory(d)
                     and d not in _SKIP_DIR_NAMES
-                    and not _is_in_skip_subtree(os.path.join(dirpath, d))
-                    and not _is_chalie_path(os.path.join(dirpath, d))
-                    and not _is_library_caches(os.path.join(dirpath, d))
+                    and not self._is_in_skip_subtree(os.path.join(dirpath, d))
+                    and not self._is_chalie_path(os.path.join(dirpath, d))
+                    and not self._is_library_caches(os.path.join(dirpath, d))
                 ]
 
                 for filename in filenames:
                     path = os.path.join(dirpath, filename)
-                    if not _should_index(path):
+                    if not self._should_index(path):
                         continue
                     try:
                         stat = os.stat(path)
@@ -423,7 +424,7 @@ class FileIndexService:
             # disk — not membership in `current` — decides their fate.
             for path in indexed:
                 if path not in current:
-                    if _is_parser_owned(path) and os.path.isfile(path):
+                    if self._is_parser_owned(path) and os.path.isfile(path):
                         continue
                     self.remove_file(path)
 

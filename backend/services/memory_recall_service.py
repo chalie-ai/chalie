@@ -85,143 +85,155 @@ _MAX_K = 50
 _EXPANSION_WINDOW_MULTIPLIER = 2
 
 
-def _sigmoid(x: float) -> float:
-    return 1.0 / (1.0 + math.exp(-x))
+class MemoryRecallService:
+    """Cross-kind fused recall over the data graph (ruling 1, layer 3).
 
+    Composes each in-span vertical's ORM candidate-gather, fuses the raw
+    per-lane signals into one composite score (ruling 2), expands top hits
+    with their supersession predecessors (ruling 3), optionally merges in
+    episodic recall, ranks, and returns the top-k.
+    """
 
-def _composite_score(row: DataGraphRow, signals: RecallSignals) -> float:
-    """The weighted-composite fusion (ruling 2, VERBATIM): a cosine/FTS base
-    scaled by ``retrieval_weight`` and an ACT-R-style recency/evidence boost."""
-    base = (
-        _KEY_COS_WEIGHT * signals.key_cos
-        + _VALUE_COS_WEIGHT * signals.value_cos
-        + _FTS_BONUS_WEIGHT * signals.fts_bonus
-    )
-    now_ts = utc_now().timestamp()
-    ref_ts_str = row.last_accessed_at or row.last_confirmed_at
-    try:
-        ref_ts = parse_utc(ref_ts_str).timestamp() if ref_ts_str else now_ts - 3600.0
-    except Exception:
-        ref_ts = now_ts - 3600.0
-    age_seconds = max(1.0, now_ts - ref_ts)
-    evidence = max(1, row.evidence_count or 1)
-    actr_boost = math.log(evidence) - 0.5 * math.log(age_seconds)
-    retrieval_weight = row.retrieval_weight if row.retrieval_weight is not None else 1.0
-    return base * retrieval_weight * (1 + _ACTR_SIGMOID_WEIGHT * _sigmoid(actr_boost))
+    @staticmethod
+    def _sigmoid(x: float) -> float:
+        return 1.0 / (1.0 + math.exp(-x))
 
+    @staticmethod
+    def _composite_score(row: DataGraphRow, signals: RecallSignals) -> float:
+        """The weighted-composite fusion (ruling 2, VERBATIM): a cosine/FTS base
+        scaled by ``retrieval_weight`` and an ACT-R-style recency/evidence boost."""
+        base = (
+            _KEY_COS_WEIGHT * signals.key_cos
+            + _VALUE_COS_WEIGHT * signals.value_cos
+            + _FTS_BONUS_WEIGHT * signals.fts_bonus
+        )
+        now_ts = utc_now().timestamp()
+        ref_ts_str = row.last_accessed_at or row.last_confirmed_at
+        try:
+            ref_ts = parse_utc(ref_ts_str).timestamp() if ref_ts_str else now_ts - 3600.0
+        except Exception:
+            ref_ts = now_ts - 3600.0
+        age_seconds = max(1.0, now_ts - ref_ts)
+        evidence = max(1, row.evidence_count or 1)
+        actr_boost = math.log(evidence) - 0.5 * math.log(age_seconds)
+        retrieval_weight = row.retrieval_weight if row.retrieval_weight is not None else 1.0
+        return base * retrieval_weight * (1 + _ACTR_SIGMOID_WEIGHT * MemoryRecallService._sigmoid(actr_boost))
 
-def _cos_score(key_cos: float, value_cos: float) -> float:
-    return max(key_cos, value_cos)
+    @staticmethod
+    def _cos_score(key_cos: float, value_cos: float) -> float:
+        return max(key_cos, value_cos)
 
-
-def _project(row: DataGraphRow, composite: float, signals: RecallSignals) -> dict[str, object]:
-    """The data-graph recall hit shape (mirrors the deleted ``recall()``'s
-    return dict) — the one contract both ``MemoryService._search_data_graph``
-    and ``api/memory.py`` adapt from independently."""
-    return {
-        "id": row.id,
-        "kind": row.kind,
-        "key": row.key,
-        "value": row.value,
-        "source": row.source,
-        "first_seen_at": row.first_seen_at,
-        "retrieval_weight": row.retrieval_weight,
-        "evidence_count": row.evidence_count,
-        "composite_score": composite,
-        "cos_score": _cos_score(signals.key_cos, signals.value_cos),
-    }
-
-
-def _expand_supersession(
-    scored: list[tuple[DataGraphRow, float, RecallSignals]], limit: int
-) -> list[tuple[DataGraphRow, float, RecallSignals]]:
-    """Ruling 3: for each of the top-scored hits, walk its supersession
-    predecessors (off ``valid_to``/``valid_from``, not an edge table) and add
-    them as candidates at the historical-edge multiplier — the replacement for
-    the deleted ``data_graph_edges`` graph-expansion lane. Only the top window
-    is expanded (not every raw candidate) since each predecessor lookup is one
-    ORM round trip (this service holds no SQL to batch them)."""
-    window = scored[: max(limit, 1) * _EXPANSION_WINDOW_MULTIPLIER]
-    seen_ids = {row.id for row, _composite, _sig in scored}
-    expanded = list(scored)
-    for row, composite, _sig in window:
-        for predecessor in type(row).superseded_predecessors(row.key, limit=3):
-            if predecessor.id in seen_ids:
-                continue
-            expanded.append((predecessor, composite * _PREDECESSOR_MULTIPLIER, RecallSignals()))
-            seen_ids.add(predecessor.id)
-    expanded.sort(key=lambda item: item[1], reverse=True)
-    return expanded
-
-
-def _episode_candidates(query: str, query_embedding: list[float] | None, limit: int) -> list[dict[str, object]]:
-    """Episode hits (:meth:`~services.episodic_service.EpisodicService.retrieve`)
-    projected into the same recall-dict shape, for a caller that opts into
-    ``include_episodes=True``."""
-    from services.episodic_service import EpisodicService  # noqa: PLC0415
-    from models.episode import Episode  # noqa: PLC0415
-
-    # retrieve() returns `list[Episode] | tuple[list[Episode], dict]`, gated by
-    # `return_telemetry` (omitted here, so it's always the bare list) — cast
-    # narrows the static type to match the guaranteed runtime shape.
-    episodes = cast(
-        "list[Episode]", EpisodicService().retrieve(query, query_embedding=query_embedding, k=limit)
-    )
-    return [
-        {
-            "id": ep.id, "kind": "episode", "key": None, "value": ep.gist,
-            "source": None, "first_seen_at": ep.created_at,
-            "retrieval_weight": ep.retrieval_weight, "evidence_count": None,
-            "composite_score": ep.composite_score, "cos_score": None,
+    @staticmethod
+    def _project(row: DataGraphRow, composite: float, signals: RecallSignals) -> dict[str, object]:
+        """The data-graph recall hit shape (mirrors the deleted ``recall()``'s
+        return dict) — the one contract both ``MemoryService._search_data_graph``
+        and ``api/memory.py`` adapt from independently."""
+        return {
+            "id": row.id,
+            "kind": row.kind,
+            "key": row.key,
+            "value": row.value,
+            "source": row.source,
+            "first_seen_at": row.first_seen_at,
+            "retrieval_weight": row.retrieval_weight,
+            "evidence_count": row.evidence_count,
+            "composite_score": composite,
+            "cos_score": MemoryRecallService._cos_score(signals.key_cos, signals.value_cos),
         }
-        for ep in episodes
-    ]
 
+    @staticmethod
+    def _expand_supersession(
+        scored: list[tuple[DataGraphRow, float, RecallSignals]], limit: int
+    ) -> list[tuple[DataGraphRow, float, RecallSignals]]:
+        """Ruling 3: for each of the top-scored hits, walk its supersession
+        predecessors (off ``valid_to``/``valid_from``, not an edge table) and add
+        them as candidates at the historical-edge multiplier — the replacement for
+        the deleted ``data_graph_edges`` graph-expansion lane. Only the top window
+        is expanded (not every raw candidate) since each predecessor lookup is one
+        ORM round trip (this service holds no SQL to batch them)."""
+        window = scored[: max(limit, 1) * _EXPANSION_WINDOW_MULTIPLIER]
+        seen_ids = {row.id for row, _composite, _sig in scored}
+        expanded = list(scored)
+        for row, composite, _sig in window:
+            for predecessor in type(row).superseded_predecessors(row.key, limit=3):
+                if predecessor.id in seen_ids:
+                    continue
+                expanded.append((predecessor, composite * _PREDECESSOR_MULTIPLIER, RecallSignals()))
+                seen_ids.add(predecessor.id)
+        expanded.sort(key=lambda item: item[1], reverse=True)
+        return expanded
 
-def recall(
-    query: str,
-    *,
-    kinds: list[str] | None = None,
-    limit: int = 10,
-    query_embedding: list[float] | None = None,
-    include_episodes: bool = False,
-) -> list[dict[str, object]]:
-    """Cross-kind fused recall (ruling 1, layer 3): compose the span's
-    vertical gathers, fuse per-lane signals into one composite score
-    (ruling 2), expand the top hits with their supersession predecessors
-    (ruling 3), optionally merge in :func:`_episode_candidates`, rank, and
-    return the top ``limit``.
+    @staticmethod
+    def _episode_candidates(
+        query: str, query_embedding: list[float] | None, limit: int
+    ) -> list[dict[str, object]]:
+        """Episode hits (:meth:`~services.episodic_service.EpisodicService.retrieve`)
+        projected into the same recall-dict shape, for a caller that opts into
+        ``include_episodes=True``."""
+        from services.episodic_service import EpisodicService  # noqa: PLC0415
+        from models.episode import Episode  # noqa: PLC0415
 
-    ``kinds`` narrows the span (``None`` = every in-span kind). Never raises:
-    any failure degrades to ``[]`` (mirrors the legacy ``recall()``'s
-    swallow-and-log, since a recall miss must never break the caller's turn).
+        # retrieve() returns `list[Episode] | tuple[list[Episode], dict]`, gated by
+        # `return_telemetry` (omitted here, so it's always the bare list) — cast
+        # narrows the static type to match the guaranteed runtime shape.
+        episodes = cast(
+            "list[Episode]", EpisodicService().retrieve(query, query_embedding=query_embedding, k=limit)
+        )
+        return [
+            {
+                "id": ep.id, "kind": "episode", "key": None, "value": ep.gist,
+                "source": None, "first_seen_at": ep.created_at,
+                "retrieval_weight": ep.retrieval_weight, "evidence_count": None,
+                "composite_score": ep.composite_score, "cos_score": None,
+            }
+            for ep in episodes
+        ]
 
-    ``include_episodes`` defaults False: both current callers
-    (``MemoryService._search_data_graph``, ``api/memory.py``) already run
-    their own separate episode lane at the call site — merging episodes here
-    too would double-count them. Pass ``include_episodes=True`` only from a
-    caller that wants ONE unified data-graph-plus-episode list."""
-    try:
-        if query_embedding is None and query:
-            from services.embedding_service import get_embedding_service  # noqa: PLC0415
+    @staticmethod
+    def recall(
+        query: str,
+        *,
+        kinds: list[str] | None = None,
+        limit: int = 10,
+        query_embedding: list[float] | None = None,
+        include_episodes: bool = False,
+    ) -> list[dict[str, object]]:
+        """Cross-kind fused recall (ruling 1, layer 3): compose the span's
+        vertical gathers, fuse per-lane signals into one composite score
+        (ruling 2), expand the top hits with their supersession predecessors
+        (ruling 3), optionally merge in :meth:`_episode_candidates`, rank, and
+        return the top ``limit``.
 
-            query_embedding = get_embedding_service().generate_embedding(query)
+        ``kinds`` narrows the span (``None`` = every in-span kind). Never raises:
+        any failure degrades to ``[]`` (mirrors the legacy ``recall()``'s
+        swallow-and-log, since a recall miss must never break the caller's turn).
 
-        verticals = [v for v in _VERTICALS if kinds is None or v.KIND in kinds]
-        k = min(limit * _K_MULTIPLIER, _MAX_K)
+        ``include_episodes`` defaults False: both current callers
+        (``MemoryService._search_data_graph``, ``api/memory.py``) already run
+        their own separate episode lane at the call site — merging episodes here
+        too would double-count them. Pass ``include_episodes=True`` only from a
+        caller that wants ONE unified data-graph-plus-episode list."""
+        try:
+            if query_embedding is None and query:
+                from services.embedding_service import get_embedding_service  # noqa: PLC0415
 
-        scored: list[tuple[DataGraphRow, float, RecallSignals]] = []
-        for vertical in verticals:
-            for row, signals in vertical.gather_candidates(query, query_embedding, k).values():
-                scored.append((row, _composite_score(row, signals), signals))
-        scored.sort(key=lambda item: item[1], reverse=True)
+                query_embedding = get_embedding_service().generate_embedding(query)
 
-        expanded = _expand_supersession(scored, limit)
-        results = [_project(row, composite, signals) for row, composite, signals in expanded[:limit]]
+            verticals = [v for v in _VERTICALS if kinds is None or v.KIND in kinds]
+            k = min(limit * _K_MULTIPLIER, _MAX_K)
 
-        if include_episodes:
-            results = (results + _episode_candidates(query, query_embedding, limit))[:limit]
-        return results
-    except Exception:
-        logger.error("[MEMORY RECALL] recall failed for query=%r", query, exc_info=True)
-        return []
+            scored: list[tuple[DataGraphRow, float, RecallSignals]] = []
+            for vertical in verticals:
+                for row, signals in vertical.gather_candidates(query, query_embedding, k).values():
+                    scored.append((row, MemoryRecallService._composite_score(row, signals), signals))
+            scored.sort(key=lambda item: item[1], reverse=True)
+
+            expanded = MemoryRecallService._expand_supersession(scored, limit)
+            results = [MemoryRecallService._project(row, composite, signals) for row, composite, signals in expanded[:limit]]
+
+            if include_episodes:
+                results = (results + MemoryRecallService._episode_candidates(query, query_embedding, limit))[:limit]
+            return results
+        except Exception:
+            logger.error("[MEMORY RECALL] recall failed for query=%r", query, exc_info=True)
+            return []
