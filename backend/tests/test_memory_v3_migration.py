@@ -6,78 +6,71 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Feature test for the Memory v3 one-time migration (Slice E).
+"""Feature test for the Memory v3 migration (Slice E) — the consolidator loop.
 
-Seeds old-shape ``data_graph`` + ``episodes`` rows and a legacy NULL ``turn_id``
-transcript row on the real ``db`` fixture, runs the migration, and asserts the
-new Graph/Map stores are backfilled (active facts only; iteration from level;
-provenance from transcript_ids) and the legacy turn_id is repaired.
+The migration is a thin loop that fires the consolidator over every transcript
+turn in order. This test spies on ``MemoryConsolidatorService.consolidate`` (the
+consolidator itself is covered by test_memory_v3_consolidator.py) and asserts the
+loop visits every non-excluded turn in (channel, turn_id) order, skips excluded
+channels, and repairs legacy NULL turn_id.
 """
-
-import json
 
 import pytest
 
-from models.memory_graph import MemoryGraphRow
-from models.memory_map import MemoryMapRow
+from services.memory_consolidator_service import MemoryConsolidatorService
 from services.memory_v3_migration import MemoryV3Migration
 
 pytestmark = pytest.mark.unit
 
 
-def test_migration_backfills_graph_and_map_and_repairs_turn_id(db) -> None:
+def _seed_turn(db, channel: str, turn_id: int, content: str = "x") -> None:
     db.execute(
-        "INSERT INTO data_graph (kind, key, value) VALUES (?, ?, ?)",
-        ("user_specific", "residence", "Lisbon"),
+        "INSERT INTO transcript (channel, role, content, turn_id) "
+        "VALUES (?, ?, ?, ?)",
+        (channel, "user", content, turn_id),
     )
-    db.execute(
-        "INSERT INTO data_graph (kind, key, value) VALUES (?, ?, ?)",
-        ("user_specific", "partner", "Ana"),
-    )
-    # An inactive (superseded) row must be skipped.
-    db.execute(
-        "INSERT INTO data_graph (kind, key, value, active) VALUES (?, ?, ?, 0)",
-        ("user_specific", "old", "gone"),
-    )
-    db.execute(
-        "INSERT INTO episodes (gist, channel, level, salience, transcript_ids) "
-        "VALUES (?, ?, ?, ?, ?)",
-        ("moved to Lisbon", "user", 0, 6, "[10, 11]"),
-    )
-    db.execute(
-        "INSERT INTO episodes (gist, channel, level, salience) VALUES (?, ?, ?, ?)",
-        ("era: settled abroad", "user", 1, 6),
-    )
-    # Legacy NULL turn_id row.
+
+
+def test_migration_replays_every_turn_in_order_skipping_excluded(
+    db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed_turn(db, "user", 1, "first")
+    _seed_turn(db, "user", 2, "second")
+    _seed_turn(db, "dmn", 1, "reflection")
+    # Excluded channels must be skipped.
+    _seed_turn(db, "delegate:web_search", 1, "delegate work")
+    _seed_turn(db, "memory_consolidator", 1, "own output")
+    db.commit()
+
+    calls: list[tuple[str, int]] = []
+
+    def spy(self, channel: str, turn_id: int) -> str:
+        calls.append((channel, turn_id))
+        return f"{channel}:{turn_id} consolidated"
+
+    monkeypatch.setattr(MemoryConsolidatorService, "consolidate", spy)
+
+    counts = MemoryV3Migration().run()
+
+    assert calls == [("dmn", 1), ("user", 1), ("user", 2)]
+    assert counts["turns_consolidated"] == 3
+
+
+def test_migration_repairs_legacy_null_turn_id(db, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A legacy NULL turn_id row is repaired to -id so it joins the loop.
     db.execute(
         "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
-        ("user", "user", "hi"),
+        ("user", "user", "legacy"),
     )
     db.commit()
 
-    counts = MemoryV3Migration().run()
-    assert counts["graph_rows"] >= 2
-    assert counts["map_rows"] >= 2
-    assert counts["turns_backfilled"] >= 1
+    monkeypatch.setattr(
+        MemoryConsolidatorService, "consolidate", lambda self, c, t: f"{c}:{t} consolidated"
+    )
+    MemoryV3Migration().run()
 
-    # Active facts -> Graph (subject = kind.key); the inactive one is skipped.
-    residence = MemoryGraphRow.by_subject("user_specific.residence")
-    assert residence is not None and residence.contents == "Lisbon"
-    assert MemoryGraphRow.by_subject("user_specific.partner") is not None
-    assert MemoryGraphRow.by_subject("user_specific.old") is None
-
-    # Episodes -> Map; iteration = level + 1; provenance carried from transcript_ids.
-    maps = MemoryMapRow.recent(limit=20)
-    by_content = {m.contents: m for m in maps}
-    assert "moved to Lisbon" in by_content
-    assert "era: settled abroad" in by_content
-    assert by_content["moved to Lisbon"].iteration == 1
-    assert by_content["era: settled abroad"].iteration == 2
-    assert json.loads(by_content["moved to Lisbon"].sourced_from) == [10, 11]
-
-    # Legacy NULL turn_id repaired to -id (< 0).
     row = db.execute(
-        "SELECT turn_id FROM transcript WHERE content = 'hi'"
+        "SELECT turn_id FROM transcript WHERE content = 'legacy'"
     ).fetchone()
     assert row is not None
     assert row[0] is not None and int(row[0]) < 0

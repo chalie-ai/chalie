@@ -1,84 +1,70 @@
-"""Memory v3 one-time migration — backfill Graph + Map from the old memory
-stores before cutover.
+"""Memory v3 migration — catch up the new memory system by replaying every
+transcript turn through the consolidator.
 
-Deterministic structural translation (no LLM):
-  * every live ``data_graph`` fact  -> a ``memory_graph`` row (subject, contents);
-  * every episode (leaf + super)     -> a ``memory_map`` row (contents = gist,
-    iteration = level + 1, sourced_from from the episode's transcript_ids).
+A thin loop around :meth:`MemoryConsolidatorService.consolidate`: iterate every
+``(channel, turn_id)`` in transcript order and fire the consolidator once each.
+The consolidator distils each turn's transcript into Graph/Map rows (with
+provenance), so by the end of the loop the new stores carry the full history.
 
-Also backfills legacy NULL ``turn_id`` on transcript rows so the consolidator can
-group them (``turn_id = -id`` matches the read path's COALESCE convention).
-
-The deeper distillation (merging related facts, composing timelines) is the
-consolidator's ongoing job; an optional consolidator pass over migrated data is a
-follow-up. This migration is the backfill the cutover depends on: the new stores
-must carry what already exists before the old tables are removed.
+Idempotent — ``consolidate`` skips turns already marked consolidated — so
+re-running or resuming after an interrupt picks up where it left off. Transcript
+rows are never deleted; this loop only populates the new stores.
 """
 
 from __future__ import annotations
 
-import json
 import logging
-from typing import cast
+from typing import Iterator, cast
 
-from models.memory_graph import MemoryGraphRow
-from models.memory_map import MemoryMapRow
+from configs.enums.channels import Channel
 from services.database import Database
+from services.memory_consolidator_service import MemoryConsolidatorService
 
 logger = logging.getLogger(__name__)
 
+# Same exclusions as the consolidator's tick(): delegates + skills_building
+# surface their value through the parent chat channel; the consolidator never
+# consolidates itself.
+_EXCLUDED_PREFIXES = ("delegate:",)
+_EXCLUDED_CHANNELS = {
+    Channel.MEMORY_CONSOLIDATOR.value,
+    Channel.SKILLS_BUILDING.value,
+}
+
 
 class MemoryV3Migration:
-    """One-shot backfill of Graph + Map from the legacy memory stores."""
+    """Replay every transcript turn through the consolidator to catch up Graph/Map."""
 
     def run(self) -> dict[str, int]:
-        counts = {
-            "turns_backfilled": self._backfill_turn_id(),
-            "graph_rows": self._migrate_data_graph(),
-            "map_rows": self._migrate_episodes(),
-        }
+        self._backfill_legacy_turn_id()
+        svc = MemoryConsolidatorService()
+        consolidated = 0
+        for channel, turn_id in self._all_turns_in_order():
+            if "consolidated" in svc.consolidate(channel, turn_id):
+                consolidated += 1
+        counts = {"turns_consolidated": consolidated}
         logger.info("[MEMORY V3 MIGRATION] %s", counts)
         return counts
 
-    def _backfill_turn_id(self) -> int:
-        cur = Database.conn().execute(
+    def _backfill_legacy_turn_id(self) -> None:
+        """Repair legacy NULL turn_id (``-id``) so those rows join a turn."""
+        Database.conn().execute(
             "UPDATE transcript SET turn_id = -id WHERE turn_id IS NULL"
         )
-        return int(cur.rowcount or 0)
 
-    def _migrate_data_graph(self) -> int:
+    def _all_turns_in_order(self) -> Iterator[tuple[str, int]]:
         rows = cast(
-            "list[tuple[str, str, str]]",
+            "list[tuple[str, int]]",
             Database.conn().execute(
-                "SELECT kind, key, value FROM data_graph "
-                "WHERE active = 1 AND deleted_at IS NULL"
+                "SELECT channel, turn_id FROM ("
+                "  SELECT DISTINCT channel, turn_id FROM transcript "
+                "  WHERE turn_id IS NOT NULL"
+                ") ORDER BY channel, turn_id"
             ).fetchall(),
         )
-        for kind, key, value in rows:
-            MemoryGraphRow(
-                subject=f"{kind}.{key}" if kind else key,
-                contents=value or "",
-            ).save()
-        return len(rows)
-
-    def _migrate_episodes(self) -> int:
-        rows = cast(
-            "list[tuple[str, int, str]]",
-            Database.conn().execute(
-                "SELECT gist, COALESCE(level, 0), COALESCE(transcript_ids, '[]') "
-                "FROM episodes WHERE deleted_at IS NULL"
-            ).fetchall(),
-        )
-        n = 0
-        for gist, level, tids_json in rows:
-            if not gist:
+        for channel, turn_id in rows:
+            if channel in _EXCLUDED_CHANNELS or any(
+                channel.startswith(prefix) for prefix in _EXCLUDED_PREFIXES
+            ):
                 continue
-            raw = json.loads(tids_json or "[]")
-            tids = [i for i in raw if isinstance(i, int)] if isinstance(raw, list) else []
-            MemoryMapRow(
-                contents=gist,
-                iteration=int(level) + 1,
-                sourced_from=json.dumps(tids),
-            ).save()
-            n += 1
-        return n
+            yield channel, turn_id
