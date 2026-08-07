@@ -63,7 +63,7 @@ class TextReader:
             self._source, profile=BROWSER, timeout=self._URL_FETCH_TIMEOUT
         )
 
-        from services.text_extractor import extract_html
+        from services.text_extractor import TextExtractor
 
         # Plain-text responses (text/* but not text/html) and known plain-text URL
         # paths pass through verbatim — extraction would strip a raw patch/diff to
@@ -74,7 +74,7 @@ class TextReader:
             or self._is_plaintext_path(path)
         )
 
-        content = html if is_plaintext else extract_html(html, url=self._source)
+        content = html if is_plaintext else TextExtractor.extract_html(html, url=self._source)
 
         if not content or not content.strip():
             raise NoReadableContent("The page was fetched but no readable text could be extracted.")
@@ -99,18 +99,18 @@ class TextReader:
         if not os.access(resolved, os.R_OK):
             raise PermissionError("That file exists but cannot be read (no permission).")
 
-        from services.text_extractor import detect_mime_type, extract_text
+        from services.text_extractor import TextExtractor
 
-        mime_type = detect_mime_type(resolved)
+        mime_type = TextExtractor.detect_mime_type(resolved)
         from abilities.read import ReadAbility  # noqa: PLC0415
 
         # read is a TEXT reader. An image has no text to read — it is described by
         # the vision tool. Rejected here with a route rather than left to
-        # extract_text's raise, so the LLM gets a next step instead of a stack trace.
+        # TextExtractor.extract_text's raise, so the LLM gets a next step instead of a stack trace.
         # The raise is mapped by the caller (the read ability) to code=not-text.
         if mime_type.startswith("image/"):
             raise SourceIsImage(f"That file is an image, not a text file — {ReadAbility.NAME} cannot see images.")
-        content = extract_text(resolved, mime_type)
+        content = TextExtractor.extract_text(resolved, mime_type)
 
         if not content or not content.strip():
             raise NoTextContent("No text content could be extracted from that file.")

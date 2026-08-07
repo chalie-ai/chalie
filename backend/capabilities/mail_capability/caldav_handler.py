@@ -570,9 +570,9 @@ class CaldavHandler:
                 try:
                     from zoneinfo import ZoneInfo  # stdlib
 
-                    from services.locale_service import get_timezone_name
+                    from services.locale_service import LocaleService
 
-                    tz = ZoneInfo(get_timezone_name())
+                    tz = ZoneInfo(LocaleService.get_timezone_name())
                     local_end = end.astimezone(tz)
                     if (
                         local_end.hour == 0

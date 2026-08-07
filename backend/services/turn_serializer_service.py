@@ -23,8 +23,8 @@ from typing import cast
 
 from services.database import Database
 from services.file_mapper_service import FileMapperService
-from services.locale_service import CHAT_DAY_FMT, CHAT_TIMESTAMP_FMT, format_date
-from services.rich_media_parser import parse as _parse_rich_media
+from services.locale_service import CHAT_DAY_FMT, CHAT_TIMESTAMP_FMT, LocaleService
+from services.rich_media_parser import RichMediaParser
 from configs.channels import ChannelConfig
 from models.tool_call import ToolCall
 from models.transcript import Transcript
@@ -117,8 +117,8 @@ def _base_message(r: dict[str, object]) -> dict[str, object]:
         "id": str(cast("int", r['id'])),
         "role": r['role'],
         "content": r['content'] or "",
-        "timestamp": format_date(cast("str", r['created_at']), CHAT_TIMESTAMP_FMT, for_ui=True) or "",
-        "day": format_date(cast("str", r['created_at']), CHAT_DAY_FMT, for_ui=True) or "",
+        "timestamp": LocaleService.format_date(cast("str", r['created_at']), CHAT_TIMESTAMP_FMT, for_ui=True) or "",
+        "day": LocaleService.format_date(cast("str", r['created_at']), CHAT_DAY_FMT, for_ui=True) or "",
         "turn_id": r['turn_id'],
     }
 
@@ -153,7 +153,7 @@ def _apply_assistant_fields(
     cycle_calls: list[dict[str, object]],
 ) -> None:
     content = msg["content"]
-    segments = _parse_rich_media(str(content), cycle_calls)
+    segments = RichMediaParser.parse(str(content), cycle_calls)
     if not segments and content:
         segments = [{"type": "text", "content": content}]
     msg["segments"] = segments

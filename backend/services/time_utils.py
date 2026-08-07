@@ -5,7 +5,7 @@ Rule: ALL datetime values in this codebase must be timezone-aware UTC.
 - Use utc_now() instead of datetime.now() or datetime.utcnow()
 - Use parse_utc() whenever reading a datetime from SQLite, JSON, or any external source
 - Never create naive datetimes (datetimes without tzinfo)
-- Use services.locale_service.get_timezone() to get the user's IANA timezone (for display/conversion)
+- Use LocaleService.get_timezone() to get the user's IANA timezone (for display/conversion)
 """
 
 import logging

@@ -36,7 +36,7 @@ import pytest
 
 from abilities._result import ToolResult
 from services.dispatch_service import DispatchService
-from services.rich_media_parser import parse
+from services.rich_media_parser import RichMediaParser
 
 if TYPE_CHECKING:
     from controllers.message_processor import MessageProcessor
@@ -107,7 +107,7 @@ def _rich_env(tool_calls_row_result: str, span_tag: str) -> None:
     content = f"<span id='{span_tag}'>synthesis here</span>"
     tool_calls: list[dict[str, object]] = [{"result": tool_calls_row_result}]
 
-    segments = parse(content, tool_calls)
+    segments = RichMediaParser.parse(content, tool_calls)
     rich = next((s for s in segments if s.get("type") == "rich"), None)
     assert rich is not None, f"no rich segment parsed; segments={segments}"
     payload = rich.get("payload")

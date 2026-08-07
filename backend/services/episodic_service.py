@@ -190,8 +190,8 @@ class EpisodicService:
             # skipped (logged) consolidation instead of raising out of the caller
             # — which, on the recursive parent-write path, runs after the DB
             # transaction has already committed.
-            from services.source_profiles import profile_for
-            if not profile_for(channel).extract_episodes:
+            from services.source_profiles import Profile
+            if not Profile.profile_for(channel).extract_episodes:
                 return
             blob = pack_embedding(embedding)
             if blob is None:
@@ -239,9 +239,9 @@ class EpisodicService:
         autocommit statements, so the service groups them in one transaction
         (its contract). Returns the total rows maintained (tombstoned +
         reweighted + deleted)."""
-        from services.source_profiles import janitor_protected_sql
+        from services.source_profiles import Profile
         with Database.transaction():
-            tombstoned = Episode.tombstone_fossils(janitor_protected_sql())
+            tombstoned = Episode.tombstone_fossils(Profile.janitor_protected_sql())
             reweighted = Episode.decay_weights()
             deleted = Episode.delete_expired()
         return tombstoned + reweighted + deleted
@@ -316,8 +316,8 @@ class EpisodicService:
         a daemon to encode the latest window into episodes. Gated by the per-source
         profile (only ``extract_episodes`` channels produce episodes); encoding runs
         off-thread so the turn never blocks. Never raises."""
-        from services.source_profiles import profile_for
-        if not profile_for(config.channel).extract_episodes:
+        from services.source_profiles import Profile
+        if not Profile.profile_for(config.channel).extract_episodes:
             return
         try:
             from models.transcript import Transcript

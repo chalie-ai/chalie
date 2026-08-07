@@ -32,46 +32,46 @@ class TestLocaleServiceReads:
             db, timezone="Europe/Malta", locale="en-MT",
             currency="EUR", **{"location.lat": 35.899, "location.lon": 14.514, "location_name": "Valletta"},
         )
-        from services.locale_service import get_timezone, get_locale, get_currency, get_location
-        assert get_timezone().key == "Europe/Malta"
-        assert get_locale() == "en-MT"
-        assert get_currency() == "EUR"
-        assert get_location()["lat"] == 35.899
+        from services.locale_service import LocaleService
+        assert LocaleService.get_timezone().key == "Europe/Malta"
+        assert LocaleService.get_locale() == "en-MT"
+        assert LocaleService.get_currency() == "EUR"
+        assert LocaleService.get_location()["lat"] == 35.899
 
     def test_defaults_when_empty(self, db: sqlite3.Connection) -> None:
         db.execute("DELETE FROM telemetry")
         db.commit()
-        from services.locale_service import get_timezone, get_locale, get_currency, get_location
-        assert get_timezone().key == "UTC"
-        assert get_locale() == "en-US"
-        assert get_currency() == "USD"
-        assert get_location()["lat"] is None
+        from services.locale_service import LocaleService
+        assert LocaleService.get_timezone().key == "UTC"
+        assert LocaleService.get_locale() == "en-US"
+        assert LocaleService.get_currency() == "USD"
+        assert LocaleService.get_location()["lat"] is None
 
     def test_invalid_timezone_falls_back_to_utc(self, db: sqlite3.Connection) -> None:
         _seed_telemetry(db, timezone="Not/A/Zone")
-        from services.locale_service import get_timezone
-        assert get_timezone().key == "UTC"
+        from services.locale_service import LocaleService
+        assert LocaleService.get_timezone().key == "UTC"
 
 
 @pytest.mark.unit
 class TestFormatDate:
     def test_for_ui_converts_to_user_timezone(self, db: sqlite3.Connection) -> None:
         _seed_telemetry(db, timezone="Europe/Malta")
-        from services.locale_service import format_date
+        from services.locale_service import LocaleService
         dt = datetime(2026, 5, 17, 14, 0, tzinfo=timezone.utc)
-        assert format_date(dt, "%H:%M", for_ui=True) == "16:00"
+        assert LocaleService.format_date(dt, "%H:%M", for_ui=True) == "16:00"
 
     def test_for_db_keeps_utc(self, db: sqlite3.Connection) -> None:
         _seed_telemetry(db, timezone="Europe/Malta")
-        from services.locale_service import format_date
+        from services.locale_service import LocaleService
         dt = datetime(2026, 5, 17, 14, 0, tzinfo=timezone.utc)
-        assert format_date(dt, "%H:%M", for_ui=False) == "14:00"
+        assert LocaleService.format_date(dt, "%H:%M", for_ui=False) == "14:00"
 
     def test_none_and_empty_return_none(self, db: sqlite3.Connection) -> None:
-        from services.locale_service import format_date
-        assert format_date(None, "%H:%M") is None
-        assert format_date("", "%H:%M") is None
-        assert format_date("not-a-date", "%H:%M") is None
+        from services.locale_service import LocaleService
+        assert LocaleService.format_date(None, "%H:%M") is None
+        assert LocaleService.format_date("", "%H:%M") is None
+        assert LocaleService.format_date("not-a-date", "%H:%M") is None
 
 
 @pytest.mark.unit
@@ -80,13 +80,13 @@ class TestCalculateInterval:
 
     def test_returns_utc_and_local(self, db: sqlite3.Connection) -> None:
         _seed_telemetry(db, timezone="Europe/Malta")
-        from services.locale_service import calculate_interval
+        from services.locale_service import LocaleService
         dt = datetime(2026, 5, 17, 10, 0, tzinfo=timezone.utc)
-        utc_dt, local_dt = calculate_interval(dt, "day", 1)
+        utc_dt, local_dt = LocaleService.calculate_interval(dt, "day", 1)
         assert utc_dt == datetime(2026, 5, 18, 10, 0, tzinfo=timezone.utc)
         assert local_dt.hour == 12  # Malta UTC+2 in May
 
     def test_invalid_type_raises(self, db: sqlite3.Connection) -> None:
-        from services.locale_service import calculate_interval
+        from services.locale_service import LocaleService
         with pytest.raises(ValueError):
-            calculate_interval(datetime(2026, 1, 1, tzinfo=timezone.utc), "week", 1)
+            LocaleService.calculate_interval(datetime(2026, 1, 1, tzinfo=timezone.utc), "week", 1)

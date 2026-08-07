@@ -29,7 +29,7 @@ from abilities._result import ToolResult
 from configs.enums.param_key import Keys
 from contracts.params.param_bag import ParamBag
 from services.cron_schedule import validate_cron
-from services.locale_service import parse_local
+from services.locale_service import LocaleService
 from services.time_utils import utc_now
 
 _ACTIONS = ("create", "list", "search", "cancel", "update", "enable", "disable")
@@ -72,7 +72,7 @@ class ScheduleParamsBag(ParamBag):
         if not text:
             return utc_now()
         try:
-            return parse_local(text)
+            return LocaleService.parse_local(text)
         except (ValueError, TypeError) as parse_err:
             return ToolResult.err(
                 f"Could not understand start_at {text!r}: {parse_err}",

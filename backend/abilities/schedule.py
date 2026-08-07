@@ -54,7 +54,7 @@ from contracts.params.schedule_params_bag import (
 )
 from models.scheduled_item import ScheduledItem
 from services.database import Database
-from services.locale_service import format_date
+from services.locale_service import LocaleService
 from configs.enums.ability_category import AbilityCategory
 
 logger = logging.getLogger(__name__)
@@ -305,7 +305,7 @@ def _format_record(
     return {
         "id": item_id,
         "message": message,
-        "start_at": format_date(start_at, fmt=_LOCAL_ISO_FMT, for_ui=True),
+        "start_at": LocaleService.format_date(start_at, fmt=_LOCAL_ISO_FMT, for_ui=True),
         "minute": minute,
         "hour": hour,
         "day": day,
@@ -419,7 +419,7 @@ def _serialise_item_row(row: dict[str, object]) -> dict[str, object]:
     return {
         "id": row.get("id"),
         "message": row.get("message"),
-        "start_at": format_date(cast("datetime | str | None", row.get("start_at")), fmt=_LOCAL_ISO_FMT, for_ui=True),
+        "start_at": LocaleService.format_date(cast("datetime | str | None", row.get("start_at")), fmt=_LOCAL_ISO_FMT, for_ui=True),
         "minute": row.get("cron_minute"),
         "hour": row.get("cron_hour"),
         "day": row.get("cron_dom"),

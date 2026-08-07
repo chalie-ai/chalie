@@ -11,7 +11,7 @@ user's local wall-clock time, never raw UTC.
 import logging
 from datetime import datetime
 
-from services.locale_service import format_date
+from services.locale_service import LocaleService
 from services.time_utils import utc_now, parse_utc
 
 logger = logging.getLogger(__name__)
@@ -67,7 +67,7 @@ class TimeFormatterService:
     def local(value: datetime | str | None, fmt: str = "%Y-%m-%d %H:%M") -> str | None:
         """Format *value* in the user's local timezone.
 
-        Delegates to locale_service.format_date(for_ui=True) — the single
+        Delegates to LocaleService.format_date(for_ui=True) — the single
         chokepoint for all user-facing timestamp formatting.
 
         Args:
@@ -81,4 +81,4 @@ class TimeFormatterService:
             Formatted local-time string, or ``None`` if *value* is missing or
             unparseable.
         """
-        return format_date(value, fmt, for_ui=True)
+        return LocaleService.format_date(value, fmt, for_ui=True)

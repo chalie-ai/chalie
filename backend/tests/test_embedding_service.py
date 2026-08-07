@@ -7,16 +7,13 @@ regressions in the ONNX pipeline end-to-end: load, tokenize, infer, normalize.
 
 import numpy as np
 
-from services.embedding_service import (
-    EmbeddingService,
-    _get_session_and_tokenizer,
-)
+from services.embedding_service import EmbeddingService
 
 
 class TestEmbeddingServiceONNX:
     @classmethod
     def setup_class(cls) -> None:
-        _get_session_and_tokenizer()
+        EmbeddingService._get_session_and_tokenizer()
 
     # ── output shape and dtype ───────────────────────────────────────────────
 

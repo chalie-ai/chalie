@@ -170,7 +170,7 @@ class NewsService:
         return [
             article
             for entry in feed.entries
-            if (article := _entry_to_article(cast(dict[str, object], entry), src, feed_image_url)) is not None
+            if (article := self._entry_to_article(cast(dict[str, object], entry), src, feed_image_url)) is not None
         ]
 
     # ── Google News ───────────────────────────────────────────
@@ -202,7 +202,7 @@ class NewsService:
         articles = [
             article
             for entry in feed.entries
-            if (article := _entry_to_article(cast(dict[str, object], entry), dummy_src, "")) is not None
+            if (article := self._entry_to_article(cast(dict[str, object], entry), dummy_src, "")) is not None
         ]
 
         if articles:
@@ -218,7 +218,7 @@ class NewsService:
         seen: list[str] = []
         result = []
         for article in articles:
-            norm = _normalize_title(article.title)
+            norm = self._normalize_title(article.title)
             is_dup = any(
                 _Levenshtein.distance(norm, prev) <= LEVENSHTEIN_THRESHOLD
                 for prev in seen
@@ -257,6 +257,91 @@ class NewsService:
         relevant.sort(key=lambda x: (x[1], x[0].published_at), reverse=True)
         return [a for a, _ in relevant]
 
+    # ── Feed parser helpers ───────────────────────────────────
+
+    @staticmethod
+    def _strip_html(text: str) -> str:
+        if not text:
+            return ""
+        cleaned = nh3.clean(text, tags=set())
+        return _WHITESPACE_RE.sub(" ", _html.unescape(cleaned).replace("\xa0", " ")).strip()
+
+    @staticmethod
+    def _feedparser_date_to_utc_str(parsed: object) -> str:
+        """Convert feedparser's UTC struct_time to an ISO 8601 UTC string.
+
+        feedparser normalises all date formats (RFC 2822, ISO 8601, W3CDTF, POSIX)
+        to a UTC struct_time. Returns utc_now() when parsed is None.
+        """
+        if parsed is None:
+            return utc_now().isoformat()
+        ts = calendar.timegm(cast(time.struct_time, parsed))  # treats struct_time as UTC (not local)
+        return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+
+    @staticmethod
+    def _feedparser_image(entry: dict[str, object], feed_image_url: str = "") -> str:
+        """Extract a thumbnail URL from a feedparser entry (RSS or Atom unified).
+
+        Priority: media:thumbnail → media:content (image/* or medium=image)
+        → enclosures (image/*, feedparser key is 'href' not 'url')
+        → feed-level channel image fallback.
+        """
+        thumbs = cast(list[dict[str, object]], entry.get("media_thumbnail") or [])
+        if thumbs:
+            url = cast(str, thumbs[0].get("url", ""))
+            if url:
+                return url.strip()
+
+        for media in cast(list[dict[str, object]], entry.get("media_content") or []):
+            t = cast(str, (media.get("type") or "")).lower()
+            m = cast(str, (media.get("medium") or "")).lower()
+            if t.startswith("image/") or m == "image":
+                url = cast(str, media.get("url", ""))
+                if url:
+                    return url.strip()
+
+        for enc in cast(list[dict[str, object]], entry.get("enclosures") or []):
+            t = cast(str, (enc.get("type") or "")).lower()
+            if t.startswith("image/"):
+                href = cast(str, enc.get("href", ""))
+                if href:
+                    return href.strip()
+
+        return feed_image_url.strip() if feed_image_url else ""
+
+    @staticmethod
+    def _entry_to_article(entry: dict[str, object], src: news_sources.Source, feed_image_url: str) -> Optional[NewsArticle]:
+        """Build a NewsArticle from a feedparser entry.
+
+        Shared by _parse_feed and fetch_google_news so there is one parsing path.
+        Returns None when the entry has no usable title.
+        """
+        title = cast(str, (entry.get("title") or "")).strip()
+        if not title:
+            return None
+
+        content = cast(list[dict[str, object]], entry.get("content") or [])
+        raw_desc = cast(str, entry.get("summary") or (cast(str, content[0].get("value", "")) if content else ""))
+        desc = NewsService._strip_html(raw_desc)[:400]
+        url = cast(str, (entry.get("link") or entry.get("id") or "")).strip()
+        published_at = NewsService._feedparser_date_to_utc_str(
+            entry.get("published_parsed") or entry.get("updated_parsed")
+        )
+        return NewsArticle(
+            title=title,
+            description=desc.strip(),
+            url=url,
+            published_at=published_at,
+            source=src.name,
+            source_id=src.id,
+            category=src.category,
+            image_url=NewsService._feedparser_image(entry, feed_image_url),
+        )
+
+    @staticmethod
+    def _normalize_title(title: str) -> str:
+        return _WHITESPACE_RE.sub(" ", _PUNCT_RE.sub("", title.lower())).strip()
+
     # ── Convenience methods ───────────────────────────────────
 
     def search(self, query: str, source_ids: list[str] | None = None, limit: int = 10, country_code: str = "US") -> list[NewsArticle]:
@@ -271,86 +356,4 @@ class NewsService:
         return articles[:limit]
 
 
-# ── Module-level helpers ──────────────────────────────────────
 
-def _strip_html(text: str) -> str:
-    if not text:
-        return ""
-    cleaned = nh3.clean(text, tags=set())
-    return _WHITESPACE_RE.sub(" ", _html.unescape(cleaned).replace("\xa0", " ")).strip()
-
-
-def _feedparser_date_to_utc_str(parsed: object) -> str:
-    """Convert feedparser's UTC struct_time to an ISO 8601 UTC string.
-
-    feedparser normalises all date formats (RFC 2822, ISO 8601, W3CDTF, POSIX)
-    to a UTC struct_time. Returns utc_now() when parsed is None.
-    """
-    if parsed is None:
-        return utc_now().isoformat()
-    ts = calendar.timegm(cast(time.struct_time, parsed))  # treats struct_time as UTC (not local)
-    return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
-
-
-def _feedparser_image(entry: dict[str, object], feed_image_url: str = "") -> str:
-    """Extract a thumbnail URL from a feedparser entry (RSS or Atom unified).
-
-    Priority: media:thumbnail → media:content (image/* or medium=image)
-    → enclosures (image/*, feedparser key is 'href' not 'url')
-    → feed-level channel image fallback.
-    """
-    thumbs = cast(list[dict[str, object]], entry.get("media_thumbnail") or [])
-    if thumbs:
-        url = cast(str, thumbs[0].get("url", ""))
-        if url:
-            return url.strip()
-
-    for media in cast(list[dict[str, object]], entry.get("media_content") or []):
-        t = cast(str, (media.get("type") or "")).lower()
-        m = cast(str, (media.get("medium") or "")).lower()
-        if t.startswith("image/") or m == "image":
-            url = cast(str, media.get("url", ""))
-            if url:
-                return url.strip()
-
-    for enc in cast(list[dict[str, object]], entry.get("enclosures") or []):
-        t = cast(str, (enc.get("type") or "")).lower()
-        if t.startswith("image/"):
-            href = cast(str, enc.get("href", ""))
-            if href:
-                return href.strip()
-
-    return feed_image_url.strip() if feed_image_url else ""
-
-
-def _entry_to_article(entry: dict[str, object], src: news_sources.Source, feed_image_url: str) -> Optional[NewsArticle]:
-    """Build a NewsArticle from a feedparser entry.
-
-    Shared by _parse_feed and fetch_google_news so there is one parsing path.
-    Returns None when the entry has no usable title.
-    """
-    title = cast(str, (entry.get("title") or "")).strip()
-    if not title:
-        return None
-
-    content = cast(list[dict[str, object]], entry.get("content") or [])
-    raw_desc = cast(str, entry.get("summary") or (cast(str, content[0].get("value", "")) if content else ""))
-    desc = _strip_html(raw_desc)[:400]
-    url = cast(str, (entry.get("link") or entry.get("id") or "")).strip()
-    published_at = _feedparser_date_to_utc_str(
-        entry.get("published_parsed") or entry.get("updated_parsed")
-    )
-    return NewsArticle(
-        title=title,
-        description=desc.strip(),
-        url=url,
-        published_at=published_at,
-        source=src.name,
-        source_id=src.id,
-        category=src.category,
-        image_url=_feedparser_image(entry, feed_image_url),
-    )
-
-
-def _normalize_title(title: str) -> str:
-    return _WHITESPACE_RE.sub(" ", _PUNCT_RE.sub("", title.lower())).strip()

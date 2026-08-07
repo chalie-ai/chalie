@@ -15,7 +15,7 @@ the exact symbol page) succeeds with ``meta degraded=true``.
 
 All HTTP goes through :mod:`services.web_fetch` (the ``API`` profile's
 identified bot UA) and all HTML extraction through
-:func:`services.text_extractor.extract_html` — no local fetch or parser plumbing.
+:class:`services.text_extractor.TextExtractor.extract_html` — no local fetch or parser plumbing.
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ from abilities._result import ToolResult, truncate
 from configs.enums.param_key import Keys
 from contracts.params.param_bag import ParamBag
 from contracts.params.programming_docs_search_params_bag import ProgrammingDocsSearchParamsBag
-from services.text_extractor import extract_html
+from services.text_extractor import TextExtractor
 from services.web_fetch import API, fetch_text
 from configs.enums.ability_category import AbilityCategory
 
@@ -462,7 +462,7 @@ def lookup(language: str, query: str) -> ToolResult:
             html = _fetch(cast(str, candidate["url"]))
         except requests.RequestException:
             continue
-        excerpt = extract_html(html, url=cast(str, candidate["url"]))
+        excerpt = TextExtractor.extract_html(html, url=cast(str, candidate["url"]))
         if not excerpt:
             continue
         excerpt, _ = truncate(excerpt, _MAX_CHARS)

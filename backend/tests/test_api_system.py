@@ -286,7 +286,7 @@ class TestSystemAPI:
 
     def test_observability_compaction_returns_summary_and_formatted_timestamp(self, client: FlaskClient, db: sqlite3.Connection) -> None:
         """A success compaction on the 'user' channel surfaces its summary, watermark, and a
-        backend-formatted timestamp (locale_service, for_ui — UTC fallback with no telemetry)."""
+        backend-formatted timestamp (LocaleService, for_ui — UTC fallback with no telemetry)."""
         watermark = self._seed_compaction(
             db, channel=Channel.USER.value,
             summary='Earlier turns condensed here.',
@@ -375,8 +375,8 @@ class TestSystemAPI:
 
         # Load the real ONNX embedding model so the /ready endpoint sees _session
         # as non-None and reports 'ok'. No mock — we verify the real model works.
-        from services.embedding_service import _get_session_and_tokenizer
-        _get_session_and_tokenizer()
+        from services.embedding_service import EmbeddingService
+        EmbeddingService._get_session_and_tokenizer()
 
         # Patch ONNX service to report ready
         mock_onnx_svc = MagicMock()

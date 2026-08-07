@@ -41,7 +41,7 @@ from __future__ import annotations
 import functools
 from datetime import datetime
 
-from services.locale_service import get_timezone
+from services.locale_service import LocaleService
 
 
 @functools.lru_cache(maxsize=256)
@@ -161,7 +161,7 @@ def matches(
     Day-of-week in the parsed set has any 7s folded to 0 so both 0 and 7
     match Sunday.
     """
-    local = now_utc.astimezone(get_timezone())
+    local = now_utc.astimezone(LocaleService.get_timezone())
 
     minset = parse_field(minute, 0, 59)
     hourset = parse_field(hour, 0, 23)

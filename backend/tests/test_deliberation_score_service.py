@@ -28,8 +28,8 @@ def _require_encoder() -> None:
 
 def _real_svc() -> DeliberationScoreService:
     _require_encoder()
-    from services.embedding_service import _get_session_and_tokenizer
-    _get_session_and_tokenizer()
+    from services.embedding_service import EmbeddingService
+    EmbeddingService._get_session_and_tokenizer()
     return DeliberationScoreService(
         inference_service=OnnxInferenceService(_DEFAULT_MODELS_DIR, _DEFAULT_PRETRAINED_DIR)
     )

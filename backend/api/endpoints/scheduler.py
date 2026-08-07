@@ -43,7 +43,7 @@ from api.request.scheduler_item import SchedulerItemRequest
 from api.response.scheduler_item import SchedulerItem
 from models.scheduled_item import ScheduledItem
 from services.database import Database
-from services.locale_service import parse_local
+from services.locale_service import LocaleService
 from services.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
@@ -124,7 +124,7 @@ class Scheduler(Endpoint):
         return "", 204
 
     def _create(self, dto: SchedulerItemRequest) -> ResponseReturnValue:
-        start_at_utc = parse_local(dto.start_at) if dto.start_at else utc_now()
+        start_at_utc = LocaleService.parse_local(dto.start_at) if dto.start_at else utc_now()
         item = ScheduledItem.create(
             message=dto.message,
             start_at=start_at_utc.isoformat(),
@@ -154,7 +154,7 @@ class Scheduler(Endpoint):
         # Anchor: the caller's new start_at when supplied, else the row's
         # existing one (a plain enabled-toggle omits it) — a future-dated
         # start_at is never re-floored to now.
-        item.start_at = parse_local(dto.start_at).isoformat() if dto.start_at else item.start_at
+        item.start_at = LocaleService.parse_local(dto.start_at).isoformat() if dto.start_at else item.start_at
         item.message = dto.message
         item.cron_minute = dto.minute
         item.cron_hour = dto.hour

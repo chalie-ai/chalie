@@ -109,9 +109,9 @@ def _group_telemetry(ctx: dict[str, object]) -> list[tuple[str, list[str]]]:
 def _compute_local_time() -> str | None:
     """Return wall-clock time formatted as ``Sat 02 May 2026 11:35``."""
     try:
-        from services.locale_service import format_date
+        from services.locale_service import LocaleService
         from services.time_utils import utc_now
-        return format_date(utc_now(), _LOCAL_TIME_FORMAT, for_ui=True)
+        return LocaleService.format_date(utc_now(), _LOCAL_TIME_FORMAT, for_ui=True)
     except Exception as exc:
         logger.debug("[WorldState] local_time compute failed: %s", exc)
         return None

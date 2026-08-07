@@ -14,7 +14,7 @@ Two layers are exercised:
 * ``parse_field`` / ``validate_cron`` — pure crontab-expression parsing and
   range validation (no timezone, no DB).
 * ``matches`` — does ``now_utc``, converted to the user's real local wall clock
-  via ``services.locale_service.get_timezone``, satisfy all five fields
+  via ``LocaleService.get_timezone``, satisfy all five fields
   (minute, hour, day-of-month, month, day-of-week)? No mocking of the timezone
   lookup — the real ``telemetry`` table is seeded through the same path the
   frontend heartbeat uses, exactly as ``get_timezone()`` reads it in
@@ -40,7 +40,7 @@ _MT = ZoneInfo(_TZ)
 
 def _seed_timezone(db: sqlite3.Connection, tz_name: str = _TZ) -> None:
     """Write a real heartbeat timezone into the telemetry table — the same
-    store the production ``locale_service.get_timezone()`` reads."""
+    store the production ``LocaleService.get_timezone()`` reads."""
     from services.heartbeat_service import heartbeat_service
 
     heartbeat_service._ctx = None

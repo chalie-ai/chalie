@@ -26,7 +26,7 @@ from models.episode import Episode
 from models.tool_call import ToolCall
 from services.file_mapper_service import FileMapperService
 from services.llm_log_service import LlmLogService, VALID_WINDOWS
-from services.locale_service import format_date
+from services.locale_service import LocaleService
 from services.time_utils import utc_now
 from utils.logger import LOG_FILE_PATH as _LOG_FILE_PATH  # Written exclusively by utils/logger.py in the same process
 from .auth import require_session
@@ -425,7 +425,7 @@ class ObservabilityCompactionResource(Resource):
                 compaction=CompactionRecord(
                     summary=record.content,
                     compacted_up_to_id=record.compacted_up_to,
-                    compacted_at=format_date(record.created_at, for_ui=True) or "",
+                    compacted_at=LocaleService.format_date(record.created_at, for_ui=True) or "",
                 ),
             )
         except Exception:

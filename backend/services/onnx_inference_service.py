@@ -169,9 +169,9 @@ class OnnxInferenceService:
     # ── Encoder access (borrowed from embedding_service) ──────────────────────
 
     def _get_encoder(self) -> tuple[object, object, list[str], list[str]]:
-        from services import embedding_service as _emb_mod
-        session, tokenizer = _emb_mod._get_session_and_tokenizer()
-        return session, tokenizer, _emb_mod._output_names, _emb_mod._input_names
+        from services import embedding_service
+        session, tokenizer = embedding_service.EmbeddingService._get_session_and_tokenizer()
+        return session, tokenizer, embedding_service._output_names, embedding_service._input_names
 
     def _encoder_onnx_path(self) -> Path:
         return self._models_dir / "gte-modernbert-base" / "onnx" / "model.onnx"

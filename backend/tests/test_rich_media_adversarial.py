@@ -13,7 +13,7 @@ from typing import cast
 import pytest
 
 from services.markup import Markup
-from services.rich_media_parser import parse
+from services.rich_media_parser import RichMediaParser
 
 pytestmark = pytest.mark.unit
 
@@ -58,7 +58,7 @@ class TestAdversarialParser:
         # No span match → full content is a text segment, no rich segment emitted.
         tc = _tc('{"temperature_c":5}\n\n<span id=\'_invalid_1\'>')
         content = "<span id='_invalid_1'>Cold today.</span>"
-        segs = parse(content, [tc])
+        segs = RichMediaParser.parse(content, [tc])
         assert not any(s["type"] == "rich" for s in segs)
         # Content still reaches the user as text
         all_text = " ".join(
@@ -71,7 +71,7 @@ class TestAdversarialParser:
         raw_content = "<span id='weather_1'><script>evil()</script>Partly cloudy.</span>"
         sanitised = Markup.sanitize(raw_content)
         tc = _tc('{"temperature_c":12}\n\n<span id=\'weather_1\'>')
-        segs = parse(sanitised, [tc])
+        segs = RichMediaParser.parse(sanitised, [tc])
         # Should produce exactly one rich segment (script stripped, text remains)
         rich = [s for s in segs if s["type"] == "rich"]
         assert len(rich) == 1
@@ -83,7 +83,7 @@ class TestAdversarialParser:
         raw_content = "<span id='weather_1' onclick='alert(1)'>Sunny.</span>"
         sanitised = Markup.sanitize(raw_content)
         tc = _tc('{"temperature_c":22}\n\n<span id=\'weather_1\'>')
-        segs = parse(sanitised, [tc])
+        segs = RichMediaParser.parse(sanitised, [tc])
         rich = [s for s in segs if s["type"] == "rich"]
         assert len(rich) == 1
         assert rich[0]["tag"] == "weather_1"
@@ -93,14 +93,14 @@ class TestAdversarialParser:
         # id '123' — no alpha prefix, regex [a-z][a-z0-9_]* does not match.
         tc = _tc('{"temperature_c":5}\n\n<span id=\'123\'>')
         content = "<span id='123'>text</span>"
-        segs = parse(content, [tc])
+        segs = RichMediaParser.parse(content, [tc])
         assert not any(s["type"] == "rich" for s in segs)
 
     def test_empty_id_falls_back_to_text(self) -> None:
         # id='' — regex requires at least one [a-z] char.
         tc = _tc('{"temperature_c":5}\n\n<span id=\'\'>')
         content = "<span id=''>text</span>"
-        segs = parse(content, [tc])
+        segs = RichMediaParser.parse(content, [tc])
         assert not any(s["type"] == "rich" for s in segs)
 
     def test_very_long_synthesis_handled_without_error(self) -> None:
@@ -108,7 +108,7 @@ class TestAdversarialParser:
         long_text = "Sunny. " * 2000
         tc = _tc('{"temperature_c":25}\n\n<span id=\'weather_1\'>')
         content = f"<span id='weather_1'>{long_text}</span>"
-        segs = parse(content, [tc])
+        segs = RichMediaParser.parse(content, [tc])
         rich = [s for s in segs if s["type"] == "rich"]
         assert len(rich) == 1
         assert cast(str, rich[0]["synthesis"]).startswith("Sunny.")

@@ -269,15 +269,15 @@ def _parse_dt(value: str) -> datetime | None:
     sentinel.
     """
     import dateparser
-    from services.locale_service import get_timezone_name, local_now
+    from services.locale_service import LocaleService
 
     parsed = dateparser.parse(
         value,
         settings={
-            "TIMEZONE": get_timezone_name(),
+            "TIMEZONE": LocaleService.get_timezone_name(),
             "TO_TIMEZONE": "UTC",
             "RETURN_AS_TIMEZONE_AWARE": True,
-            "RELATIVE_BASE": local_now(),
+            "RELATIVE_BASE": LocaleService.local_now(),
             "PREFER_DATES_FROM": "future",
         },
     )

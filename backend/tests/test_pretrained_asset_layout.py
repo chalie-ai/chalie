@@ -41,8 +41,8 @@ class TestPretrainedAssetLayoutBoot:
         _require_encoder()
         _require_shipped_assets()
 
-        from services.embedding_service import _get_session_and_tokenizer
-        _get_session_and_tokenizer()
+        from services.embedding_service import EmbeddingService
+        EmbeddingService._get_session_and_tokenizer()
 
         svc = OnnxInferenceService(_MODELS_DIR, _PRETRAINED_DIR)
 
@@ -57,8 +57,8 @@ class TestPretrainedAssetLayoutBoot:
         _require_encoder()
         _require_shipped_assets()
 
-        from services.embedding_service import _get_session_and_tokenizer
-        _get_session_and_tokenizer()
+        from services.embedding_service import EmbeddingService
+        EmbeddingService._get_session_and_tokenizer()
 
         mtime_before = os.path.getmtime(_DELIB_NPZ)
 
@@ -79,8 +79,8 @@ class TestPretrainedAssetMissingMeta:
         _require_encoder()
         _require_shipped_assets()
 
-        from services.embedding_service import _get_session_and_tokenizer
-        _get_session_and_tokenizer()
+        from services.embedding_service import EmbeddingService
+        EmbeddingService._get_session_and_tokenizer()
 
         backup_path = _DELIB_META + ".bak_test"
         try:

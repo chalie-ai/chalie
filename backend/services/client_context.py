@@ -39,17 +39,10 @@ class ClientContext:
         """Returns None when no context is stored yet (fresh boot, no
         heartbeat) or the locale services are unavailable."""
         try:
-            from services.locale_service import (  # noqa: PLC0415
-                format_date,
-                get_currency,
-                get_language,
-                get_locale,
-                get_location,
-                get_timezone_name,
-            )
+            from services.locale_service import LocaleService  # noqa: PLC0415
             from services.time_utils import utc_now  # noqa: PLC0415
 
-            location = get_location()
+            location = LocaleService.get_location()
             loc_name = cast(str, location.get("name") or "")
             city, country = "", ""
             if "," in loc_name:
@@ -61,11 +54,11 @@ class ClientContext:
                 location_name=loc_name,
                 city=city,
                 country=country,
-                time=format_date(utc_now(), "%H:%M:%S", for_ui=True) or "",
-                timezone=get_timezone_name(),
-                locale=get_locale(),
-                language=get_language(),
-                currency=get_currency(),
+                time=LocaleService.format_date(utc_now(), "%H:%M:%S", for_ui=True) or "",
+                timezone=LocaleService.get_timezone_name(),
+                locale=LocaleService.get_locale(),
+                language=LocaleService.get_language(),
+                currency=LocaleService.get_currency(),
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("[ClientContext] snapshot failed: %s", exc)
