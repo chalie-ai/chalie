@@ -30,8 +30,8 @@ from contracts.params.param_bag import ParamBag
 from contracts.params.web_fetch_params_bag import WebFetchParamsBag
 from exceptions import DownloadTooLarge
 from services.file_mapper_service import FileMapperService
-from services.url_to_markdown_service import UrlToMarkdownService, url_slug
-from services.web_fetch import BROWSER, stream_to_file
+from services.url_to_markdown_service import UrlToMarkdownService
+from services.web_fetch import BROWSER, WebFetch
 
 
 class WebFetchAbility(Ability[WebFetchParamsBag]):
@@ -124,7 +124,7 @@ class WebFetchAbility(Ability[WebFetchParamsBag]):
         url = params.url
         dest = FileMapperService.get_downloads_path(_filename_from_url(url))
         try:
-            bytes_written, content_type = stream_to_file(
+            bytes_written, content_type = WebFetch.stream_to_file(
                 url,
                 str(dest),
                 profile=BROWSER,
@@ -242,5 +242,5 @@ def _filename_from_url(url: str) -> str:
     convention as web pages (two hosts' ``report.pdf`` never collide; a re-fetch
     overwrites in place), keeping the URL's own extension when it has one."""
     ext = PurePosixPath(urlparse(url.lower()).path).suffix.lstrip(".")
-    base = url_slug(url) or "download"
+    base = UrlToMarkdownService.url_slug(url) or "download"
     return f"{base}.{ext}" if ext.isalnum() else base

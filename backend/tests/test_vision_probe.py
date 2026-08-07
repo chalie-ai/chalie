@@ -30,22 +30,22 @@ _FOLDED_COLOR = json.dumps({
 
 
 def test_perfect_exact_form_scores_one() -> None:
-    from services.vision_probe import score_probe_response
-    assert score_probe_response(_PREFERRED) == pytest.approx(1.0)
+    from services.vision_probe import VisionProbe
+    assert VisionProbe.score_probe_response(_PREFERRED) == pytest.approx(1.0)
 
 
 def test_folded_color_failure_scores_one_and_passes() -> None:
     """Replicate the reproduced failure: model folds colour into the shape.
     Previously this got 0.55; with synonym+token matching it gets 1.0 and the
     probe passes."""
-    from services.vision_probe import score_probe_response
-    assert score_probe_response(_FOLDED_COLOR) == pytest.approx(1.0)
+    from services.vision_probe import VisionProbe
+    assert VisionProbe.score_probe_response(_FOLDED_COLOR) == pytest.approx(1.0)
 
 
 def test_count_plus_two_shapes_plus_text_passes() -> None:
     # One shape missed entirely: 0.30 count + 2*0.15 attributes + 0.25 text = 0.85.
     # A model that saw the image but under-reported one shape still passes.
-    from services.vision_probe import score_probe_response
+    from services.vision_probe import VisionProbe
     body = json.dumps({
         "number_of_shapes": 3,
         "shapes": [
@@ -54,7 +54,7 @@ def test_count_plus_two_shapes_plus_text_passes() -> None:
         ],
         "text": "Chalie can read!",
     })
-    assert score_probe_response(body) == pytest.approx(0.85)
+    assert VisionProbe.score_probe_response(body) == pytest.approx(0.85)
 
 
 def test_count_plus_three_shapes_no_text_fails() -> None:
@@ -65,7 +65,7 @@ def test_count_plus_three_shapes_no_text_fails() -> None:
     one thing this probe tests that a blind guess from the prompt cannot fake,
     so no future reweighting may quietly promote this reply to a pass.
     """
-    from services.vision_probe import PASS_THRESHOLD, score_probe_response
+    from services.vision_probe import PASS_THRESHOLD, VisionProbe
     body = json.dumps({
         "number_of_shapes": 3,
         "shapes": [
@@ -75,7 +75,7 @@ def test_count_plus_three_shapes_no_text_fails() -> None:
         ],
         "text": "",
     })
-    score = score_probe_response(body)
+    score = VisionProbe.score_probe_response(body)
     assert score == pytest.approx(0.75)
     assert score < PASS_THRESHOLD
 
@@ -87,7 +87,7 @@ def test_three_shapes_correct_text_wrong_count_fails() -> None:
     reports five shapes when three are drawn did not see the image accurately,
     however well it described the three it did name.
     """
-    from services.vision_probe import PASS_THRESHOLD, score_probe_response
+    from services.vision_probe import PASS_THRESHOLD, VisionProbe
     body = json.dumps({
         "number_of_shapes": 5,
         "shapes": [
@@ -97,14 +97,14 @@ def test_three_shapes_correct_text_wrong_count_fails() -> None:
         ],
         "text": "Chalie can read!",
     })
-    score = score_probe_response(body)
+    score = VisionProbe.score_probe_response(body)
     assert score == pytest.approx(0.70)
     assert score < PASS_THRESHOLD
 
 
 def test_case_insensitive_and_trimmed_text() -> None:
     # Synonym/normaliser handles casing: "Rectangle"/"RED" + leading/trailing whitespace.
-    from services.vision_probe import score_probe_response
+    from services.vision_probe import VisionProbe
     body = json.dumps({
         "number_of_shapes": 3,
         "shapes": [
@@ -114,12 +114,12 @@ def test_case_insensitive_and_trimmed_text() -> None:
         ],
         "text": "  chalie can read!  ",
     })
-    assert score_probe_response(body) == pytest.approx(1.0)
+    assert VisionProbe.score_probe_response(body) == pytest.approx(1.0)
 
 
 def test_quoted_uppercase_text_norm_equal() -> None:
     # Capitalised shape/value keywords + surrounding quotes around the text.
-    from services.vision_probe import score_probe_response
+    from services.vision_probe import VisionProbe
     body = json.dumps({
         "number_of_shapes": 3,
         "shapes": [
@@ -129,28 +129,28 @@ def test_quoted_uppercase_text_norm_equal() -> None:
         ],
         "text": '"Chalie can read!"',
     })
-    assert score_probe_response(body) == pytest.approx(1.0)
+    assert VisionProbe.score_probe_response(body) == pytest.approx(1.0)
 
 
 def test_json_in_code_fence_is_parsed() -> None:
-    from services.vision_probe import score_probe_response
-    assert score_probe_response(f"Here you go:\n```json\n{_PREFERRED}\n```") == pytest.approx(1.0)
+    from services.vision_probe import VisionProbe
+    assert VisionProbe.score_probe_response(f"Here you go:\n```json\n{_PREFERRED}\n```") == pytest.approx(1.0)
 
 
 def test_prose_then_json_is_parsed() -> None:
-    from services.vision_probe import score_probe_response
-    assert score_probe_response(f"I can see three shapes. {_PREFERRED}") == pytest.approx(1.0)
+    from services.vision_probe import VisionProbe
+    assert VisionProbe.score_probe_response(f"I can see three shapes. {_PREFERRED}") == pytest.approx(1.0)
 
 
 def test_garbage_scores_zero() -> None:
-    from services.vision_probe import score_probe_response
-    assert score_probe_response("no json here") == pytest.approx(0.0)
-    assert score_probe_response("") == pytest.approx(0.0)
+    from services.vision_probe import VisionProbe
+    assert VisionProbe.score_probe_response("no json here") == pytest.approx(0.0)
+    assert VisionProbe.score_probe_response("") == pytest.approx(0.0)
 
 
 def test_duplicate_correct_shape_counts_once() -> None:
     # repeated (rectangle,red) must not double-count
-    from services.vision_probe import score_probe_response
+    from services.vision_probe import VisionProbe
     body = json.dumps({
         "number_of_shapes": 3,
         "shapes": [
@@ -162,13 +162,13 @@ def test_duplicate_correct_shape_counts_once() -> None:
     # Greedy consumption: the first (rect,red) is claimed by the rectangle and
     # scores both halves; the second is left unmatched because circle/yellow and
     # hexagon/green find nothing in it. 0.30 count + 0.15 attr + 0.25 text = 0.70.
-    assert score_probe_response(body) == pytest.approx(0.70)
+    assert VisionProbe.score_probe_response(body) == pytest.approx(0.70)
 
 
 def test_zero_shape_colour_matches_correct_text_scores_count_and_text() -> None:
     # Three 'blue triangles': neither word appears in any synonym set, so no
     # attribute scores at all -> 0.30 count + 0.00 attr + 0.25 text = 0.55.
-    from services.vision_probe import score_probe_response
+    from services.vision_probe import VisionProbe
     body = json.dumps({
         "number_of_shapes": 3,
         "shapes": [
@@ -178,12 +178,12 @@ def test_zero_shape_colour_matches_correct_text_scores_count_and_text() -> None:
         ],
         "text": "Chalie can read!",
     })
-    assert score_probe_response(body) == pytest.approx(0.55)
+    assert VisionProbe.score_probe_response(body) == pytest.approx(0.55)
 
 
 def test_three_blue_triangles_wrong_text_fails() -> None:
     # Wrong text zeros the text slot too, leaving just the count slot.
-    from services.vision_probe import score_probe_response
+    from services.vision_probe import VisionProbe
     body = json.dumps({
         "number_of_shapes": 3,
         "shapes": [
@@ -193,7 +193,7 @@ def test_three_blue_triangles_wrong_text_fails() -> None:
         ],
         "text": "nothing visible here",
     })
-    assert score_probe_response(body) == pytest.approx(0.30)
+    assert VisionProbe.score_probe_response(body) == pytest.approx(0.30)
 
 
 def test_text_scores_regardless_of_punctuation_and_spacing() -> None:
@@ -204,10 +204,10 @@ def test_text_scores_regardless_of_punctuation_and_spacing() -> None:
     below a clean transcription would fail a provider for its punctuation, so
     the text field runs through the same normaliser as the shape tokens.
     """
-    from services.vision_probe import score_probe_response
+    from services.vision_probe import VisionProbe
 
     def scored(text: str) -> float:
-        return score_probe_response(json.dumps({
+        return VisionProbe.score_probe_response(json.dumps({
             "number_of_shapes": 3,
             "shapes": [
                 {"shape": "rectangle", "color": "red"},
@@ -224,14 +224,14 @@ def test_text_scores_regardless_of_punctuation_and_spacing() -> None:
 
 def test_probe_provider_true_on_passing_reply() -> None:
     from services import vision_probe
-    with patch("services.vision_service.send_image_with_config", return_value=_PREFERRED):
+    with patch("services.vision_service.VisionService.send_image_with_config", return_value=_PREFERRED):
         assert vision_probe.probe_provider(
             {"platform": "ollama", "model": "llava"}) is True
 
 
 def test_probe_provider_false_on_low_score() -> None:
     from services import vision_probe
-    with patch("services.vision_service.send_image_with_config",
+    with patch("services.vision_service.VisionService.send_image_with_config",
                return_value='{"number_of_shapes": 0, "shapes": [], "text": ""}'):
         assert vision_probe.probe_provider(
             {"platform": "ollama", "model": "llava"}) is False
@@ -239,6 +239,6 @@ def test_probe_provider_false_on_low_score() -> None:
 
 def test_probe_provider_false_on_none_reply() -> None:
     from services import vision_probe
-    with patch("services.vision_service.send_image_with_config", return_value=None):
+    with patch("services.vision_service.VisionService.send_image_with_config", return_value=None):
         assert vision_probe.probe_provider(
             {"platform": "ollama", "model": "llava"}) is False

@@ -9,10 +9,11 @@
 """Feature tests — seed-on-creation super-episode consolidation, end to end.
 
 Companion to ``test_seed_cluster.py`` (which covers the discovery primitive
-``find_seed_cluster``): these tests drive the *write* half of the pipeline —
-``consolidate_cluster`` encoding one parent super-episode from a cluster and
-wiring every child's ``consolidated_into`` back-pointer — plus the
-fire-on-creation gate that ``store_episode`` runs.
+``EpisodicService.find_seed_cluster``): these tests drive the *write* half of
+the pipeline — ``EpisodicService.consolidate_cluster`` encoding one parent
+super-episode from a cluster and wiring every child's
+``consolidated_into`` back-pointer — plus the fire-on-creation gate that
+``store_episode`` runs.
 
 Everything runs on the real ``db`` fixture with zero mocks of the code under
 test. The only substitutions are the two non-deterministic external ML
@@ -44,8 +45,6 @@ from models.provider_response import ProviderResponse
 from services.episodic_service import (
     EpisodicService,
     _consolidation_lock,
-    consolidate_cluster,
-    find_seed_cluster,
 )
 from services.embedding_utils import pack_embedding
 from services.episodic_constants import (
@@ -182,7 +181,7 @@ def test_consolidate_cluster_forms_one_parent_with_lineage(db: sqlite3.Connectio
 
     client = _ScriptedClient(ProviderResponse(text=_ENCODER_JSON, model="scripted"))
     with patch(_BUILD_CLIENT, return_value=client):
-        wrote = consolidate_cluster(
+        wrote = EpisodicService.consolidate_cluster(
             "chat", source_ids, 1, cast("EmbeddingService", _FixedEmbedder()), es, [],
         )
 
@@ -215,7 +214,7 @@ def test_below_floor_cluster_does_not_consolidate(db: sqlite3.Connection) -> Non
 
     client = _ScriptedClient(ProviderResponse(text=_ENCODER_JSON, model="scripted"))
     with patch(_BUILD_CLIENT, return_value=client):
-        wrote = consolidate_cluster(
+        wrote = EpisodicService.consolidate_cluster(
             "chat", source_ids, 1, cast("EmbeddingService", _FixedEmbedder()), es, [],
         )
 
@@ -239,7 +238,7 @@ def test_empty_encoder_response_forms_no_parent(db: sqlite3.Connection) -> None:
 
     client = _ScriptedClient(ProviderResponse(text="", model="scripted"))
     with patch(_BUILD_CLIENT, return_value=client):
-        wrote = consolidate_cluster(
+        wrote = EpisodicService.consolidate_cluster(
             "chat", source_ids, 1, cast("EmbeddingService", _FixedEmbedder()), es, [],
         )
 
@@ -266,7 +265,7 @@ def test_seed_at_max_level_does_not_consolidate(db: sqlite3.Connection) -> None:
     ]
 
     # The neighbourhood is genuinely consolidation-worthy...
-    cluster = find_seed_cluster(ids[-1], CHANNEL_USER, MAX_EPISODE_LEVEL, _query_blob())
+    cluster = EpisodicService.find_seed_cluster(ids[-1], CHANNEL_USER, MAX_EPISODE_LEVEL, _query_blob())
     assert cluster is not None and len(cluster) >= SEED_CLUSTER_MIN_SIZE
 
     # ...but nothing forms above the cap, and no parent was written at all.

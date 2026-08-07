@@ -27,7 +27,7 @@ from api.request.provider_role import ProviderRef
 from api.response.provider import Provider
 from api.response.provider_role import ProviderRole
 from services.provider_db_service import ProviderDbService
-from services.provider_probe import invalidate_provider_cache
+from services.provider_probe import ProviderProbe
 
 
 class ProviderSelected(Action):
@@ -58,5 +58,5 @@ class ProviderSelected(Action):
         if not row:
             raise NotFoundError("Provider not found")
         service.set_selected_provider(dto.provider_id)
-        invalidate_provider_cache()
+        ProviderProbe.invalidate_provider_cache()
         return ProviderRole(provider=Provider.from_row(row), source="explicit").single()

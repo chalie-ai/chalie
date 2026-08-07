@@ -63,7 +63,7 @@ def test_fetch_text_reaches_a_host_on_the_local_network() -> None:
     port = int(server.server_address[1])
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
-        body = web_fetch.fetch_text(f"http://127.0.0.1:{port}/")
+        body = web_fetch.WebFetch.fetch_text(f"http://127.0.0.1:{port}/")
     finally:
         server.shutdown()
         server.server_close()
@@ -77,7 +77,7 @@ def test_fetch_text_reaches_a_host_on_the_local_network() -> None:
 @pytest.mark.integration
 def test_fetch_text_browser_profile_returns_body(httpbin: None) -> None:
     """A real GET with the browser profile returns the decoded body."""
-    body = web_fetch.fetch_text(
+    body = web_fetch.WebFetch.fetch_text(
         "https://httpbin.org/user-agent", profile=web_fetch.BROWSER
     )
     assert "Chrome/131" in body  # httpbin echoes the UA we sent
@@ -86,7 +86,7 @@ def test_fetch_text_browser_profile_returns_body(httpbin: None) -> None:
 @pytest.mark.integration
 def test_fetch_text_api_profile_sends_bot_user_agent(httpbin: None) -> None:
     """The API profile presents the identified bot UA over the wire."""
-    body = web_fetch.fetch_text(
+    body = web_fetch.WebFetch.fetch_text(
         "https://httpbin.org/user-agent", profile=web_fetch.API
     )
     assert "ChalieBot" in body
@@ -96,7 +96,7 @@ def test_fetch_text_api_profile_sends_bot_user_agent(httpbin: None) -> None:
 def test_fetch_text_raises_on_http_error(httpbin: None) -> None:
     """HTTP failures bubble (raise_for_status) — never swallowed."""
     with pytest.raises(requests.RequestException):
-        web_fetch.fetch_text("https://httpbin.org/status/404")
+        web_fetch.WebFetch.fetch_text("https://httpbin.org/status/404")
 
 
 @pytest.mark.integration
@@ -106,7 +106,7 @@ def test_stream_to_file_writes_full_body(httpbin: None) -> None:
     if os.path.exists(dest):
         os.remove(dest)
 
-    web_fetch.stream_to_file("https://httpbin.org/robots.txt", dest)
+    web_fetch.WebFetch.stream_to_file("https://httpbin.org/robots.txt", dest)
 
     assert os.path.exists(dest)
     assert os.path.getsize(dest) > 0

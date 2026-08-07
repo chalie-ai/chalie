@@ -642,7 +642,7 @@ class NetworkResource(Resource):
         file, so a bad upload can never crash-loop the server.
         """
         from models.setting import Setting as SettingModel
-        from services.restart_service import request_restart
+        from services.restart_service import RestartService
         try:
             if (dto.ssl_cert is None) != (dto.ssl_key is None):
                 return _FileStorageAnnotation.error("Certificate and key must be supplied together", 422)
@@ -658,7 +658,7 @@ class NetworkResource(Resource):
             SettingModel.set(SettingModel.DEPLOYMENT_DOMAIN, dto.deployment_domain)
             SettingModel.set_bool(SettingModel.SSL_ENABLED, dto.ssl_enabled)
 
-            request_restart()
+            RestartService.request_restart()
             return NetworkUpdateResult(ssl_enabled=dto.ssl_enabled, restarting=True)
         except Exception:
             logger.exception("[REST API] network update error")

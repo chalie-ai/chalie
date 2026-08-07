@@ -48,8 +48,8 @@ def analyze(image_bytes: bytes) -> dict[str, object]:
         img = _strip_exif(img)
         img = _normalize_dimensions(img)
 
-        from services.ocr_service import _extract_text
-        ocr_text = _extract_text(img)
+        from services.ocr_service import OcrService
+        ocr_text = OcrService._extract_text(img)
         result['ocr_text'] = ocr_text.strip() if ocr_text else ''
         result['has_text'] = len(cast(str, result['ocr_text'])) >= _MIN_TEXT_LENGTH
 

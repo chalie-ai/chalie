@@ -35,7 +35,7 @@ from contracts.search_config import DATA_GRAPH_SEARCH, SearchConfig
 from contracts.tuples.recall_signals import RecallSignals
 from models.model import Model
 from models.query import Query
-from services._fts_delete import fts5_external_delete
+from services._fts_delete import FtsDelete
 from services.embedding_utils import pack_embedding
 from services.search_expander_service import enqueue
 from services.time_utils import utc_now
@@ -164,7 +164,7 @@ class DataGraphRow(Model):
         config = cls.__search__
         if config is None:
             return
-        fts5_external_delete(
+        FtsDelete.fts5_external_delete(
             conn, config.fts_table, rowid,
             {col: cast("str | None", indexed.get(col)) for col in config.fts_columns},
         )

@@ -95,8 +95,8 @@ class SearchEnricher:
             return result
 
         try:
-            from services.web_fetch import fetch_text
-            html = fetch_text(url)
+            from services.web_fetch import WebFetch
+            html = WebFetch.fetch_text(url)
             desc, date = SearchEnricher._extract_meta(html)
             if desc:
                 result = {**result, "summary": desc}

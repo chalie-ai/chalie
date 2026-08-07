@@ -216,7 +216,7 @@ class EpisodicService:
             # — one tick, one thread — which fire-on-creation daemons would
             # otherwise break, producing duplicate parents and dangling lineage.
             with _consolidation_lock(channel):
-                cluster = find_seed_cluster(seed_id, channel, level, blob)
+                cluster = EpisodicService.find_seed_cluster(seed_id, channel, level, blob)
                 if not cluster:
                     return
                 from services.embedding_service import get_embedding_service
@@ -225,7 +225,7 @@ class EpisodicService:
                     prior_embeddings = Episode.novelty_comparison_blobs(channel)
                 except Exception:
                     prior_embeddings = []
-                consolidate_cluster(channel, cluster, level + 1, emb_svc, self, prior_embeddings)
+                EpisodicService.consolidate_cluster(channel, cluster, level + 1, emb_svc, self, prior_embeddings)
         except Exception as exc:  # noqa: BLE001
             logger.warning("%s _consolidate_seed failed (channel=%s): %s", LOG_PREFIX, channel, exc)
 
@@ -276,27 +276,27 @@ class EpisodicService:
 
         try:
             if query_embedding is None and query_text:
-                query_embedding = _generate_embedding(query_text)
+                query_embedding = EpisodicService._generate_embedding(query_text)
 
-            telemetry['episode_count'] = _count_episodes(channel)
+            telemetry['episode_count'] = EpisodicService._count_episodes(channel)
 
-            fts_hits = _fts_search(query_text or '', channel, k=k * 2)
-            vector_hits = _vector_search(query_embedding, channel, k=_VECTOR_KNN_K)
+            fts_hits = EpisodicService._fts_search(query_text or '', channel, k=k * 2)
+            vector_hits = EpisodicService._vector_search(query_embedding, channel, k=_VECTOR_KNN_K)
             telemetry['vector_candidates'] = len(vector_hits)
             telemetry['fts_candidates'] = len(fts_hits)
 
-            candidates = _dedup_by_id(fts_hits + vector_hits)
+            candidates = EpisodicService._dedup_by_id(fts_hits + vector_hits)
             if not candidates:
                 if return_telemetry:
                     return [], telemetry
                 return []
 
-            scored = _rerank_composite(candidates)
+            scored = EpisodicService._rerank_composite(candidates)
             ranked = scored[:k]
             # Candidates dropped by the relative score floor (before top-k trunc).
             telemetry['floor_cut_count'] = len(candidates) - len(scored)
             telemetry['final_rrf_count'] = len(ranked)
-            telemetry['top_distances'] = _collect_top_distances(ranked)
+            telemetry['top_distances'] = EpisodicService._collect_top_distances(ranked)
 
             if return_telemetry:
                 return ranked, telemetry
@@ -422,8 +422,8 @@ class EpisodicService:
         gist = cast("str", ep.get('gist', '') or '')
         embedding = get_embedding_service().generate_embedding(gist) if gist else None
 
-        novelty = compute_novelty(embedding, prior_embeddings) if embedding else 1.0
-        ep['salience'] = compute_salience(
+        novelty = EpisodicService.compute_novelty(embedding, prior_embeddings) if embedding else 1.0
+        ep['salience'] = EpisodicService.compute_salience(
             has_open_loop=bool(ep.get('has_open_loop', False)),
             novelty=novelty,
         )
@@ -608,256 +608,405 @@ class EpisodicService:
         meaningful = ('gist', 'transcript_ids', 'update_id')
         return not any(ep.get(f) for f in meaningful)
 
+    # ── Retrieval helpers (folded into class) ─────────────────────────────────────
 
-# ── Retrieval helpers (module-level) ───────────────────────────────────────────
+    @staticmethod
+    def _generate_embedding(text: str) -> list[float] | None:
+        """Resolve an embedding via the shared embedding service."""
+        try:
+            from services.embedding_service import get_embedding_service
+            return get_embedding_service().generate_embedding(text)
+        except Exception as exc:
+            logger.warning(f"[RETRIEVAL] _generate_embedding failed: {exc}")
+            return None
 
+    @staticmethod
+    def _pack_embedding(embedding: object) -> bytes | None:
+        """Pack a list of floats into a sqlite-vec binary blob."""
+        if embedding is None:
+            return None
+        try:
+            return pack_embedding(embedding)
+        except Exception as exc:
+            logger.warning(f"[RETRIEVAL] _pack_embedding failed: {exc}")
+            return None
 
-def _generate_embedding(text: str) -> list[float] | None:
-    """Resolve an embedding via the shared embedding service."""
-    try:
-        from services.embedding_service import get_embedding_service
-        return get_embedding_service().generate_embedding(text)
-    except Exception as exc:
-        logger.warning(f"[RETRIEVAL] _generate_embedding failed: {exc}")
-        return None
+    @staticmethod
+    def _count_episodes(channel: str | None = None) -> int:
+        """Return the live episode count, optionally scoped to a channel."""
+        try:
+            query = Episode.live()
+            if channel is not None:
+                query = query.filter("channel", channel)
+            return query.count()
+        except Exception:
+            return 0
 
+    @staticmethod
+    def _fts_search(query_text: str, channel: str | None, k: int) -> list[Episode]:
+        """FTS lane over the gist column. The model sanitises + runs the query and
+        raises on DB failure — the warn-guard lives here."""
+        try:
+            return Episode.fts_search(query_text, channel, k=k)
+        except Exception as exc:
+            logger.warning(f"[RETRIEVAL] FTS search failed: {exc}")
+            return []
 
-def _pack_embedding(embedding: object) -> bytes | None:
-    """Pack a list of floats into a sqlite-vec binary blob."""
-    if embedding is None:
-        return None
-    try:
-        return pack_embedding(embedding)
-    except Exception as exc:
-        logger.warning(f"[RETRIEVAL] _pack_embedding failed: {exc}")
-        return None
+    @staticmethod
+    def _vector_search(query_embedding: object, channel: str | None, k: int) -> list[Episode]:
+        """Cosine KNN lane via sqlite-vec.
 
+        No distance ceiling is applied: the relative score floor in
+        ``_rerank_composite`` decides what survives (kills the radius-0 bug where a
+        hard ceiling muted the entire vector lane).
+        """
+        blob = EpisodicService._pack_embedding(query_embedding)
+        if blob is None:
+            return []
+        try:
+            return Episode.nearest(blob, channel, k=k)
+        except Exception as exc:
+            logger.warning(f"[RETRIEVAL] Vector search failed: {exc}")
+            return []
 
-def _count_episodes(channel: str | None = None) -> int:
-    """Return the live episode count, optionally scoped to a channel."""
-    try:
-        query = Episode.live()
-        if channel is not None:
-            query = query.filter("channel", channel)
-        return query.count()
-    except Exception:
-        return 0
+    @staticmethod
+    def _dedup_by_id(hits: list[Episode]) -> list[Episode]:
+        """Deduplicate hits preserving first-seen order. Merges text_rank and
+        vector_distance from duplicate entries onto the first occurrence."""
+        seen: dict[str, Episode] = {}
+        ordered: list[Episode] = []
+        for hit in hits:
+            eid = str(hit.id)
+            if eid not in seen:
+                seen[eid] = hit
+                ordered.append(hit)
+            else:
+                existing = seen[eid]
+                if existing.text_rank is None and hit.text_rank is not None:
+                    existing.text_rank = hit.text_rank
+                if existing.vector_distance is None and hit.vector_distance is not None:
+                    existing.vector_distance = hit.vector_distance
+        return ordered
 
-
-def _fts_search(query_text: str, channel: str | None, k: int) -> list[Episode]:
-    """FTS lane over the gist column. The model sanitises + runs the query and
-    raises on DB failure — the warn-guard lives here."""
-    try:
-        return Episode.fts_search(query_text, channel, k=k)
-    except Exception as exc:
-        logger.warning(f"[RETRIEVAL] FTS search failed: {exc}")
-        return []
-
-
-def _vector_search(query_embedding: object, channel: str | None, k: int) -> list[Episode]:
-    """Cosine KNN lane via sqlite-vec.
-
-    No distance ceiling is applied: the relative score floor in
-    ``_rerank_composite`` decides what survives (kills the radius-0 bug where a
-    hard ceiling muted the entire vector lane).
-    """
-    blob = _pack_embedding(query_embedding)
-    if blob is None:
-        return []
-    try:
-        return Episode.nearest(blob, channel, k=k)
-    except Exception as exc:
-        logger.warning(f"[RETRIEVAL] Vector search failed: {exc}")
-        return []
-
-
-def _dedup_by_id(hits: list[Episode]) -> list[Episode]:
-    """Deduplicate hits preserving first-seen order. Merges text_rank and
-    vector_distance from duplicate entries onto the first occurrence."""
-    seen: dict[str, Episode] = {}
-    ordered: list[Episode] = []
-    for hit in hits:
-        eid = str(hit.id)
-        if eid not in seen:
-            seen[eid] = hit
-            ordered.append(hit)
-        else:
-            existing = seen[eid]
-            if existing.text_rank is None and hit.text_rank is not None:
-                existing.text_rank = hit.text_rank
-            if existing.vector_distance is None and hit.vector_distance is not None:
-                existing.vector_distance = hit.vector_distance
-    return ordered
-
-
-def _vector_sim(ep: Episode) -> float:
-    """Raw vector-lane similarity (1 - distance), 0 when the lane did not hit."""
-    vd = ep.vector_distance
-    if vd is None:
-        return 0.0
-    return max(0.0, 1.0 - float(vd))
-
-
-def _fts_strength(ep: Episode) -> float:
-    """Raw FTS-lane strength from the (negative) FTS5 rank, 0 when no hit.
-
-    FTS5 ``rank`` is negative and more negative = better; the magnitude is the
-    raw strength fed into per-lane min-max normalisation.
-    """
-    tr = ep.text_rank
-    if tr is None:
-        return 0.0
-    return abs(float(tr))
-
-
-def _recency(ep: Episode, now: datetime) -> float:
-    """Exponential recency term anchored on ``last_relevant_at`` (half-life 14d).
-
-    The clock is the relevance anchor (last write-relevant event), falling back
-    to creation time — reads never advance it. ``parse_utc`` never raises; a
-    sentinel/legacy value yields a flat fallback rather than a crash.
-    """
-    anchor = ep.last_relevant_at or ep.created_at
-    if not anchor:
-        return _RECENCY_FALLBACK
-    ref_time = parse_utc(anchor)
-    if ref_time == PARSE_SENTINEL:
-        logger.warning(
-            "[RETRIEVAL] unparseable relevance anchor for id=%s: %r",
-            ep.id, anchor,
-        )
-        return _RECENCY_FALLBACK
-    hours = (now - ref_time).total_seconds() / 3600.0
-    return math.exp(-_RECENCY_DECAY_PER_HOUR * hours)
-
-
-def _importance(ep: Episode) -> float:
-    """Importance term: salience/10 × retrieval_weight."""
-    salience_norm = float(ep.salience or 5) / _SALIENCE_SCALE
-    retrieval_w = float(ep.retrieval_weight or 1.0)
-    return salience_norm * retrieval_w
-
-
-def _min_max_normalise(values: list[float]) -> list[float]:
-    """Min-max normalise a lane's raw signals into [0, 1].
-
-    A degenerate spread (all equal, including all-zero) maps every entry to 0.0
-    so a lane that fired uniformly adds no discrimination rather than inflating
-    every candidate to 1.0.
-    """
-    if not values:
-        return []
-    lo = min(values)
-    hi = max(values)
-    span = hi - lo
-    if span <= 0.0:
-        return [0.0 for _ in values]
-    return [(v - lo) / span for v in values]
-
-
-def _rerank_composite(episodes: list[Episode]) -> list[Episode]:
-    """Collapsed-tree composite rerank with a relative score floor.
-
-    Episodes at all hierarchy levels (leaf, super, era) compete in one pool.
-    The two retrieval lanes are min-max normalised WITHIN the pool, then
-
-        score = relevance + recency + importance
-
-    where ``relevance`` is the stronger of the two normalised lane signals,
-    ``recency`` is an exp half-life ≈ 14d term on ``last_relevant_at``, and
-    ``importance`` is ``salience/10 × retrieval_weight``.
-
-    A RELATIVE floor then drops every candidate scoring below
-    ``_RELATIVE_SCORE_FLOOR × top_score`` — survivors only, never padded to *k*.
-    """
-    if not episodes:
-        return []
-
-    now = utc_now()
-
-    vector_norm = _min_max_normalise([_vector_sim(ep) for ep in episodes])
-    fts_norm = _min_max_normalise([_fts_strength(ep) for ep in episodes])
-
-    for ep, v_norm, f_norm in zip(episodes, vector_norm, fts_norm):
-        relevance = max(v_norm, f_norm)
-        score = relevance + _recency(ep, now) + _importance(ep)
-        # Scale into the 0-100-ish space the memory skill buckets confidence in.
-        ep.composite_score = score * _COMPOSITE_DISPLAY_SCALE
-
-    episodes.sort(key=lambda e: e.composite_score, reverse=True)
-
-    top_score = episodes[0].composite_score
-    if top_score <= 0.0:
-        return episodes
-    floor = top_score * _RELATIVE_SCORE_FLOOR
-    return [ep for ep in episodes if ep.composite_score >= floor]
-
-
-def _collect_top_distances(ranked: list[Episode]) -> list[float]:
-    """Return rounded vector distances for the top-5 ranked episodes."""
-    top_dists: list[float] = []
-    for ep in ranked[:5]:
+    @staticmethod
+    def _vector_sim(ep: Episode) -> float:
+        """Raw vector-lane similarity (1 - distance), 0 when the lane did not hit."""
         vd = ep.vector_distance
-        if vd is not None:
-            try:
-                top_dists.append(round(float(vd), 4))
-            except (TypeError, ValueError):
-                pass
-    return top_dists
+        if vd is None:
+            return 0.0
+        return max(0.0, 1.0 - float(vd))
 
+    @staticmethod
+    def _fts_strength(ep: Episode) -> float:
+        """Raw FTS-lane strength from the (negative) FTS5 rank, 0 when no hit.
 
-# ── Salience / novelty / clustering (module-level) ────────────────────────────
+        FTS5 ``rank`` is negative and more negative = better; the magnitude is the
+        raw strength fed into per-lane min-max normalisation.
+        """
+        tr = ep.text_rank
+        if tr is None:
+            return 0.0
+        return abs(float(tr))
 
+    @staticmethod
+    def _recency(ep: Episode, now: datetime) -> float:
+        """Exponential recency term anchored on ``last_relevant_at`` (half-life 14d).
 
-def compute_salience(has_open_loop: bool, novelty: float) -> int:
-    """raw = SALIENCE_NOVELTY_WEIGHT × novelty + SALIENCE_OPEN_LOOP_WEIGHT × open_boost,
-    then clamped to an integer 1..10."""
-    open_boost = 1.0 if has_open_loop else 0.0
-    raw = SALIENCE_NOVELTY_WEIGHT * float(novelty) + SALIENCE_OPEN_LOOP_WEIGHT * open_boost
-    return max(1, min(10, int(round(raw * 10))))
+        The clock is the relevance anchor (last write-relevant event), falling back
+        to creation time — reads never advance it. ``parse_utc`` never raises; a
+        sentinel/legacy value yields a flat fallback rather than a crash.
+        """
+        anchor = ep.last_relevant_at or ep.created_at
+        if not anchor:
+            return _RECENCY_FALLBACK
+        ref_time = parse_utc(anchor)
+        if ref_time == PARSE_SENTINEL:
+            logger.warning(
+                "[RETRIEVAL] unparseable relevance anchor for id=%s: %r",
+                ep.id, anchor,
+            )
+            return _RECENCY_FALLBACK
+        hours = (now - ref_time).total_seconds() / 3600.0
+        return math.exp(-_RECENCY_DECAY_PER_HOUR * hours)
 
+    @staticmethod
+    def _importance(ep: Episode) -> float:
+        """Importance term: salience/10 × retrieval_weight."""
+        salience_norm = float(ep.salience or 5) / _SALIENCE_SCALE
+        retrieval_w = float(ep.retrieval_weight or 1.0)
+        return salience_norm * retrieval_w
 
-def _unpack_blob(blob: bytes) -> list[float]:
-    """Unpack a sqlite-vec binary blob into a list of floats."""
-    n = len(blob) // 4  # 4 bytes per float32
-    return list(struct.unpack(f'{n}f', blob))
+    @staticmethod
+    def _min_max_normalise(values: list[float]) -> list[float]:
+        """Min-max normalise a lane's raw signals into [0, 1].
 
+        A degenerate spread (all equal, including all-zero) maps every entry to 0.0
+        so a lane that fired uniformly adds no discrimination rather than inflating
+        every candidate to 1.0.
+        """
+        if not values:
+            return []
+        lo = min(values)
+        hi = max(values)
+        span = hi - lo
+        if span <= 0.0:
+            return [0.0 for _ in values]
+        return [(v - lo) / span for v in values]
 
-def compute_novelty(new_embedding: object, prior_embeddings: list[bytes]) -> float:
-    """novelty = 1.0 - max(cosine_sim(new, prior) for prior in
-    prior_embeddings). Clamped to [0.0, 1.0]. Returns 1.0 (fully
-    novel) if prior_embeddings is empty."""
-    if not prior_embeddings:
-        return 1.0
+    @staticmethod
+    def _rerank_composite(episodes: list[Episode]) -> list[Episode]:
+        """Collapsed-tree composite rerank with a relative score floor.
 
-    try:
-        if isinstance(new_embedding, bytes):
-            new_vec = np.array(_unpack_blob(new_embedding), dtype=np.float32)
-        else:
-            new_vec = np.array(new_embedding, dtype=np.float32)
+        Episodes at all hierarchy levels (leaf, super, era) compete in one pool.
+        The two retrieval lanes are min-max normalised WITHIN the pool, then
 
-        # L2-normalize (embeddings from EmbeddingService are already normalized,
-        # but defend against callers who pass raw vectors).
-        norm = np.linalg.norm(new_vec)
-        if norm > 0:
-            new_vec = new_vec / norm
+            score = relevance + recency + importance
 
-        max_sim = 0.0
-        for blob in prior_embeddings:
-            try:
-                prior_vec = np.array(_unpack_blob(blob), dtype=np.float32)
-                if prior_vec.shape != new_vec.shape:
+        where ``relevance`` is the stronger of the two normalised lane signals,
+        ``recency`` is an exp half-life ≈ 14d term on ``last_relevant_at``, and
+        ``importance`` is ``salience/10 × retrieval_weight``.
+
+        A RELATIVE floor then drops every candidate scoring below
+        ``_RELATIVE_SCORE_FLOOR × top_score`` — survivors only, never padded to *k*.
+        """
+        if not episodes:
+            return []
+
+        now = utc_now()
+
+        vector_norm = EpisodicService._min_max_normalise([EpisodicService._vector_sim(ep) for ep in episodes])
+        fts_norm = EpisodicService._min_max_normalise([EpisodicService._fts_strength(ep) for ep in episodes])
+
+        for ep, v_norm, f_norm in zip(episodes, vector_norm, fts_norm):
+            relevance = max(v_norm, f_norm)
+            score = relevance + EpisodicService._recency(ep, now) + EpisodicService._importance(ep)
+            # Scale into the 0-100-ish space the memory skill buckets confidence in.
+            ep.composite_score = score * _COMPOSITE_DISPLAY_SCALE
+
+        episodes.sort(key=lambda e: e.composite_score, reverse=True)
+
+        top_score = episodes[0].composite_score
+        if top_score <= 0.0:
+            return episodes
+        floor = top_score * _RELATIVE_SCORE_FLOOR
+        return [ep for ep in episodes if ep.composite_score >= floor]
+
+    @staticmethod
+    def _collect_top_distances(ranked: list[Episode]) -> list[float]:
+        """Return rounded vector distances for the top-5 ranked episodes."""
+        top_dists: list[float] = []
+        for ep in ranked[:5]:
+            vd = ep.vector_distance
+            if vd is not None:
+                try:
+                    top_dists.append(round(float(vd), 4))
+                except (TypeError, ValueError):
+                    pass
+        return top_dists
+
+    # ── Salience / novelty / clustering (folded into class) ────────────────────
+
+    @staticmethod
+    def compute_salience(has_open_loop: bool, novelty: float) -> int:
+        """raw = SALIENCE_NOVELTY_WEIGHT × novelty + SALIENCE_OPEN_LOOP_WEIGHT × open_boost,
+        then clamped to an integer 1..10."""
+        open_boost = 1.0 if has_open_loop else 0.0
+        raw = SALIENCE_NOVELTY_WEIGHT * float(novelty) + SALIENCE_OPEN_LOOP_WEIGHT * open_boost
+        return max(1, min(10, int(round(raw * 10))))
+
+    @staticmethod
+    def _unpack_blob(blob: bytes) -> list[float]:
+        """Unpack a sqlite-vec binary blob into a list of floats."""
+        n = len(blob) // 4  # 4 bytes per float32
+        return list(struct.unpack(f'{n}f', blob))
+
+    @staticmethod
+    def compute_novelty(new_embedding: object, prior_embeddings: list[bytes]) -> float:
+        """novelty = 1.0 - max(cosine_sim(new, prior) for prior in
+        prior_embeddings). Clamped to [0.0, 1.0]. Returns 1.0 (fully
+        novel) if prior_embeddings is empty."""
+        if not prior_embeddings:
+            return 1.0
+
+        try:
+            if isinstance(new_embedding, bytes):
+                new_vec = np.array(EpisodicService._unpack_blob(new_embedding), dtype=np.float32)
+            else:
+                new_vec = np.array(new_embedding, dtype=np.float32)
+
+            # L2-normalize (embeddings from EmbeddingService are already normalized,
+            # but defend against callers who pass raw vectors).
+            norm = np.linalg.norm(new_vec)
+            if norm > 0:
+                new_vec = new_vec / norm
+
+            max_sim = 0.0
+            for blob in prior_embeddings:
+                try:
+                    prior_vec = np.array(EpisodicService._unpack_blob(blob), dtype=np.float32)
+                    if prior_vec.shape != new_vec.shape:
+                        continue
+                    sim = float(np.dot(new_vec, prior_vec))
+                    if sim > max_sim:
+                        max_sim = sim
+                except Exception:
                     continue
-                sim = float(np.dot(new_vec, prior_vec))
-                if sim > max_sim:
-                    max_sim = sim
-            except Exception:
-                continue
-        return max(0.0, min(1.0, 1.0 - max_sim))
+            return max(0.0, min(1.0, 1.0 - max_sim))
 
-    except Exception as exc:
-        logging.warning(f"[NOVELTY] compute_novelty failed: {exc}")
-        return 1.0
+        except Exception as exc:
+            logging.warning(f"[NOVELTY] compute_novelty failed: {exc}")
+            return 1.0
+
+    # ── Consolidation (folded into class) ─────────────────────────────────────
+
+    @staticmethod
+    def find_seed_cluster(
+        seed_id: str, channel: str, level: int, embedding: bytes
+    ) -> list[str] | None:
+        """Seed-on-creation candidate discovery for super-episode consolidation.
+
+        One new episode seeds a local KNN neighbourhood instead of reclustering the
+        whole apex pool (the old batch HDBSCAN path). ``Episode.nearest`` applies
+        the qualifying filters (live, same-channel, same-level, apex-only) inside
+        the KNN itself, so the hits are already the nearest qualifying neighbours;
+        here we only drop the seed itself and anything beyond the cosine-distance
+        radius. If the resulting cluster (seed + qualifying neighbours) meets the
+        minimum-size floor, return the sorted id list; otherwise return ``None`` —
+        the seed stays a lone apex.
+
+        ``vector_distance`` is cosine distance (0.0 = identical, larger = less
+        similar). Neighbours beyond :data:`SEED_CLUSTER_RADIUS` are excluded.
+        DB failures log a warning and return ``None`` — never raise.
+        """
+        try:
+            # The seed must still be apex. A concurrent same-channel consolidation
+            # may have rolled it up (as a neighbour of its own cluster) between this
+            # episode's creation and now; a non-apex seed must not anchor a fresh
+            # cluster, or its back-pointer would be overwritten and the first
+            # parent's lineage left dangling. Neighbours are apex-filtered inside
+            # the KNN; the seed is the one member added unconditionally, so it is
+            # checked here. Under the per-channel consolidation lock this check and
+            # the eventual write are atomic, so the seed cannot be rolled up between.
+            seed = Episode.by_id(seed_id)
+            if seed is None or seed.consolidated_into is not None:
+                return None
+            # k = cap + 1: the seed is itself a qualifying row (distance 0) and is
+            # dropped below, leaving at most SEED_CLUSTER_MAX_MATCHES neighbours.
+            hits = Episode.nearest(
+                embedding, channel, SEED_CLUSTER_MAX_MATCHES + 1,
+                level=level, apex_only=True,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[SEED_CLUSTER] seed/KNN lookup failed for seed=%s channel=%s: %s",
+                seed_id, channel, exc,
+            )
+            return None
+
+        neighbours: list[str] = []
+        for hit in hits:
+            # Exclude the seed itself (it will always be nearest to itself).
+            if hit.id == seed_id:
+                continue
+            # Must carry a vector_distance overlay — sqlite-vec always sets it on
+            # a hit, but guard against a missing value (defensive).
+            vd = hit.vector_distance
+            if vd is None:
+                continue
+            # Cosine-distance cutoff: smaller = more similar; keep <= radius.
+            if float(vd) > SEED_CLUSTER_RADIUS:
+                continue
+            neighbours.append(str(hit.id))
+            if len(neighbours) >= SEED_CLUSTER_MAX_MATCHES:
+                break
+
+        cluster = [seed_id] + neighbours
+        if len(cluster) < SEED_CLUSTER_MIN_SIZE:
+            return None
+        return sorted(cluster)
+
+    @staticmethod
+    def consolidate_cluster(
+        channel: str,
+        cluster_ids: list[str],
+        level: int,
+        emb_svc: "EmbeddingService",
+        episodic_svc: "EpisodicService",
+        prior_embeddings: list[bytes],
+    ) -> bool:
+        """Encode + store one parent episode for a cluster. Returns True on write."""
+        from services.episodic_constants import SEED_CLUSTER_MIN_SIZE
+        from controllers.message_processor import MessageProcessor
+
+        try:
+            sources = [
+                ep.to_dict() for ep in (
+                    Episode.by_id(eid) for eid in cluster_ids
+                )
+                if ep
+            ]
+            if len(sources) < SEED_CLUSTER_MIN_SIZE:
+                return False
+
+            all_t_ids = SuperEpisodeConfig.collect_transcript_ids(cast(list[object], sources))
+
+            config = SuperEpisodeConfig(channel, cast(list[object], sources))
+            response = MessageProcessor.process(config).result()
+
+            if not response:
+                logger.warning(
+                    f"{LOG_PREFIX} SuperEpisodeEncoder returned empty response "
+                    f"for cluster {cluster_ids}"
+                )
+                return False
+
+            super_ep = SuperEpisodeConfig.safe_json_load_object(response)
+            if not super_ep or not super_ep.get("gist"):
+                logger.warning(
+                    f"{LOG_PREFIX} SuperEpisodeEncoder returned unparseable/empty "
+                    f"gist for cluster {cluster_ids}"
+                )
+                return False
+
+            super_ep["channel"] = channel
+            super_ep["level"] = level
+            unique_t_ids = sorted(all_t_ids)
+            super_ep["transcript_ids"] = unique_t_ids
+            super_ep["transcript_id_start"] = (
+                min(unique_t_ids) if unique_t_ids else None
+            )
+            super_ep["transcript_id_end"] = (
+                max(unique_t_ids) if unique_t_ids else None
+            )
+            super_ep["consolidated_from"] = [ep["id"] for ep in sources]
+
+            gist = cast(str, super_ep["gist"])
+            embedding = emb_svc.generate_embedding(gist)
+            novelty = (
+                EpisodicService.compute_novelty(embedding, prior_embeddings) if embedding else 1.0
+            )
+            super_ep["salience"] = EpisodicService.compute_salience(
+                has_open_loop=bool(super_ep.get("has_open_loop", False)),
+                novelty=novelty,
+            )
+            super_ep.pop("has_open_loop", None)
+
+            new_id = episodic_svc.store_episode(super_ep, embedding=embedding)
+            for src_id in cluster_ids:
+                Episode.set_consolidated_into(src_id, new_id)
+
+            logger.info(
+                f"{LOG_PREFIX} level-{level} episode {new_id} created from cluster "
+                f"{cluster_ids} (channel={channel})"
+            )
+            return True
+
+        except Exception as exc:
+            logger.warning(
+                f"{LOG_PREFIX} level-{level} consolidation failed for cluster "
+                f"{cluster_ids} (channel={channel}): {exc}"
+            )
+            return False
 
 
 # Per-channel consolidation locks. Fire-on-creation consolidation runs in
@@ -880,152 +1029,3 @@ def _consolidation_lock(channel: str) -> threading.Lock:
             lock = threading.Lock()
             _CONSOLIDATION_LOCKS[channel] = lock
         return lock
-
-
-def find_seed_cluster(
-    seed_id: str, channel: str, level: int, embedding: bytes
-) -> list[str] | None:
-    """Seed-on-creation candidate discovery for super-episode consolidation.
-
-    One new episode seeds a local KNN neighbourhood instead of reclustering the
-    whole apex pool (the old batch HDBSCAN path). ``Episode.nearest`` applies
-    the qualifying filters (live, same-channel, same-level, apex-only) inside
-    the KNN itself, so the hits are already the nearest qualifying neighbours;
-    here we only drop the seed itself and anything beyond the cosine-distance
-    radius. If the resulting cluster (seed + qualifying neighbours) meets the
-    minimum-size floor, return the sorted id list; otherwise return ``None`` —
-    the seed stays a lone apex.
-
-    ``vector_distance`` is cosine distance (0.0 = identical, larger = less
-    similar). Neighbours beyond :data:`SEED_CLUSTER_RADIUS` are excluded.
-    DB failures log a warning and return ``None`` — never raise.
-    """
-    try:
-        # The seed must still be apex. A concurrent same-channel consolidation
-        # may have rolled it up (as a neighbour of its own cluster) between this
-        # episode's creation and now; a non-apex seed must not anchor a fresh
-        # cluster, or its back-pointer would be overwritten and the first
-        # parent's lineage left dangling. Neighbours are apex-filtered inside
-        # the KNN; the seed is the one member added unconditionally, so it is
-        # checked here. Under the per-channel consolidation lock this check and
-        # the eventual write are atomic, so the seed cannot be rolled up between.
-        seed = Episode.by_id(seed_id)
-        if seed is None or seed.consolidated_into is not None:
-            return None
-        # k = cap + 1: the seed is itself a qualifying row (distance 0) and is
-        # dropped below, leaving at most SEED_CLUSTER_MAX_MATCHES neighbours.
-        hits = Episode.nearest(
-            embedding, channel, SEED_CLUSTER_MAX_MATCHES + 1,
-            level=level, apex_only=True,
-        )
-    except Exception as exc:
-        logger.warning(
-            "[SEED_CLUSTER] seed/KNN lookup failed for seed=%s channel=%s: %s",
-            seed_id, channel, exc,
-        )
-        return None
-
-    neighbours: list[str] = []
-    for hit in hits:
-        # Exclude the seed itself (it will always be nearest to itself).
-        if hit.id == seed_id:
-            continue
-        # Must carry a vector_distance overlay — sqlite-vec always sets it on
-        # a hit, but guard against a missing value (defensive).
-        vd = hit.vector_distance
-        if vd is None:
-            continue
-        # Cosine-distance cutoff: smaller = more similar; keep <= radius.
-        if float(vd) > SEED_CLUSTER_RADIUS:
-            continue
-        neighbours.append(str(hit.id))
-        if len(neighbours) >= SEED_CLUSTER_MAX_MATCHES:
-            break
-
-    cluster = [seed_id] + neighbours
-    if len(cluster) < SEED_CLUSTER_MIN_SIZE:
-        return None
-    return sorted(cluster)
-
-
-def consolidate_cluster(
-    channel: str,
-    cluster_ids: list[str],
-    level: int,
-    emb_svc: "EmbeddingService",
-    episodic_svc: "EpisodicService",
-    prior_embeddings: list[bytes],
-) -> bool:
-    """Encode + store one parent episode for a cluster. Returns True on write."""
-    from services.episodic_constants import SEED_CLUSTER_MIN_SIZE
-    from controllers.message_processor import MessageProcessor
-
-    try:
-        sources = [
-            ep.to_dict() for ep in (
-                Episode.by_id(eid) for eid in cluster_ids
-            )
-            if ep
-        ]
-        if len(sources) < SEED_CLUSTER_MIN_SIZE:
-            return False
-
-        all_t_ids = SuperEpisodeConfig.collect_transcript_ids(cast(list[object], sources))
-
-        config = SuperEpisodeConfig(channel, cast(list[object], sources))
-        response = MessageProcessor.process(config).result()
-
-        if not response:
-            logger.warning(
-                f"{LOG_PREFIX} SuperEpisodeEncoder returned empty response "
-                f"for cluster {cluster_ids}"
-            )
-            return False
-
-        super_ep = SuperEpisodeConfig.safe_json_load_object(response)
-        if not super_ep or not super_ep.get("gist"):
-            logger.warning(
-                f"{LOG_PREFIX} SuperEpisodeEncoder returned unparseable/empty "
-                f"gist for cluster {cluster_ids}"
-            )
-            return False
-
-        super_ep["channel"] = channel
-        super_ep["level"] = level
-        unique_t_ids = sorted(all_t_ids)
-        super_ep["transcript_ids"] = unique_t_ids
-        super_ep["transcript_id_start"] = (
-            min(unique_t_ids) if unique_t_ids else None
-        )
-        super_ep["transcript_id_end"] = (
-            max(unique_t_ids) if unique_t_ids else None
-        )
-        super_ep["consolidated_from"] = [ep["id"] for ep in sources]
-
-        gist = cast(str, super_ep["gist"])
-        embedding = emb_svc.generate_embedding(gist)
-        novelty = (
-            compute_novelty(embedding, prior_embeddings) if embedding else 1.0
-        )
-        super_ep["salience"] = compute_salience(
-            has_open_loop=bool(super_ep.get("has_open_loop", False)),
-            novelty=novelty,
-        )
-        super_ep.pop("has_open_loop", None)
-
-        new_id = episodic_svc.store_episode(super_ep, embedding=embedding)
-        for src_id in cluster_ids:
-            Episode.set_consolidated_into(src_id, new_id)
-
-        logger.info(
-            f"{LOG_PREFIX} level-{level} episode {new_id} created from cluster "
-            f"{cluster_ids} (channel={channel})"
-        )
-        return True
-
-    except Exception as exc:
-        logger.warning(
-            f"{LOG_PREFIX} level-{level} consolidation failed for cluster "
-            f"{cluster_ids} (channel={channel}): {exc}"
-        )
-        return False

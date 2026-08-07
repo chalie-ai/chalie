@@ -43,7 +43,6 @@ from services.provider_api import (
     PROVIDER_CALL_TIMEOUT_S,
     ProviderApiRequest,
     ProviderApiResponse,
-    is_token_limit_message,
 )
 
 logger = logging.getLogger(__name__)
@@ -236,8 +235,8 @@ class CodexCliClient(ProviderClient):
         cls, host: str, api_key: str,
     ) -> tuple[list[dict[str, str | None]] | None, str | None]:
         """Asks the local binary — no network call, no credential."""
-        from services.provider_probe import fetch_codex_models  # noqa: PLC0415
-        return fetch_codex_models()
+        from services.provider_probe import ProviderProbe  # noqa: PLC0415
+        return ProviderProbe.fetch_codex_models()
 
     def __init__(self, config: dict[str, object]) -> None:
         self._config = config
@@ -307,7 +306,7 @@ class CodexCliClient(ProviderClient):
         # it here or the turn dies on retries instead of compacting.
         if proc is not None and proc.returncode != 0:
             err_text = (stderr or "").strip() or (stdout or "").strip() or f"codex exited {proc.returncode}"
-            if is_token_limit_message(err_text):
+            if ProviderApiRequest.is_token_limit_message(err_text):
                 raise ContextLimit(
                     f"codex rejected payload (token limit): {err_text}",
                     provider='codex_cli',
@@ -334,7 +333,7 @@ class CodexCliClient(ProviderClient):
 
         # (i) Surface an upstream error only when no assistant text was produced.
         if errors and not agent_text:
-            if is_token_limit_message(errors[0]):
+            if ProviderApiRequest.is_token_limit_message(errors[0]):
                 raise ContextLimit(
                     f"codex rejected payload (token limit): {errors[0]}",
                     provider='codex_cli',

@@ -104,8 +104,8 @@ class AnthropicClient(ProviderClient):
         cls, host: str, api_key: str,
     ) -> tuple[list[dict[str, str | None]] | None, str | None]:
         """Anthropic publishes the list against the key; there is no host to give."""
-        from services.provider_probe import fetch_anthropic_models  # noqa: PLC0415
-        return fetch_anthropic_models(api_key)
+        from services.provider_probe import ProviderProbe  # noqa: PLC0415
+        return ProviderProbe.fetch_anthropic_models(api_key)
 
     @staticmethod
     def _assistant_tool_block(msg: "_Msg") -> "_Msg":

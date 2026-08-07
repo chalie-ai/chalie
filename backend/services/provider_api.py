@@ -29,14 +29,6 @@ TOKEN_LIMIT_STRINGS = frozenset({
 })
 
 
-def is_token_limit_message(text: str | None) -> bool:
-    """True when a provider's error prose reports a size rejection.
-
-    Owns the casefold so no caller can match case-sensitively by accident.
-    """
-    return any(s in (text or '').lower() for s in TOKEN_LIMIT_STRINGS)
-
-
 # Deadline (seconds) for a single provider API call, enforced by every thin
 # client at its own HTTP boundary (the only place a call can actually be
 # interrupted — a Python thread cannot be killed). On expiry the client raises
@@ -77,6 +69,14 @@ class ProviderApiRequest:
     # rather than asking their provider, so the DB column is the only window
     # any send is ever sized against.
     context_window: Optional[int] = field(default=None)
+
+    @staticmethod
+    def is_token_limit_message(text: str | None) -> bool:
+        """True when a provider's error prose reports a size rejection.
+
+        Owns the casefold so no caller can match case-sensitively by accident.
+        """
+        return any(s in (text or '').lower() for s in TOKEN_LIMIT_STRINGS)
 
     def resolve_max_tokens(self) -> int:
         """Return the output-token ceiling for this request.

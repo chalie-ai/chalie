@@ -128,8 +128,8 @@ class OpenAIClient(OpenAICompatibleClient):
         Overridden because the inherited implementation needs a base URL to
         call, and this platform deliberately has none to give.
         """
-        from services.provider_probe import fetch_openai_models  # noqa: PLC0415
-        return fetch_openai_models(api_key)
+        from services.provider_probe import ProviderProbe  # noqa: PLC0415
+        return ProviderProbe.fetch_openai_models(api_key)
 
     def _probe_context_window(self) -> int | None:
         """Documented figure first, then the number OpenAI quotes in a refusal.

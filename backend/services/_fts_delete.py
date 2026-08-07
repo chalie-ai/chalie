@@ -18,24 +18,33 @@ import sqlite3
 logger = logging.getLogger(__name__)
 
 
-def fts5_external_delete(conn: sqlite3.Connection, table: str, rowid: int, columns: dict[str, str | None]) -> None:
-    """Issues the FTS5 ``'delete'`` command with the indexed column values
-    (required for external-content tables in production). Falls back to a
-    plain DELETE for standalone FTS tables (e.g. test fixtures that omit
-    ``content=``). columns order MUST match the FTS5 column order; values
-    may be None and are coerced to empty strings.
-    """
-    names = list(columns.keys())
-    values = [columns[name] if columns[name] is not None else '' for name in names]
-    placeholders = ', '.join(['?'] * (len(names) + 1))
-    col_list = ', '.join([table] + names)
-    try:
-        conn.execute(
-            f"INSERT INTO {table}({col_list}) VALUES({placeholders})",
-            ['delete', rowid, *values],
-        )
-    except Exception:
+class FtsDelete:
+    """Shared FTS5 external-content delete idiom."""
+
+    @staticmethod
+    def fts5_external_delete(
+        conn: sqlite3.Connection,
+        table: str,
+        rowid: int,
+        columns: dict[str, str | None],
+    ) -> None:
+        """Issues the FTS5 ``'delete'`` command with the indexed column values
+        (required for external-content tables in production). Falls back to a
+        plain DELETE for standalone FTS tables (e.g. test fixtures that omit
+        ``content=``). columns order MUST match the FTS5 column order; values
+        may be None and are coerced to empty strings.
+        """
+        names = list(columns.keys())
+        values = [columns[name] if columns[name] is not None else '' for name in names]
+        placeholders = ', '.join(['?'] * (len(names) + 1))
+        col_list = ', '.join([table] + names)
         try:
-            conn.execute(f"DELETE FROM {table} WHERE rowid = ?", (rowid,))
-        except Exception as e:
-            logger.warning("[FTS] delete failed for %s rowid=%s: %s", table, rowid, e)
+            conn.execute(
+                f"INSERT INTO {table}({col_list}) VALUES({placeholders})",
+                ['delete', rowid, *values],
+            )
+        except Exception:
+            try:
+                conn.execute(f"DELETE FROM {table} WHERE rowid = ?", (rowid,))
+            except Exception as e:
+                logger.warning("[FTS] delete failed for %s rowid=%s: %s", table, rowid, e)

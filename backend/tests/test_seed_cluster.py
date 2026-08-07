@@ -1,4 +1,4 @@
-"""Tests for find_seed_cluster — seed-on-creation candidate discovery.
+"""Tests for EpisodicService.find_seed_cluster — seed-on-creation candidate discovery.
 
 All tests use the real db fixture with zero mocks. Episodes are seeded via
 EpisodicService.store_episode with real embeddings (768-dim, matching the
@@ -23,7 +23,7 @@ import sqlite3
 
 import pytest
 
-from services.episodic_service import EpisodicService, find_seed_cluster
+from services.episodic_service import EpisodicService
 from services.episodic_constants import (
     SEED_CLUSTER_MAX_MATCHES,
     SEED_CLUSTER_MIN_SIZE,
@@ -66,7 +66,7 @@ def test_cluster_forms_with_enough_near_neighbours(db: sqlite3.Connection) -> No
     for i in range(1, SEED_CLUSTER_MIN_SIZE):
         _seed(es, f"near-duplicate {i} about gozo", embedding=_unit(1))
 
-    result = find_seed_cluster(seed_id, "chat", 0, _query_embedding())
+    result = EpisodicService.find_seed_cluster(seed_id, "chat", 0, _query_embedding())
 
     assert result is not None
     assert seed_id in result
@@ -83,7 +83,7 @@ def test_cluster_below_floor_returns_none(db: sqlite3.Connection) -> None:
     for i in range(1, 6):
         _seed(es, f"near-duplicate {i} about gozo", embedding=_unit(1))
 
-    result = find_seed_cluster(seed_id, "chat", 0, _query_embedding())
+    result = EpisodicService.find_seed_cluster(seed_id, "chat", 0, _query_embedding())
 
     assert result is None
 
@@ -104,7 +104,7 @@ def test_non_apex_neighbours_excluded(db: sqlite3.Connection) -> None:
     for nid in neighbour_ids:
         es.update_episode(nid, {"consolidated_into": "super_ep_id"})
 
-    result = find_seed_cluster(seed_id, "chat", 0, _query_embedding())
+    result = EpisodicService.find_seed_cluster(seed_id, "chat", 0, _query_embedding())
 
     assert result is None
 
@@ -125,7 +125,7 @@ def test_consolidated_seed_returns_none(db: sqlite3.Connection) -> None:
     # The seed itself is consolidated (rolled up as another cluster's neighbour).
     es.update_episode(seed_id, {"consolidated_into": "super_ep_id"})
 
-    result = find_seed_cluster(seed_id, "chat", 0, _query_embedding())
+    result = EpisodicService.find_seed_cluster(seed_id, "chat", 0, _query_embedding())
 
     assert result is None
 
@@ -139,7 +139,7 @@ def test_different_level_neighbours_excluded(db: sqlite3.Connection) -> None:
     for i in range(1, SEED_CLUSTER_MIN_SIZE):
         _seed(es, f"near-duplicate {i} about gozo", embedding=_unit(1), level=1)
 
-    result = find_seed_cluster(seed_id, "chat", 0, _query_embedding())
+    result = EpisodicService.find_seed_cluster(seed_id, "chat", 0, _query_embedding())
 
     assert result is None
 
@@ -154,7 +154,7 @@ def test_neighbours_beyond_radius_excluded(db: sqlite3.Connection) -> None:
     for i in range(1, SEED_CLUSTER_MIN_SIZE):
         _seed(es, f"near-duplicate {i} about gozo", embedding=_unit(i + 100))
 
-    result = find_seed_cluster(seed_id, "chat", 0, _query_embedding())
+    result = EpisodicService.find_seed_cluster(seed_id, "chat", 0, _query_embedding())
 
     assert result is None
 
@@ -182,7 +182,7 @@ def test_crowded_non_qualifying_rows_do_not_starve_discovery(db: sqlite3.Connect
         for i in range(1, SEED_CLUSTER_MIN_SIZE)
     ]
 
-    result = find_seed_cluster(seed_id, "chat", 0, _query_embedding())
+    result = EpisodicService.find_seed_cluster(seed_id, "chat", 0, _query_embedding())
 
     assert result is not None, "non-qualifying rows starved the KNN slots"
     assert set(result) == {seed_id, *neighbour_ids}
@@ -198,7 +198,7 @@ def test_seed_not_duplicated_and_count_within_limit(db: sqlite3.Connection) -> N
     for i in range(1, SEED_CLUSTER_MAX_MATCHES + 1):
         _seed(es, f"near-duplicate {i} about gozo", embedding=_unit(1))
 
-    result = find_seed_cluster(seed_id, "chat", 0, _query_embedding())
+    result = EpisodicService.find_seed_cluster(seed_id, "chat", 0, _query_embedding())
 
     assert result is not None
     # Seed appears exactly once.

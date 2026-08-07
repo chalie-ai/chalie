@@ -158,8 +158,8 @@ class OllamaClient(ProviderClient):
         cls, host: str, api_key: str,
     ) -> tuple[list[dict[str, str | None]] | None, str | None]:
         """Ollama lists what is pulled locally; it takes no credential."""
-        from services.provider_probe import fetch_ollama_models  # noqa: PLC0415
-        return fetch_ollama_models(host or cls.DEFAULT_BASE_URL)
+        from services.provider_probe import ProviderProbe  # noqa: PLC0415
+        return ProviderProbe.fetch_ollama_models(host or cls.DEFAULT_BASE_URL)
 
     def __init__(self, config: dict[str, object]) -> None:
         self._config = config

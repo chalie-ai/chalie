@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 
 from flask import request, g, abort
 
-from services.feature_flags import internal_dev_enabled
+from services.feature_flags import FeatureFlags
 
 if TYPE_CHECKING:
     from flask.typing import ResponseReturnValue
@@ -33,7 +33,7 @@ def internal_only(f: Callable[..., "ResponseReturnValue"]) -> Callable[..., "Res
     """
     @wraps(f)
     def decorated(*args: object, **kwargs: object) -> "ResponseReturnValue":
-        if not internal_dev_enabled():
+        if not FeatureFlags.internal_dev_enabled():
             abort(404)
         return f(*args, **kwargs)
 

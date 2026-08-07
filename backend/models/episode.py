@@ -33,8 +33,8 @@ from typing import ClassVar, Self
 from contracts.search_config import EPISODE_SEARCH, SearchConfig
 from models.model import Model
 from models.query import Query
-from services._fts_delete import fts5_external_delete
-from services._vec_upsert import vec0_upsert
+from services._fts_delete import FtsDelete
+from services._vec_upsert import VecUpsert
 from services.episodic_constants import NOVELTY_ACTIVATION_LIMIT, NOVELTY_RECENT_LIMIT
 from services.search_expander_service import enqueue
 from services.time_utils import PARSE_SENTINEL, parse_utc, utc_now
@@ -352,7 +352,7 @@ class Episode(Model):
             "SELECT rowid FROM episodes WHERE id = ?", (episode_id,)
         ).fetchone()
         if row:
-            vec0_upsert(connection, "episodes_vec", row[0], blob)
+            VecUpsert.vec0_upsert(connection, "episodes_vec", row[0], blob)
 
     @classmethod
     def novelty_comparison_blobs(cls, channel: str) -> list[bytes]:
@@ -454,7 +454,7 @@ class Episode(Model):
         if row is not None:
             rowid, gist, indexed_at = row[0], row[1], row[2]
             if indexed_at is not None:
-                fts5_external_delete(
+                FtsDelete.fts5_external_delete(
                     connection, "episodes_fts", rowid,
                     {"gist": gist},
                 )

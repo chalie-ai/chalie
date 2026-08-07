@@ -68,8 +68,8 @@ class Scheduler(Endpoint):
     def _embed(item_id: int, message: str) -> None:
         """Fire-and-forget embedding of a freshly created item (non-fatal on failure)."""
         try:
-            from services.scheduler_service import embed_scheduled_item
-            embed_scheduled_item(item_id, message)
+            from services.scheduler_service import SchedulerService
+            SchedulerService.embed_scheduled_item(item_id, message)
         except Exception as exc:
             logger.warning("[SCHEDULER API] Embedding failed (non-fatal): %s", exc)
 

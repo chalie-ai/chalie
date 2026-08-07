@@ -137,114 +137,119 @@ class _TokenBag:
         return bool(self.token_set & _SHAPE_SYNONYMS.get(key, _NO_SYNONYMS))
 
 
-def _extract_json(text: str) -> Optional[Dict[str, object]]:
-    if not text:
-        return None
-    fenced = re.search(r'```(?:json)?\s*(\{.*\})\s*```', text, re.DOTALL)
-    if fenced:
-        candidate = fenced.group(1)
-    else:
-        start = text.find('{')
-        end = text.rfind('}')
-        candidate = text[start:end + 1] if (start != -1 and end > start) else None
-    if not candidate:
-        return None
-    try:
-        parsed = json.loads(candidate)
-    except (ValueError, TypeError):
-        return None
-    return parsed if isinstance(parsed, dict) else None
+class VisionProbe:
+    """Vision probe — verify a provider actually understands images."""
 
-
-def score_probe_response(text: str) -> float:
-    data = _extract_json(text)
-    if not data:
-        return 0.0
-
-    score = 0.0
-
-    # ---- count ------------------------------------------------------------
-    # Accepted as a number or as its digits: models answer this field both ways,
-    # and "3" is the same observation as 3. Anything else (a list, a null, a
-    # word) simply does not score — it is not evidence the model counted.
-    count = data.get('number_of_shapes')
-    if isinstance(count, (int, float, str)) and not isinstance(count, bool):
+    @staticmethod
+    def _extract_json(text: str) -> Optional[Dict[str, object]]:
+        if not text:
+            return None
+        fenced = re.search(r'```(?:json)?\s*(\{.*\})\s*```', text, re.DOTALL)
+        if fenced:
+            candidate = fenced.group(1)
+        else:
+            start = text.find('{')
+            end = text.rfind('}')
+            candidate = text[start:end + 1] if (start != -1 and end > start) else None
+        if not candidate:
+            return None
         try:
-            if int(count) == _EXPECTED_COUNT:
-                score += _COUNT_WEIGHT
-        except ValueError:
-            pass
+            parsed = json.loads(candidate)
+        except (ValueError, TypeError):
+            return None
+        return parsed if isinstance(parsed, dict) else None
 
-    # ---- build bags -------------------------------------------------------
-    bags: List[_TokenBag] = []
-    shapes = data.get('shapes')
-    if isinstance(shapes, list):
-        for item in shapes:
-            if not isinstance(item, dict):
-                continue
-            color = str(item.get('color', '') or '').strip()
-            shape = str(item.get('shape', '') or '').strip()
-            if color or shape:
-                bags.append(_TokenBag(color, shape))
+    @staticmethod
+    def score_probe_response(text: str) -> float:
+        data = VisionProbe._extract_json(text)
+        if not data:
+            return 0.0
 
-    # ---- attribute matching -----------------------------------------------
-    # Colour and shape score independently, so a reply naming one correctly is
-    # worth more than a reply naming neither — the probe is asking whether the
-    # model saw the image, not whether it phrased the answer our way.
-    used_indices: Set[int] = set()
-    for expected_shape, expected_colour in _EXPECTED_SHAPES:
-        chosen_idx: Optional[int] = None
+        score = 0.0
 
-        # Prefer the first unconsumed entry matching the expected colour;
-        # colour is the more discriminating of the two, since every shape
-        # synonym set overlaps ordinary description ("round", "box").
-        for i, bag in enumerate(bags):
-            if i not in used_indices and bag.matches_colour(expected_colour):
-                chosen_idx = i
-                break
+        # ---- count ------------------------------------------------------------
+        # Accepted as a number or as its digits: models answer this field both ways,
+        # and "3" is the same observation as 3. Anything else (a list, a null, a
+        # word) simply does not score — it is not evidence the model counted.
+        count = data.get('number_of_shapes')
+        if isinstance(count, (int, float, str)) and not isinstance(count, bool):
+            try:
+                if int(count) == _EXPECTED_COUNT:
+                    score += _COUNT_WEIGHT
+            except ValueError:
+                pass
 
-        if chosen_idx is None:
+        # ---- build bags -------------------------------------------------------
+        bags: List[_TokenBag] = []
+        shapes = data.get('shapes')
+        if isinstance(shapes, list):
+            for item in shapes:
+                if not isinstance(item, dict):
+                    continue
+                color = str(item.get('color', '') or '').strip()
+                shape = str(item.get('shape', '') or '').strip()
+                if color or shape:
+                    bags.append(_TokenBag(color, shape))
+
+        # ---- attribute matching -----------------------------------------------
+        # Colour and shape score independently, so a reply naming one correctly is
+        # worth more than a reply naming neither — the probe is asking whether the
+        # model saw the image, not whether it phrased the answer our way.
+        used_indices: Set[int] = set()
+        for expected_shape, expected_colour in _EXPECTED_SHAPES:
+            chosen_idx: Optional[int] = None
+
+            # Prefer the first unconsumed entry matching the expected colour;
+            # colour is the more discriminating of the two, since every shape
+            # synonym set overlaps ordinary description ("round", "box").
             for i, bag in enumerate(bags):
-                if i not in used_indices and bag.matches_shape(expected_shape):
+                if i not in used_indices and bag.matches_colour(expected_colour):
                     chosen_idx = i
                     break
 
-        if chosen_idx is None:
-            continue
+            if chosen_idx is None:
+                for i, bag in enumerate(bags):
+                    if i not in used_indices and bag.matches_shape(expected_shape):
+                        chosen_idx = i
+                        break
 
-        # One reported entry answers for at most one expected shape, so three
-        # copies of the same correct answer cannot score as three shapes seen.
-        used_indices.add(chosen_idx)
-        bag = bags[chosen_idx]
-        if bag.matches_colour(expected_colour):
-            score += _ATTRIBUTE_HALF_WEIGHT
-        if bag.matches_shape(expected_shape):
-            score += _ATTRIBUTE_HALF_WEIGHT
+            if chosen_idx is None:
+                continue
 
-    # ---- text -------------------------------------------------------------
-    # Compared through the shared normaliser, so punctuation and spacing in the
-    # model's transcription are irrelevant while the words must be exact.
-    reported_text = _normalise_tokens(str(data.get('text', '') or ''))
-    if reported_text == _EXPECTED_TEXT_TOKENS:
-        score += _TEXT_WEIGHT
+            # One reported entry answers for at most one expected shape, so three
+            # copies of the same correct answer cannot score as three shapes seen.
+            used_indices.add(chosen_idx)
+            bag = bags[chosen_idx]
+            if bag.matches_colour(expected_colour):
+                score += _ATTRIBUTE_HALF_WEIGHT
+            if bag.matches_shape(expected_shape):
+                score += _ATTRIBUTE_HALF_WEIGHT
 
-    return round(score, 4)
+        # ---- text -------------------------------------------------------------
+        # Compared through the shared normaliser, so punctuation and spacing in the
+        # model's transcription are irrelevant while the words must be exact.
+        reported_text = _normalise_tokens(str(data.get('text', '') or ''))
+        if reported_text == _EXPECTED_TEXT_TOKENS:
+            score += _TEXT_WEIGHT
+
+        return round(score, 4)
 
 
 def probe_provider(provider: Dict[str, object]) -> bool:
     try:
         from services.file_mapper_service import FileMapperService
         from services import vision_service
+        from services.vision_probe import VisionProbe
         asset_path = FileMapperService.get_backend_path('vision', 'vision-test.png')
         with open(asset_path, 'rb') as fh:
             image_bytes = fh.read()
-        config = vision_service.build_vision_config(provider)
-        reply = vision_service.send_image_with_config(
+        config = vision_service.VisionService.build_vision_config(provider)
+        reply = vision_service.VisionService.send_image_with_config(
             config, image_bytes, PROBE_PROMPT, mime_type='image/png',
         )
         if not reply:
             return False
-        score = score_probe_response(reply)
+        score = VisionProbe.score_probe_response(reply)
         passed = score >= PASS_THRESHOLD
         logger.info(
             "[VisionProbe] name=%s platform=%s model=%s score=%.2f pass=%s",

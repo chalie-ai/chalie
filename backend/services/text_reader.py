@@ -20,7 +20,7 @@ from exceptions import (
     SourceIsImage,
     SystemPathBlocked,
 )
-from services.web_fetch import BROWSER, fetch_page
+from services.web_fetch import BROWSER, WebFetch
 
 
 class TextReader:
@@ -59,7 +59,7 @@ class TextReader:
     # ── URL branch ───────────────────────────────────────────────────────────────
 
     def _read_url(self) -> str:
-        html, content_type = fetch_page(
+        html, content_type = WebFetch.fetch_page(
             self._source, profile=BROWSER, timeout=self._URL_FETCH_TIMEOUT
         )
 

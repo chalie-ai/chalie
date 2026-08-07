@@ -9,7 +9,7 @@ from flask_restx import Namespace, Resource
 from werkzeug.security import generate_password_hash
 
 from services.auth_service import AuthService
-from services.feature_flags import internal_dev_enabled
+from services.feature_flags import FeatureFlags
 from contracts.constants.auth import LOGIN_RATE_LIMIT, LOGIN_RATE_WINDOW_SECONDS
 from .auth import require_auth, _cookie_only, internal_only
 from .dto import Error, expects, responds, OpenApiRegistry
@@ -75,7 +75,7 @@ class AuthStatusResource(Resource):
                 has_session=has_session,
                 vault_state=vault_state,
                 has_vision_provider=has_vision,
-                internal_dev=internal_dev_enabled(),
+                internal_dev=FeatureFlags.internal_dev_enabled(),
             )
         except Exception as e:
             logger.error(f"[REST API] Auth status error: {e}")

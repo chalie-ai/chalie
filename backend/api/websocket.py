@@ -73,7 +73,7 @@ class WebSocketServer:
     @staticmethod
     def _ws_handler(ws: object) -> None:
         from flask import request as flask_request
-        from services.feature_flags import internal_dev_enabled
+        from services.feature_flags import FeatureFlags
 
         ws_typed = cast(_WS, ws)
 
@@ -81,7 +81,7 @@ class WebSocketServer:
         # before. A native client has no cookie, so it authenticates with the first
         # WS frame instead of a query-string token (see ``_handshake_bearer``).
         if not WebSocketServer._validate_cookie_session(flask_request):
-            if not internal_dev_enabled() or not WebSocketServer._handshake_bearer(ws_typed):
+            if not FeatureFlags.internal_dev_enabled() or not WebSocketServer._handshake_bearer(ws_typed):
                 try:
                     ws_typed.send(json.dumps({"type": "error", "message": "Unauthorized"}))
                 except Exception:

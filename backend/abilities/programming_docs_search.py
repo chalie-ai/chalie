@@ -35,7 +35,7 @@ from configs.enums.param_key import Keys
 from contracts.params.param_bag import ParamBag
 from contracts.params.programming_docs_search_params_bag import ProgrammingDocsSearchParamsBag
 from services.text_extractor import TextExtractor
-from services.web_fetch import API, fetch_text
+from services.web_fetch import API, WebFetch
 from configs.enums.ability_category import AbilityCategory
 
 # ── Tunables ──────────────────────────────────────────────────────────────────
@@ -49,7 +49,7 @@ _RE_HTML_TAGS = re.compile(r"<[^>]+>")
 # ── Low-level fetch helpers (all through services.web_fetch) ────────────────────
 
 def _fetch(url: str) -> str:
-    return fetch_text(url, profile=API, timeout=_FETCH_TIMEOUT)
+    return WebFetch.fetch_text(url, profile=API, timeout=_FETCH_TIMEOUT)
 
 
 def _strip_tags(html: str) -> str:

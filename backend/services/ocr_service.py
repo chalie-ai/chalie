@@ -22,8 +22,12 @@ def _get_engine() -> object:
     return _engine
 
 
-def _extract_text(img: object) -> str:
-    result, _ = cast(Callable[[object], tuple[list[list[object]], object]], _get_engine())(img)
-    if not result:
-        return ''
-    return '\n'.join(cast(str, region[1]) for region in result)
+class OcrService:
+    """OCR Service — RapidOCR text extraction."""
+
+    @staticmethod
+    def _extract_text(img: object) -> str:
+        result, _ = cast(Callable[[object], tuple[list[list[object]], object]], _get_engine())(img)
+        if not result:
+            return ''
+        return '\n'.join(cast(str, region[1]) for region in result)

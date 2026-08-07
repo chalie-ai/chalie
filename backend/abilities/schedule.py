@@ -338,8 +338,8 @@ class ScheduleAbility(Ability[ScheduleParamsBag]):
             item_id = cast(int, item.id)
 
             try:
-                from services.scheduler_service import embed_scheduled_item
-                embed_scheduled_item(item_id, params.message)
+                from services.scheduler_service import SchedulerService
+                SchedulerService.embed_scheduled_item(item_id, params.message)
             except Exception as emb_err:
                 logger.warning(f"{LOG_PREFIX} Embedding failed (non-fatal): {emb_err}")
 

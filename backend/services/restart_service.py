@@ -21,17 +21,23 @@ import threading
 logger = logging.getLogger(__name__)
 
 
-def request_restart() -> None:
-    """Daemon thread waits 2 s (HTTP response to flush) then ``os._exit(42)``.
+class RestartService:
+    """Request an in-process restart."""
 
-    Exit code 42 signals ``run.sh`` to restart the process.
-    """
-    def _deferred_exit() -> None:
-        import time
-        time.sleep(2)
-        logger.info("Restarting Chalie (exit code 42)")
-        os._exit(42)
+    @staticmethod
+    def request_restart() -> None:
+        """Daemon thread waits 2 s (HTTP response to flush) then ``os._exit(42)``.
 
-    thread = threading.Thread(target=_deferred_exit, daemon=True)
-    thread.start()
-    logger.info("Restart requested — exiting in 2 seconds")
+        Exit code 42 signals ``run.sh`` to restart the process.
+        """
+
+        def _deferred_exit() -> None:
+            import time
+
+            time.sleep(2)
+            logger.info("Restarting Chalie (exit code 42)")
+            os._exit(42)
+
+        thread = threading.Thread(target=_deferred_exit, daemon=True)
+        thread.start()
+        logger.info("Restart requested — exiting in 2 seconds")

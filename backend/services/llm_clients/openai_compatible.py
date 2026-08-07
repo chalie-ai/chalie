@@ -70,7 +70,6 @@ from services.llm_clients.thinking_map import (
 from services.provider_api import (
     ProviderApiRequest,
     ProviderApiResponse,
-    is_token_limit_message,
 )
 
 logger = logging.getLogger(__name__)
@@ -246,8 +245,8 @@ class OpenAICompatibleClient(ProviderClient):
         cls, host: str, api_key: str,
     ) -> tuple[list[dict[str, str | None]] | None, str | None]:
         """Every OpenAI-protocol host answers ``GET {base_url}/models``."""
-        from services.provider_probe import fetch_openai_compatible_models  # noqa: PLC0415
-        return fetch_openai_compatible_models(host or cls.DEFAULT_BASE_URL, api_key)
+        from services.provider_probe import ProviderProbe  # noqa: PLC0415
+        return ProviderProbe.fetch_openai_compatible_models(host or cls.DEFAULT_BASE_URL, api_key)
 
     def __init__(self, config: dict[str, object]) -> None:
         self._config = config
@@ -347,7 +346,7 @@ class OpenAICompatibleClient(ProviderClient):
             if (
                 err_code == 'context_length_exceeded'
                 or 'context_length_exceeded' in str(exc).lower()
-                or is_token_limit_message(str(exc))
+                or ProviderApiRequest.is_token_limit_message(str(exc))
             ):
                 raise ContextLimit(
                     f"Provider rejected payload (context length): {exc}",

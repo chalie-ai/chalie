@@ -12,11 +12,8 @@ This module is the single place those concerns live:
   ship by default: ``BROWSER`` (impersonates Chrome, for article/page reads),
   ``API`` (a polite identified bot, for JSON/HTML doc APIs), and ``DOWNLOAD``
   (minimal headers for binary file pulls).
-* :func:`fetch_text` — GET a URL and return the decoded text.
-* :func:`stream_to_file` — GET a URL and stream the body to a path in fixed-size
-  chunks (never buffering the whole file in memory).
-
-Any host is reachable — public, private, or on the local network.
+* :class:`WebFetch` — static methods for GET text, GET page, and streamed
+  download. Any host is reachable — public, private, or on the local network.
 """
 
 from __future__ import annotations
@@ -91,109 +88,113 @@ DOWNLOAD = FetchProfile(
 )
 
 
-def fetch_text(
-    url: str,
-    *,
-    profile: FetchProfile = BROWSER,
-    timeout: float = DEFAULT_TIMEOUT,
-    verify: bool = False,
-    allow_redirects: bool = True,
-) -> str:
-    """GET *url* and return the decoded response text.
+class WebFetch:
+    """Outbound HTTP fetch stack with named profiles."""
 
-    Raises :class:`requests.RequestException` (incl. ``raise_for_status``) on any
-    HTTP failure — errors bubble so callers surface them, never swallow.
-    """
-    text, _ = fetch_page(
-        url,
-        profile=profile,
-        timeout=timeout,
-        verify=verify,
-        allow_redirects=allow_redirects,
-    )
-    return text
+    @staticmethod
+    def fetch_text(
+        url: str,
+        *,
+        profile: FetchProfile = BROWSER,
+        timeout: float = DEFAULT_TIMEOUT,
+        verify: bool = False,
+        allow_redirects: bool = True,
+    ) -> str:
+        """GET *url* and return the decoded response text.
 
-
-def fetch_page(
-    url: str,
-    *,
-    profile: FetchProfile = BROWSER,
-    timeout: float = DEFAULT_TIMEOUT,
-    verify: bool = False,
-    allow_redirects: bool = True,
-) -> tuple[str, str]:
-    """GET *url*; return ``(text, content_type)``.
-
-    The bare ``Content-Type`` header — lower-cased, charset suffix stripped (the
-    part before any ``;``) — is returned alongside the decoded body so a caller
-    can decide whether the body is HTML to extract or plain text to pass through
-    verbatim (the ``read`` ability's ``.diff`` / ``.patch`` case). An empty string
-    is returned when the server sends no ``Content-Type``.
-
-    Raises :class:`requests.RequestException` (incl. ``raise_for_status``) on any
-    HTTP failure — errors bubble so callers surface them, never swallow.
-    """
-    with requests.Session() as session:
-        session.headers.update(profile.headers)
-        response = session.get(
-            url, timeout=timeout, allow_redirects=allow_redirects, verify=verify
+        Raises :class:`requests.RequestException` (incl. ``raise_for_status``) on any
+        HTTP failure — errors bubble so callers surface them, never swallow.
+        """
+        text, _ = WebFetch.fetch_page(
+            url,
+            profile=profile,
+            timeout=timeout,
+            verify=verify,
+            allow_redirects=allow_redirects,
         )
-        response.raise_for_status()
-        content_type = response.headers.get("Content-Type", "").split(";")[0].strip().lower()
-        return response.text, content_type
+        return text
 
+    @staticmethod
+    def fetch_page(
+        url: str,
+        *,
+        profile: FetchProfile = BROWSER,
+        timeout: float = DEFAULT_TIMEOUT,
+        verify: bool = False,
+        allow_redirects: bool = True,
+    ) -> tuple[str, str]:
+        """GET *url*; return ``(text, content_type)``.
 
-def stream_to_file(
-    url: str,
-    dest_path: str,
-    *,
-    profile: FetchProfile = DOWNLOAD,
-    timeout: float = DEFAULT_TIMEOUT,
-    chunk_size: int = DEFAULT_CHUNK_SIZE,
-    max_bytes: int | None = None,
-) -> tuple[int, str]:
-    """GET *url* and stream the body to *dest_path*.
+        The bare ``Content-Type`` header — lower-cased, charset suffix stripped (the
+        part before any ``;``) — is returned alongside the decoded body so a caller
+        can decide whether the body is HTML to extract or plain text to pass through
+        verbatim (the ``read`` ability's ``.diff`` / ``.patch`` case). An empty string
+        is returned when the server sends no ``Content-Type``.
 
-    When *max_bytes* is set: the ``Content-Length`` header is checked upfront so
-    an obviously-oversized download is aborted before the body is pulled, and the
-    running byte count is also checked during streaming so a server that
-    under-declares (or omits) its length is still stopped. On over-cap the
-    partial file is removed and :class:`DownloadTooLarge` is raised — never a
-    silent truncation.
+        Raises :class:`requests.RequestException` (incl. ``raise_for_status``) on any
+        HTTP failure — errors bubble so callers surface them, never swallow.
+        """
+        with requests.Session() as session:
+            session.headers.update(profile.headers)
+            response = session.get(
+                url, timeout=timeout, allow_redirects=allow_redirects, verify=verify
+            )
+            response.raise_for_status()
+            content_type = response.headers.get("Content-Type", "").split(";")[0].strip().lower()
+            return response.text, content_type
 
-    Raises :class:`DownloadTooLarge` when the cap is exceeded and
-    :class:`requests.RequestException` on any HTTP failure.
-    """
-    os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+    @staticmethod
+    def stream_to_file(
+        url: str,
+        dest_path: str,
+        *,
+        profile: FetchProfile = DOWNLOAD,
+        timeout: float = DEFAULT_TIMEOUT,
+        chunk_size: int = DEFAULT_CHUNK_SIZE,
+        max_bytes: int | None = None,
+    ) -> tuple[int, str]:
+        """GET *url* and stream the body to *dest_path*.
 
-    response = requests.get(
-        url, stream=True, timeout=timeout, headers=profile.headers
-    )
-    with response:
-        response.raise_for_status()
+        When *max_bytes* is set: the ``Content-Length`` header is checked upfront so
+        an obviously-oversized download is aborted before the body is pulled, and the
+        running byte count is also checked during streaming so a server that
+        under-declares (or omits) its length is still stopped. On over-cap the
+        partial file is removed and :class:`DownloadTooLarge` is raised — never a
+        silent truncation.
 
-        if max_bytes is not None:
-            declared = response.headers.get("Content-Length")
-            if declared is not None and declared.isdigit() and int(declared) > max_bytes:
-                raise DownloadTooLarge(max_bytes)
+        Raises :class:`DownloadTooLarge` when the cap is exceeded and
+        :class:`requests.RequestException` on any HTTP failure.
+        """
+        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
 
-        content_type = (
-            response.headers.get("Content-Type", "").split(";")[0].strip().lower()
+        response = requests.get(
+            url, stream=True, timeout=timeout, headers=profile.headers
         )
+        with response:
+            response.raise_for_status()
 
-        written = 0
-        try:
-            with open(dest_path, "wb") as fh:
-                for chunk in response.iter_content(chunk_size=chunk_size):
-                    if not chunk:
-                        continue
-                    written += len(chunk)
-                    if max_bytes is not None and written > max_bytes:
-                        raise DownloadTooLarge(max_bytes)
-                    fh.write(chunk)
-        except (DownloadTooLarge, OSError):
-            if os.path.exists(dest_path):
-                os.remove(dest_path)
-            raise
+            if max_bytes is not None:
+                declared = response.headers.get("Content-Length")
+                if declared is not None and declared.isdigit() and int(declared) > max_bytes:
+                    raise DownloadTooLarge(max_bytes)
 
-        return written, content_type
+            content_type = (
+                response.headers.get("Content-Type", "").split(";")[0].strip().lower()
+            )
+
+            written = 0
+            try:
+                with open(dest_path, "wb") as fh:
+                    for chunk in response.iter_content(chunk_size=chunk_size):
+                        if not chunk:
+                            continue
+                        written += len(chunk)
+                        if max_bytes is not None and written > max_bytes:
+                            raise DownloadTooLarge(max_bytes)
+                        fh.write(chunk)
+            except (DownloadTooLarge, OSError):
+                if os.path.exists(dest_path):
+                    os.remove(dest_path)
+                raise
+
+            return written, content_type

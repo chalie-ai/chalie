@@ -208,13 +208,13 @@ class ImageSearchAbility(Ability[ImageSearchParamsBag]):
     ) -> tuple[dict[str, object] | None, str | None]:
         # Local imports to avoid import cycles.
         from services import tmp_storage  # noqa: PLC0415
-        from services.web_fetch import stream_to_file  # noqa: PLC0415
+        from services.web_fetch import WebFetch  # noqa: PLC0415
         from services.image_description import ImageDescription  # noqa: PLC0415
 
         dest = tmp_storage.new_tmp_path(f"imgsearch_{uuid.uuid4().hex[:8]}")
         try:
             try:
-                _, content_type = stream_to_file(
+                _, content_type = WebFetch.stream_to_file(
                     result["url"], dest, max_bytes=_MAX_IMAGE_BYTES
                 )
             except DownloadTooLarge:

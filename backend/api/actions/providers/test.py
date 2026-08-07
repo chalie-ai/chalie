@@ -26,7 +26,7 @@ from api.request import Request
 from api.request.provider_models import ProviderTestRequest
 from api.response.provider_models import ProviderTestResult
 from services.provider_db_service import ProviderDbService
-from services.provider_probe import test_api_provider, test_codex_provider, test_ollama_provider
+from services.provider_probe import ProviderProbe
 
 
 class ProviderTest(Action):
@@ -62,11 +62,11 @@ class ProviderTest(Action):
             return ProviderTestResult(success=False, error="Model is required").single()
         start = time.time()
         if platform == 'ollama':
-            outcome = test_ollama_provider(cast(str, config.get('host', '')), model, start)
+            outcome = ProviderProbe.test_ollama_provider(cast(str, config.get('host', '')), model, start)
         elif platform == 'codex_cli':
-            outcome = test_codex_provider(model, start)
+            outcome = ProviderProbe.test_codex_provider(model, start)
         else:
-            outcome = test_api_provider(cast(str | None, config.get('api_key')), cast(str | None, config.get('host')), platform, model, start)
+            outcome = ProviderProbe.test_api_provider(cast(str | None, config.get('api_key')), cast(str | None, config.get('host')), platform, model, start)
 
         return ProviderTestResult(
             success=outcome.success,

@@ -107,7 +107,6 @@ from services.llm_clients.thinking_map import GEMINI_NONE_FALLBACK_BUDGET, GEMIN
 from services.provider_api import (
     ProviderApiRequest,
     ProviderApiResponse,
-    is_token_limit_message,
 )
 
 logger = logging.getLogger(__name__)
@@ -142,8 +141,8 @@ class GeminiClient(ProviderClient):
         cls, host: str, api_key: str,
     ) -> tuple[list[dict[str, str | None]] | None, str | None]:
         """Google publishes the list against the key; there is no host to give."""
-        from services.provider_probe import fetch_gemini_models  # noqa: PLC0415
-        return fetch_gemini_models(api_key)
+        from services.provider_probe import ProviderProbe  # noqa: PLC0415
+        return ProviderProbe.fetch_gemini_models(api_key)
 
     @staticmethod
     def _gemini_tool_response(msg: dict[str, object]) -> dict[str, object]:
@@ -316,7 +315,7 @@ class GeminiClient(ProviderClient):
         # code==400 check would over-trigger (covers wrong params, regions, etc.).
         # If the string-match misses, log a WARNING so the set can be extended.
         if exc_code == 400 and exc_status == 'INVALID_ARGUMENT':
-            if is_token_limit_message(getattr(exc, 'message', None)):
+            if ProviderApiRequest.is_token_limit_message(getattr(exc, 'message', None)):
                 raise ContextLimit(
                     f"Gemini rejected payload (token limit): {exc}",
                     provider='gemini',

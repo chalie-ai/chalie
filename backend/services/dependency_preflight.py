@@ -49,7 +49,7 @@ class DependencyPreflight:
         for _spec in _raw:
             if not isinstance(_spec, str):
                 continue
-            _bare = _bare_name(_spec)
+            _bare = DependencyPreflight._bare_name(_spec)
             if not _bare:
                 continue
             try:
@@ -59,12 +59,12 @@ class DependencyPreflight:
 
         return sorted(_missing)
 
+    @staticmethod
+    def _bare_name(spec: str) -> str:
+        """Strip version specifiers, extras, and env markers from a PEP 508 spec.
 
-def _bare_name(spec: str) -> str:
-    """Strip version specifiers, extras, and env markers from a PEP 508 spec.
-
-    Returns the empty string when the spec does not begin with a valid package
-    name (should not happen for well-formed ``pyproject.toml``).
-    """
-    _match = _BARE_NAME_RE.match(spec.strip())
-    return _match.group(1) if _match else ''
+        Returns the empty string when the spec does not begin with a valid package
+        name (should not happen for well-formed ``pyproject.toml``).
+        """
+        _match = _BARE_NAME_RE.match(spec.strip())
+        return _match.group(1) if _match else ''

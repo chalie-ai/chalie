@@ -330,9 +330,9 @@ class ProviderDbService:
         if isinstance(provider_id, int):
             # Best-effort: a failed write costs one repeated probe, never the turn.
             try:
-                from services.provider_probe import invalidate_provider_cache  # noqa: PLC0415
+                from services.provider_probe import ProviderProbe  # noqa: PLC0415
                 self.update_provider(provider_id, {"context_window": window})
-                invalidate_provider_cache()
+                ProviderProbe.invalidate_provider_cache()
                 logger.info(
                     "[Provider] Pinned context window %d for id=%s (platform=%s model=%s)",
                     window, provider_id, platform, model,
