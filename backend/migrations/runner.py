@@ -66,6 +66,7 @@ _STEPS: tuple[tuple[str, str], ...] = (
     ("providers-context-window-v1", "migrations.migration_016_providers_context_window"),
     ("llm-call-log-timings-v1", "migrations.migration_017_llm_call_log_timings"),
     ("usage-type-foreground-background-v1", "migrations.migration_018_usage_type_foreground_background"),
+    ("transcript-consolidated-v1", "migrations.migration_020_transcript_consolidated"),
 )
 
 # Extra wrapper-era sentinel stems a step's resolution must also satisfy:

@@ -449,6 +449,7 @@ CREATE TABLE IF NOT EXISTS transcript (
     -- ActTrail.start() demotes to 0 when a settling tool is recorded against the
     -- row. Internal passes (chat_history_compactor, thinking) never demote.
     settled     INTEGER NOT NULL DEFAULT 0,
+    consolidated INTEGER NOT NULL DEFAULT 0,
     -- Per-turn thinking level chosen by the sender (auto|medium|high); NULL =
     -- legacy row or not-yet-set, lets a later query distinguish "chose auto"
     -- from "never set".

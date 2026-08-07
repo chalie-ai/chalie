@@ -74,9 +74,9 @@ if TYPE_CHECKING:
         _sources: list[object]
 
     class _MemoryConsolidatorConfig(Protocol):
-        _compaction: str
+        _target_channel: str
         _window: str
-        _prior_map: str
+        _source_transcript_ids: list[int]
 
 logger = logging.getLogger(__name__)
 
@@ -759,24 +759,10 @@ class PromptService:
         return f"Source episodes:\n\n{src}"
 
     def _memory_consolidator_prompt(self) -> str:
-        """The consolidator's self-contained input window: prior compaction (if
-        any), the turn's transcript rows, then any map rows previously written
-        for this turn (re-fire lineage). All carried on the config."""
+        """The consolidator's self-contained input window: the fully-formatted
+        window text built by the service (channel header, preamble, and exchanges)."""
         config = cast("_MemoryConsolidatorConfig", self.mp.config)
-        parts: list[str] = []
-        if config._compaction:
-            parts.append(f"Prior compaction:\n{config._compaction}")
-            parts.append("")
-        parts.append("Transcript window — each line is `[id] role: content`:")
-        parts.append("")
-        parts.append(config._window)
-        if config._prior_map:
-            parts.append("")
-            parts.append(
-                "Map rows you previously wrote for this turn (derive/retire as needed):"
-            )
-            parts.append(config._prior_map)
-        return "\n".join(parts)
+        return config._window
 
     # ── EpisodeEncoderConfig (channel="episode_encoder") ─────────────────────
 

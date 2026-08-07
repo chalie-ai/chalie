@@ -1,23 +1,19 @@
-"""Idle-gated cron job: Memory v3 consolidation (background distillation).
+"""Fixed 30-minute cron job: Memory v3 consolidation (background distillation).
 
 Fires :class:`services.memory_consolidator_service.MemoryConsolidatorService`
-when the user is idle. The 10-minute idle window matches the Memory v3 design
-(inactivity trigger); ``min_interval`` keeps it from re-firing every minute once
-idle. Per-turn idempotence (a consolidated turn is not re-consolidated) lives in
-the service, not the schedule.
+every 30 minutes. No idle gate — the consolidator runs on a fixed schedule
+regardless of user activity, since the window is defined by the
+``transcript.consolidated`` flag, not by turn boundaries.
 """
 
 from __future__ import annotations
 
-from datetime import timedelta
-
-from cron.base import IdleGatedJob
+from cron.base import ScheduledJob
 
 
-class MemoryConsolidatorJob(IdleGatedJob):
+class MemoryConsolidatorJob(ScheduledJob):
     name = "memory_consolidator"
-    idle_window = timedelta(minutes=10)
-    min_interval = timedelta(minutes=5)
+    minute = "*/30"
 
     def _run(self) -> str:
         from services.memory_consolidator_service import (  # noqa: PLC0415

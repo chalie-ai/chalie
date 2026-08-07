@@ -28,7 +28,7 @@ class Transcript(Model):
         "id", "channel", "role", "content", "tool_call_id", "tool_name",
         "internal", "deliberation_score", "created_at", "xml_migrated",
         "location_lat", "location_lon", "location_name", "turn_id", "settled",
-        "thinking_level",
+        "consolidated", "thinking_level",
     )
 
     @classmethod
@@ -49,6 +49,7 @@ class Transcript(Model):
     location_name: str | None
     turn_id: int | None
     settled: int
+    consolidated: int
     thinking_level: str | None
 
     # settle0 — the FIRST assistant row of a turn with settled=1: the boundary

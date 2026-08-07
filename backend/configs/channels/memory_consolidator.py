@@ -1,11 +1,11 @@
 """MemoryConsolidator channel config + the channel->preamble map (Memory v3).
 
-The consolidator is a background agentic pass over a single (channel, turn)
-window. The service (:mod:`services.memory_consolidator_service`) builds one
-``MemoryConsolidatorConfig`` per consolidation, capturing the input window so
-``PromptService`` can assemble a self-contained user prompt (the consolidator
-has no chat history). The consolidator's own transcript channel is always
-``memory_consolidator``; ``_target_channel`` selects the review preamble.
+The consolidator is a background agentic pass over a window of unconsolidated
+transcript rows. The service (:mod:`services.memory_consolidator_service`) builds
+one ``MemoryConsolidatorConfig`` per consolidation, capturing the formatted
+window so ``PromptService`` can assemble a self-contained user prompt (the
+consolidator has no chat history). The consolidator's own transcript channel is
+always ``memory_consolidator``; ``_target_channel`` selects the review preamble.
 """
 
 from __future__ import annotations
@@ -21,8 +21,8 @@ from configs.enums.policy_channel import PolicyChannel
 from services.processor_config import ProcessorConfig
 
 # Channel -> preamble framing (replaces per-source memory profiles). Channels
-# the service does NOT consolidate (delegate:*, subagent, skills_building, and
-# memory_consolidator itself) have no preamble here.
+# the service does NOT consolidate (delegate:*, subagent, skills_building,
+# memory_consolidator itself, and discovery) have no preamble here.
 _PREAMBLES: dict[str, str] = {
     Channel.USER.value: (
         "This is the user's main conversation. Facts about the user, their "
@@ -65,9 +65,8 @@ def preamble_for(channel: str) -> str:
 _SYSTEM_PROMPT = """\
 You are the memory consolidator. You run in the background after a conversation \
 turn settles, distilling what was said into durable memory. Your input window is \
-one turn: the thread's last compaction (if present) followed by the transcript \
-rows of this turn that came after it, plus any map rows you previously wrote for \
-this turn.
+one or more transcript rows from a single channel, formatted with timestamps and \
+locations.
 
 Principles
 - Recall first. Before storing anything, call `recall` with the salient topics so \
@@ -102,23 +101,19 @@ verbatim.
 
 
 class MemoryConsolidatorConfig(ProcessorConfig):
-    """One background consolidation pass. Captures the input window so the user
-    prompt is self-contained (no chat history). The service stamps
+    """One background consolidation pass. Captures the formatted input window so
+    the user prompt is self-contained (no chat history). The service stamps
     ``_source_transcript_ids`` so the write tools can attribute provenance."""
 
     if TYPE_CHECKING:
         _target_channel: str
-        _compaction: str
         _window: str
-        _prior_map: str
         _source_transcript_ids: list[int]
 
     def __init__(
         self,
         target_channel: str,
-        compaction: str,
         window: str,
-        prior_map: str,
         source_transcript_ids: list[int],
     ) -> None:
         super().__init__(
@@ -132,9 +127,7 @@ class MemoryConsolidatorConfig(ProcessorConfig):
             memory_seed=False,
         )
         object.__setattr__(self, "_target_channel", target_channel)
-        object.__setattr__(self, "_compaction", compaction)
         object.__setattr__(self, "_window", window)
-        object.__setattr__(self, "_prior_map", prior_map)
         object.__setattr__(self, "_source_transcript_ids", list(source_transcript_ids))
 
     @property
