@@ -124,7 +124,7 @@ async def _async_list_tools(host: str, headers: dict[str, str]) -> list[dict[str
     from mcp.shared._httpx_utils import create_mcp_http_client
 
     async with create_mcp_http_client(headers=headers) as client:
-        async with streamable_http_client(host, http_client=client) as (read, write):
+        async with streamable_http_client(host, http_client=client) as (read, write, _):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 result = await session.list_tools()
@@ -133,7 +133,7 @@ async def _async_list_tools(host: str, headers: dict[str, str]) -> list[dict[str
                         "name": t.name,
                         "description": t.description or "",
                         "inputSchema": (
-                            t.input_schema if isinstance(t.input_schema, dict) else {}
+                            t.inputSchema if isinstance(t.inputSchema, dict) else {}
                         ),
                     }
                     for t in result.tools
@@ -155,7 +155,7 @@ async def _async_call_tool(
     from mcp.shared._httpx_utils import create_mcp_http_client
 
     async with create_mcp_http_client(headers=headers) as client:
-        async with streamable_http_client(host, http_client=client) as (read, write):
+        async with streamable_http_client(host, http_client=client) as (read, write, _):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 return await session.call_tool(remote_tool, params)

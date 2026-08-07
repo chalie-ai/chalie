@@ -6,7 +6,7 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""MCP server built on the SDK's ``MCPServer`` — single ``talk_to_chalie`` tool for external agents.
+"""MCP server built on the SDK's ``FastMCP`` — single ``talk_to_chalie`` tool for external agents.
 
 Streamable HTTP on a dedicated port (default 8462). Bearer tokens validated by
 ASGI middleware against ``wrapper_tokens`` (same as the REST API).
@@ -19,7 +19,7 @@ import re
 import sqlite3
 
 import uvicorn
-from mcp.server import MCPServer
+from mcp.server import FastMCP
 from starlette.applications import Starlette
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
@@ -101,14 +101,14 @@ class BearerTokenMiddleware(BaseHTTPMiddleware):
         return wrapper_id
 
 
-def create_mcp_server() -> MCPServer:
+def create_mcp_server() -> FastMCP:
     """Create and configure the MCP server with the talk_to_chalie tool.
 
-    Bind host and port are not set here — the constructor no longer takes them
-    (they are applied where they matter: ``host`` in ``_build_app`` and ``port``
-    by ``uvicorn.run`` in ``run_mcp_server``).
+    ``host`` is set on the FastMCP constructor (not on ``streamable_http_app``,
+    which no longer takes it): a non-loopback bind host keeps the SDK's
+    auto DNS-rebinding protection OFF (see ``_build_app``).
     """
-    mcp = MCPServer(name=_MCP_SERVER_NAME)
+    mcp = FastMCP(name=_MCP_SERVER_NAME, host="0.0.0.0")
 
     @mcp.tool()
     async def talk_to_chalie(
@@ -163,14 +163,15 @@ def create_mcp_server() -> MCPServer:
     return mcp
 
 
-def _build_app(mcp: MCPServer) -> Starlette:
+def _build_app(mcp: FastMCP) -> Starlette:
     """Wrap the MCP Starlette app with bearer token auth middleware."""
-    # host="0.0.0.0" is load-bearing, not cosmetic: the SDK auto-enables
-    # DNS-rebinding protection (localhost-only allowed_hosts) ONLY when host is a
-    # loopback address. Passing the real bind host keeps that protection OFF, so
-    # networked external agents can connect — the permissive transport 1.x always
-    # ran. Do not "simplify" this back to the default.
-    app = mcp.streamable_http_app(host="0.0.0.0")
+    # host="0.0.0.0" is load-bearing, not cosmetic: FastMCP auto-enables
+    # DNS-rebinding protection (localhost-only allowed_hosts) ONLY when its host
+    # is a loopback address. Setting the real bind host on the constructor keeps
+    # that protection OFF, so networked external agents can connect — the
+    # permissive transport 1.x always ran. Do not "simplify" this back to the
+    # default 127.0.0.1.
+    app: Starlette = mcp.streamable_http_app()
     app.add_middleware(BearerTokenMiddleware)
     return app
 
