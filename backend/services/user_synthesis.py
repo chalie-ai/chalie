@@ -27,7 +27,6 @@ import json
 import logging
 
 from models.behavioral_pattern import BehavioralPattern
-from models.fact import FactRow
 from models.machine_state import MachineStateRow
 from services.time_utils import parse_utc
 
@@ -91,14 +90,10 @@ class UserSynthesis:
 
     @staticmethod
     def _newest_trait_ts() -> str | None:
-        """The most recent ``last_confirmed_at`` across live traits and patterns,
-        or ``None`` when neither lane has a row."""
-        rows = [
-            FactRow.live().order_by("last_confirmed_at DESC").first(),
-            BehavioralPattern.live().order_by("last_confirmed_at DESC").first(),
-        ]
-        stamps = [row.last_confirmed_at for row in rows if row is not None]
-        return max(stamps) if stamps else None
+        """The most recent ``last_confirmed_at`` across live patterns, or
+        ``None`` when the lane has no row."""
+        row = BehavioralPattern.live().order_by("last_confirmed_at DESC").first()
+        return row.last_confirmed_at if row is not None else None
 
     @classmethod
     def persist_user_summary(cls, text: str) -> None:

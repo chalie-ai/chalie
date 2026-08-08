@@ -44,7 +44,6 @@ from configs.channels.user import UserConfig
 from configs.enums.channels import Channel
 from exceptions import UnroutedPromptChannel
 from models.behavioral_pattern import BehavioralPattern
-from models.fact import FactRow
 from models.tool_call import ToolCall
 from models.transcript import Transcript
 from models.transcript_thinking import TranscriptThinking
@@ -144,7 +143,6 @@ Some tools accept an `async` flag. Set `async: true` to run a tool in the backgr
 
 Choose `async: true` when the user asks for something to happen "in the background" or "while" they do something else, or when a call is likely to be slow (web research, browsing, lengthy shell or file work) and the user should not have to wait. Call tools normally (synchronously) for quick results the user is actively waiting on."""
 
-_MAX_TRAIT_ROWS = 200
 _MAX_PATTERN_ROWS = 25
 
 
@@ -474,23 +472,9 @@ class PromptService:
     # ── UserSummaryConfig (channel="user_summary") ───────────────────────────
 
     def _user_summary_prompt(self) -> str:
-        """``UserSummaryConfig.get_user_prompt``: traits facts section, plus the
-        active-patterns section when any exist."""
-        facts_section = self._traits_block()
-        patterns_section = self._user_summary_patterns_block()
-        if not patterns_section:
-            return facts_section
-        return f"{facts_section}\n\n{patterns_section}"
-
-    def _traits_block(self) -> str:
-        """Section 1 of ``UserSummaryConfig.get_user_prompt``: up to
-        ``_MAX_TRAIT_ROWS`` live ``user_specific`` facts, most-reinforced first,
-        via ``FactRow.traits()``."""
-        rows = FactRow.traits().get()[:_MAX_TRAIT_ROWS]
-        lines = [f"{row.key}: {row.value}" for row in rows if row.key and row.value]
-        if not lines:
-            return "Facts:\n(no facts available)"
-        return "Facts:\n" + "\n".join(lines)
+        """``UserSummaryConfig.get_user_prompt``: the active-patterns section
+        when any exist."""
+        return self._user_summary_patterns_block()
 
     def _user_summary_patterns_block(self) -> str:
         """Section 2 of ``UserSummaryConfig.get_user_prompt``: up to

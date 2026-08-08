@@ -253,13 +253,7 @@ class ClientContextService:
             return
 
         try:
-            from models.fact import FactRow
-            FactRow.store('culture_region', culture, source='demographic_seeding')
-
-            if language:
-                FactRow.store('language_preference', language, source='demographic_seeding')
-
             self._store.setex(CULTURE_SEED_KEY, 86400 * 30, "1")  # Don't re-seed for 30 days
-            logging.debug(f"[CLIENT CONTEXT] Seeded culture_region={culture} from locale={locale}")
+            logging.debug(f"[CLIENT CONTEXT] Culture={culture} noted from locale={locale}")
         except Exception as e:
             logging.debug(f"[CLIENT CONTEXT] Demographic seeding failed: {e}")
