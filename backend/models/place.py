@@ -25,14 +25,6 @@ class PlaceRow(DataGraphRow):
     _SUPERSEDE_RW_FACTOR: ClassVar[float] = 0.5
 
     @classmethod
-    def active_by_key(cls, key: str) -> Self | None:
-        """The single active row for this kind's exact ``key`` — the store lookup
-        (mirrors ``_SELECT_ACTIVE_BY_KIND_KEY_SQL``: ``active = 1`` only, NOT
-        ``deleted_at``-filtered)."""
-        return (cls.filter("kind", cls.KIND).filter("key", key)
-                   .filter("active", 1).first())
-
-    @classmethod
     def store(cls, key: str, value: str, source: str | None = None) -> tuple[Self, str, str | None]:
         """Exact-key supersede upsert. Returns ``(row, status, old_value)``;
         status is ``created`` | ``reinforced`` | ``superseded``. ``value`` is a

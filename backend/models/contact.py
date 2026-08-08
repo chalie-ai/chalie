@@ -22,14 +22,6 @@ class ContactRow(DataGraphRow):
     KIND: ClassVar[str] = "contact"
 
     @classmethod
-    def active_by_key(cls, key: str) -> Self | None:
-        """The single active row for this kind's exact ``key`` — the store
-        lookup (mirrors ``_SELECT_ACTIVE_BY_KIND_KEY_SQL``: ``active = 1`` only,
-        NOT ``deleted_at``-filtered)."""
-        return (cls.filter("kind", cls.KIND).filter("key", key)
-                   .filter("active", 1).first())
-
-    @classmethod
     def store(cls, key: str, value: str, source: str | None = None) -> Self:
         """Exact-key upsert, ported from the non-superseding branch of
         ``DataGraph.store`` (``"contact"`` is not in ``_SUPERSEDING_KINDS``): no

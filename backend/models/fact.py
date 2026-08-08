@@ -23,15 +23,6 @@ class FactRow(DataGraphRow):
     # ttl 30d gates that decay runs at all; d_base/salience_floor set the curve.
     _DECAY_D_BASE: ClassVar[float] = 0.5
     _DECAY_SALIENCE_FLOOR: ClassVar[float] = 0.2
-    _DECAY_RW_EPSILON: ClassVar[float] = 0.0001
-
-    @classmethod
-    def active_by_key(cls, key: str) -> Self | None:
-        """The single active row for this kind's exact ``key`` — the store lookup
-        (mirrors ``_SELECT_ACTIVE_BY_KIND_KEY_SQL``: ``active = 1`` only, NOT
-        ``deleted_at``-filtered)."""
-        return (cls.filter("kind", cls.KIND).filter("key", key)
-                   .filter("active", 1).first())
 
     @classmethod
     def active_values(cls, key: str) -> list[str]:
@@ -187,29 +178,4 @@ class FactRow(DataGraphRow):
         ``last_confirmed_at``. Only rows last confirmed > 1h ago, and only when the
         new weight actually moves (> epsilon). Returns rows updated. The shared
         superseded-decay and 90-day hard-GC are the DecayEngine's job, not here."""
-        from datetime import timedelta  # noqa: PLC0415
-        now = utc_now()
-        cutoff = (now - timedelta(hours=1)).isoformat()
-        now_ts = now.timestamp()
-        updated = 0
-        for row in cls.live().filter("last_confirmed_at", cutoff, "<").get():
-            new_rw = cls._decayed_rw(row.last_confirmed_at, now_ts)
-            if new_rw is not None and abs(new_rw - row.retrieval_weight) > cls._DECAY_RW_EPSILON:
-                row.retrieval_weight = new_rw
-                row.save()
-                updated += 1
-        return updated
-
-    @classmethod
-    def _decayed_rw(cls, confirmed_at: str | None, now_ts: float) -> float | None:
-        from services.time_utils import parse_utc  # noqa: PLC0415
-        if not confirmed_at:
-            return None
-        try:
-            confirmed_ts = parse_utc(confirmed_at).timestamp()
-        except Exception:
-            return None
-        age_days = (now_ts - confirmed_ts) / 86400.0
-        if age_days <= 0:
-            return None
-        return max(cls._DECAY_SALIENCE_FLOOR, float(max(1.0, age_days) ** (-cls._DECAY_D_BASE)))
+        return cls._decay_live_rw(cls._DECAY_D_BASE, cls._DECAY_SALIENCE_FLOOR)

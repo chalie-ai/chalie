@@ -2,8 +2,9 @@
 
 :class:`DataGraphRow` is the abstract base every per-kind vertical subclasses:
 it owns the table binding, the column set, the reinforce path, the kind-bound
-live/exact-key/FTS reads (scoped to the subclass's :attr:`~DataGraphRow.KIND`)
-and the post-commit FTS/vec write-sync. :class:`DataGraph` is the thin generic
+live/exact-key/FTS reads (scoped to the subclass's :attr:`~DataGraphRow.KIND`),
+the shared power-law retrieval_weight decay loop, and the post-commit FTS/vec
+write-sync. :class:`DataGraph` is the thin generic
 gateway that still spans every not-yet-ported kind: it leaves ``KIND`` unset and
 overrides the kind-bound reads with kind-parametrised ones, and carries the
 supersede machinery (``store``/``demote``/``_SUPERSEDING_KINDS``) and the
@@ -29,6 +30,7 @@ import logging
 import math
 import re
 import sqlite3
+from datetime import timedelta
 from typing import ClassVar, Self, cast
 
 from contracts.search_config import DATA_GRAPH_SEARCH, SearchConfig, register_kind
@@ -38,15 +40,16 @@ from models.query import Query
 from services._fts_delete import fts5_external_delete
 from services.embedding_utils import pack_embedding
 from services.search_expander_service import enqueue
-from services.time_utils import utc_now
+from services.time_utils import parse_utc, utc_now
 
 logger = logging.getLogger(__name__)
 
 
 class DataGraphRow(Model):
     """The shared ``data_graph`` shell: field storage + CRUD + the reinforce
-    path, the kind-bound reads a concrete vertical inherits, and the post-commit
-    FTS/vec write-sync. Concrete verticals set :attr:`KIND` and read their own
+    path, the kind-bound reads a concrete vertical inherits, the shared
+    power-law decay loop (:meth:`_decay_live_rw`), and the post-commit FTS/vec
+    write-sync. Concrete verticals set :attr:`KIND` and read their own
     lane with a bare ``live()`` / ``search()``; the generic :class:`DataGraph`
     gateway leaves ``KIND`` unset and passes the kind explicitly to
     :meth:`live`."""
@@ -95,6 +98,11 @@ class DataGraphRow(Model):
 
     # Evidence-diminishing reinforcement boost numerator (``_reinforce_row``).
     _REINFORCE_BOOST: ClassVar[float] = 0.05
+
+    # Minimum retrieval_weight delta a power-law decay pass writes back
+    # (``_decay_live_rw``) — every decaying vertical shares this threshold,
+    # unlike ``d_base``/``salience_floor`` which are per-kind curve shape.
+    _DECAY_RW_EPSILON: ClassVar[float] = 0.0001
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         """Register each concrete vertical's ``KIND → __search__`` mapping so the
@@ -186,6 +194,14 @@ class DataGraphRow(Model):
         passes the kind explicitly."""
         resolved = kind if kind is not None else cls.KIND
         return cls.filter("kind", resolved).filter("active", 1).filter("deleted_at", None, "IS")
+
+    @classmethod
+    def active_by_key(cls, key: str) -> Self | None:
+        """The single active row for this kind's exact ``key`` — the store lookup
+        (mirrors ``_SELECT_ACTIVE_BY_KIND_KEY_SQL``: ``active = 1`` only, NOT
+        ``deleted_at``-filtered)."""
+        return (cls.filter("kind", cls.KIND).filter("key", key)
+                   .filter("active", 1).first())
 
     @classmethod
     def search(cls, query: str, k: int) -> list[Self]:
@@ -403,3 +419,43 @@ class DataGraphRow(Model):
         self.last_confirmed_at = now
         self.last_accessed_at = now
         return self.save()
+
+    # ── decay ───────────────────────────────────────────────────────────
+
+    @classmethod
+    def _decay_live_rw(cls, d_base: float, salience_floor: float) -> int:
+        """Absolute power-law decay of this kind's live rows' retrieval_weight
+        (idempotent): ``rw = max(salience_floor, max(1, age_days) ** -d_base)``
+        from ``last_confirmed_at``. Only rows last confirmed > 1h ago, and only
+        when the new weight actually moves (> :attr:`_DECAY_RW_EPSILON`).
+        Returns rows updated. ``d_base``/``salience_floor`` are the calling
+        vertical's own decay curve (its ``_DECAY_D_BASE``/
+        ``_DECAY_SALIENCE_FLOOR``) — not every kind decays, so they stay
+        subclass ``ClassVar``s rather than living here."""
+        now = utc_now()
+        cutoff = (now - timedelta(hours=1)).isoformat()
+        now_ts = now.timestamp()
+        updated = 0
+        for row in cls.live().filter("last_confirmed_at", cutoff, "<").get():
+            new_rw = cls._decayed_rw(row.last_confirmed_at, now_ts, d_base, salience_floor)
+            if new_rw is not None and abs(new_rw - row.retrieval_weight) > cls._DECAY_RW_EPSILON:
+                row.retrieval_weight = new_rw
+                row.save()
+                updated += 1
+        return updated
+
+    @classmethod
+    def _decayed_rw(cls, confirmed_at: str | None, now_ts: float, d_base: float, salience_floor: float) -> float | None:
+        """The single-row power-law formula behind :meth:`_decay_live_rw`;
+        ``None`` when ``confirmed_at`` is absent, unparseable, or not yet in
+        the past."""
+        if not confirmed_at:
+            return None
+        try:
+            confirmed_ts = parse_utc(confirmed_at).timestamp()
+        except Exception:
+            return None
+        age_days = (now_ts - confirmed_ts) / 86400.0
+        if age_days <= 0:
+            return None
+        return max(salience_floor, float(max(1.0, age_days) ** (-d_base)))
