@@ -754,7 +754,7 @@ class MessageProcessor:
         try:
             if self.config.memory_seed:
                 self.dispatch_service.dispatch(
-                    "memory", {"action": "recall", "query": self.raw_input, "_auto": True}
+                    "recall", {"query": self.raw_input, "_auto": True}
                 )
             attachments = list(self._placed_attachments)
             if attachments:

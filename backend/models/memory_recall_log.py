@@ -12,7 +12,7 @@ the schema, so callers must leave them unset and let the base ``save()`` omit
 them so the DB defaults fire on INSERT.
 
 This model is the SOLE home of ``memory_recall_log`` SQL;
-:class:`~services.memory_service.MemoryService` writes exclusively through it.
+The consolidator writes exclusively through it.
 """
 
 from __future__ import annotations

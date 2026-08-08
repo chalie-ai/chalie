@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING
 from abilities.delete import DeleteAbility
 from abilities.edit_file import EditFileAbility
 from abilities.make_dir import MakeDirAbility
-from abilities.memory import MemoryAbility
+from abilities.recall import Recall
 from abilities.move import MoveAbility
 from abilities.programming_docs_search import ProgrammingDocsSearchAbility
 from abilities.read import ReadAbility
@@ -69,7 +69,7 @@ class CodeAgentConfig(ProcessorConfig):
             channel=Channel.DELEGATE_CODE_AGENT.value,
             role="code_agent",
             policy_channel=policy_channel,
-            always_available=[*_PINNED_TOOLS, MemoryAbility.NAME, WebSearchAbility.NAME, ProgrammingDocsSearchAbility.NAME],
+            always_available=[*_PINNED_TOOLS, Recall.NAME, WebSearchAbility.NAME, ProgrammingDocsSearchAbility.NAME],
             skip_transcript=False,  # write a delegate-channel transcript row so
             skip_input_row=False,   # _setup assigns the uid the act-trail needs
             suppress_history=True,
@@ -79,7 +79,7 @@ class CodeAgentConfig(ProcessorConfig):
     @property
     def system_prompt(self) -> str:
         workspace = FileMapperService.get_code_agent_workspace_path()
-        return f"""You are Chalie's coding agent. You receive one coding task; tools: {ReadAbility.NAME}, {SearchFilesAbility.NAME}, {WriteFileAbility.NAME} (full-content writes, and the only way to create a file — pass an empty contents for a 0-byte file; you must read an existing file before overwriting it), {MakeDirAbility.NAME} (create a directory, parents included), {DeleteAbility.NAME} (remove a file, or a folder and everything in it), {SetPermissionsAbility.NAME} (chmod via path/permission_code), {MoveAbility.NAME} (rename/relocate via current_path/new_path), {EditFileAbility.NAME} (replace ONE occurrence of a literal string in a single file — the search text must be unique in the file; include surrounding context to disambiguate), {RunScriptAbility.NAME} (executes a .ts file with Deno, full permissions). {MemoryAbility.NAME}, {WebSearchAbility.NAME}, {ProgrammingDocsSearchAbility.NAME} for research.
+        return f"""You are Chalie's coding agent. You receive one coding task; tools: {ReadAbility.NAME}, {SearchFilesAbility.NAME}, {WriteFileAbility.NAME} (full-content writes, and the only way to create a file — pass an empty contents for a 0-byte file; you must read an existing file before overwriting it), {MakeDirAbility.NAME} (create a directory, parents included), {DeleteAbility.NAME} (remove a file, or a folder and everything in it), {SetPermissionsAbility.NAME} (chmod via path/permission_code), {MoveAbility.NAME} (rename/relocate via current_path/new_path), {EditFileAbility.NAME} (replace ONE occurrence of a literal string in a single file — the search text must be unique in the file; include surrounding context to disambiguate), {RunScriptAbility.NAME} (executes a .ts file with Deno, full permissions). {Recall.NAME} for context, {WebSearchAbility.NAME}, {ProgrammingDocsSearchAbility.NAME} for research.
 
 All file paths passed to tools must be absolute.
 

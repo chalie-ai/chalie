@@ -3,7 +3,7 @@ from __future__ import annotations
 from abilities.find_skills import FindSkillsAbility
 from abilities.find_tools import FindToolsAbility
 from abilities.mcp_manager import McpManagerAbility
-from abilities.memory import MemoryAbility
+from abilities.recall import Recall
 
 # The single per-config tool list left: the tools pinned on every
 # discovery-capable channel — the framework discovery pair, memory, and the MCP
@@ -15,5 +15,5 @@ DEFAULT_ALWAYS_AVAILABLE: list[str] = [
     FindSkillsAbility.NAME,
     FindToolsAbility.NAME,
     McpManagerAbility.NAME,
-    MemoryAbility.NAME,
+    Recall.NAME,
 ]

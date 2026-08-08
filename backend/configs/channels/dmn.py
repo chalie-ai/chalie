@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from abilities.memory import MemoryAbility
+from abilities.recall import Recall
 from abilities.web_browse import WebBrowseAbility
 from abilities.web_search import WebSearchAbility
 from models.episode import Episode
@@ -77,9 +77,9 @@ The user has provided a synthesis about themselves under `About the User` and re
 
 ## How to ACT
 
-* Use the supplied tools to learn more topics the user discusses so that the next time they discuss such a topic you are aware of latest news, research, etc... You can use the `{WebSearchAbility.NAME}` and `{WebBrowseAbility.NAME}` tools for this. Save your findings using the `{MemoryAbility.NAME}` tool so that you can reference them later.
-* Analyse patterns where the user seemed genuinely satisfied or dissatisfied with your responses or approach and store feedback to not repeat the same mistakes or reinforce good behaviour. Use the `{MemoryAbility.NAME}` tool for this.
+* Use the supplied tools to learn more topics the user discusses so that the next time they discuss such a topic you are aware of latest news, research, etc... You can use the `{WebSearchAbility.NAME}` and `{WebBrowseAbility.NAME}` tools for this. The background consolidator stores findings — during this turn you only `{Recall.NAME}` for context.
+* Analyse patterns where the user seemed genuinely satisfied or dissatisfied with your responses or approach. The background consolidator stores feedback — during this turn you only `{Recall.NAME}` for context.
 
 ## When to stop
 
-Aim for 2–3 substantive findings per tick — quality over quantity. Once you have saved meaningful insights via the `{MemoryAbility.NAME}` tool, conclude with a brief one-line summary of what you saved. Do not pad with redundant tool calls or speculative topics."""
+Aim for 2–3 substantive findings per tick — quality over quantity. The background consolidator stores insights automatically. Conclude with a brief one-line summary of what you recalled and observed. Do not pad with redundant tool calls or speculative topics."""

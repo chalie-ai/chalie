@@ -193,7 +193,7 @@ _EXPECTED_NON_DISCOVERABLE = frozenset({
     "save_pattern",            # pattern-write — PatternMatchProcessor only
     "find_tools",              # the discovery entry point itself
     "find_skills",             # framework — always_available only
-    "memory",                  # framework — always_available only
+
     "mcp_manager",             # framework — always_available only
     "chat_history_compactor",  # internal — dispatched programmatically
     "skill_manager",           # system variant — SkillSuggestionConfig only

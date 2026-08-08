@@ -33,7 +33,7 @@ def test_active_tools_resolve_to_always_available_surface() -> None:
     mp = _make_mp(list(DEFAULT_ALWAYS_AVAILABLE), config=UserConfig({"channel": "user"}))
     names = {cast(str, t["name"]) for t in AbilityRegistry.build_tools(mp)}
     assert names == set(DEFAULT_ALWAYS_AVAILABLE)
-    assert names == {"find_skills", "find_tools", "mcp_manager", "memory"}
+    assert names == {"find_skills", "find_tools", "mcp_manager", "recall"}
 
 
 def test_act_summary_injected_as_required_on_every_tool() -> None:
@@ -48,9 +48,9 @@ def test_act_summary_injected_as_required_on_every_tool() -> None:
 
 def test_find_tools_appended_names_are_resolved_and_deduped() -> None:
     """find_tools-appended names join the surface; dupes keep first-seen."""
-    names = [cast(str, t["name"]) for t in AbilityRegistry.build_tools(_make_mp(["memory", "weather", "memory"]))]
+    names = [cast(str, t["name"]) for t in AbilityRegistry.build_tools(_make_mp(["recall", "weather", "recall"]))]
     assert "weather" in names
-    assert names.count("memory") == 1
+    assert names.count("recall") == 1
 
 
 def test_build_tools_does_not_mutate_ability_classvar() -> None:
@@ -62,8 +62,8 @@ def test_build_tools_does_not_mutate_ability_classvar() -> None:
 
 def test_unknown_name_is_skipped_not_fatal() -> None:
     """A name with no registered ability is logged and skipped, never raises."""
-    names = {cast(str, t["name"]) for t in AbilityRegistry.build_tools(_make_mp(["memory", "no_such_ability_xyz"]))}
-    assert names == {"memory"}
+    names = {cast(str, t["name"]) for t in AbilityRegistry.build_tools(_make_mp(["recall", "no_such_ability_xyz"]))}
+    assert names == {"recall"}
 
 
 def test_empty_active_tools_yields_empty_surface() -> None:

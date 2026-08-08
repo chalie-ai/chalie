@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, ClassVar
 
-from abilities.memory import MemoryAbility
+from abilities.recall import Recall
 from abilities.news import NewsAbility
 from abilities.read import ReadAbility
 from abilities.search import SearchAbility
@@ -60,7 +60,7 @@ class WebSearchConfig(ProcessorConfig):
             channel=Channel.DELEGATE_WEB_SEARCH.value,
             role="web_search",
             policy_channel=policy_channel,
-            always_available=[*tools, MemoryAbility.NAME],
+            always_available=[*tools, Recall.NAME],
             skip_transcript=False,  # write a delegate-channel transcript row so
             skip_input_row=False,   # _setup assigns the uid the act-trail needs
             suppress_history=True,

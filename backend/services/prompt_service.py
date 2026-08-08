@@ -38,7 +38,7 @@ import json
 import logging
 from typing import TYPE_CHECKING, cast
 
-from abilities.memory import MemoryAbility
+from abilities.recall import Recall
 from configs.channels.dmn import DmnConfig
 from configs.channels.external_agent import EAMPConfig
 from configs.channels.user import UserConfig
@@ -375,10 +375,10 @@ class PromptService:
                 if tid in interim:
                     parts.append(f"[interim_response] {interim[tid]}")
                 emitted.add(tid)
-            if call.tool_name == MemoryAbility.NAME and '"_auto": true' in call.params:
+            if call.tool_name == Recall.NAME and '"_auto": true' in call.params:
                 body = result.split("\n", 1)[1] if "\n" in result else result
                 parts.append(
-                    f"[background_memory]\n{body}".replace("[end:memory]", "[end:background_memory]")
+                    f"[background_memory]\n{body}".replace("[end:recall]", "[end:background_memory]")
                 )
                 continue
             parts.append(f"[{call.tool_name}] {call.params} → {result}")

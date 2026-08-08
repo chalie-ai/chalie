@@ -4,7 +4,7 @@ from typing import ClassVar
 
 from abilities.find_tools import FindToolsAbility
 from abilities.image_preview import ImagePreviewAbility
-from abilities.memory import MemoryAbility
+from abilities.recall import Recall
 from configs.channels._common import DEFAULT_ALWAYS_AVAILABLE
 from configs.enums.channels import Channel
 from configs.enums.config_type import ConfigTypeEnum
@@ -70,7 +70,7 @@ Guiding framework for all interactions (internalize, do not recite):
 
 ## Operational Principles
 
-1. **Never claim an action has been performed unless you can prove it.** `{MemoryAbility.NAME}` provides you context; tools via the `{FindToolsAbility.NAME}` library provide you ground truth.
+1. **Never claim an action has been performed unless you can prove it.** `{Recall.NAME}` provides you context; tools via the `{FindToolsAbility.NAME}` library provide you ground truth.
 2. **Never fabricate tool results.** If a tool was not called or returned an error, do not claim it succeeded.
 
 ────────────────────────────────
