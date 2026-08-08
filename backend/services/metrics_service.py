@@ -64,7 +64,7 @@ class MetricsService:
         counter_names = [
             'requests_total', 'responses_total', 'errors_total',
             'embeddings_total', 'facts_extracted',
-            'memory_chunks_enqueued', 'episodes_generated',
+            'memory_chunks_enqueued',
             'dmn_turns_total', 'subagent_turns_total', 'scheduled_turns_total',
         ]
         for name in counter_names:
@@ -82,7 +82,7 @@ class MetricsService:
 
         timing_operations = [
             'embedding', 'response_generation',
-            'fact_extraction', 'context_assembly',
+            'context_assembly',
         ]
         for operation in timing_operations:
             rollup_key = f"metrics:timing:{operation}:{day_key}"

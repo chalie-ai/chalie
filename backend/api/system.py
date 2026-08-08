@@ -22,7 +22,6 @@ from flask_restx import Namespace, Resource
 from configs.enums.channels import Channel
 from models.compaction import Compaction
 from models.data_graph import DataGraphRow
-from models.episode import Episode
 from models.tool_call import ToolCall
 from services.file_mapper_service import FileMapperService
 from services.llm_log_service import LlmLogService, VALID_WINDOWS
@@ -58,7 +57,7 @@ _SIGNAL_SOURCE_HEALTH = "/health"
 
 # Records browser bounds + valid sources (invalid source is a preserved 400, not 422).
 _RECORDS_LIMIT = 250
-_VALID_SOURCES = {"episodes", "user", "system"}
+_VALID_SOURCES = {"user", "system"}
 # Infra tool names the usage view hides — compaction/thinking families are
 # housekeeping calls, not user-facing tool usage.
 _USAGE_EXCLUDED_TOOLS = ("compaction", "tool_compaction", "trail_compaction", "chat_history_compactor", "thinking")
@@ -229,16 +228,6 @@ class SystemStatusResource(Resource):
             # SQLite counts
             try:
                 try:
-                    storage["episodes"] = Episode.all().count()
-                except sqlite3.OperationalError as e:
-                    logger.warning(f"[SYSTEM] Count query failed for 'episodes': {e}")
-                    storage["episodes"] = -1
-                    status = "degraded"
-                except Exception as e:
-                    logger.warning(f"[SYSTEM] Count query failed for 'episodes': {e}")
-                    storage["episodes"] = -1
-
-                try:
                     storage["concepts"] = DataGraphRow.live("user_specific").count()
                 except sqlite3.OperationalError as e:
                     logger.warning(f"[SYSTEM] Count query failed for 'concepts': {e}")
@@ -270,7 +259,7 @@ class SystemStatusResource(Resource):
 @system_ns.route("/observability/records")
 class ObservabilityRecordsResource(Resource):
     @require_session
-    @system_ns.param("source", "episodes | user | system", _in="query", required=True)
+    @system_ns.param("source", "user | system", _in="query", required=True)
     @system_ns.param("offset", "Rows to skip (>=0)", _in="query")
     @system_ns.param("q", "Substring filter", _in="query")
     @system_ns.response(200, "Records page", model=_S["RecordsPage"])
@@ -278,7 +267,7 @@ class ObservabilityRecordsResource(Resource):
     @system_ns.response(500, "Failed to retrieve records", model=_S["Error"])
     @responds(RecordsPage, code=200)
     def get(self) -> RecordsPage | ResponseReturnValue:
-        """Paginated record browser for episodes, user, and system memory sources."""
+        """Paginated record browser for user and system memory sources."""
         try:
             source = request.args.get("source", "")
             if source not in _VALID_SOURCES:
@@ -295,15 +284,7 @@ class ObservabilityRecordsResource(Resource):
             q = (request.args.get("q", "") or "")[:200]
 
             if source == "episodes":
-                rows = [
-                    {
-                        "created": r["created_at"],
-                        "last_accessed": r["last_relevant_at"] or r["created_at"],
-                        "value": r["gist"],
-                        "location_name": r["location_name"],
-                    }
-                    for r in Episode.records_page(q, _RECORDS_LIMIT, offset)
-                ]
+                return error("episodes source removed", 404)
             else:
                 kind = "user_specific" if source == "user" else "system"
                 rows = DataGraphRow.records_page(kind, q, _RECORDS_LIMIT, offset)
@@ -316,10 +297,7 @@ class ObservabilityRecordsResource(Resource):
                     "last_accessed": r["last_accessed"],
                     "value": r["value"],
                 }
-                if source == "episodes":
-                    row["location"] = r.get("location_name") or ""
-                else:
-                    row["key"] = r["key"]
+                row["key"] = r["key"]
                 serialised.append(row)
 
             return RecordsPage(

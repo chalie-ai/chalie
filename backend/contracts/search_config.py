@@ -80,19 +80,6 @@ DATA_GRAPH_SEARCH = SearchConfig(
 )
 
 
-#: Episode search footprint. Episodes carry their vectors synchronously
-#: (``EpisodicService`` writes ``episodes_vec`` on the store path), so no vec
-#: lane is declared here — the async engine only owns the FTS posting.
-EPISODE_SEARCH = SearchConfig(
-    base_table="episodes",
-    fts_table="episodes_fts",
-    fts_columns=("gist",),
-    vec_lanes=(),
-    text_columns=("gist",),
-    heal_where="deleted_at IS NULL",
-)
-
-
 # ── kind → config registry ────────────────────────────────────────────────────
 #
 # Populated by DataGraphRow.__init_subclass__ at model-import time. The save path
@@ -178,6 +165,5 @@ MAP_SEARCH = SearchConfig(
 
 
 register_table(DATA_GRAPH_SEARCH)
-register_table(EPISODE_SEARCH)
 register_table(GRAPH_SEARCH)
 register_table(MAP_SEARCH)

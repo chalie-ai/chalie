@@ -39,7 +39,6 @@ import logging
 from typing import TYPE_CHECKING, cast
 
 from abilities.recall import Recall
-from configs.channels.dmn import DmnConfig
 from configs.channels.external_agent import EAMPConfig
 from configs.channels.user import UserConfig
 from configs.enums.channels import Channel
@@ -61,17 +60,10 @@ if TYPE_CHECKING:
 
     from controllers.message_processor import MessageProcessor
 
-    class _FactExtractionConfig(Protocol):
-        _gist: str
-        _neighbours: list[object]
-
     class _ExternalAgentConfig(Protocol):
         _agent_name: str
         _project: str
         system_prompt: str
-
-    class _SuperEpisodeConfig(Protocol):
-        _sources: list[object]
 
     class _MemoryConsolidatorConfig(Protocol):
         _target_channel: str
@@ -84,7 +76,6 @@ _CHANNEL_USER = Channel.USER
 _CHANNEL_USER_SUMMARY = Channel.USER_SUMMARY
 _CHANNEL_PATTERN_MATCH = Channel.PATTERN_MATCH
 _CHANNEL_SCHEDULE = Channel.SCHEDULE
-_CHANNEL_FACT_EXTRACTION = Channel.FACT_EXTRACTION
 _CHANNEL_SKILL_ASSOCIATION = Channel.SKILL_ASSOCIATION
 _CHANNEL_SKILLS_BUILDING = Channel.SKILLS_BUILDING
 _CHANNEL_THREAD_GIST = Channel.DELEGATE_THREAD_GIST
@@ -95,7 +86,6 @@ _CHANNEL_PIM = Channel.DELEGATE_PIM
 _CHANNEL_CODE_AGENT = Channel.DELEGATE_CODE_AGENT
 _CHANNEL_EXTERNAL_AGENT = "external_agent"
 _CHANNEL_COMPACTION = Channel.COMPACTION
-_CHANNEL_SUPER_EPISODE = Channel.SUPER_EPISODE_ENCODER
 _CHANNEL_GEO_PATTERN = Channel.GEO_PATTERN
 _CHANNEL_DMN = Channel.DMN
 _CHANNEL_EPISODE_ENCODER = Channel.EPISODE_ENCODER
@@ -221,8 +211,6 @@ class PromptService:
             return self._pattern_prompt()
         if channel == _CHANNEL_SCHEDULE:
             return self._schedule_prompt()
-        if channel == _CHANNEL_FACT_EXTRACTION:
-            return self._fact_extraction_prompt()
         if channel == _CHANNEL_SKILLS_BUILDING:
             return self._skill_suggestion_prompt()
         if channel == _CHANNEL_THREAD_GIST:
@@ -237,8 +225,6 @@ class PromptService:
             return self._code_agent_prompt()
         if channel == _CHANNEL_EXTERNAL_AGENT:
             return self._external_agent_prompt()
-        if channel == _CHANNEL_SUPER_EPISODE:
-            return self._super_episode_prompt()
         if channel == _CHANNEL_MEMORY_CONSOLIDATOR:
             return self._memory_consolidator_prompt()
         if channel == _CHANNEL_GEO_PATTERN:
@@ -570,23 +556,6 @@ class PromptService:
             parts.append(trail)
         return "\n\n".join(parts)
 
-    # ── FactExtractionConfig (channel="fact_extraction") ─────────────────────
-
-    def _fact_extraction_prompt(self) -> str:
-        """``FactExtractionConfig.get_user_prompt``: the episode gist and the
-        pre-fetched neighbour facts captured on the config (``_gist`` /
-        ``_neighbours`` — per-episode frozen data, not mp-reachable)."""
-        config = cast("_FactExtractionConfig", self.mp.config)
-        if config._neighbours:
-            known = "\n".join(
-                f"- key={cast('dict[str, object]', n).get('key')!r} "
-                f"value={cast('dict[str, object]', n).get('value')!r}"
-                for n in config._neighbours
-            )
-        else:
-            known = "(no similar facts on record)"
-        return f"Episode:\n{config._gist}\n\nMost similar known facts:\n{known}"
-
     # ── SkillSuggestionConfig (channel="skills_building") ────────────────────
 
     def _skill_suggestion_prompt(self) -> str:
@@ -744,20 +713,6 @@ class PromptService:
 
     # ── SuperEpisodeConfig (channel="super_episode_encoder") ─────────────────
 
-    def _super_episode_prompt(self) -> str:
-        """``SuperEpisodeConfig.get_user_prompt``: the cluster's source-episode
-        gists alone (``_sources``, per-cluster frozen data captured on the config
-        at construction, not mp-reachable — same pattern as fact-extraction's
-        payload). Every level distils its child gists; raw transcript turns are
-        never re-hydrated into the prompt, so a super-episode always contracts
-        the level beneath it."""
-        config = cast("_SuperEpisodeConfig", self.mp.config)
-        src = "\n\n".join(
-            f"[{cast('dict[str, object]', e)['id']}] {cast('dict[str, object]', e)['gist']}"
-            for e in config._sources
-        )
-        return f"Source episodes:\n\n{src}"
-
     def _memory_consolidator_prompt(self) -> str:
         """The consolidator's self-contained input window: the fully-formatted
         window text built by the service (channel header, preamble, and exchanges)."""
@@ -769,7 +724,7 @@ class PromptService:
     def _episode_encoder_prompt(self) -> str:
         """``EpisodeEncoderConfig.get_user_prompt``: the formatted transcript
         window, then (when present) the episodes referenced during those turns —
-        both computed by ``EpisodicService`` and carried on ``self.mp.metadata``
+        both computed by the episode encoder and carried on ``self.mp.metadata``
         (keys ``window`` / ``referenced``), the sanctioned per-turn payload channel
         (§2.4), replacing the pre-rewrite ``mp._window`` / ``mp._referenced``
         instance-attribute injection."""
@@ -839,24 +794,10 @@ class PromptService:
         synthesis = UserSynthesis.get()
         if synthesis:
             parts.append(f"## About the User\n{synthesis}")
-        episodes = self._dmn_episodes_block()
-        if episodes:
-            parts.append(f"## Episodes\n{episodes}")
         trail = self._trail()
         if trail:
             parts.append(trail)
         return "\n\n".join(parts)
-
-    def _dmn_episodes_block(self) -> str:
-        """DMN's recent-salient-episode reflection context — the episodic read
-        at prompt-assembly time. Sourced from ``DmnConfig``'s own DB-reaching
-        static (marked ``@todo: Refactor`` there): one home for the DMN reads
-        until episodic prompt-context is folded onto the spine as a service."""
-        try:
-            return DmnConfig.recent_salient_user_episodes()
-        except Exception as exc:  # noqa: BLE001 — a reflection-context read must not crash the turn
-            logger.debug("[PromptService] dmn episodes read failed: %s", exc)
-            return ""
 
     # ── formatting helpers ───────────────────────────────────────────────────
 

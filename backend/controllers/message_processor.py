@@ -598,8 +598,6 @@ class MessageProcessor:
         if self.turn_execution_service.should_stop():
             raise _TurnCancelled()
         self._post_turn(response_text)
-        from services.episodic_service import EpisodicService  # noqa: PLC0415
-        EpisodicService().check_and_store(self.config)
         return response_text
 
     def _post_turn(self, response_text: str) -> None:

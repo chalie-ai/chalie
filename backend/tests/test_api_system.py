@@ -80,52 +80,6 @@ class TestSystemAPI:
 
     # GET /system/observability/records
 
-    def test_records_episodes_source_returns_gist_and_location(self, client: FlaskClient, db: sqlite3.Connection) -> None:
-        """Episodes source returns value=gist + location, ordered by COALESCE(last_relevant_at, created_at) DESC.
-
-        : last_accessed_at is write-dead; the endpoint now projects and orders by
-        COALESCE(last_relevant_at, created_at). A row with NULL last_relevant_at sorts by
-        its created_at — there is no NULLs-last behaviour anymore.
-
-        Seed:
-          ep-a: created=Jan-01, last_relevant_at=Jan-03  → sort key Jan-03 (third)
-          ep-b: created=Jan-02, last_relevant_at=Jan-04  → sort key Jan-04 (first)
-          ep-c: created=Jan-05, last_relevant_at=NULL     → sort key Jan-05 via COALESCE (second)
-        """
-        db.execute(
-            "INSERT INTO episodes (id, gist, salience, channel, created_at, last_relevant_at, location_name) "
-            "VALUES ('ep-a', 'first gist', 5, 'user', '2026-01-01T00:00:00', '2026-01-03T00:00:00', 'Valletta, Malta')"
-        )
-        db.execute(
-            "INSERT INTO episodes (id, gist, salience, channel, created_at, last_relevant_at, location_name) "
-            "VALUES ('ep-b', 'second gist', 5, 'user', '2026-01-02T00:00:00', '2026-01-04T00:00:00', NULL)"
-        )
-        db.execute(
-            "INSERT INTO episodes (id, gist, salience, channel, created_at) "
-            "VALUES ('ep-c', 'null relevant', 5, 'user', '2026-01-05T00:00:00')"
-        )
-        db.commit()
-
-        resp = client.get('/api/system/observability/records?source=episodes')
-
-        assert resp.status_code == 200
-        data = resp.get_json()
-        assert data['source'] == 'episodes'
-        assert data['returned'] == 3
-        values = [r['value'] for r in data['rows']]
-        # ep-c (sort key Jan-05 via COALESCE) first; ep-b (sort key Jan-04) second; ep-a (Jan-03) third
-        assert values[0] == 'null relevant'
-        assert values[1] == 'second gist'
-        assert values[2] == 'first gist'
-        # NULL last_relevant_at row sorts by its created_at (Jan-05) — ends up FIRST, not last
-        assert values.index('null relevant') == 0
-        # location passthrough
-        row = next(r for r in data['rows'] if r['value'] == 'first gist')
-        assert row['location'] == 'Valletta, Malta'
-        assert 'key' not in row
-        row_null_loc = next(r for r in data['rows'] if r['value'] == 'second gist')
-        assert row_null_loc['location'] == ''
-
     def test_records_search_filters_by_like(self, client: FlaskClient, db: sqlite3.Connection) -> None:
         """Search param filters gist (episodes) and key/value (data_graph)."""
         now_iso = '2026-01-01T00:00:00+00:00'
@@ -147,29 +101,6 @@ class TestSystemAPI:
         data = resp.get_json()
         assert data['returned'] == 1
         assert data['rows'][0]['key'] == 'favorite_color'
-
-    def test_records_pagination_offset_works(self, client: FlaskClient, db: sqlite3.Connection) -> None:
-        """First page returns 250 rows with has_more=true; offset=250 returns remainder."""
-        now_iso = '2026-01-01T00:00:00+00:00'
-        for i in range(260):
-            db.execute(
-                "INSERT INTO episodes (id, gist, salience, channel, created_at) "
-                "VALUES (?, ?, 5, 'user', ?)",
-                (f'ep-{i:04d}', f'gist {i}', now_iso),
-            )
-        db.commit()
-
-        resp1 = client.get('/api/system/observability/records?source=episodes')
-        assert resp1.status_code == 200
-        data1 = resp1.get_json()
-        assert data1['returned'] == 250
-        assert data1['has_more'] is True
-
-        resp2 = client.get('/api/system/observability/records?source=episodes&offset=250')
-        assert resp2.status_code == 200
-        data2 = resp2.get_json()
-        assert data2['returned'] == 10
-        assert data2['has_more'] is False
 
     def test_records_invalid_source_400(self, client: FlaskClient, db: sqlite3.Connection) -> None:
         """Unknown source returns 400 with error payload."""

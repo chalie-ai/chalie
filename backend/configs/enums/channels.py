@@ -38,11 +38,9 @@ class Channel(str, Enum):
     SKILL_ASSOCIATION = "skill_association"
 
     # ── Episodic memory ──────────────────────────────────────────────────────
-    EPISODE_ENCODER       = "episode_encoder"
-    SUPER_EPISODE_ENCODER = "super_episode_encoder"
+    EPISODE_ENCODER = "episode_encoder"
 
-    # ── Fact extraction / compaction ─────────────────────────────────────────
-    FACT_EXTRACTION = "fact_extraction"
+    # ── Compaction ───────────────────────────────────────────────────────────
     COMPACTION      = "compaction"
 
     # ── Memory v3 ─────────────────────────────────────────────────────────────

@@ -12,8 +12,8 @@ contribute to which memory subsystem.
 A channel's *profile* declares, for one transcript source, whether its rows
 become episodes, whether they feed fact extraction, whether they count as
 user-activity in the geo and pattern windows, and whether their rows back-fill
-the user's live location — five orthogonal switches (``extract_episodes``,
-``extract_facts``, ``geo_is_user``, ``pattern_is_user``, ``location_backfill``).
+the user's live location — four orthogonal switches (``extract_facts``,
+``geo_is_user``, ``pattern_is_user``, ``location_backfill``).
 Provenance is not a profile field: each derived row is tagged at write time from
 the running processor's config channel (pattern/geo passes) or the source
 episode's channel (fact extraction).
@@ -66,9 +66,6 @@ PROVENANCE_PATTERN_MATCH = Channel.PATTERN_MATCH.value
 class Profile:
     """One source's memory behaviour. Immutable — the table is a constant."""
 
-    extract_episodes: bool
-    """True → this channel's transcript rows trigger episode extraction."""
-
     extract_facts: bool
     """True → this channel's episodes are eligible for fact extraction.
     (Fact extraction drains a channel-agnostic backlog; this flag documents
@@ -91,7 +88,6 @@ class Profile:
 
 # Fully-muted default for any channel absent from the table.
 _MUTED = Profile(
-    extract_episodes=False,
     extract_facts=False,
     geo_is_user=False,
     pattern_is_user=False,
@@ -105,7 +101,6 @@ _MUTED = Profile(
 
 _EXACT_PROFILES: dict[str, Profile] = {
     CHANNEL_USER: Profile(
-        extract_episodes=True,
         extract_facts=True,
         geo_is_user=True,
         pattern_is_user=True,
@@ -115,7 +110,6 @@ _EXACT_PROFILES: dict[str, Profile] = {
     # not the user moving through the world, so it is excluded from geo/pattern
     # user-activity and never back-fills the user's live location.
     CHANNEL_DMN: Profile(
-        extract_episodes=True,
         extract_facts=True,
         geo_is_user=False,
         pattern_is_user=False,
@@ -126,7 +120,6 @@ _EXACT_PROFILES: dict[str, Profile] = {
     # and location back-fill — a fired task is not the user moving through the
     # world (the same exclusions as DMN).
     CHANNEL_SCHEDULE: Profile(
-        extract_episodes=True,
         extract_facts=True,
         geo_is_user=False,
         pattern_is_user=False,
@@ -147,7 +140,6 @@ _PREFIX_PROFILES: tuple[tuple[str, Profile], ...] = (
     (
         LIKE_EXTERNAL_AGENT,
         Profile(
-            extract_episodes=True,
             extract_facts=True,
             geo_is_user=False,
             pattern_is_user=False,
@@ -211,10 +203,10 @@ def pattern_user_channels_sql(column: str = "channel") -> str:
 
 def janitor_protected_sql(column: str = "channel") -> str:
     """Allowlist fragment selecting the HEAVY channels the fossil janitor must
-    NOT tombstone (their leaves are legitimate apex memory).
+    NOT tombstone (their rows are legitimate apex memory).
 
-    HEAVY = channels that produce episodes. dmn never consolidates, so its
-    leaves are permanently apex and would otherwise be reaped after the fossil
-    cutoff; protecting every episode-producing channel keeps that memory.
+    HEAVY = channels that produce facts. dmn never consolidates, so its
+    rows are permanently apex and would otherwise be reaped after the fossil
+    cutoff; protecting every fact-producing channel keeps that memory.
     """
-    return _allowlist_sql(column, lambda p: p.extract_episodes)
+    return _allowlist_sql(column, lambda p: p.extract_facts)
