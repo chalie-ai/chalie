@@ -23,7 +23,7 @@ from cron.jobs.synthesis import SynthesisJob
 
 # Concrete singleton instances (all subclass ScheduledJob, which satisfies
 # ScheduledJobProtocol and carries the runner's infra: ``name`` and ``_lock``).
-# Built once at import so per-job cached state (decay engine, last_fired)
+# Built once at import so per-job cached state (last_fired)
 # survives across ticks. Order is cosmetic — every job self-gates via
 # ``should_run`` and shares no in-memory state, so the runner fires them
 # independently regardless of position.

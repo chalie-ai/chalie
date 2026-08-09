@@ -1,10 +1,10 @@
-"""``ExactKeyRow`` — the shared exact-key upsert base for the two ``data_graph``
-verticals that address rows by an exact ``key`` rather than by semantic search:
-:class:`~models.system_memory.SystemMemoryRow` (searchable knowledge memories)
-and :class:`~models.machine_state.MachineStateRow` (operational cursors/clocks/
-summary). Abstract — it leaves :attr:`KIND` unset (each subclass declares it) and
-adds only the exact-key store/forget/supersede lifecycle on top of the shared
-:class:`~models.data_graph.DataGraphRow` shell. Sole home of this lane's SQL (I6).
+"""``ExactKeyRow`` — the shared exact-key upsert base for ``data_graph``
+verticals that address rows by an exact ``key`` rather than by semantic search
+(e.g. :class:`~models.machine_state.MachineStateRow` — operational cursors/
+clocks/summary). Abstract — it leaves :attr:`KIND` unset (each subclass declares
+it) and adds only the exact-key store/forget/supersede lifecycle on top of the
+shared :class:`~models.data_graph.DataGraphRow` shell. Sole home of this lane's
+SQL (I6).
 """
 
 from __future__ import annotations
