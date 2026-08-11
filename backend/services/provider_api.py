@@ -100,14 +100,15 @@ class ProviderApiRequest:
 
 @dataclass
 class ProviderApiResponse:
-    """Standardised response returned by all provider clients.
+    """Wire-layer reply returned by every thin ``llm_clients/*`` client.
 
-    Extends today's LLMResponse with two new fields:
-      - thinking_block: the reasoning content (Anthropic: was parsed then
-        dropped; now surfaced for telemetry and possible future display).
-      - response_code: the HTTP / provider status code for telemetry.
+    Transport-only: ``ProviderService.send()`` converts it — field-for-field —
+    into :class:`models.provider_response.ProviderResponse`, which is what the
+    rest of the app (the context gate's ``context_tokens`` read included)
+    consumes. Keep the two field lists in step.
 
-    Replaces LLMResponse everywhere — callers must import from here.
+    Carries ``thinking_block`` (reasoning content, surfaced for telemetry) and
+    ``response_code`` (HTTP / provider status) alongside the token counters.
     """
 
     text: str

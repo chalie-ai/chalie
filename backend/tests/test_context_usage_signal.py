@@ -40,6 +40,7 @@ from configs.channels.user import UserConfig
 from controllers.message_processor import MessageProcessor
 from models.provider_response import ProviderResponse
 from services.processor_config import ProcessorConfig
+from services.provider_api import ProviderApiResponse
 from services.websocket import Websocket
 
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
@@ -53,6 +54,10 @@ _BUILD_CLIENT = "services.provider_service.build_client"
 # hard-coded constant or a silently-substituted cap would read 200_000 and fail.
 _CLIENT_WINDOW = 120_000
 _TOKENS_IN = 4_321
+# Distinct, odd values so the asserted occupancy (their disjoint sum) can only
+# arise from summing all three counters — not from any one alone.
+_CACHE_READ = 1_000
+_CACHE_CREATE = 79
 
 
 class _RecordingClient:
@@ -98,6 +103,35 @@ class _TokenReportingProvider:
         )
 
 
+class _WireReplyProvider:
+    """Speaks the REAL thin-client wire contract: ``send()`` returns the
+    ``ProviderApiResponse`` dataclass exactly as every ``llm_clients/*`` client
+    does — NOT the ``ProviderResponse`` model the other doubles in this suite
+    answer with. That model-shaped shortcut is the blind spot that let the
+    ``ProviderService.send()`` seam ship without a runtime conversion: the
+    wire class has no ``context_tokens``, so the gate's occupancy read crashed
+    every live turn while model-returning doubles kept the suite green. All
+    three prompt-side counters are set so the asserted occupancy can only be
+    their disjoint sum."""
+
+    def __init__(self) -> None:
+        self.sends = 0
+
+    def get_context_limit(self) -> int:
+        return _CLIENT_WINDOW
+
+    def send(self, _dto: object) -> ProviderApiResponse:
+        self.sends += 1
+        return ProviderApiResponse(
+            text="ok.",
+            model="scripted-wire-reply",
+            tool_calls=None,
+            tokens_input=_TOKENS_IN,
+            tokens_cache_read=_CACHE_READ,
+            tokens_cache_create=_CACHE_CREATE,
+        )
+
+
 def _drain_background_turns(timeout_s: float = 10.0) -> None:
     """Join the fire-and-forget post-turn daemon turns a completed turn spawns
     (skill suggestion, thread gist) so they run to completion inside THIS test's
@@ -118,7 +152,9 @@ def _drain_background_turns(timeout_s: float = 10.0) -> None:
 
 
 def _run(
-    config: ProcessorConfig, provider: _TokenReportingProvider, raw_input: str,
+    config: ProcessorConfig,
+    provider: _TokenReportingProvider | _WireReplyProvider,
+    raw_input: str,
 ) -> tuple[MessageProcessor, _RecordingClient]:
     """Drive a real turn on *config* to termination against *provider* with a live
     socket registered, then quiesce any post-turn daemon turns inside the patch so
@@ -152,6 +188,28 @@ def test_user_turn_emits_context_usage_with_tokens_and_window(db: sqlite3.Connec
     frame = usage[0]
     assert frame["tokens_input"] == _TOKENS_IN
     assert frame["context_window"] == _CLIENT_WINDOW  # the client's real limit, under the cap
+    assert frame["turn_id"] == mp.turn_id
+    assert frame["type"] == "user"
+
+
+def test_wire_contract_reply_reaches_meter_as_occupancy(db: sqlite3.Connection) -> None:
+    """A client honoring the real wire contract still completes the turn, and
+    the meter reads OCCUPANCY — ``tokens_input`` plus both cache counters, the
+    disjoint sum ``ProviderResponse.context_tokens`` states — never the uncached
+    remainder alone. Every real client returns the wire dataclass, so this is
+    the path every live send takes; the model-returning doubles above cannot
+    cover it."""
+    assert db is not None
+    provider = _WireReplyProvider()
+
+    mp, client = _run(UserConfig(), provider, "how full is my context")
+
+    assert provider.sends >= 1, "turn never reached the provider — silence proves nothing"
+    usage = client.usage_frames()
+    assert len(usage) == 1, f"expected exactly one meter move per CHAT call, got {usage!r}"
+    frame = usage[0]
+    assert frame["tokens_input"] == _TOKENS_IN + _CACHE_READ + _CACHE_CREATE
+    assert frame["context_window"] == _CLIENT_WINDOW
     assert frame["turn_id"] == mp.turn_id
     assert frame["type"] == "user"
 

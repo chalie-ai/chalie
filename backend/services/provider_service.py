@@ -35,10 +35,12 @@ from __future__ import annotations
 
 import logging
 import re
+from dataclasses import asdict
 from typing import TYPE_CHECKING, cast
 
 from configs.enums.provider_type import ProviderType
 from exceptions import ContextLimit, ProviderError
+from models.provider_response import ProviderResponse
 from models.turn_signal import TurnSignal
 from services.llm_clients.factory import build_client
 from services.llm_log_service import LlmLogService
@@ -46,7 +48,6 @@ from services.llm_log_service import LlmLogService
 if TYPE_CHECKING:
     from controllers.message_processor import MessageProcessor
     from models.provider_request import ProviderRequest
-    from models.provider_response import ProviderResponse
     from contracts.provider_client import ProviderClient
     from services.provider_api import ProviderApiRequest
 
@@ -110,13 +111,18 @@ class ProviderService:
                     model=cast(str, config.get("model") or ""),
                 )
         try:
-            response = cast("ProviderResponse", client.send(cast("ProviderApiRequest", request)))
+            api_reply = client.send(cast("ProviderApiRequest", request))
         except ContextLimit as limit:
             # The client knows the provider said "too long"; only this layer
             # knows whose turn it was. Attach it so the handler can compact.
             limit.mp = self.mp
             limit.window = limit.window or window
             raise
+        # Thin clients answer with the wire dataclass; the app runs on the
+        # model. This chokepoint is the ONE conversion (field-for-field), and
+        # it is what puts ``context_tokens`` — the occupancy read below and
+        # the gate's ledger row — in reach of everything downstream.
+        response = ProviderResponse(**asdict(api_reply))
         self.mp.llm_log_service.record(response, channel=self.mp.channel if request.type is ProviderType.CHAT else None)
         occupied = response.context_tokens
         if request.type is ProviderType.CHAT and occupied is not None:

@@ -1,5 +1,6 @@
-"""Transient LLM reply — the provider-neutral response every thin client
-returns from ``send()``.
+"""Transient LLM reply — the provider-neutral response the app runs on.
+``ProviderService.send()`` builds it (field-for-field) from the wire dataclass
+the thin clients return (``services.provider_api.ProviderApiResponse``).
 
 A data-model (Rule 8) but transport-only: it never touches disk (no ``save``/
 ``delete``, no query entry) and holds no ``mp``. It projects "as a dict and as
