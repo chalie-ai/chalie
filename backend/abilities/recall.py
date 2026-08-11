@@ -47,7 +47,8 @@ class Recall(Ability[RecallParamsBag]):
         return self._PARAMETERS
 
     def run(self, params: RecallParamsBag) -> ToolResult:
-        result = MemoryRecallService().recall(params.query)
+        k = self.mp.config.recall_k if self.mp is not None else 3
+        result = MemoryRecallService().recall(params.query, k_graph=k, k_map=k)
         graph = result.get("graph", [])
         episodes = result.get("map", [])
         lines: list[str] = []

@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 from typing import cast
 
-from configs.channels.memory_consolidator import MemoryConsolidatorConfig, preamble_for
+from configs.channels.memory_consolidator import MemoryConsolidatorConfig, descriptor_for
 from configs.enums.channels import Channel
 from services.database import Database
 from services.time_utils import parse_utc
@@ -78,6 +78,12 @@ class MemoryConsolidatorService:
                 "SELECT id, role, content, created_at, location_name "
                 "FROM transcript "
                 "WHERE channel = ? AND consolidated = 0 "
+                "  AND (turn_id IS NULL OR EXISTS ("
+                "    SELECT 1 FROM transcript t2 "
+                "    WHERE t2.channel = transcript.channel "
+                "      AND t2.turn_id = transcript.turn_id "
+                "      AND t2.role = 'assistant' AND t2.settled = 1"
+                "  )) "
                 "ORDER BY id ASC",
                 (channel,),
             ).fetchall(),
@@ -117,16 +123,18 @@ class MemoryConsolidatorService:
         testable without driving the model. At least the first row is always
         included; further rows are added oldest-first until the next would push
         the estimated window over the budget."""
-        description = preamble_for(channel)
-        header = f"## {channel}\n### Description\n{description}\n\n### Exchanges\n"
+        name, description = descriptor_for(channel)
+        header = f"## {name}\n### Description\n{description}\n\n### Exchanges\n"
         budget_for_lines = max(budget - _token_estimate(header), 0)
 
         window_lines: list[str] = []
         batch_ids: list[int] = []
         used = 0
         for row_id, role, content, created_at, location_name in rows:
-            location = location_name or "unknown"
-            line = f"[{_format_row_ts(created_at)} @ {location}] {role}: {content}"
+            if location_name:
+                line = f"[{_format_row_ts(created_at)} @ {location_name}] {role}: {content}"
+            else:
+                line = f"[{_format_row_ts(created_at)}] {role}: {content}"
             line_tokens = _token_estimate(line)
             if window_lines and used + line_tokens > budget_for_lines:
                 break

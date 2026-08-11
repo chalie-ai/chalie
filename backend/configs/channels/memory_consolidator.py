@@ -47,6 +47,33 @@ _DEFAULT_PREAMBLE = (
 
 _EXTERNAL_AGENT_PREFIX = Channel.EXTERNAL_AGENT.value
 
+_DESCRIPTORS: dict[str, tuple[str, str]] = {
+    Channel.USER.value: (
+        "User conversation",
+        "Direct exchanges between the user and the assistant — the primary first-person channel.",
+    ),
+    Channel.DMN.value: (
+        "Inner reflection",
+        "The assistant's autonomous background reflection loop; its prose is the assistant's own thinking, not the user speaking.",
+    ),
+    Channel.SCHEDULE.value: (
+        "Scheduled tasks",
+        "Turns fired by scheduled tasks the user set up; the instruction and its durable outcome are what matter.",
+    ),
+}
+
+
+def descriptor_for(channel: str) -> tuple[str, str]:
+    """The (name, description) pair for a target channel, used in the consolidator
+    window header."""
+    if channel.startswith(_EXTERNAL_AGENT_PREFIX + ":"):
+        suffix = channel[len(_EXTERNAL_AGENT_PREFIX) + 1 :]
+        return (
+            f"External agent: {suffix}",
+            "Exchanges between an external coding/automation agent and the assistant on a shared project.",
+        )
+    return _DESCRIPTORS.get(channel, (channel, "Assistant-internal channel."))
+
 
 def preamble_for(channel: str) -> str:
     """The review preamble for a target channel."""
@@ -125,6 +152,7 @@ class MemoryConsolidatorConfig(ProcessorConfig):
             skip_input_row=False,
             suppress_history=True,
             memory_seed=False,
+            recall_k=10,
         )
         object.__setattr__(self, "_target_channel", target_channel)
         object.__setattr__(self, "_window", window)
