@@ -177,9 +177,9 @@ class PromptService:
         return config.system_prompt
 
     def user_definition(self) -> str:
-        """``UserConfig.get_user_definition``: the short user synthesis via
+        """``UserConfig.get_user_definition``: the user synthesis via
         :class:`UserSynthesis`, or the peer-to-peer fallback."""
-        return UserSynthesis.get(shorthand=True) or _USER_DEFINITION_FALLBACK
+        return UserSynthesis.get() or _USER_DEFINITION_FALLBACK
 
     def user_prompt(self) -> str:
         """The turn's user-message body, ported from each config's
@@ -652,7 +652,7 @@ class PromptService:
         config = cast("_ExternalAgentConfig", self.mp.config)
         try:
             body = config.system_prompt
-            summary = UserSynthesis.get(shorthand=True)
+            summary = UserSynthesis.get()
             user_name = summary.split()[0] if summary and summary.split() else "the user"
             body = (
                 body

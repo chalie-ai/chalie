@@ -1,13 +1,13 @@
 """Feature tests for :class:`services.user_synthesis.UserSynthesis`.
 
 Real-DataGraph round-trips over the conftest ``db`` fixture (isolated SQLite,
-zero mocks). Covers the behaviour every former caller depended on:
+zero mocks). Covers the single-key contract every caller depends on:
 
-* the channel-response ingest (``persist_user_summary``) writes both rows, and
-  ``get`` reads each back at its own shorthand;
-* the long read falls back to the short synthesis when no long row exists — the
-  long→short fallback contract;
-* ``upsert`` routes to the right key per ``shorthand``;
+* the channel-response ingest (``persist_user_summary``) writes the one
+  ``user_summary`` row ``get`` reads back — and never a ``user_summary_long``
+  row (the removed dual-key contract must stay gone);
+* malformed or incomplete responses are dropped wholesale, never raised;
+* ``upsert`` overwrites in place;
 * an absent synthesis reads back as ``""`` (the falsy skip-gate every caller uses).
 """
 
@@ -21,82 +21,66 @@ from services.user_synthesis import UserSynthesis
 
 pytestmark = pytest.mark.unit
 
-_RESPONSE = json.dumps({"short": "Loves espresso.", "long": "A senior architect who loves espresso and jazz."})
+_RESPONSE = json.dumps({"summary": "A senior architect who loves espresso."})
 
 
 class TestPersistAndGet:
 
-    def test_persist_writes_both_rows_readable_at_each_shorthand(self, db: sqlite3.Connection) -> None:
-        """persist_user_summary ingests the {short, long} response; get returns each."""
+    def test_persist_writes_the_single_row_get_reads_back(self, db: sqlite3.Connection) -> None:
+        """persist_user_summary ingests {"summary": ...} into the 'user_summary'
+        row; the long row of the removed dual-key contract is never written."""
         UserSynthesis.persist_user_summary(_RESPONSE)
 
-        assert UserSynthesis.get(shorthand=True) == "Loves espresso."
-        assert UserSynthesis.get(shorthand=False) == "A senior architect who loves espresso and jazz."
-
-    def test_default_get_is_long(self, db: sqlite3.Connection) -> None:
-        """get() with no arg returns the long synthesis (shorthand defaults False)."""
-        UserSynthesis.persist_user_summary(_RESPONSE)
-
-        assert UserSynthesis.get() == "A senior architect who loves espresso and jazz."
-
-    def test_long_read_falls_back_to_short(self, db: sqlite3.Connection) -> None:
-        """When only the short row exists, the long read serves the short one —
-        the long→short fallback contract."""
-        UserSynthesis.upsert("Loves espresso.", shorthand=True)
-
-        assert UserSynthesis.get(shorthand=False) == "Loves espresso."
-
-    def test_short_read_does_not_fall_back_to_long(self, db: sqlite3.Connection) -> None:
-        """The short read is exact — it never serves the long row (matches the
-        pre-consolidation user_summary() semantics)."""
-        UserSynthesis.upsert("The long one only.", shorthand=False)
-
-        assert UserSynthesis.get(shorthand=True) == ""
-
-    def test_absent_synthesis_reads_empty(self, db: sqlite3.Connection) -> None:
-        """No rows → "" at either shorthand (the falsy skip-gate callers rely on)."""
-        assert UserSynthesis.get(shorthand=True) == ""
-        assert UserSynthesis.get(shorthand=False) == ""
-
-
-class TestUpsertRouting:
-
-    def test_upsert_default_targets_short_key(self, db: sqlite3.Connection) -> None:
-        """upsert defaults to shorthand=True → the 'user_summary' row."""
-        UserSynthesis.upsert("Short portrait.")
-
-        short = MachineStateRow.active_by_key("user_summary")
-        assert short is not None and short.value == "Short portrait."
+        assert UserSynthesis.get() == "A senior architect who loves espresso."
+        row = MachineStateRow.active_by_key("user_summary")
+        assert row is not None and row.value == "A senior architect who loves espresso."
         assert MachineStateRow.active_by_key("user_summary_long") is None
 
-    def test_upsert_long_targets_long_key(self, db: sqlite3.Connection) -> None:
-        """upsert(shorthand=False) → the 'user_summary_long' row."""
-        UserSynthesis.upsert("Long portrait.", shorthand=False)
+    def test_code_fenced_response_is_unwrapped(self, db: sqlite3.Connection) -> None:
+        """A ```json-fenced response still parses — the ingest strips fences."""
+        UserSynthesis.persist_user_summary(f"```json\n{_RESPONSE}\n```")
 
-        long_ = MachineStateRow.active_by_key("user_summary_long")
-        assert long_ is not None and long_.value == "Long portrait."
-        assert MachineStateRow.active_by_key("user_summary") is None
+        assert UserSynthesis.get() == "A senior architect who loves espresso."
+
+    def test_absent_synthesis_reads_empty(self, db: sqlite3.Connection) -> None:
+        """No row → "" (the falsy skip-gate callers rely on)."""
+        assert UserSynthesis.get() == ""
+
+
+class TestUpsert:
+
+    def test_upsert_targets_the_user_summary_key(self, db: sqlite3.Connection) -> None:
+        """upsert writes the 'user_summary' machine-state row."""
+        UserSynthesis.upsert("Short portrait.")
+
+        row = MachineStateRow.active_by_key("user_summary")
+        assert row is not None and row.value == "Short portrait."
 
     def test_upsert_overwrites_prior_value(self, db: sqlite3.Connection) -> None:
         """A second upsert supersedes the first — get returns the latest."""
-        UserSynthesis.upsert("First.", shorthand=True)
-        UserSynthesis.upsert("Second.", shorthand=True)
+        UserSynthesis.upsert("First.")
+        UserSynthesis.upsert("Second.")
 
-        assert UserSynthesis.get(shorthand=True) == "Second."
+        assert UserSynthesis.get() == "Second."
 
 
 class TestPersistGuards:
 
     def test_malformed_json_is_skipped_not_raised(self, db: sqlite3.Connection) -> None:
-        """A non-JSON channel response is logged and dropped — never raised, and
-        nothing is written."""
+        """A non-JSON channel response is logged and dropped — nothing stored,
+        nothing raised (a bad turn must never poison the system prompt)."""
         UserSynthesis.persist_user_summary("not json at all")
 
-        assert UserSynthesis.get(shorthand=True) == ""
-        assert UserSynthesis.get(shorthand=False) == ""
+        assert UserSynthesis.get() == ""
 
-    def test_missing_field_writes_nothing(self, db: sqlite3.Connection) -> None:
-        """A response missing 'long' is rejected wholesale — neither row is written."""
-        UserSynthesis.persist_user_summary(json.dumps({"short": "only short"}))
+    def test_missing_summary_key_writes_nothing(self, db: sqlite3.Connection) -> None:
+        """A response without 'summary' is rejected wholesale."""
+        UserSynthesis.persist_user_summary(json.dumps({"other": "value"}))
 
-        assert UserSynthesis.get(shorthand=True) == ""
+        assert UserSynthesis.get() == ""
+
+    def test_empty_summary_writes_nothing(self, db: sqlite3.Connection) -> None:
+        """An empty 'summary' value is rejected, not stored."""
+        UserSynthesis.persist_user_summary(json.dumps({"summary": ""}))
+
+        assert UserSynthesis.get() == ""

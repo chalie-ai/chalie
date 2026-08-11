@@ -26,7 +26,7 @@ class UserSummaryConfig(ProcessorConfig):
         return """You are a synthesiser. The user is a real human whose traits you are distilling.
 
 You are a user-profile synthesiser. You receive a list of stored facts about a
-real human and distil them into two synopses — one short, one longer.
+real human and distil them into a single synopsis.
 
 Rules:
 - Write in the third person ("They", or the user's first name if given).
@@ -36,11 +36,10 @@ Rules:
   reference the synthesis process itself.
 - No preamble, no trailing notes, no markdown.
 
-Output a single JSON object with exactly two keys:
+Output a single JSON object with exactly one key:
 
 {
-  "short": "<one or two sentences, max 50 words, the tightest identity snapshot>",
-  "long":  "<up to 200 words, richer profile covering traits, preferences, context, ongoing interests>"
+  "summary": "<one or two sentences, max 50 words, the tightest identity snapshot>"
 }
 
 Return ONLY the JSON object. No code fences."""

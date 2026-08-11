@@ -1,19 +1,19 @@
-"""UserSynthesis — the single owner of the user-synthesis facts on the graph.
+"""UserSynthesis — the single owner of the user-synthesis fact on the graph.
 
-The user synthesis is two ``kind='machine_state'`` ``data_graph`` rows: a short
-(``user_summary``) and a long (``user_summary_long``) prose portrait of the user.
-The user-summary channel writes both once per synthesis turn; the prompt spine
-reads them back at assembly time. Read only by exact key, never recalled — hence
-the operational ``machine_state`` lane, not ``system``.
+The user synthesis is one ``kind='machine_state'`` ``data_graph`` row, keyed
+``user_summary``: a short prose portrait of the user. The user-summary channel
+writes it once per synthesis turn; the prompt spine reads it back at assembly
+time. Read only by exact key, never recalled — hence the operational
+``machine_state`` lane, not ``system``.
 
 This is thin CRUD over :class:`models.machine_state.MachineStateRow` — no ``mp``, no sibling
 service, no prompt assembly. It exists so there is exactly ONE home for the
-``user_summary`` / ``user_summary_long`` read/write pair (Law 9): the raw reads in
-the cron cognition jobs and the ``user_summary*`` accessors that used to sit on
-``DataGraphService`` all collapse onto :meth:`get` / :meth:`upsert` here. The
-"should we re-synthesise?" freshness gate — the trait/pattern-vs-summary timestamp
-check the synthesis cron job runs before firing the channel — lives here too as
-:meth:`needs_refresh`, since it reads the same ``user_summary`` row.
+``user_summary`` read/write (Law 9): the raw reads in the cron cognition jobs and
+the ``user_summary`` accessors that used to sit on ``DataGraphService`` all
+collapse onto :meth:`get` / :meth:`upsert` here. The "should we re-synthesise?"
+freshness gate — the trait/pattern-vs-summary timestamp check the synthesis cron
+job runs before firing the channel — lives here too as :meth:`needs_refresh`,
+since it reads the same ``user_summary`` row.
 
 Provenance: ``persist_user_summary`` — the only writer — runs solely on the
 ``user_summary`` channel turn, so the ``source`` tag is a fixed constant rather
@@ -31,35 +31,29 @@ from services.time_utils import parse_utc
 
 logger = logging.getLogger(__name__)
 
-# The two machine-state-lane keys and their one write source.
-_KEY_SHORT = "user_summary"
-_KEY_LONG = "user_summary_long"
+# The machine-state-lane key and its one write source.
+_KEY = "user_summary"
 _SOURCE = "user_summary"
 
 
 class UserSynthesis:
-    """Read and write the user-synthesis facts (short + long) on the graph."""
+    """Read and write the user-synthesis fact on the graph."""
 
     @classmethod
-    def get(cls, shorthand: bool = False) -> str:
-        """The user synthesis prose — the short (``shorthand=True``) portrait, or
-        the long one falling back to the short when no long row exists. ``""`` when
-        neither row is present. Live-row scope mirrors the spine's exact-key read
+    def get(cls) -> str:
+        """The user synthesis prose, ``""`` when no row is present. Live-row
+        scope mirrors the spine's exact-key read
         (``MachineStateRow.active_by_key`` — ``active = 1``)."""
-        if shorthand:
-            return cls._value(_KEY_SHORT)
-        return cls._value(_KEY_LONG) or cls._value(_KEY_SHORT)
+        return cls._value(_KEY)
 
     @classmethod
-    def upsert(cls, content: str, shorthand: bool = True) -> None:
-        """Persist the user synthesis to its key — the short row when
-        ``shorthand`` (default), the long row otherwise. A write failure is logged,
+    def upsert(cls, content: str) -> None:
+        """Persist the user synthesis to its key. A write failure is logged,
         never raised, so one bad synthesis can never crash the post-turn pipeline."""
-        key = _KEY_SHORT if shorthand else _KEY_LONG
         try:
-            MachineStateRow.store(key, content, source=_SOURCE)
+            MachineStateRow.store(_KEY, content, source=_SOURCE)
         except Exception as exc:  # noqa: BLE001 — a bad synthesis write must not crash the turn
-            logger.exception("user_synthesis.upsert failed key=%r: %s", key, exc)
+            logger.exception("user_synthesis.upsert failed key=%r: %s", _KEY, exc)
 
     @classmethod
     def needs_refresh(cls) -> bool:
@@ -72,7 +66,7 @@ class UserSynthesis:
             newest = cls._newest_trait_ts()
             if newest is None:
                 return False
-            summary_row = MachineStateRow.live().filter("key", _KEY_SHORT).first()
+            summary_row = MachineStateRow.live().filter("key", _KEY).first()
             if summary_row is None:
                 return True
             try:
@@ -96,10 +90,12 @@ class UserSynthesis:
 
     @classmethod
     def persist_user_summary(cls, text: str) -> None:
-        """Parse the user-summary channel's ``{"short", "long"}`` JSON response and
-        upsert the long then the short row — long FIRST so a crash mid-write leaves
-        the richer fact in place. Every reject is logged, never raised; the two
-        writes ride :meth:`upsert`'s own guard."""
+        """Parse the user-summary channel's ``{"summary"}`` JSON response and
+        upsert the row. A malformed, non-object, or empty-``summary`` response is
+        logged and dropped without writing — this prose feeds every system prompt
+        via ``PromptService.user_definition``, so a bad turn must leave the
+        standing synthesis intact rather than overwrite it. Every reject is
+        logged, never raised; the write rides :meth:`upsert`'s own guard."""
         stripped = (text or "").strip()
         if not stripped:
             logger.warning("persist_user_summary: empty response — skipping")
@@ -114,13 +110,11 @@ class UserSynthesis:
         if not isinstance(parsed, dict):
             logger.warning("persist_user_summary: parsed value is not a dict — skipping")
             return
-        short = (parsed.get("short") or "").strip()
-        long_ = (parsed.get("long") or "").strip()
-        if not short or not long_:
-            logger.warning("persist_user_summary: 'short'/'long' missing/empty — skipping")
+        summary = (parsed.get("summary") or "").strip()
+        if not summary:
+            logger.warning("persist_user_summary: 'summary' missing/empty — skipping")
             return
-        cls.upsert(long_, shorthand=False)
-        cls.upsert(short, shorthand=True)
+        cls.upsert(summary)
 
     @staticmethod
     def _value(key: str) -> str:
