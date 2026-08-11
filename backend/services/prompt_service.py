@@ -86,7 +86,6 @@ _CHANNEL_EXTERNAL_AGENT = "external_agent"
 _CHANNEL_COMPACTION = Channel.COMPACTION
 _CHANNEL_GEO_PATTERN = Channel.GEO_PATTERN
 _CHANNEL_DMN = Channel.DMN
-_CHANNEL_EPISODE_ENCODER = Channel.EPISODE_ENCODER
 _CHANNEL_MEMORY_CONSOLIDATOR = Channel.MEMORY_CONSOLIDATOR
 
 _USER_DEFINITION_FALLBACK = (
@@ -228,8 +227,6 @@ class PromptService:
             return self._geo_pattern_prompt()
         if channel == _CHANNEL_DMN:
             return self._dmn_prompt()
-        if channel == _CHANNEL_EPISODE_ENCODER:
-            return self._episode_encoder_prompt()
         # skill_association, vision and compaction pass the raw input straight
         # through.
         if channel in (_CHANNEL_SKILL_ASSOCIATION, _CHANNEL_VISION, _CHANNEL_COMPACTION):
@@ -694,39 +691,11 @@ class PromptService:
             parts.append(trail)
         return "\n".join(parts)
 
-    # ── SuperEpisodeConfig (channel="super_episode_encoder") ─────────────────
-
     def _memory_consolidator_prompt(self) -> str:
         """The consolidator's self-contained input window: the fully-formatted
         window text built by the service (channel header, preamble, and exchanges)."""
         config = cast("_MemoryConsolidatorConfig", self.mp.config)
         return config._window
-
-    # ── EpisodeEncoderConfig (channel="episode_encoder") ─────────────────────
-
-    def _episode_encoder_prompt(self) -> str:
-        """``EpisodeEncoderConfig.get_user_prompt``: the formatted transcript
-        window, then (when present) the episodes referenced during those turns —
-        both computed by the episode encoder and carried on ``self.mp.metadata``
-        (keys ``window`` / ``referenced``), the sanctioned per-turn payload channel
-        (§2.4), replacing the pre-rewrite ``mp._window`` / ``mp._referenced``
-        instance-attribute injection."""
-        meta = self.mp.metadata or {}
-        window = cast("str", meta.get("window") or "")
-        referenced = cast("str", meta.get("referenced") or "")
-        parts = [
-            "Transcript window — each line is `[id] (timestamp) role: content`:",
-            "",
-            window,
-        ]
-        if referenced:
-            parts.extend([
-                "",
-                "Episodes referenced during these turns (candidates for update / delete):",
-                "",
-                referenced,
-            ])
-        return "\n".join(parts)
 
     # ── GeoConfig (channel="geo_pattern") ────────────────────────────────────
 

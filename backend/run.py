@@ -368,22 +368,6 @@ def _check_asset_caches() -> None:
     except Exception as e:
         logger.warning(f"[Startup] Search cache check failed: {e}")
 
-    try:
-        _lut_db = FileMapperService.get_concept_lut_db_path()
-        if _lut_db.exists():
-            _c = _sql.connect(str(_lut_db))
-            _tables = [r[0] for r in _c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
-            _c.close()
-            if "lut_embeddings" in _tables:
-                logger.info("[Startup] Concept LUT ready: %s", _lut_db)
-            else:
-                logger.warning("[Startup] Concept LUT embeddings missing — run 'cd backend && python -m utils.generate_concept_lut'")
-        else:
-            logger.warning("[Startup] concept_lut.sqlite not found — run 'cd backend && python -m utils.generate_concept_lut'")
-    except Exception as e:
-        logger.warning(f"[Startup] Concept LUT check failed: {e}")
-
-
 def _warmup_models() -> None:
     """Warm up voice and embedding models in background daemon threads."""
     import threading as _t

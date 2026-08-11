@@ -37,9 +37,6 @@ class Channel(str, Enum):
     SKILLS_BUILDING   = "skills_building"
     SKILL_ASSOCIATION = "skill_association"
 
-    # ── Episodic memory ──────────────────────────────────────────────────────
-    EPISODE_ENCODER = "episode_encoder"
-
     # ── Compaction ───────────────────────────────────────────────────────────
     COMPACTION      = "compaction"
 

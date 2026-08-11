@@ -13,7 +13,6 @@ from __future__ import annotations
 from configs.channels._common import DEFAULT_ALWAYS_AVAILABLE
 from configs.channels.discovery import DiscoveryConfig
 from configs.channels.dmn import DmnConfig
-from configs.channels.episode_encoder import EpisodeEncoderConfig
 from configs.channels.external_agent import EAMPConfig
 from configs.channels.geo_pattern import GeoConfig
 from configs.channels.pattern import PatternConfig
@@ -52,7 +51,6 @@ __all__ = [
     "DiscoveryConfig",
     "DmnConfig",
     "EAMPConfig",
-    "EpisodeEncoderConfig",
     "GeoConfig",
     "PatternConfig",
     "ProcessorConfig",
