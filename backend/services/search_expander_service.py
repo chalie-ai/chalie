@@ -255,13 +255,17 @@ class SearchExpanderService:
         # the FTS5 'delete' command for a posting that was never inserted
         # corrupts the index (delete-before-first-insert). Only remove a prior
         # posting when one exists; a first index goes straight to INSERT.
-        if prior_indexed is not None:
-            self._delete_fts(conn, rowid, fts_vals, config)
-
+        # The indexed_at stamp applies to every searchable table, including
+        # vec-only configs (e.g. memory_map) that carry no FTS posting.
         conn.execute(
             f"UPDATE {config.base_table} SET {config.indexed_column} = datetime('now') WHERE rowid = ?",
             (rowid,)
         )
+        if not config.fts_table:
+            return  # vec-only: no FTS posting to maintain; vec lanes backfilled separately.
+
+        if prior_indexed is not None:
+            self._delete_fts(conn, rowid, fts_vals, config)
         fts_cols = ", ".join(config.fts_columns)
         placeholders = ", ".join(["?"] * (len(config.fts_columns) + 1))
         fts_values = [fts_vals.get(col) or '' for col in config.fts_columns]

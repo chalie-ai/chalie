@@ -127,16 +127,6 @@ class FileMapperService:
         return cls._BACKEND_DIR / "tools" / "search" / "assets" / "search_tool_providers.sqlite"
 
     @classmethod
-    def get_concept_lut_db_path(cls) -> Path:
-        """Return path to the concept LUT sqlite database."""
-        return cls._BACKEND_DIR / "services" / "data_graph" / "assets" / "concept_lut.sqlite"
-
-    @classmethod
-    def get_concept_lut_yaml_path(cls) -> Path:
-        """Return path to the concept LUT YAML source file."""
-        return cls._BACKEND_DIR / "services" / "data_graph" / "assets" / "concept_lut.yaml"
-
-    @classmethod
     def get_abilities_sha_path(cls) -> Path:
         """Return path to the abilities drift-sidecar SHA file."""
         return cls._PRETRAINED_DIR / "abilities_sha.json"

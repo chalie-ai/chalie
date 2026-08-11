@@ -186,11 +186,14 @@ _EXPECTED_NON_DISCOVERABLE = frozenset({
     "browser",                 # raw web — web_browse delegate only
     "search",                  # raw web — web_search delegate only
     "news",                    # raw web — web_search delegate only ()
-    "save_graph",              # pattern-write — PatternMatchProcessor only
+    "save_graph",              # memory-v3 consolidator only (Graph living facts)
+    "save_map",                # memory-v3 consolidator only (Map episodic lineage)
+    "delete_graph",            # memory-v3 consolidator only
+    "recall",                  # memory-v3 — model's only memory surface
     "save_pattern",            # pattern-write — PatternMatchProcessor only
     "find_tools",              # the discovery entry point itself
     "find_skills",             # framework — always_available only
-    "memory",                  # framework — always_available only
+
     "mcp_manager",             # framework — always_available only
     "chat_history_compactor",  # internal — dispatched programmatically
     "skill_manager",           # system variant — SkillSuggestionConfig only

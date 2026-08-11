@@ -60,9 +60,9 @@ VALID_SETTINGS = {"internal", "allow", "ask", "deny"}
 # stale rows for them so this frozenset stays the single source of truth.
 INTERNAL = frozenset({
     "browser", "calendar", "chalie_docs", "chat_history_compactor", "contacts",
-    "email", "find_skills", "find_tools", "image_preview", "mcp_tools", "memory", "news",
-    "read", "review_tool_calls", "review_transcript", "run_script", "save_graph",
-    "save_pattern", "search", "skill_manager", "web_fetch",
+    "delete_graph", "email", "find_skills", "find_tools", "image_preview", "mcp_tools", "news",
+    "read", "recall", "review_tool_calls", "review_transcript", "run_script", "save_graph",
+    "save_map", "save_pattern", "search", "skill_manager", "web_fetch",
 })
 
 # Channels with no human at a prompt: an `ask` becomes a `deny` (D2).

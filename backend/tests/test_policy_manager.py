@@ -82,7 +82,7 @@ def test_allow_and_internal_run_callback(mgr: PolicyManager, db: sqlite3.Connect
 # email/calendar/contacts are the pim delegate's inner surface: the user-facing
 # permission is the outer `pim` tool, so the inner calls must never gate.
 @pytest.mark.parametrize("channel", [CH.CHAT, CH.SUBCONSCIOUS, CH.EXTERNAL_AGENT])
-@pytest.mark.parametrize("permission", ["run_script", "search", "browser.open", "memory.store", "save_graph",
+@pytest.mark.parametrize("permission", ["run_script", "search", "browser.open", "recall", "save_graph",
                                         "email.send", "calendar.create_event", "contacts.get"])
 def test_internal_tools_always_bypass(mgr: PolicyManager, db: sqlite3.Connection, channel: PolicyChannel, permission: str) -> None:
     # a deny row for the same key must be ignored — INTERNAL wins, no DB lookup

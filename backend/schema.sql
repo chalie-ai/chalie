@@ -452,6 +452,7 @@ CREATE TABLE IF NOT EXISTS transcript (
     -- ActTrail.start() demotes to 0 when a settling tool is recorded against the
     -- row. Internal passes (chat_history_compactor, thinking) never demote.
     settled     INTEGER NOT NULL DEFAULT 0,
+    consolidated INTEGER NOT NULL DEFAULT 0,
     -- Per-turn thinking level chosen by the sender (auto|medium|high); NULL =
     -- legacy row or not-yet-set, lets a later query distinguish "chose auto"
     -- from "never set".
@@ -629,6 +630,43 @@ CREATE VIRTUAL TABLE IF NOT EXISTS data_graph_fts USING fts5(
 
 CREATE VIRTUAL TABLE IF NOT EXISTS data_graph_key_vec   USING vec0(embedding float[768]);
 CREATE VIRTUAL TABLE IF NOT EXISTS data_graph_value_vec USING vec0(embedding float[768]);
+
+-- ────────────────────────────────────────────────────────────────
+-- MEMORY GRAPH — subject-keyed living facts (Memory v3)
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS memory_graph (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+    last_updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    subject           TEXT NOT NULL UNIQUE,
+    contents          TEXT NOT NULL,
+    sourced_from      TEXT NOT NULL DEFAULT '[]',
+    indexed_at        TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_graph_subject ON memory_graph(subject);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS memory_graph_fts USING fts5(
+    subject, content='memory_graph', content_rowid='rowid'
+);
+
+-- ────────────────────────────────────────────────────────────────
+-- MEMORY MAP — episodic lineage with vector contents (Memory v3)
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS memory_map (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    generated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    contents     TEXT NOT NULL,
+    derived_from TEXT NOT NULL DEFAULT '[]',
+    sourced_from TEXT NOT NULL DEFAULT '[]',
+    iteration    INTEGER NOT NULL DEFAULT 1,
+    indexed_at   TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_map_iteration ON memory_map(iteration DESC);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS memory_map_contents_vec USING vec0(embedding float[768]);
 
 -- ────────────────────────────────────────────────────────────────
 -- DATA GRAPH EDGES — typed join table for graph traversal

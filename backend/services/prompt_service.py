@@ -13,11 +13,10 @@ in Phase E — the configs are now pure declarative data. Each builder's docstri
 names the config it was ported from.
 
 Memory boundary (§3.11): every structured user-context read goes through a
-sibling service — the FACTS vertical (``FactRow.traits``) for the traits lane and
-``self.mp.behavioral_pattern_service`` for the pattern lane — never a raw
-``data_graph`` read here. The behavioural-pattern confidence ranking + cap lives
-on ``BehavioralPatternService.top_patterns``; this file only formats the rows the
-service hands back.
+sibling service — ``self.mp.behavioral_pattern_service`` for the pattern lane —
+never a raw ``data_graph`` read here. The behavioural-pattern confidence ranking
++ cap lives on ``BehavioralPatternService.top_patterns``; this file only formats
+the rows the service hands back.
 
 Cross-turn / cross-channel reads (skill-building's trigger-turn tool trail,
 thread-gist's opener rows) are the trigger turn's identity — a DIFFERENT
@@ -38,14 +37,12 @@ import json
 import logging
 from typing import TYPE_CHECKING, cast
 
-from abilities.memory import MemoryAbility
-from configs.channels.dmn import DmnConfig
+from abilities.recall import Recall
 from configs.channels.external_agent import EAMPConfig
 from configs.channels.user import UserConfig
 from configs.enums.channels import Channel
 from exceptions import UnroutedPromptChannel
 from models.behavioral_pattern import BehavioralPattern
-from models.fact import FactRow
 from models.tool_call import ToolCall
 from models.transcript import Transcript
 from models.transcript_thinking import TranscriptThinking
@@ -61,17 +58,15 @@ if TYPE_CHECKING:
 
     from controllers.message_processor import MessageProcessor
 
-    class _FactExtractionConfig(Protocol):
-        _gist: str
-        _neighbours: list[object]
-
     class _ExternalAgentConfig(Protocol):
         _agent_name: str
         _project: str
         system_prompt: str
 
-    class _SuperEpisodeConfig(Protocol):
-        _sources: list[object]
+    class _MemoryConsolidatorConfig(Protocol):
+        _target_channel: str
+        _window: str
+        _source_transcript_ids: list[int]
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +74,6 @@ _CHANNEL_USER = Channel.USER
 _CHANNEL_USER_SUMMARY = Channel.USER_SUMMARY
 _CHANNEL_PATTERN_MATCH = Channel.PATTERN_MATCH
 _CHANNEL_SCHEDULE = Channel.SCHEDULE
-_CHANNEL_FACT_EXTRACTION = Channel.FACT_EXTRACTION
 _CHANNEL_SKILL_ASSOCIATION = Channel.SKILL_ASSOCIATION
 _CHANNEL_SKILLS_BUILDING = Channel.SKILLS_BUILDING
 _CHANNEL_THREAD_GIST = Channel.DELEGATE_THREAD_GIST
@@ -90,10 +84,9 @@ _CHANNEL_PIM = Channel.DELEGATE_PIM
 _CHANNEL_CODE_AGENT = Channel.DELEGATE_CODE_AGENT
 _CHANNEL_EXTERNAL_AGENT = "external_agent"
 _CHANNEL_COMPACTION = Channel.COMPACTION
-_CHANNEL_SUPER_EPISODE = Channel.SUPER_EPISODE_ENCODER
 _CHANNEL_GEO_PATTERN = Channel.GEO_PATTERN
 _CHANNEL_DMN = Channel.DMN
-_CHANNEL_EPISODE_ENCODER = Channel.EPISODE_ENCODER
+_CHANNEL_MEMORY_CONSOLIDATOR = Channel.MEMORY_CONSOLIDATOR
 
 _USER_DEFINITION_FALLBACK = (
     "The user is a real human. Treat this conversation as peer-to-peer dialogue."
@@ -148,7 +141,6 @@ Some tools accept an `async` flag. Set `async: true` to run a tool in the backgr
 
 Choose `async: true` when the user asks for something to happen "in the background" or "while" they do something else, or when a call is likely to be slow (web research, browsing, lengthy shell or file work) and the user should not have to wait. Call tools normally (synchronously) for quick results the user is actively waiting on."""
 
-_MAX_TRAIT_ROWS = 200
 _MAX_PATTERN_ROWS = 25
 
 
@@ -215,8 +207,6 @@ class PromptService:
             return self._pattern_prompt()
         if channel == _CHANNEL_SCHEDULE:
             return self._schedule_prompt()
-        if channel == _CHANNEL_FACT_EXTRACTION:
-            return self._fact_extraction_prompt()
         if channel == _CHANNEL_SKILLS_BUILDING:
             return self._skill_suggestion_prompt()
         if channel == _CHANNEL_THREAD_GIST:
@@ -231,14 +221,12 @@ class PromptService:
             return self._code_agent_prompt()
         if channel == _CHANNEL_EXTERNAL_AGENT:
             return self._external_agent_prompt()
-        if channel == _CHANNEL_SUPER_EPISODE:
-            return self._super_episode_prompt()
+        if channel == _CHANNEL_MEMORY_CONSOLIDATOR:
+            return self._memory_consolidator_prompt()
         if channel == _CHANNEL_GEO_PATTERN:
             return self._geo_pattern_prompt()
         if channel == _CHANNEL_DMN:
             return self._dmn_prompt()
-        if channel == _CHANNEL_EPISODE_ENCODER:
-            return self._episode_encoder_prompt()
         # skill_association, vision and compaction pass the raw input straight
         # through.
         if channel in (_CHANNEL_SKILL_ASSOCIATION, _CHANNEL_VISION, _CHANNEL_COMPACTION):
@@ -367,10 +355,10 @@ class PromptService:
                 if tid in interim:
                     parts.append(f"[interim_response] {interim[tid]}")
                 emitted.add(tid)
-            if call.tool_name == MemoryAbility.NAME and '"_auto": true' in call.params:
+            if call.tool_name == Recall.NAME and '"_auto": true' in call.params:
                 body = result.split("\n", 1)[1] if "\n" in result else result
                 parts.append(
-                    f"[background_memory]\n{body}".replace("[end:memory]", "[end:background_memory]")
+                    f"[background_memory]\n{body}".replace("[end:recall]", "[end:background_memory]")
                 )
                 continue
             parts.append(f"[{call.tool_name}] {call.params} → {result}")
@@ -480,23 +468,9 @@ class PromptService:
     # ── UserSummaryConfig (channel="user_summary") ───────────────────────────
 
     def _user_summary_prompt(self) -> str:
-        """``UserSummaryConfig.get_user_prompt``: traits facts section, plus the
-        active-patterns section when any exist."""
-        facts_section = self._traits_block()
-        patterns_section = self._user_summary_patterns_block()
-        if not patterns_section:
-            return facts_section
-        return f"{facts_section}\n\n{patterns_section}"
-
-    def _traits_block(self) -> str:
-        """Section 1 of ``UserSummaryConfig.get_user_prompt``: up to
-        ``_MAX_TRAIT_ROWS`` live ``user_specific`` facts, most-reinforced first,
-        via ``FactRow.traits()``."""
-        rows = FactRow.traits().get()[:_MAX_TRAIT_ROWS]
-        lines = [f"{row.key}: {row.value}" for row in rows if row.key and row.value]
-        if not lines:
-            return "Facts:\n(no facts available)"
-        return "Facts:\n" + "\n".join(lines)
+        """``UserSummaryConfig.get_user_prompt``: the active-patterns section
+        when any exist."""
+        return self._user_summary_patterns_block()
 
     def _user_summary_patterns_block(self) -> str:
         """Section 2 of ``UserSummaryConfig.get_user_prompt``: up to
@@ -561,23 +535,6 @@ class PromptService:
         if trail:
             parts.append(trail)
         return "\n\n".join(parts)
-
-    # ── FactExtractionConfig (channel="fact_extraction") ─────────────────────
-
-    def _fact_extraction_prompt(self) -> str:
-        """``FactExtractionConfig.get_user_prompt``: the episode gist and the
-        pre-fetched neighbour facts captured on the config (``_gist`` /
-        ``_neighbours`` — per-episode frozen data, not mp-reachable)."""
-        config = cast("_FactExtractionConfig", self.mp.config)
-        if config._neighbours:
-            known = "\n".join(
-                f"- key={cast('dict[str, object]', n).get('key')!r} "
-                f"value={cast('dict[str, object]', n).get('value')!r}"
-                for n in config._neighbours
-            )
-        else:
-            known = "(no similar facts on record)"
-        return f"Episode:\n{config._gist}\n\nMost similar known facts:\n{known}"
 
     # ── SkillSuggestionConfig (channel="skills_building") ────────────────────
 
@@ -734,47 +691,11 @@ class PromptService:
             parts.append(trail)
         return "\n".join(parts)
 
-    # ── SuperEpisodeConfig (channel="super_episode_encoder") ─────────────────
-
-    def _super_episode_prompt(self) -> str:
-        """``SuperEpisodeConfig.get_user_prompt``: the cluster's source-episode
-        gists alone (``_sources``, per-cluster frozen data captured on the config
-        at construction, not mp-reachable — same pattern as fact-extraction's
-        payload). Every level distils its child gists; raw transcript turns are
-        never re-hydrated into the prompt, so a super-episode always contracts
-        the level beneath it."""
-        config = cast("_SuperEpisodeConfig", self.mp.config)
-        src = "\n\n".join(
-            f"[{cast('dict[str, object]', e)['id']}] {cast('dict[str, object]', e)['gist']}"
-            for e in config._sources
-        )
-        return f"Source episodes:\n\n{src}"
-
-    # ── EpisodeEncoderConfig (channel="episode_encoder") ─────────────────────
-
-    def _episode_encoder_prompt(self) -> str:
-        """``EpisodeEncoderConfig.get_user_prompt``: the formatted transcript
-        window, then (when present) the episodes referenced during those turns —
-        both computed by ``EpisodicService`` and carried on ``self.mp.metadata``
-        (keys ``window`` / ``referenced``), the sanctioned per-turn payload channel
-        (§2.4), replacing the pre-rewrite ``mp._window`` / ``mp._referenced``
-        instance-attribute injection."""
-        meta = self.mp.metadata or {}
-        window = cast("str", meta.get("window") or "")
-        referenced = cast("str", meta.get("referenced") or "")
-        parts = [
-            "Transcript window — each line is `[id] (timestamp) role: content`:",
-            "",
-            window,
-        ]
-        if referenced:
-            parts.extend([
-                "",
-                "Episodes referenced during these turns (candidates for update / delete):",
-                "",
-                referenced,
-            ])
-        return "\n".join(parts)
+    def _memory_consolidator_prompt(self) -> str:
+        """The consolidator's self-contained input window: the fully-formatted
+        window text built by the service (channel header, preamble, and exchanges)."""
+        config = cast("_MemoryConsolidatorConfig", self.mp.config)
+        return config._window
 
     # ── GeoConfig (channel="geo_pattern") ────────────────────────────────────
 
@@ -825,24 +746,10 @@ class PromptService:
         synthesis = UserSynthesis.get()
         if synthesis:
             parts.append(f"## About the User\n{synthesis}")
-        episodes = self._dmn_episodes_block()
-        if episodes:
-            parts.append(f"## Episodes\n{episodes}")
         trail = self._trail()
         if trail:
             parts.append(trail)
         return "\n\n".join(parts)
-
-    def _dmn_episodes_block(self) -> str:
-        """DMN's recent-salient-episode reflection context — the episodic read
-        at prompt-assembly time. Sourced from ``DmnConfig``'s own DB-reaching
-        static (marked ``@todo: Refactor`` there): one home for the DMN reads
-        until episodic prompt-context is folded onto the spine as a service."""
-        try:
-            return DmnConfig.recent_salient_user_episodes()
-        except Exception as exc:  # noqa: BLE001 — a reflection-context read must not crash the turn
-            logger.debug("[PromptService] dmn episodes read failed: %s", exc)
-            return ""
 
     # ── formatting helpers ───────────────────────────────────────────────────
 

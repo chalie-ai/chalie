@@ -37,13 +37,11 @@ class Channel(str, Enum):
     SKILLS_BUILDING   = "skills_building"
     SKILL_ASSOCIATION = "skill_association"
 
-    # ── Episodic memory ──────────────────────────────────────────────────────
-    EPISODE_ENCODER       = "episode_encoder"
-    SUPER_EPISODE_ENCODER = "super_episode_encoder"
-
-    # ── Fact extraction / compaction ─────────────────────────────────────────
-    FACT_EXTRACTION = "fact_extraction"
+    # ── Compaction ───────────────────────────────────────────────────────────
     COMPACTION      = "compaction"
+
+    # ── Memory v3 ─────────────────────────────────────────────────────────────
+    MEMORY_CONSOLIDATOR = "memory_consolidator"
 
     # ── Delegates (tool-driven sub-loops) ────────────────────────────────────
     DELEGATE_PIM        = "delegate:pim"

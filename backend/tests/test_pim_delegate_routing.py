@@ -194,8 +194,8 @@ def test_pim_delegate_pins_exactly_its_toolset() -> None:
     """The delegate is pinned exactly to its four tools — the three personal-info
     tools it owns plus memory — no more, no less."""
     always_available = PimConfig(PolicyChannel.CHAT).always_available
-    assert set(always_available) == {"email", "calendar", "contacts", "memory"}, (
-        f"pim delegate must pin exactly email/calendar/contacts/memory. "
+    assert set(always_available) == {"email", "calendar", "contacts", "recall"}, (
+        f"pim delegate must pin exactly email/calendar/contacts/recall. "
         f"always_available={always_available!r}"
     )
 

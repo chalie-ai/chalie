@@ -166,6 +166,12 @@ class ProcessorConfig(ABC):
     rejected as an invalid fork; forked-ness is derived from whether the turn
     already exists, not the -1 sentinel."""
 
+    recall_k: int = 3
+    """Recall depth per lane (Graph FTS + Map vec) for the consolidator's
+    recall-first step. Chat and most background channels keep the default of 3;
+    the consolidator overrides to 10 so its recall-first step surfaces enough
+    context for distillation without duplicating the full turn history."""
+
     # ── Derived properties ────────────────────────────────────────────────────
 
     @property

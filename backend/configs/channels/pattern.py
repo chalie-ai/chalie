@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from abilities.save_graph import SaveGraph
 from abilities.save_pattern import SavePattern
 from typing import TYPE_CHECKING
 
@@ -21,7 +20,7 @@ class PatternConfig(ProcessorConfig):
             channel=Channel.PATTERN_MATCH.value,
             role="pattern_match",
             policy_channel=PolicyChannel.SUBCONSCIOUS,
-            always_available=[SavePattern.NAME, SaveGraph.NAME],
+            always_available=[SavePattern.NAME],
             skip_transcript=True,
             skip_input_row=False,
             suppress_history=True,
@@ -46,6 +45,5 @@ Do NOT write narratives, episode summaries, or date-stamped event logs. The summ
 Rules:
 - {SavePattern.NAME} requires >=2 evidence rows in this batch.
 - Mirror existing pattern names exactly when reinforcing — case-sensitive.
-- Do NOT use {SaveGraph.NAME} for repeating behaviours — use {SavePattern.NAME}.
 - Skip noise. Skip one-offs. Skip ambiguous interpretations.
 - Emit everything in this single pass."""
