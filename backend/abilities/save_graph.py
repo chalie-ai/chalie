@@ -1,7 +1,7 @@
 """SaveGraph — save/update a living fact in the memory graph (Memory v3).
 
 Subject-keyed: saving an existing subject overwrites ``contents`` and bumps
-``last_updated_at``. A consolidator-only tool — the in-conversation model only
+``last_updated_at``. A memory-step-only tool — the in-conversation model only
 recalls; it never writes memory.
 """
 
@@ -18,9 +18,9 @@ from models.memory_graph import MemoryGraphRow
 
 
 def _source_transcript_ids(mp: object) -> list[int]:
-    """Provenance transcript ids the consolidator stamps on its writes, carried
+    """Provenance transcript ids the memory step stamps on its writes, carried
     on the invoking processor's config (``_source_transcript_ids``). Empty for
-    non-consolidator callers (e.g. build-time introspection)."""
+    other callers (e.g. build-time introspection)."""
     cfg = getattr(mp, "config", None) if mp is not None else None
     ids = getattr(cfg, "_source_transcript_ids", None)
     return list(ids) if ids else []

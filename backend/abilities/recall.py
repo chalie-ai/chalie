@@ -1,7 +1,7 @@
 """Recall — search existing memory before writing (Memory v3).
 
 Fuses Graph FTS (subject) + Map vector (contents, iteration-ranked). The one
-memory surface the in-conversation model may use, and the consolidator's
+memory surface the in-conversation model may use, and the memory step's
 recall-first step. Never writes.
 """
 

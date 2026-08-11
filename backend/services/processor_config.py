@@ -167,10 +167,10 @@ class ProcessorConfig(ABC):
     already exists, not the -1 sentinel."""
 
     recall_k: int = 3
-    """Recall depth per lane (Graph FTS + Map vec) for the consolidator's
-    recall-first step. Chat and most background channels keep the default of 3;
-    the consolidator overrides to 10 so its recall-first step surfaces enough
-    context for distillation without duplicating the full turn history."""
+    """Recall depth per lane (Graph FTS + Map vec). Chat and most background
+    channels keep the default of 3; the memory step overrides to 10 so its
+    recall-first pass surfaces enough context for distillation without
+    duplicating the full turn history."""
 
     # ── Derived properties ────────────────────────────────────────────────────
 

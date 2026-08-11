@@ -63,11 +63,6 @@ if TYPE_CHECKING:
         _project: str
         system_prompt: str
 
-    class _MemoryConsolidatorConfig(Protocol):
-        _target_channel: str
-        _window: str
-        _source_transcript_ids: list[int]
-
 logger = logging.getLogger(__name__)
 
 _CHANNEL_USER = Channel.USER
@@ -86,7 +81,6 @@ _CHANNEL_EXTERNAL_AGENT = "external_agent"
 _CHANNEL_COMPACTION = Channel.COMPACTION
 _CHANNEL_GEO_PATTERN = Channel.GEO_PATTERN
 _CHANNEL_DMN = Channel.DMN
-_CHANNEL_MEMORY_CONSOLIDATOR = Channel.MEMORY_CONSOLIDATOR
 
 _USER_DEFINITION_FALLBACK = (
     "The user is a real human. Treat this conversation as peer-to-peer dialogue."
@@ -221,8 +215,6 @@ class PromptService:
             return self._code_agent_prompt()
         if channel == _CHANNEL_EXTERNAL_AGENT:
             return self._external_agent_prompt()
-        if channel == _CHANNEL_MEMORY_CONSOLIDATOR:
-            return self._memory_consolidator_prompt()
         if channel == _CHANNEL_GEO_PATTERN:
             return self._geo_pattern_prompt()
         if channel == _CHANNEL_DMN:
@@ -690,12 +682,6 @@ class PromptService:
         if trail:
             parts.append(trail)
         return "\n".join(parts)
-
-    def _memory_consolidator_prompt(self) -> str:
-        """The consolidator's self-contained input window: the fully-formatted
-        window text built by the service (channel header, preamble, and exchanges)."""
-        config = cast("_MemoryConsolidatorConfig", self.mp.config)
-        return config._window
 
     # ── GeoConfig (channel="geo_pattern") ────────────────────────────────────
 

@@ -6,7 +6,7 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Feature tests for the Memory v3 consolidator tools (Slice B).
+"""Feature tests for the four Memory v3 memory tools (Slice B).
 
 Exercises the four abilities end-to-end on the real ``db`` fixture: each tool's
 param bag (validation) + run() (store mutation), driving the real

@@ -67,9 +67,9 @@ def memory_step_config(
     :meth:`~services.processor_config.ProcessorConfig.with_hidden_input`.
 
     ``skip_input_row`` is deliberately False: the input row assigns the uid
-    the act trail anchors on, and we must not skip it. ``recall_k`` is set to
-    10 to mirror :class:`~configs.channels.memory_consolidator.MemoryConsolidatorConfig`'s
-    recall-depth rationale. ``BROADCASTS_STATE`` is shadowed to False on the
+    the act trail anchors on, and we must not skip it. ``recall_k`` is raised
+    to 10 so the recall-first pass surfaces enough existing memory for
+    distillation. ``BROADCASTS_STATE`` is shadowed to False on the
     instance so the background step stays off the client's WS frames (the
     gate reads the instance attribute, not the ClassVar). ``USAGE_TYPE`` is
     shadowed to "background" for the same reason DiscoveryConfig declares it:

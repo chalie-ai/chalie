@@ -28,7 +28,7 @@ class Transcript(Model):
         "id", "channel", "role", "content", "tool_call_id", "tool_name",
         "internal", "deliberation_score", "created_at", "xml_migrated",
         "location_lat", "location_lon", "location_name", "turn_id", "settled",
-        "consolidated", "thinking_level",
+        "thinking_level",
     )
 
     @classmethod
@@ -49,7 +49,6 @@ class Transcript(Model):
     location_name: str | None
     turn_id: int | None
     settled: int
-    consolidated: int
     thinking_level: str | None
 
     # settle0 — the FIRST assistant row of a turn with settled=1: the boundary
@@ -361,8 +360,8 @@ class Transcript(Model):
     # ── off-turn GC (unlinked-transcript sweep) ──────────────────────────────
 
     # Retention purges a transcript row once it ages past this window AND no
-    # live episode still cites it — the age floor that keeps a fresh,
-    # not-yet-consolidated turn from disappearing out from under an in-flight
+    # live episode still cites it — the age floor that keeps a fresh
+    # turn from disappearing out from under an in-flight
     # recall. Mirrors ``ToolCall.ORPHAN_GC_AFTER_DAYS`` in spirit (same window,
     # same "age + no live reference" shape) but is its own constant since the
     # two tables decay on independent conditions.

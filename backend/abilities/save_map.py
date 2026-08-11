@@ -2,7 +2,7 @@
 
 ``derived_from`` (map ids) retires those parents from the searchable pool.
 Iteration (salience) is computed deterministically as max(parent iterations) + 1
-(fresh episodes start at 1). A consolidator-only tool.
+(fresh episodes start at 1). A memory-step-only tool.
 """
 
 from __future__ import annotations

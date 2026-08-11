@@ -16,7 +16,6 @@ from cron.jobs.discovery import DiscoveryJob
 from cron.jobs.dmn import DmnJob
 from cron.jobs.garbage_collection import GarbageCollectionJob
 from cron.jobs.geo_patterns import GeoPatternsJob
-from cron.jobs.memory_consolidator import MemoryConsolidatorJob
 from cron.jobs.pattern_match import PatternMatchJob
 from cron.jobs.scheduled_items import ScheduledItemsDispatcherJob
 from cron.jobs.synthesis import SynthesisJob
@@ -36,7 +35,6 @@ JOBS: tuple[ScheduledJob, ...] = (
     GeoPatternsJob(),
     DiscoveryJob(),
     GarbageCollectionJob(),
-    MemoryConsolidatorJob(),
 )
 
 __all__ = [

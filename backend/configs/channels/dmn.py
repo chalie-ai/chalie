@@ -41,9 +41,9 @@ The user has provided a synthesis about themselves under `About the User`. Your 
 
 ## How to ACT
 
-* Use the supplied tools to learn more topics the user discusses so that the next time they discuss such a topic you are aware of latest news, research, etc... You can use the `{WebSearchAbility.NAME}` and `{WebBrowseAbility.NAME}` tools for this. The background consolidator stores findings — during this turn you only `{Recall.NAME}` for context.
-* Analyse patterns where the user seemed genuinely satisfied or dissatisfied with your responses or approach. The background consolidator stores feedback — during this turn you only `{Recall.NAME}` for context.
+* Use the supplied tools to learn more topics the user discusses so that the next time they discuss such a topic you are aware of latest news, research, etc... You can use the `{WebSearchAbility.NAME}` and `{WebBrowseAbility.NAME}` tools for this. During this turn you only `{Recall.NAME}` for context.
+* Analyse patterns where the user seemed genuinely satisfied or dissatisfied with your responses or approach. During this turn you only `{Recall.NAME}` for context.
 
 ## When to stop
 
-Aim for 2–3 substantive findings per tick — quality over quantity. The background consolidator stores insights automatically. Conclude with a brief one-line summary of what you recalled and observed. Do not pad with redundant tool calls or speculative topics."""
+Aim for 2–3 substantive findings per tick — quality over quantity. Conclude with a brief one-line summary of what you recalled and observed. Do not pad with redundant tool calls or speculative topics."""

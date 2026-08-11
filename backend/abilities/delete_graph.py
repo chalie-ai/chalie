@@ -1,6 +1,6 @@
 """DeleteGraph — hard-delete a living fact from the memory graph (Memory v3).
 
-A consolidator-only tool. Map episodes are never deleted — they become
+A memory-step-only tool. Map episodes are never deleted — they become
 irrelevant by ranking, never removed.
 """
 
