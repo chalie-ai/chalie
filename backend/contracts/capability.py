@@ -2,11 +2,11 @@
 
 Declares the complete method surface of the capability family:
 
-- ``get_id`` / ``get_manifest`` / ``configure`` / ``connect`` / ``disconnect`` /
-  ``ingest`` / ``understand`` / ``_do_monitor`` / ``get_tools`` — **required**.
-  Each concrete capability supplies them (enforced by
+- ``get_id`` / ``configure`` / ``connect`` / ``disconnect`` / ``ingest`` /
+  ``understand`` / ``_do_monitor`` / ``get_tools`` — **required**. Each
+  concrete capability supplies them (enforced by
   :class:`capabilities.base.AbstractCapability`'s ``@abstractmethod``).
-- ``monitor`` / ``store_credential`` / ``load_credential`` /
+- ``get_manifest`` / ``monitor`` / ``store_credential`` / ``load_credential`` /
   ``delete_credentials`` / ``is_connected`` — **shared**. Supplied by the
   ``AbstractCapability`` ABC base, which every capability inherits.
 

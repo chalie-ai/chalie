@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
+    from pathlib import Path
 
 # Scalar types permitted in the flat ``meta`` map (rendered into the open tag).
 _SCALAR = (str, int, float, bool)
@@ -147,3 +148,19 @@ class ToolResult:
             hint=hint,
             valid=tuple(valid),
         )
+
+    @classmethod
+    def not_found(cls, target: Path) -> ToolResult:
+        return cls.err(
+            f"No such file or directory: {target}",
+            code="not-found",
+            hint="pass an absolute path to an existing file or directory.",
+        )
+
+    @classmethod
+    def permission_denied(cls, verb: str, target: Path, exc: PermissionError, *, hint: str) -> ToolResult:
+        return cls.err(f"Permission denied {verb} {target}: {exc}", code="permission-denied", hint=hint)
+
+    @classmethod
+    def path_os_error(cls, verb: str, target: Path, exc: OSError, *, code: str, hint: str) -> ToolResult:
+        return cls.err(f"Could not {verb} {target}: {exc}", code=code, hint=hint)

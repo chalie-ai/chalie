@@ -95,11 +95,7 @@ class DeleteAbility(Ability[DeleteParamsBag]):
             return target
 
         if not target.exists():
-            return ToolResult.err(
-                f"No such file or directory: {target}",
-                code="not-found",
-                hint="pass an absolute path to an existing file or directory.",
-            )
+            return ToolResult.not_found(target)
 
         try:
             if target.is_dir():
@@ -107,16 +103,8 @@ class DeleteAbility(Ability[DeleteParamsBag]):
             else:
                 target.unlink()
         except PermissionError as exc:
-            return ToolResult.err(
-                f"Permission denied deleting {target}: {exc}",
-                code="permission-denied",
-                hint=f"you do not own {target} or cannot remove it.",
-            )
+            return ToolResult.permission_denied("deleting", target, exc, hint=f"you do not own {target} or cannot remove it.")
         except OSError as exc:
-            return ToolResult.err(
-                f"Could not delete {target}: {exc}",
-                code="not-found",
-                hint="the path may have been removed by another process.",
-            )
+            return ToolResult.path_os_error("delete", target, exc, code="not-found", hint="the path may have been removed by another process.")
 
         return ToolResult.ok({"path": str(target), "deleted": True})

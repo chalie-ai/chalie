@@ -7,7 +7,7 @@ import logging
 import os
 import re
 import sqlite3
-from typing import TYPE_CHECKING, TypeAlias
+from typing import TYPE_CHECKING, ClassVar, Literal, TypeAlias
 
 from services.database import Database
 from services.file_mapper_service import FileMapperService
@@ -59,6 +59,29 @@ def _load_sqlite_vec(conn: sqlite3.Connection) -> None:
 
 
 class SchemaConvergenceService:
+
+    _DdlObjType: TypeAlias = Literal["table", "virtual_table", "trigger"]
+
+    # Comments are stripped before matching because schema.sql comments can
+    # contain semicolons (e.g. "-- dropped by migration 026; kept here."),
+    # which would otherwise terminate a [^;]+ match early.
+    _DDL_PATTERNS: ClassVar[dict[_DdlObjType, str]] = {
+        "table": (
+            r"(CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"
+            r"{name}\s*\([^;]+;)"
+        ),
+        "virtual_table": (
+            r"(CREATE\s+VIRTUAL\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"
+            r"{name}[^;]+;)"
+        ),
+        # Trigger bodies contain semicolons inside their BEGIN...END block, so
+        # [^;]+ (used for table/virtual_table) would truncate mid-body. Match
+        # through the closing END instead and consume the trailing semicolon.
+        "trigger": (
+            r"(CREATE\s+TRIGGER\s+(?:IF\s+NOT\s+EXISTS\s+)?"
+            r"{name}\b.+?END\s*;)"
+        ),
+    }
 
     def __init__(self) -> None:
         self._schema_path = FileMapperService.get_schema_path()
@@ -320,7 +343,7 @@ class SchemaConvergenceService:
 
         for table_name, desired_cols in desired.items():
             if table_name not in actual:
-                ddl = self._extract_table_ddl(schema_sql, table_name)
+                ddl = self._extract_ddl(schema_sql, "table", table_name)
                 if ddl:
                     try:
                         live_conn.execute(ddl)
@@ -589,7 +612,7 @@ class SchemaConvergenceService:
 
         for table_name, desired_ddl in desired.items():
             if table_name not in actual:
-                raw_ddl = self._extract_virtual_table_ddl(schema_sql, table_name)
+                raw_ddl = self._extract_ddl(schema_sql, "virtual_table", table_name)
                 if not raw_ddl:
                     logger.warning(
                         f"[convergence] No DDL found for missing virtual table: {table_name}"
@@ -622,7 +645,7 @@ class SchemaConvergenceService:
                             f"[convergence] FTS5 column list changed for {table_name}: "
                             f"{live_cols} -> {desired_cols}. Rebuilding."
                         )
-                        raw_ddl = self._extract_virtual_table_ddl(schema_sql, table_name)
+                        raw_ddl = self._extract_ddl(schema_sql, "virtual_table", table_name)
                         if raw_ddl:
                             try:
                                 live_conn.execute(f"DROP TABLE IF EXISTS {table_name}")
@@ -660,7 +683,7 @@ class SchemaConvergenceService:
 
         for trigger_name, desired_ddl in desired.items():
             if trigger_name not in actual:
-                raw_ddl = self._extract_trigger_ddl(schema_sql, trigger_name)
+                raw_ddl = self._extract_ddl(schema_sql, "trigger", trigger_name)
                 if not raw_ddl:
                     logger.warning(
                         f"[convergence] No DDL found for missing trigger: {trigger_name}"
@@ -673,7 +696,7 @@ class SchemaConvergenceService:
                 except Exception as exc:
                     logger.error(f"[convergence] Failed to create trigger {trigger_name}: {exc}")
             elif actual[trigger_name] != desired_ddl:
-                raw_ddl = self._extract_trigger_ddl(schema_sql, trigger_name)
+                raw_ddl = self._extract_ddl(schema_sql, "trigger", trigger_name)
                 if not raw_ddl:
                     logger.warning(
                         f"[convergence] No DDL found for changed trigger: {trigger_name}"
@@ -840,42 +863,15 @@ class SchemaConvergenceService:
     # DDL extraction from schema.sql
     # ──────────────────────────────────────────────────────────────────────────
 
-    def _extract_table_ddl(self, schema_sql: str, table_name: str) -> str | None:
-        """Extract the CREATE TABLE ... ; block for a normal table from schema.sql."""
-        # Strip single-line SQL comments first — they can contain semicolons
-        # (e.g. "-- dropped by migration 026; kept here") which break [^;]+.
-        stripped = re.sub(_RE_SQL_COMMENTS, "",schema_sql)
-        pattern = re.compile(
-            r"(CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?" + re.escape(table_name) + r"\s*\([^;]+;)",
-            re.IGNORECASE | re.DOTALL,
-        )
-        match = pattern.search(stripped)
-        return match.group(1).strip() if match else None
+    def _extract_ddl(self, schema_sql: str, obj_type: _DdlObjType, name: str) -> str | None:
+        """Extract a DDL block from schema.sql for the given object type.
 
-    def _extract_virtual_table_ddl(self, schema_sql: str, table_name: str) -> str | None:
-        """Extract the CREATE VIRTUAL TABLE ... ; block for a virtual table from schema.sql."""
-        # Strip SQL comments before regex matching (same as _extract_table_ddl)
-        clean_sql = re.sub(_RE_SQL_COMMENTS, "",schema_sql)
-        pattern = re.compile(
-            r"(CREATE\s+VIRTUAL\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?" + re.escape(table_name) + r"[^;]+;)",
-            re.IGNORECASE | re.DOTALL,
-        )
-        match = pattern.search(clean_sql)
-        if not match:
-            return None
-        return match.group(1).strip()
-
-    def _extract_trigger_ddl(self, schema_sql: str, trigger_name: str) -> str | None:
-        """Extract the CREATE TRIGGER ... END ; block for a trigger from schema.sql.
-
-        SQLite trigger bodies contain semicolons inside the BEGIN...END block, so
-        we cannot rely on the simple split-on-semicolon approach used elsewhere.
-        Instead we match from CREATE TRIGGER <name> through the END keyword that
-        closes the outermost block, then consume the trailing semicolon.
+        See ``_DDL_PATTERNS`` for the regex templates used per type.
         """
-        stripped = re.sub(_RE_SQL_COMMENTS, "",schema_sql)
+        stripped = re.sub(_RE_SQL_COMMENTS, "", schema_sql)
+        template = self._DDL_PATTERNS[obj_type]
         pattern = re.compile(
-            r"(CREATE\s+TRIGGER\s+(?:IF\s+NOT\s+EXISTS\s+)?" + re.escape(trigger_name) + r"\b.+?END\s*;)",
+            template.format(name=re.escape(name)),
             re.IGNORECASE | re.DOTALL,
         )
         match = pattern.search(stripped)
