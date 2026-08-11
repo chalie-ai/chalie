@@ -4,8 +4,10 @@ After any turn settles on an in-scope channel, ``MemoryStepService.on_settle``
 spawns a daemon ``MessageProcessor`` on the SAME channel with a cloned config
 so it runs the four memory tools against the settled turn's act trail. This
 suite drives that end-to-end: the step fires, it sees its own tool trail, the
-next turn is never polluted, rapid settles coalesce into at most two runs, and
-the REST thread listing never surfaces the step's synthetic input row.
+next turn is never polluted, rapid settles coalesce into at most two runs, the
+REST thread listing never surfaces the step's synthetic input row, and a
+discovery settle's step forks into the research thread rather than the user
+spine.
 
 Every test drives a real user turn through the production ``MessageProcessor``
 entry point against the real SQLite ``db``, with the LLM network boundary
@@ -34,6 +36,7 @@ from abilities.delete_graph import DeleteGraph
 from abilities.recall import Recall
 from abilities.save_graph import SaveGraph
 from abilities.save_map import SaveMap
+from configs.channels.discovery import DiscoveryConfig
 from configs.channels.user import UserConfig
 from configs.enums.channels import Channel
 from controllers.message_processor import MessageProcessor
@@ -41,6 +44,7 @@ from models.memory_graph import MemoryGraphRow
 from models.provider_request import ProviderRequest
 from models.provider_response import ProviderResponse
 from models.transcript import Transcript
+from services.compaction_service import CompactionService
 from services.memory_step_service import (
     MEMORY_STEP_PROMPT,
     MemoryStepService,
@@ -447,3 +451,72 @@ def test_memory_step_config_overrides_and_leaves_the_source_untouched() -> None:
     assert cfg.skip_transcript is False
     assert cfg.always_available == original_always
     assert cfg.always_available != [Recall.NAME, SaveGraph.NAME, SaveMap.NAME, DeleteGraph.NAME]
+
+
+def test_discovery_settle_forks_the_step_into_the_research_thread() -> None:
+    """A discovery fire's settle triggers a memory step that reads the
+    RESEARCH thread, never the user spine.
+
+    The step clone inherits ``external_turn_id`` and the stable discovery
+    turn_id, so it forks into the research thread — and a fork's history read
+    must scope to the WRITE channel, not resolve ``read_channel``. The fire is
+    deliberately given the USER turn's id as its stable turn_id: turn ids are
+    per-channel, so a fork read that resolved ``read_channel`` ("user") would
+    deterministically return the user turn's rows instead of the research log.
+    The step must see the research note and must not see the user marker.
+
+    Also pins that the pass itself carries no memory-write tools — recall
+    grounding only; writes happen in the step."""
+    provider = _ScriptedProvider(
+        turn_script=[
+            _Say("noted"),  # the user turn
+            _Say("Found a uranium-glass archive worth a note"),  # the discovery fire
+        ],
+        step_script=[_Say("nothing new")],  # both steps settle in one iteration
+    )
+    with patch(_BUILD_CLIENT, return_value=provider):
+        user_mp = _drive_turn("tell me about the purple-elephant statue")
+        _await_step()
+        MessageProcessor.process(
+            DiscoveryConfig(), raw_input="run the research pass", turn_id=user_mp.turn_id,
+        ).result()
+        _await_step()
+
+    fire = next(
+        (r for r in provider.requests
+         if not _is_step_request(r) and "run the research pass" in _texts(r)),
+        None,
+    )
+    assert fire is not None, "the discovery fire's request was not found"
+    fire_tools = {t["name"] for t in (fire.tools or [])}
+    assert not fire_tools & {SaveGraph.NAME, SaveMap.NAME, DeleteGraph.NAME}, (
+        f"discovery pass carries memory-write tools: {fire_tools!r}"
+    )
+    assert Recall.NAME in fire_tools, "discovery pass lost its recall grounding"
+
+    discovery_step = next(
+        (r for r in _step_requests(provider) if "uranium-glass" in _texts(r)), None,
+    )
+    assert discovery_step is not None, (
+        "no step request saw the research note — the step did not read the research thread"
+    )
+    assert "purple-elephant" not in _texts(discovery_step), (
+        "the user turn leaked into the discovery step's fork view"
+    )
+
+
+def test_step_compaction_keying_follows_the_fork_axis() -> None:
+    """On a split-read config the compaction checkpoint is keyed on the READ
+    channel for the MAIN spine but on the WRITE channel for a FORK.
+
+    This is what keeps the research thread's checkpoint coherent when a
+    discovery step (or fire ≥2) compacts: a fork's watermark is a transcript
+    *id* floor over its own channel's rows — keying it on the read channel
+    would cut the research log by a user-channel row id."""
+    mp = MessageProcessor(DiscoveryConfig(), raw_input="x")
+
+    mp._forked = False
+    assert CompactionService(mp)._channel() == Channel.USER.value
+
+    mp._forked = True
+    assert CompactionService(mp)._channel() == Channel.DISCOVERY.value

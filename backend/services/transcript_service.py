@@ -58,15 +58,19 @@ class TranscriptService:
         suppresses history. The FORK view excludes ``role='memory'`` rows
         (memory-step inputs — turn plumbing, not conversation); the MAIN view
         needs no filter because a memory-step turn never settles an assistant
-        row, so the per-turn settle0 floor already drops it."""
+        row, so the per-turn settle0 floor already drops it. A FORK always
+        reads ``self.mp.channel`` — a fork IS the thread, its view is its own
+        turn's rows; the split-channel read (``read_channel``, e.g.
+        DiscoveryConfig) applies to the MAIN cross-turn view only. Turn ids
+        are per-channel, so resolving ``read_channel`` on a FORK would cross
+        namespaces and return another channel's unrelated turn."""
         if self.mp.config.suppress_history:
             return []
-        channel = self.mp.config.read_channel or self.mp.channel
         watermark = self.mp.compaction_service.watermark()
         if self.mp._forked:
             ceiling = self.mp.uid if self.mp.uid is not None else _NO_CEILING
             return (
-                Transcript.filter("channel", channel)
+                Transcript.filter("channel", self.mp.channel)
                 .filter("turn_id", self.mp.turn_id)
                 .filter("id", watermark, ">")
                 .filter("id", ceiling, "<")
@@ -74,6 +78,7 @@ class TranscriptService:
                 .order_by("id ASC")
                 .get()
             )
+        channel = self.mp.config.read_channel or self.mp.channel
         by_turn: dict[int, list[Transcript]] = {}
         for row in (
             Transcript.filter("channel", channel)

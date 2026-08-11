@@ -135,15 +135,17 @@ class ChatHistoryCompactor(Ability[ChatHistoryCompactorParamsBag]):
         from controllers.message_processor import MessageProcessor  # noqa: PLC0415
 
         mp = cast("_CompactionParent", self.mp)
-        # The checkpoint is keyed on the channel the parent READS cross-turn
-        # history from — ``read_channel`` when the config splits read/write,
-        # else the write ``channel``. A split config (DiscoveryConfig) reads the
-        # user spine, so its compaction must fold those user rows and advance the
-        # USER watermark; keying it on the write channel would leave the read
-        # channel's watermark pinned and the post-compaction continuation would
-        # re-read the same rows (no progression / livelock). The FORK/MAIN axis
-        # (for_turn_id) is independent and unchanged.
-        channel = mp.config.read_channel or mp.config.channel
+        # The checkpoint is keyed on the channel the parent READS its view
+        # from. MAIN: ``read_channel`` when the config splits read/write, else
+        # the write ``channel`` — a split config (DiscoveryConfig) reads the
+        # user spine, so its compaction must fold those user rows and advance
+        # the USER watermark; keying it on the write channel would leave the
+        # read channel's watermark pinned and the post-compaction continuation
+        # would re-read the same rows (no progression / livelock). FORK: always
+        # the write ``channel`` — a fork is its own thread and
+        # ``transcript_service.read()`` scopes its FORK view the same way, so
+        # the id-axis watermark and the rows it cuts stay on one channel.
+        channel = mp.config.channel if mp._forked else (mp.config.read_channel or mp.config.channel)
         # The checkpoint axis follows the parent's view: FORK → its thread, MAIN →
         # the spine (NULL). Used for both the prior read and the new write.
         for_turn_id = mp.turn_id if mp._forked else None

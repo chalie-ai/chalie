@@ -12,42 +12,52 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unit tests for the Memory v3 discovery prompt alignment.
+"""Unit tests for the discovery channel's memory contract.
 
-Pins the split between the system prompt (inherited persona + appended Memory
-v3 block) and the user turn (research task only, no tool-instruction boilerplate).
+The research pass only READS memory: ``recall`` grounds it in what is already
+known, and the settle-triggered memory step distills its findings afterwards.
+These pin that the pass carries no memory-write surface — no save-tool pins,
+no save instructions in the system prompt — and that the user turn stays the
+research task only.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from configs.channels.discovery import DISCOVERY_PROMPT, DiscoveryConfig, _MEMORY_V3_PROMPT
+from abilities.delete_graph import DeleteGraph
+from abilities.recall import Recall
+from abilities.save_graph import SaveGraph
+from abilities.save_map import SaveMap
+from configs.channels.discovery import DISCOVERY_PROMPT, DiscoveryConfig
 
 pytestmark = pytest.mark.unit
 
 
-def test_system_prompt_ends_with_memory_v3_block() -> None:
-    """DiscoveryConfig.system_prompt appends _MEMORY_V3_PROMPT to the inherited
-    UserConfig persona prompt."""
-    cfg = DiscoveryConfig()
-    assert cfg.system_prompt.endswith(_MEMORY_V3_PROMPT)
-    assert cfg.system_prompt != _MEMORY_V3_PROMPT  # it is longer than the appended block
+def test_discovery_pins_no_memory_write_tools() -> None:
+    """The pass can recall but never save: the three write tools are absent
+    from ``always_available`` (and none of them is discoverable, so absence
+    here means unreachable on this channel)."""
+    tools = DiscoveryConfig().always_available
+    assert Recall.NAME in tools
+    for write_tool in (SaveGraph.NAME, SaveMap.NAME, DeleteGraph.NAME):
+        assert write_tool not in tools, f"{write_tool} must not be pinned on discovery"
 
 
-def test_system_prompt_contains_memory_v3_content() -> None:
-    """The appended block is present verbatim (tool names substituted)."""
-    assert "Before performing the research use recall" in DiscoveryConfig().system_prompt
-    assert "save_graph" in DiscoveryConfig().system_prompt
-    assert "save_map" in DiscoveryConfig().system_prompt
-    assert "delete_graph" in DiscoveryConfig().system_prompt
-    assert "stale memories to match the new reality" in DiscoveryConfig().system_prompt
+def test_system_prompt_carries_no_save_instructions() -> None:
+    """The system prompt is the inherited persona prompt, unmodified — the
+    old recall-before / save-after block is gone. ``recall`` may appear (the
+    persona describes the chat memory surface); the write tools must not."""
+    sp = DiscoveryConfig().system_prompt
+    for write_tool in (SaveGraph.NAME, SaveMap.NAME, DeleteGraph.NAME):
+        assert write_tool not in sp, f"{write_tool} instruction leaked into the discovery prompt"
+    assert "stale memories to match the new reality" not in sp
 
 
 def test_discovery_prompt_has_no_tool_mechanics() -> None:
-    """The user turn is the research task only — the paraphrased recall-before /
-    save-after instructions were moved into the system-prompt block."""
+    """The user turn is the research task only — no memory-tool instructions."""
     assert "Before recording anything" not in DISCOVERY_PROMPT
+    assert SaveGraph.NAME not in DISCOVERY_PROMPT
 
 
 def test_discovery_prompt_keeps_nothing_stands_out() -> None:

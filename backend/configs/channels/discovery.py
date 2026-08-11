@@ -1,29 +1,19 @@
 from __future__ import annotations
 
-from abilities.delete_graph import DeleteGraph
 from abilities.find_skills import FindSkillsAbility
 from abilities.find_tools import FindToolsAbility
 from abilities.mcp_manager import McpManagerAbility
 from abilities.recall import Recall
-from abilities.save_graph import SaveGraph
-from abilities.save_map import SaveMap
 from configs.channels.user import UserConfig
 from configs.enums.channels import Channel
 from configs.enums.config_type import ConfigTypeEnum
 
 # The task handed to the loop each tick — written as a user asking for a research
 # pass, grounded on the fresh main spine (DiscoveryConfig reads the ``user``
-# channel's history via ``read_channel="user"``).
-#
-# The system prompt is the inherited UserConfig persona/voice prompt with the
-# Memory v3 recall-before / save-after block appended (see _MEMORY_V3_PROMPT).
-# The user turn is the research task only — no tool-instruction boilerplate lives
-# here.
-_MEMORY_V3_PROMPT = f"""\
-Before performing the research use {Recall.NAME} to find memories about my interests, preferences and what you have already researched.
-After performing the research use {SaveGraph.NAME}, {SaveMap.NAME} and {DeleteGraph.NAME} and persist memories about this research: what you think I might find interesting, and novel knowledge you were not aware of already.
-Also update stale memories to match the new reality."""
-
+# channel's history via ``read_channel="user"``). The system prompt is the
+# inherited UserConfig persona/voice prompt, unmodified; the user turn is the
+# research task only. Persisting what the pass found is the settle-triggered
+# memory step's job, never the pass's own.
 DISCOVERY_PROMPT = (
     f"Can you run a background research pass for me? Ground it in our recent "
     f"conversation above, then search the web and read the news for anything "
@@ -44,17 +34,18 @@ class DiscoveryConfig(UserConfig):
     A thin split of UserConfig: it **reads** the ``user`` channel's cross-turn
     history (so it sees exactly what a user turn sees) but **writes** its rows
     to the ``discovery`` channel. The system prompt is the inherited UserConfig
-    persona/voice prompt with the Memory v3 recall-before / save-after block
-    appended; the user turn is the research task only (``DISCOVERY_PROMPT``).
-    Only the routing identity, the tool surface, the stable turn_id, and the
-    silent-background-loop overrides differ from UserConfig. Fired at most once
-    every few hours by the subconscious worker.
+    persona/voice prompt; the user turn is the research task only
+    (``DISCOVERY_PROMPT``). Only the routing identity, the tool surface, the
+    stable turn_id, and the silent-background-loop overrides differ from
+    UserConfig. Fired at most once every few hours by the subconscious worker.
 
-    Memory v3: discovery writes its findings through the Graph/Map tools
-    (``recall`` / ``save_graph`` / ``save_map`` / ``delete_graph``) instead of
-    the legacy in-conversation memory. All of a box's discovery fires share one
-    stable ``turn_id`` (``external_turn_id = True`` + the cron persists the id
-    it allocated on the first fire), so the research log clusters as one thread.
+    Memory: the pass itself only reads — ``recall`` grounds the research in
+    what is already known; it never writes memory inline. Each settled fire
+    triggers the memory step, which forks into the research thread and
+    distills the findings into Graph/Map. All of a box's discovery fires share
+    one stable ``turn_id`` (``external_turn_id = True`` + the cron persists
+    the id it allocated on the first fire), so the research log clusters as
+    one thread.
     """
 
     SUPPORTS_ASYNC = False
@@ -73,9 +64,9 @@ class DiscoveryConfig(UserConfig):
         object.__setattr__(self, "channel", Channel.DISCOVERY.value)
         object.__setattr__(self, "read_channel", Channel.USER.value)
         object.__setattr__(self, "prompt_channel", Channel.USER.value)
-        # Memory v3 tool surface: keep the framework discovery pair + MCP manager,
-        # drop the legacy in-conversation memory, and pin the Graph/Map tools so
-        # the research pass can recall + persist findings directly.
+        # Tool surface: the framework discovery pair + MCP manager, plus recall
+        # so the pass can ground its research in what is already known. Memory
+        # WRITES happen in the settle-triggered memory step, never inline.
         object.__setattr__(
             self,
             "always_available",
@@ -84,19 +75,12 @@ class DiscoveryConfig(UserConfig):
                 FindToolsAbility.NAME,
                 McpManagerAbility.NAME,
                 Recall.NAME,
-                SaveGraph.NAME,
-                SaveMap.NAME,
-                DeleteGraph.NAME,
             ],
         )
         # The discovery turn_id is a stable, box-owned key (persisted by the cron
         # job on first fire): the first research pass opens the turn, every later
         # fire forks into it, so the whole research log is one thread.
         object.__setattr__(self, "external_turn_id", True)
-
-    @property
-    def system_prompt(self) -> str:
-        return super().system_prompt + "\n\n" + _MEMORY_V3_PROMPT
 
     def type(self) -> ConfigTypeEnum:
         return ConfigTypeEnum.DISCOVERY

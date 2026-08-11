@@ -37,9 +37,15 @@ class CompactionService:
         self.mp = mp
 
     def _channel(self) -> str:
-        """The channel this view's checkpoint is keyed on — the READ channel
-        when the config splits read/write (e.g. ``DiscoveryConfig``), else the
-        write channel. Matches ``chat_history_compactor``'s own keying."""
+        """The channel this view's checkpoint is keyed on. MAIN: the READ
+        channel when the config splits read/write (e.g. ``DiscoveryConfig``) —
+        its cross-turn view is the read channel's spine, so that is the
+        watermark that must advance. FORK: always the write channel — a fork
+        is its own thread, and ``TranscriptService.read()`` scopes its FORK
+        view the same way, so the id floor and the rows it cuts stay on one
+        channel. Matches ``chat_history_compactor``'s own keying."""
+        if self.mp._forked:
+            return self.mp.config.channel
         return self.mp.config.read_channel or self.mp.config.channel
 
     def _for_turn_id(self) -> int | None:

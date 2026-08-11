@@ -144,9 +144,14 @@ class ProcessorConfig(ABC):
     """Cross-turn history read channel; ``None`` ⇒ read on ``channel`` (every
     existing config). Only split-channel configs set this — writes and
     current-turn identity stay on ``channel`` while the model's cross-turn
-    history is read from ``read_channel``. Today only DiscoveryConfig sets it
-    (``= "user"``), and it runs MAIN-only, so the split's FORK edge cases never
-    apply. Do not set ``read_channel != channel`` on a FORK/reply config."""
+    history is read from ``read_channel``. Applies to the MAIN view only: a
+    FORK is a reply into this config's OWN thread, so the FORK history read
+    and its compaction keying always use ``channel`` — turn ids are
+    per-channel, and resolving ``read_channel`` on a fork would cross
+    namespaces into another channel's unrelated turn. Today only
+    DiscoveryConfig sets it (``= "user"``); its fires ≥2 fork into the stable
+    research turn and read the research log, while fire 1 (MAIN) reads the
+    user spine."""
 
     # ── PromptService dispatch override ───────────────────────────────────────
 
