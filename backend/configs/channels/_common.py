@@ -6,7 +6,7 @@ from abilities.mcp_manager import McpManagerAbility
 from abilities.recall import Recall
 
 # The single per-config tool list left: the tools pinned on every
-# discovery-capable channel — the framework discovery pair, memory, and the MCP
+# discovery-capable channel — the framework discovery pair, recall, and the MCP
 # server manager. Discovery scope itself is not a list — a tool is reachable via
 # find_tools iff its ``Ability.DISCOVERABLE`` is True (a global trait) and the
 # channel pins ``find_tools`` here. There is no per-channel discoverable/blocked
