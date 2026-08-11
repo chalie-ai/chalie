@@ -8,6 +8,8 @@ from flask.testing import FlaskClient
 from api.system import health_ns, system_ns
 from configs.enums.channels import Channel
 from models.compaction import Compaction
+from models.memory_graph import MemoryGraphRow
+from models.memory_map import MemoryMapRow
 from services.memory_store import MemoryStore
 from tests.restx_test_app import mount_namespace
 
@@ -42,12 +44,13 @@ class TestSystemAPI:
     def test_system_status_returns_expected_keys(self, client: FlaskClient, db: sqlite3.Connection) -> None:
         """GET /system/status returns status, memory, storage top-level keys."""
         store = MemoryStore()
-        # Seed 2 keys for each memory namespace so counts == 2.
-        for ns in ('working_memory', 'gist_index', 'fact_index'):
-            store.set(f'{ns}:a', 'x')
-            store.set(f'{ns}:b', 'x')
+        # Seed 2 working-memory keys so the count == 2.
+        store.set('working_memory:a', 'x')
+        store.set('working_memory:b', 'x')
         # Seed DMN delivery ZSET with a recent entry.
         store.zadd('dmn:deliveries', {'test-delivery': 1711500000.0})
+        # One graph fact; the map stays empty.
+        MemoryGraphRow(subject='favorite_color', contents='blue').save()
 
         with patch('services.memory_client.MemoryClientService.create_connection', return_value=store):
             resp = client.get('/api/system/status')
@@ -57,10 +60,9 @@ class TestSystemAPI:
         assert data['status'] == 'ok'
         assert 'memory' in data
         assert 'storage' in data
-        # Memory keys should reflect store.keys() calls (3 calls: working_memory, gist, fact)
         assert data['memory']['working_memory_keys'] == 2
-        assert data['memory']['gist_keys'] == 2
-        assert data['memory']['fact_keys'] == 2
+        assert data['storage']['graph'] == 1
+        assert data['storage']['map'] == 0
 
     def test_system_status_degraded_when_store_fails(self, client: FlaskClient, db: sqlite3.Connection) -> None:
         """GET /system/status reports 'degraded' when MemoryStore ping raises."""
@@ -81,32 +83,40 @@ class TestSystemAPI:
     # GET /system/observability/records
 
     def test_records_search_filters_by_like(self, client: FlaskClient, db: sqlite3.Connection) -> None:
-        """Search param filters gist (episodes) and key/value (data_graph)."""
-        now_iso = '2026-01-01T00:00:00+00:00'
+        """q substring-filters graph rows (subject/contents); map rows serialise
+        iteration-as-key with contents as value."""
+        MemoryGraphRow(subject='favorite_color', contents='blue').save()
+        MemoryGraphRow(subject='pet_name', contents='Rex').save()
+        map_row = MemoryMapRow(contents='Went hiking in the Alps', iteration=2).save()
+        # save() stamps generated_at itself — pin it so the wire mapping
+        # (last_accessed ← generated_at) is assertable deterministically.
         db.execute(
-            "INSERT INTO data_graph (kind, key, value, first_seen_at, last_confirmed_at) "
-            "VALUES ('user_specific', 'favorite_color', 'blue', ?, ?)",
-            (now_iso, now_iso),
-        )
-        db.execute(
-            "INSERT INTO data_graph (kind, key, value, first_seen_at, last_confirmed_at) "
-            "VALUES ('user_specific', 'pet_name', 'Rex', ?, ?)",
-            (now_iso, now_iso),
+            "UPDATE memory_map SET generated_at = '2026-01-01T00:00:00+00:00' WHERE id = ?",
+            (map_row.id,),
         )
         db.commit()
 
-        resp = client.get('/api/system/observability/records?source=user&q=blue')
-
+        resp = client.get('/api/system/observability/records?source=graph&q=blue')
         assert resp.status_code == 200
         data = resp.get_json()
         assert data['returned'] == 1
         assert data['rows'][0]['key'] == 'favorite_color'
+        assert data['rows'][0]['value'] == 'blue'
+
+        resp = client.get('/api/system/observability/records?source=map')
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data['returned'] == 1
+        assert data['rows'][0]['key'] == '2'
+        assert data['rows'][0]['value'] == 'Went hiking in the Alps'
+        assert data['rows'][0]['last_accessed'] == '2026-01-01T00:00:00+00:00'
 
     def test_records_invalid_source_400(self, client: FlaskClient, db: sqlite3.Connection) -> None:
-        """Unknown source returns 400 with error payload."""
-        resp = client.get('/api/system/observability/records?source=bogus')
-        assert resp.status_code == 400
-        assert resp.get_json()['error'] == 'invalid source'
+        """Unknown source returns 400 — including the retired user/system sources."""
+        for source in ('bogus', 'user', 'system'):
+            resp = client.get(f'/api/system/observability/records?source={source}')
+            assert resp.status_code == 400
+            assert resp.get_json()['error'] == 'invalid source'
 
     # GET /system/observability/tools
 

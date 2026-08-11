@@ -21,7 +21,8 @@ from flask_restx import Namespace, Resource
 
 from configs.enums.channels import Channel
 from models.compaction import Compaction
-from models.data_graph import DataGraphRow
+from models.memory_graph import MemoryGraphRow
+from models.memory_map import MemoryMapRow
 from models.tool_call import ToolCall
 from services.file_mapper_service import FileMapperService
 from services.llm_log_service import LlmLogService, VALID_WINDOWS
@@ -57,7 +58,7 @@ _SIGNAL_SOURCE_HEALTH = "/health"
 
 # Records browser bounds + valid sources (invalid source is a preserved 400, not 422).
 _RECORDS_LIMIT = 250
-_VALID_SOURCES = {"user", "system"}
+_VALID_SOURCES = {"graph", "map"}
 # Infra tool names the usage view hides — compaction/thinking families are
 # housekeeping calls, not user-facing tool usage.
 _USAGE_EXCLUDED_TOOLS = ("compaction", "tool_compaction", "trail_compaction", "chat_history_compactor", "thinking")
@@ -219,26 +220,24 @@ class SystemStatusResource(Resource):
             try:
                 store.ping()
                 memory["working_memory_keys"] = len(store.keys("working_memory:*"))
-                memory["gist_keys"] = len(store.keys("gist_index:*"))
-                memory["fact_keys"] = len(store.keys("fact_index:*"))
             except Exception as e:
                 status = "degraded"
                 memory_store_error = str(e)
 
             # SQLite counts
-            try:
+            for model_cls, key in (
+                (MemoryGraphRow, "graph"),
+                (MemoryMapRow, "map"),
+            ):
                 try:
-                    storage["concepts"] = DataGraphRow.live("user_specific").count()
+                    storage[key] = model_cls.count()
                 except sqlite3.OperationalError as e:
-                    logger.warning(f"[SYSTEM] Count query failed for 'concepts': {e}")
-                    storage["concepts"] = -1
+                    logger.warning(f"[SYSTEM] Count query failed for '{key}': {e}")
+                    storage[key] = -1
                     status = "degraded"
                 except Exception as e:
-                    logger.warning(f"[SYSTEM] Count query failed for 'concepts': {e}")
-                    storage["concepts"] = -1
-            except Exception as e:
-                status = "degraded"
-                database_error = str(e)
+                    logger.warning(f"[SYSTEM] Count query failed for '{key}': {e}")
+                    storage[key] = -1
 
             return SystemStatus(
                 status=status,
@@ -259,7 +258,7 @@ class SystemStatusResource(Resource):
 @system_ns.route("/observability/records")
 class ObservabilityRecordsResource(Resource):
     @require_session
-    @system_ns.param("source", "user | system", _in="query", required=True)
+    @system_ns.param("source", "graph | map", _in="query", required=True)
     @system_ns.param("offset", "Rows to skip (>=0)", _in="query")
     @system_ns.param("q", "Substring filter", _in="query")
     @system_ns.response(200, "Records page", model=_S["RecordsPage"])
@@ -267,7 +266,7 @@ class ObservabilityRecordsResource(Resource):
     @system_ns.response(500, "Failed to retrieve records", model=_S["Error"])
     @responds(RecordsPage, code=200)
     def get(self) -> RecordsPage | ResponseReturnValue:
-        """Paginated record browser for user and system memory sources."""
+        """Paginated record browser for graph and map memory sources."""
         try:
             source = request.args.get("source", "")
             if source not in _VALID_SOURCES:
@@ -283,22 +282,30 @@ class ObservabilityRecordsResource(Resource):
 
             q = (request.args.get("q", "") or "")[:200]
 
-            if source == "episodes":
-                return error("episodes source removed", 404)
-            else:
-                kind = "user_specific" if source == "user" else "system"
-                rows = DataGraphRow.records_page(kind, q, _RECORDS_LIMIT, offset)
-
-            rows = rows or []
+            rows: list[dict[str, object]] = []
             serialised: list[dict[str, object]] = []
-            for r in rows:
-                row: dict[str, object] = {
-                    "created": r["created"],
-                    "last_accessed": r["last_accessed"],
-                    "value": r["value"],
-                }
-                row["key"] = r["key"]
-                serialised.append(row)
+            if source == "graph":
+                rows = MemoryGraphRow.records_page(q, _RECORDS_LIMIT, offset)
+                serialised = [
+                    {
+                        "created": r["created_at"],
+                        "last_accessed": r["last_updated_at"],
+                        "key": r["subject"],
+                        "value": r["contents"],
+                    }
+                    for r in (rows or [])
+                ]
+            elif source == "map":
+                rows = MemoryMapRow.records_page(q, _RECORDS_LIMIT, offset)
+                serialised = [
+                    {
+                        "created": r["created_at"],
+                        "last_accessed": r["generated_at"],
+                        "key": str(r["iteration"]),
+                        "value": r["contents"],
+                    }
+                    for r in (rows or [])
+                ]
 
             return RecordsPage(
                 generated_at=utc_now(),
