@@ -55,7 +55,10 @@ class TranscriptService:
         ``settle0`` lookup can flip under a MAIN turn that settles more than
         one row before its terminal step; the fixed flag can't). Feeds
         ``PromptService``'s history assembly. ``[]`` when the config
-        suppresses history."""
+        suppresses history. The FORK view excludes ``role='memory'`` rows
+        (memory-step inputs — turn plumbing, not conversation); the MAIN view
+        needs no filter because a memory-step turn never settles an assistant
+        row, so the per-turn settle0 floor already drops it."""
         if self.mp.config.suppress_history:
             return []
         channel = self.mp.config.read_channel or self.mp.channel
@@ -67,6 +70,7 @@ class TranscriptService:
                 .filter("turn_id", self.mp.turn_id)
                 .filter("id", watermark, ">")
                 .filter("id", ceiling, "<")
+                .filter("role", "memory", "!=")
                 .order_by("id ASC")
                 .get()
             )
@@ -120,13 +124,16 @@ class TranscriptService:
         before_id, require_content=True)`` — the pre-rewrite pattern-recognition
         read). Bounds come off this turn's ``PatternConfig`` (``_window_start``
         exclusive, ``_window_end`` inclusive); empty-content rows are excluded so
-        the model only ever sees real utterances. Zero-param (§2.4): the id
-        bounds are config fields, reachable off ``self.mp.config``."""
+        the model only ever sees real utterances. Memory-step input rows live
+        on the user channel but are plumbing, not utterances, so they are
+        excluded. Zero-param (§2.4): the id bounds are config fields, reachable
+        off ``self.mp.config``."""
         config = cast("PatternConfig", self.mp.config)
         return (
             Transcript.filter("channel", Channel.USER.value)
             .filter("id", config._window_start, ">")
             .filter("id", config._window_end, "<=")
+            .filter("role", "memory", "!=")
             .filter("content", None, "IS NOT")
             .filter("content", "", "!=")
             .order_by("id ASC")
@@ -140,7 +147,9 @@ class TranscriptService:
         require_content=True)`` — the pre-rewrite geo read). Bounds come off this
         turn's ``GeoConfig`` (``_window_start`` exclusive, ``_window_end``
         inclusive), same semantics as :meth:`window`; only rows carrying a
-        latitude/longitude and real content survive. Zero-param (§2.4)."""
+        latitude/longitude and real content survive. Memory-step input rows live
+        on the user channel but are plumbing, not utterances, so they are
+        excluded. Zero-param (§2.4)."""
         config = cast("GeoConfig", self.mp.config)
         return (
             Transcript.filter("channel", Channel.USER.value)
@@ -148,6 +157,7 @@ class TranscriptService:
             .filter("id", config._window_end, "<=")
             .filter("location_lat", None, "IS NOT")
             .filter("location_lon", None, "IS NOT")
+            .filter("role", "memory", "!=")
             .filter("content", None, "IS NOT")
             .filter("content", "", "!=")
             .order_by("id ASC")

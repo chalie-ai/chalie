@@ -69,7 +69,7 @@ class ThreadsEndpoint(Endpoint):
         "delete": DocumentedResponse(TurnStopResult, not_found=False),  # ack-style: always 200
     }
 
-    _EXCLUDE_ROLES = ("subagent_return",)
+    _EXCLUDE_ROLES = ("subagent_return", "memory")
     """Roles that never form a thread of their own in the feed."""
 
     _MAX_FILES = 10

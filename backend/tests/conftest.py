@@ -157,6 +157,36 @@ def _isolate_vault_backups(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(FileMapperService, "_SECURE_DIR", tmp_path / "secure")
 
 
+# Every settled turn on an in-scope channel offers itself to the memory-step
+# service, which spawns a live background MessageProcessor. In the unit suite
+# that thread outlives its test — consuming scripted provider responses,
+# writing rows mid-teardown, and mutating per-channel gate state. The patch is
+# session-scoped because fire-and-forget MP drive threads outlive their test:
+# a per-test patch leaves teardown/setup gaps where a late settle would hit
+# the real trigger against a torn-down DB. Feature tests re-arm the real
+# trigger with the ``real_memory_step`` fixture.
+
+_REAL_ON_SETTLE = None
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _quiesce_memory_step() -> "Iterator[None]":
+    global _REAL_ON_SETTLE
+    from services.memory_step_service import MemoryStepService
+    _REAL_ON_SETTLE = MemoryStepService.on_settle
+    patch_ = pytest.MonkeyPatch()
+    patch_.setattr(MemoryStepService, "on_settle", lambda self, mp: None)
+    yield
+    patch_.undo()
+
+
+@pytest.fixture
+def real_memory_step(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Re-arm the real settle trigger for memory-step feature tests."""
+    from services.memory_step_service import MemoryStepService
+    monkeypatch.setattr(MemoryStepService, "on_settle", _REAL_ON_SETTLE)
+
+
 # ── Non-DB mock fixtures ──────────────────────────────────────────
 
 @pytest.fixture

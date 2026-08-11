@@ -605,7 +605,10 @@ class MessageProcessor:
         nowhere to surface; scheduled self-surfaces in its own thread and the
         scheduler dock, with no user-channel relay, §13.9). Every handler is
         isolated — a failure is logged, never propagated, so post-turn work can
-        never fail an otherwise-complete turn."""
+        never fail an otherwise-complete turn. After the role dispatch, every
+        settle is offered to the memory-step service, which owns the scope/role
+        gates — a separate isolated block so a role-handler failure cannot
+        starve the memory step."""
         role = self.config.role
         try:
             if role == "user" and self.channel == Channel.USER:
@@ -619,6 +622,11 @@ class MessageProcessor:
                 self._disclose_to_human(response_text)
         except Exception as exc:  # noqa: BLE001 — post-turn work must never fail the turn
             logger.warning("[post_turn] %s handler failed (isolated): %s", role, exc)
+        try:
+            from services.memory_step_service import MemoryStepService  # noqa: PLC0415
+            MemoryStepService.instance().on_settle(self)
+        except Exception as exc:  # noqa: BLE001 — post-turn work must never fail the turn
+            logger.warning("[post_turn] memory step trigger failed (isolated): %s", exc)
 
     def _voice_presynthesis(self) -> None:
         """Kick background speech pre-synthesis for this turn's settled row on a

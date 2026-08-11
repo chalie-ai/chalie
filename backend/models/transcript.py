@@ -104,6 +104,17 @@ class Transcript(Model):
         return int(row[0]) if row and row[0] is not None else None
 
     @classmethod
+    def ids_for_turn(cls, channel: str, turn_id: int) -> list[int]:
+        """Every transcript row id for ``(channel, turn_id)``, ordered by
+        ``id`` ascending — the act-trail anchor lookup. Empty list when the
+        turn has no rows yet (in-progress). Mirrors :meth:`settle0`'s style."""
+        rows = cls._bound_connection().execute(
+            "SELECT id FROM transcript WHERE channel = ? AND turn_id = ? ORDER BY id",
+            (channel, turn_id),
+        ).fetchall()
+        return [int(r[0]) for r in rows]
+
+    @classmethod
     def latest_thinking_level(cls, channel: str, turn_id: int | None = None) -> str | None:
         """``thinking_level`` of the most recent row (highest id) for ``channel``
         that has a non-NULL ``thinking_level``. When ``turn_id`` is given, also

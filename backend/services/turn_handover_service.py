@@ -78,13 +78,16 @@ class TurnHandoverService:
 
         The compaction marker itself is skipped: a previous compaction in this
         same turn leaves a ``chat_history_compactor`` row whose result is
-        bookkeeping, not turn work.
+        bookkeeping, not turn work. Memory-step input rows (``role='memory'``)
+        are skipped for the same reason — plumbing, not turn content.
         """
         from abilities.chat_history_compactor import ChatHistoryCompactor  # noqa: PLC0415
 
         lines: list[str] = []
         for row in mp.transcript_service.turn_rows():
             fields = row.to_dict()
+            if fields.get("role") == "memory":
+                continue
             content = cast("str", fields.get("content") or "").replace("\n", " ").strip()
             if content:
                 lines.append(f"{cast('str', fields.get('role') or 'unknown')}: {content}")
@@ -117,6 +120,7 @@ class TurnHandoverService:
                 Transcript.filter("channel", mp.channel)
                 .filter("role", "assistant", "!=")
                 .filter("role", "compaction", "!=")
+                .filter("role", "memory", "!=")
                 .order_by("id DESC")
                 .first()
             )
