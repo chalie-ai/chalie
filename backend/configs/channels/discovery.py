@@ -13,12 +13,17 @@ from configs.enums.config_type import ConfigTypeEnum
 
 # The task handed to the loop each tick — written as a user asking for a research
 # pass, grounded on the fresh main spine (DiscoveryConfig reads the ``user``
-# channel's history via ``read_channel="user"``). The system prompt is the
-# inherited UserConfig persona/voice prompt; this is the user-turn input only.
+# channel's history via ``read_channel="user"``).
 #
-# Recall-before / save-after: the loop must recall what it already knows before
-# recording anything, and persist only via the Memory v3 tools (Graph for living
-# facts, Map for narrative lineage) — never the legacy in-conversation memory.
+# The system prompt is the inherited UserConfig persona/voice prompt with the
+# Memory v3 recall-before / save-after block appended (see _MEMORY_V3_PROMPT).
+# The user turn is the research task only — no tool-instruction boilerplate lives
+# here.
+_MEMORY_V3_PROMPT = f"""\
+Before performing the research use {Recall.NAME} to find memories about my interests, preferences and what you have already researched.
+After performing the research use {SaveGraph.NAME}, {SaveMap.NAME} and {DeleteGraph.NAME} and persist memories about this research: what you think I might find interesting, and novel knowledge you were not aware of already.
+Also update stale memories to match the new reality."""
+
 DISCOVERY_PROMPT = (
     f"Can you run a background research pass for me? Ground it in our recent "
     f"conversation above, then search the web and read the news for anything "
@@ -26,14 +31,8 @@ DISCOVERY_PROMPT = (
     f"Use {FindToolsAbility.NAME} to bring up the web search and browsing delegates, and "
     f"follow whatever leads are worth following. Be selective — a generic "
     f"headline is noise; something tied to my actual interests, work, plans, or "
-    f"people is signal.\n\n"
-    f"Before recording anything, call {Recall.NAME} on the topics you're about to "
-    f"write so you don't duplicate or contradict what's already stored. Then, if "
-    f"you find something worth keeping, save it: {SaveGraph.NAME} for a durable fact "
-    f"(a short subject key + the current value) or {SaveMap.NAME} for a narrative "
-    f"thread that extends something earlier. Use {DeleteGraph.NAME} only to retire a "
-    f"fact that this pass overturns. If nothing stands out, that's a fine outcome "
-    f"— just say so and record nothing.\n\n"
+    f"people is signal. If nothing stands out, that's a fine outcome — just say so "
+    f"and record nothing.\n\n"
     f"Write whatever you find plainly, as if you're leaving me a note to read "
     f"later."
 )
@@ -44,11 +43,12 @@ class DiscoveryConfig(UserConfig):
 
     A thin split of UserConfig: it **reads** the ``user`` channel's cross-turn
     history (so it sees exactly what a user turn sees) but **writes** its rows
-    to the ``discovery`` channel. The system prompt, user definition, world
-    state, memory seed and prompt assembly are all inherited from UserConfig —
-    only the routing identity, the tool surface, the stable turn_id, and the
-    silent-background-loop overrides differ. Fired at most once every few hours
-    by the subconscious worker.
+    to the ``discovery`` channel. The system prompt is the inherited UserConfig
+    persona/voice prompt with the Memory v3 recall-before / save-after block
+    appended; the user turn is the research task only (``DISCOVERY_PROMPT``).
+    Only the routing identity, the tool surface, the stable turn_id, and the
+    silent-background-loop overrides differ from UserConfig. Fired at most once
+    every few hours by the subconscious worker.
 
     Memory v3: discovery writes its findings through the Graph/Map tools
     (``recall`` / ``save_graph`` / ``save_map`` / ``delete_graph``) instead of
@@ -93,6 +93,10 @@ class DiscoveryConfig(UserConfig):
         # job on first fire): the first research pass opens the turn, every later
         # fire forks into it, so the whole research log is one thread.
         object.__setattr__(self, "external_turn_id", True)
+
+    @property
+    def system_prompt(self) -> str:
+        return super().system_prompt + "\n\n" + _MEMORY_V3_PROMPT
 
     def type(self) -> ConfigTypeEnum:
         return ConfigTypeEnum.DISCOVERY
