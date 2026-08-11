@@ -33,7 +33,6 @@ from configs.enums.channels import Channel
 # ── Channel keys (exact) ──────────────────────────────────────────────────────
 # Named constants so no consumer hard-codes a channel literal.
 CHANNEL_USER = Channel.USER.value
-CHANNEL_DMN = Channel.DMN.value
 CHANNEL_SKILLS_BUILDING = Channel.SKILLS_BUILDING.value
 CHANNEL_SCHEDULE = Channel.SCHEDULE.value
 CHANNEL_DISCOVERY = Channel.DISCOVERY.value
@@ -87,12 +86,6 @@ _EXACT_PROFILES: dict[str, Profile] = {
         pattern_is_user=True,
         location_backfill=True,
     ),
-    # DMN is HEAVY: its reflection loop is not the user moving through the
-    # world, so it is excluded from geo/pattern user-activity and never back-fills
-    # the user's live location — field-for-field identical to the fully-muted
-    # default, but stated explicitly because a write-capable channel requires a
-    # row.
-    CHANNEL_DMN: _MUTED,
     # A fired schedule encodes into episodic memory like a user turn (§13.4);
     # field-for-field identical to the fully-muted default but stated explicitly
     # because a write-capable channel requires a row.

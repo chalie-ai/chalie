@@ -333,7 +333,7 @@ def test_out_of_scope_settles_fire_nothing(db: sqlite3.Connection) -> None:
     names, then drives a real out-of-scope one-shot (``compaction``) and
     verifies that no step requests were served and no role='memory' rows
     were written."""
-    assert _in_scope("dmn") is False
+    assert _in_scope("pattern_match") is False
     assert _in_scope("delegate:pim") is False
     assert _in_scope("compaction") is False
     assert _in_scope("external-agent:crm") is True

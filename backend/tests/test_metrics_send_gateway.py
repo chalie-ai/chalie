@@ -51,7 +51,7 @@ def test_count_exactness_n_turns(db: sqlite3.Connection, store: MemoryStore) -> 
     # Rows on other channels/roles must not inflate the count.
     db.execute(
         "INSERT INTO transcript (channel, role, content) VALUES "
-        "('user', 'assistant', 'a'), ('dmn', 'user', 'b'), "
+        "('user', 'assistant', 'a'), ('discovery', 'user', 'b'), "
         "('external-agent:bot', 'external_agent', 'c')"
     )
     db.commit()

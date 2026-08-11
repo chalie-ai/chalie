@@ -1,6 +1,6 @@
 """Feature test: leaked markdown in the LLM's final response is rewritten to
-Chalie's HTML subset on user-facing channels — background channel output (DMN,
-encoders, compaction) is not mangled."""
+Chalie's HTML subset on user-facing channels — background channel output
+(discovery, encoders, compaction) is not mangled."""
 
 import sqlite3
 from typing import cast
@@ -8,8 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
-from configs.channels import ScheduledConfig, UserConfig
-from configs.channels.dmn import DmnConfig
+from configs.channels import DiscoveryConfig, ScheduledConfig, UserConfig
 from configs.enums.provider_type import ProviderType
 from controllers.message_processor import MessageProcessor
 from models.provider_request import ProviderRequest
@@ -126,15 +125,15 @@ def test_scheduled_channel_markdown_is_converted_to_html(db: sqlite3.Connection)
     assert "`" not in content
 
 
-def test_dmn_channel_markdown_is_left_verbatim(db: sqlite3.Connection) -> None:
+def test_discovery_channel_markdown_is_left_verbatim(db: sqlite3.Connection) -> None:
     leaked = "**bold** and _under_ and `code`"
 
-    result = _run_turn(DmnConfig(), "reflect", leaked)
+    result = _run_turn(DiscoveryConfig(), "run a research pass", leaked)
 
     # Gated off: returned text is the raw markdown, untouched.
     assert result == leaked
 
-    history = _recent("dmn", limit=10)
+    history = _recent("discovery", limit=10)
     assistant = [r for r in history if r["role"] == "assistant"]
     assert assistant, "no assistant row persisted"
     content = assistant[-1]["content"]

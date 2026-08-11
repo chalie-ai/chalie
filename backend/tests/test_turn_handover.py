@@ -14,8 +14,8 @@ Six claims, one per branch the hand-over actually carries:
    separate them, and the two ids come from independent sequences);
 2. the hand-over row is never written under an input role — the count of
    ``role='user'`` rows must not grow by more than the turn's own input row,
-   because ``Transcript.last_user_message_at()`` gates idle cognition and DMN
-   reflection on ``role = 'user'`` with no channel filter;
+   because ``Transcript.last_user_message_at()`` gates idle cognition on
+   ``role = 'user'`` with no channel filter;
 3. an empty hand-over from the model falls back to the anchor pointer rather
    than leaving the erasure standing alone;
 4. the hand-over reaches the model through the user prompt;
@@ -227,10 +227,10 @@ def test_handover_row_is_never_written_under_an_input_role(db: sqlite3.Connectio
 
     ``Transcript.last_user_message_at()`` is ``SELECT MAX(created_at) ... WHERE
     role = 'user'`` with NO channel filter, and it gates idle cognition
-    (``IdleGatedJob._is_idle``) and DMN reflection (``DmnJob._spine_advanced``).
-    A hand-over written under an input role would fool both into believing the
-    user had just spoken — on the schedule channel too, whose input row is also
-    ``role='user'``. The delta is exactly 1: the turn's own input row, never two.
+    (``IdleGatedJob._is_idle``). A hand-over written under an input role would
+    fool it into believing the user had just spoken — on the schedule channel
+    too, whose input row is also ``role='user'``. The delta is exactly 1: the
+    turn's own input row, never two.
     """
     assert db is not None
     before = Transcript.filter("role", "user").count()

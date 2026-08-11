@@ -122,7 +122,7 @@ def test_raw_personal_info_tools_never_surface(db: object, query: list[str]) -> 
 
 
 def test_default_roster_does_not_expose_personal_info() -> None:
-    """The shared default roster (carried by the user, DMN, external-agent and
+    """The shared default roster (carried by the user, external-agent and
     scheduled channels) must not pin any personal-info tool — otherwise the split
     would leak to every channel that inherits it."""
     assert _RAW_SET.isdisjoint(DEFAULT_ALWAYS_AVAILABLE), (

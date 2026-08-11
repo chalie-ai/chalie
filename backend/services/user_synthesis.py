@@ -2,14 +2,13 @@
 
 The user synthesis is two ``kind='machine_state'`` ``data_graph`` rows: a short
 (``user_summary``) and a long (``user_summary_long``) prose portrait of the user.
-The user-summary channel writes both once per synthesis turn; the prompt spine and
-the DMN reflection loop read them back at assembly time. Read only by exact key,
-never recalled — hence the operational ``machine_state`` lane, not ``system``.
+The user-summary channel writes both once per synthesis turn; the prompt spine
+reads them back at assembly time. Read only by exact key, never recalled — hence
+the operational ``machine_state`` lane, not ``system``.
 
 This is thin CRUD over :class:`models.machine_state.MachineStateRow` — no ``mp``, no sibling
 service, no prompt assembly. It exists so there is exactly ONE home for the
-``user_summary`` / ``user_summary_long`` read/write pair (Law 9): the DB-reaching
-statics that used to live in ``DmnConfig`` (§2.5 config strip), the raw reads in
+``user_summary`` / ``user_summary_long`` read/write pair (Law 9): the raw reads in
 the cron cognition jobs and the ``user_summary*`` accessors that used to sit on
 ``DataGraphService`` all collapse onto :meth:`get` / :meth:`upsert` here. The
 "should we re-synthesise?" freshness gate — the trait/pattern-vs-summary timestamp

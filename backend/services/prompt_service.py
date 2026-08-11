@@ -80,7 +80,6 @@ _CHANNEL_CODE_AGENT = Channel.DELEGATE_CODE_AGENT
 _CHANNEL_EXTERNAL_AGENT = "external_agent"
 _CHANNEL_COMPACTION = Channel.COMPACTION
 _CHANNEL_GEO_PATTERN = Channel.GEO_PATTERN
-_CHANNEL_DMN = Channel.DMN
 
 _USER_DEFINITION_FALLBACK = (
     "The user is a real human. Treat this conversation as peer-to-peer dialogue."
@@ -217,8 +216,6 @@ class PromptService:
             return self._external_agent_prompt()
         if channel == _CHANNEL_GEO_PATTERN:
             return self._geo_pattern_prompt()
-        if channel == _CHANNEL_DMN:
-            return self._dmn_prompt()
         # skill_association, vision and compaction pass the raw input straight
         # through.
         if channel in (_CHANNEL_SKILL_ASSOCIATION, _CHANNEL_VISION, _CHANNEL_COMPACTION):
@@ -721,21 +718,6 @@ class PromptService:
                 f"{cast('str', fields.get('content'))}"
             )
         return "\n".join(lines)
-
-    # ── DmnConfig (channel="dmn") ────────────────────────────────────────────
-
-    def _dmn_prompt(self) -> str:
-        """``DmnConfig.get_user_prompt``: the user synthesis (long summary,
-        falling back to the short one), the recent-salient-episodes reflection
-        context, then this turn's act trail."""
-        parts: list[str] = []
-        synthesis = UserSynthesis.get()
-        if synthesis:
-            parts.append(f"## About the User\n{synthesis}")
-        trail = self._trail()
-        if trail:
-            parts.append(trail)
-        return "\n\n".join(parts)
 
     # ── formatting helpers ───────────────────────────────────────────────────
 

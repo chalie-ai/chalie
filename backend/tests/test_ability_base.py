@@ -30,7 +30,7 @@ import pytest
 
 from abilities._ability import Ability
 from abilities._delegate import DelegateAbility
-from configs.channels import DmnConfig, UserConfig
+from configs.channels import DiscoveryConfig, UserConfig
 
 if TYPE_CHECKING:
     from controllers.message_processor import MessageProcessor
@@ -43,8 +43,8 @@ _VALID_EXAMPLES = ["ex one", "ex two", "ex three", "ex four", "ex five", "ex six
 class _Mp:
     """Minimal real MP-shaped context — ``_inject_framework_fields`` reads only
     ``self.mp.config.SUPPORTS_ASYNC`` off it, carrying a REAL channel config
-    (UserConfig backgrounds, DmnConfig does not). Not a mock — the real config
-    object decides the gate."""
+    (UserConfig backgrounds, DiscoveryConfig does not). Not a mock — the real
+    config object decides the gate."""
 
     def __init__(self, config: object) -> None:
         self.config = config
@@ -182,9 +182,9 @@ def test_async_injected_only_under_supports_async_config_for_delegates() -> None
     assert cast("dict[str, object]", user_props["async"])["type"] == "boolean"
     assert cast("dict[str, object]", user_props["async"])["default"] is False
 
-    # Non-async channel (DmnConfig) → never exposed.
-    dmn_props = cast("dict[str, object]", cast("dict[str, object]", cls(mp=cast("MessageProcessor", _Mp(DmnConfig()))).get_input_schema()["input_schema"])["properties"])
-    assert "async" not in dmn_props
+    # Non-async channel (DiscoveryConfig) → never exposed.
+    background_props = cast("dict[str, object]", cast("dict[str, object]", cls(mp=cast("MessageProcessor", _Mp(DiscoveryConfig()))).get_input_schema()["input_schema"])["properties"])
+    assert "async" not in background_props
 
     # No live processor (mp=None — build/introspection) → never exposed.
     none_props = cast("dict[str, object]", cast("dict[str, object]", cls().get_input_schema()["input_schema"])["properties"])

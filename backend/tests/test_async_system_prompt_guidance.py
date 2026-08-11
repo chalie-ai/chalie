@@ -22,15 +22,15 @@ MessageProcessor for each channel and call the production ``PromptService``
 (``mp.prompt_service``, eagerly constructed by the MP constructor) — the same
 service the turn's request assembly reads its system prompt from — then assert
 on the returned string, i.e. precisely what the model is told. UserConfig
-(SUPPORTS_ASYNC=True) carries the guidance verbatim; the non-async DmnConfig
-channel never does.
+(SUPPORTS_ASYNC=True) carries the guidance verbatim; the non-async
+DiscoveryConfig channel never does.
 """
 
 import sqlite3
 
 import pytest
 
-from configs.channels import DmnConfig, UserConfig
+from configs.channels import DiscoveryConfig, UserConfig
 from controllers.message_processor import MessageProcessor
 from services.processor_config import ProcessorConfig
 from services.prompt_service import _ASYNC_GUIDANCE
@@ -62,7 +62,7 @@ def test_async_guidance_present_on_supports_async_channel(db: sqlite3.Connection
 
 
 def test_async_guidance_absent_on_non_async_channel(db: sqlite3.Connection) -> None:
-    # DmnConfig leaves SUPPORTS_ASYNC at the base False → no guidance, ever.
-    system = _assembled_system(DmnConfig())
+    # DiscoveryConfig re-declares SUPPORTS_ASYNC = False → no guidance, ever.
+    system = _assembled_system(DiscoveryConfig())
 
     assert _GUIDANCE_MARKER not in system, "async guidance leaked onto a non-async channel"

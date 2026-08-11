@@ -6,7 +6,7 @@ Domain-specific terminology used throughout the Chalie system.
 |---|---|---|
 | `turn` | The per-channel conversation boundary; many transcript rows share one `turn_id`. The unit of interruption. | `turn_id=42` |
 | `transcript` | The persistent, channel-scoped conversation log table (`transcript` rows: role, content, turn_id, settled). | A row with `role='assistant'`, `turn_id=42`, `settled=1` |
-| `channel` | The transcript/telemetry namespace string that scopes a conversation. | `'user'`, `'dmn'`, `'delegate:web_search'` |
+| `channel` | The transcript/telemetry namespace string that scopes a conversation. | `'user'`, `'discovery'`, `'delegate:web_search'` |
 | `thread` | A turn grown past its settle0 by one or more user replies. | `turn_id=42` once a user replies into it |
 | `turn_execution` | The DB-backed lifecycle record for one turn's run: `state` (`working`/`completed`/`cancelled`/`crashed`), `cancel_requested`, `started_at`/`ended_at`. `cancel()` is the sole authority (P10) for a turn's terminal state — it stamps `cancel_requested=1` and `state='cancelled'` synchronously in one call, without waiting for the still-running step loop; `finish()` becomes a no-op once it observes the row already closed. | `state='cancelled'`, `cancel_requested=1` |
 | `settle0` | The id of the first settled assistant row in a turn — the boundary between the main spine and fork views. | `settle0=15` |
@@ -67,7 +67,7 @@ Domain-specific terminology used throughout the Chalie system.
 | `MessageProcessor` | The single flat orchestrator for every LLM turn (one per turn, per channel). | lifecycle signals: `working`, `done`, `tool_called` |
 | `ExecutionTracker` | Per-turn object the `MessageProcessor` builds after turn resolution; owns the `turn_execution` row, is the sole emitter of lifecycle WS frames, and answers `should_stop()`. | `ExecutionTracker(config, turn_id)` |
 | `should_stop` | Cooperative-stop predicate checked at each turn checkpoint; True once a cancel has been requested. Replaces the old in-memory cancel `Event`. | `if self.should_stop(): raise _TurnCancelled` |
-| `ProcessorConfig` | Frozen dataclass parameterising one channel's `MessageProcessor`. | `UserConfig`, `DmnConfig`, `DiscoveryConfig` |
+| `ProcessorConfig` | Frozen dataclass parameterising one channel's `MessageProcessor`. | `UserConfig`, `ScheduledConfig`, `DiscoveryConfig` |
 | `policy_channel` | Enum picking which policy rows apply. | `CHAT`, `SUBCONSCIOUS`, `EXTERNAL_AGENT` |
 | `memory_seed` | Flag that fires a `recall` dispatch at turn 0 (the "flashback" seed). | `UserConfig.memory_seed=True` |
 | `RENDERS_HTML` | The `ProcessorConfig` class constant marking a channel whose output a human reads. One fact with three consequences that move together: `PromptService` appends the response-format contract (the model is told to emit `markup.PROMPT_TAGS`, never markdown), `MessageProcessor._format` converts and sanitizes the reply at persist time, and `DispatchService` assigns rich-media ordinals. Splitting them was the old defect — a channel sanitized but never instructed still leaks markdown, because the `markdown_to_html` fallback is inline-only and cannot rescue headings, lists, or tables. Distinct from `BROADCASTS_STATE`, which streams live turn progress; this governs the markup of the settled reply. | declared `True` by `UserConfig` and `ScheduledConfig` only |

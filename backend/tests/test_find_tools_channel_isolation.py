@@ -14,12 +14,12 @@ never selectable on ANY channel; they reach the model only by being pinned into 
 delegate config's ``always_available`` (``WebBrowseConfig`` / ``WebSearchConfig``).
 The delegate wrappers (``web_browse`` / ``web_search`` / ``vision``) are
 ``DISCOVERABLE=True`` and stay selectable on every channel that carries
-find_tools — the user channel AND the DMN background channel.
+find_tools — the user channel AND the discovery background channel.
 
 These run against the REAL production stack:
 - Real ``FindToolsAbility.run()`` — the same call ToolDispatcher makes.
 - Real ``MessageProcessor`` instances carrying the REAL channel configs
-  (``UserConfig`` / ``DmnConfig`` / ``WebBrowseConfig``).
+  (``UserConfig`` / ``DiscoveryConfig`` / ``WebBrowseConfig``).
 - Real ``AbilityRegistry.build_tools()`` resolution against the real registry.
 - Exact-match lookup against ``AbilityRegistry.discovery_aliases()`` (canonical names + ``SEARCHABLE_AS`` aliases, normalized).
 
@@ -33,7 +33,7 @@ import pytest
 from abilities._registry import AbilityRegistry
 from abilities.find_tools import FindToolsAbility
 from contracts.params.find_tools_params_bag import FindToolsParamsBag
-from configs.channels import DmnConfig, UserConfig
+from configs.channels import DiscoveryConfig, UserConfig
 from configs.channels.web_browse import WebBrowseConfig
 from configs.enums.policy_channel import PolicyChannel
 from controllers.message_processor import MessageProcessor
@@ -114,42 +114,43 @@ class TestUserChannelCannotReachRawWebTools:
 
 
 # ---------------------------------------------------------------------------
-# Background channel — raw web tools are still non-discoverable, but the DMN
-# CAN now discover the delegate wrappers (global discovery; it carries find_tools).
+# Background channel — raw web tools are still non-discoverable, but the
+# discovery loop CAN discover the delegate wrappers (global discovery; it
+# carries find_tools).
 # ---------------------------------------------------------------------------
 
 class TestBackgroundChannelDiscovery:
 
-    def test_dmn_cannot_reach_raw_web_or_pattern_tools(self, db: object) -> None:
+    def test_background_channel_cannot_reach_raw_web_or_pattern_tools(self, db: object) -> None:
         """The raw, non-discoverable tools (browser/search/news/save_pattern/
-        save_graph) are absent from the global roster, so a DMN query naming them
-        can never inject them either."""
-        mp = _mp_for(DmnConfig())
+        save_graph) are absent from the global roster, so a background-channel
+        query naming them can never inject them either."""
+        mp = _mp_for(DiscoveryConfig())
         non_discoverable = ["browser", "search", "news", "save_pattern", "save_graph"]
 
         _find_tools_on(mp, {"query": non_discoverable})
 
         leaked = [n for n in non_discoverable if n in mp.active_tools]
         assert not leaked, (
-            f"DMN must not reach non-discoverable tools {non_discoverable}; leaked: {leaked}"
+            f"background channel must not reach non-discoverable tools {non_discoverable}; leaked: {leaked}"
         )
 
-    def test_dmn_can_discover_the_delegate_wrappers(self, db: object) -> None:
-        """Discovery is global now: the DMN carries find_tools and the delegate
-        wrappers are DISCOVERABLE=True, so the background loop can discover and
-        spawn web_browse / web_search / vision. Keeping that work out of the
-        subconscious is the policy gate's job, NOT a discovery block."""
-        mp = _mp_for(DmnConfig())
+    def test_background_channel_can_discover_the_delegate_wrappers(self, db: object) -> None:
+        """Discovery is global: the research loop carries find_tools and the
+        delegate wrappers are DISCOVERABLE=True, so the background loop can
+        discover and spawn web_browse / web_search / vision. Whether a channel
+        may RUN them is the policy gate's job, NOT a discovery block."""
+        mp = _mp_for(DiscoveryConfig())
 
         result = _find_tools_on(mp, {"query": ["web_browse", "web_search", "vision"]})
 
         for name in ("web_browse", "web_search", "vision"):
             assert name in mp.active_tools, (
-                f"DMN must be able to discover the {name} delegate. "
+                f"background channel must be able to discover the {name} delegate. "
                 f"active_tools={mp.active_tools}"
             )
         assert cast(Mapping[str, object], result)["not_found"] == [], (
-            f"delegate wrappers must not be reported unavailable on DMN. result={result!r}"
+            f"delegate wrappers must not be reported unavailable on the background channel. result={result!r}"
         )
 
 

@@ -220,10 +220,10 @@ class TranscriptService:
         """Write the pre-compaction hand-over row (role="compaction", settled=0).
 
         ``role="compaction"`` is deliberate: it matches no ``role='user'`` query —
-        ``Transcript.last_user_message_at()`` gates idle cognition and DMN
-        reflection with ``SELECT MAX(created_at) FROM transcript WHERE role = 'user'``
+        ``Transcript.last_user_message_at()`` gates idle cognition with
+        ``SELECT MAX(created_at) FROM transcript WHERE role = 'user'``
         (no channel filter), and a hand-over written under an input role would
-        fool both.
+        fool it.
         """
         return self._append(content, role="compaction", settled=0)
 

@@ -47,8 +47,6 @@ class TestSystemAPI:
         # Seed 2 working-memory keys so the count == 2.
         store.set('working_memory:a', 'x')
         store.set('working_memory:b', 'x')
-        # Seed DMN delivery ZSET with a recent entry.
-        store.zadd('dmn:deliveries', {'test-delivery': 1711500000.0})
         # One graph fact; the map stays empty.
         MemoryGraphRow(subject='favorite_color', contents='blue').save()
 

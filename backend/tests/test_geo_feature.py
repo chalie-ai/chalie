@@ -160,7 +160,7 @@ class TestGeoPatternWindowChannelFilter:
 
         # One located row per representative channel, all inside the window.
         _seed_located_row(db, channel=Channel.USER.value, content="USER at the gym")
-        _seed_located_row(db, channel=Channel.DMN.value, content="DMN reflection located")
+        _seed_located_row(db, channel=Channel.DISCOVERY.value, content="DISCOVERY research located")
         _seed_located_row(db, channel="delegate:research", content="DELEGATE located")
         _seed_located_row(db, channel=Channel.for_external_agent("bob"), content="EXT located")
 
@@ -175,7 +175,7 @@ class TestGeoPatternWindowChannelFilter:
         # Only the user's own geo-activity row is admitted.
         assert "USER at the gym" in contents
         # Every non-user channel is excluded — the window can't be widened past the user.
-        assert "DMN reflection located" not in contents
+        assert "DISCOVERY research located" not in contents
         assert "DELEGATE located" not in contents
         assert "EXT located" not in contents
 

@@ -30,7 +30,7 @@ import sqlite3
 
 import pytest
 
-from configs.channels import DmnConfig, ScheduledConfig, UserConfig
+from configs.channels import DiscoveryConfig, ScheduledConfig, UserConfig
 from controllers.message_processor import MessageProcessor
 from services.processor_config import ProcessorConfig
 from services.prompt_service import _ASYNC_GUIDANCE, _RESPONSE_FORMAT
@@ -76,10 +76,10 @@ def test_response_format_still_precedes_async_guidance_on_user_channel(db: sqlit
 
 
 def test_response_format_absent_on_silent_non_html_channel(db: sqlite3.Connection) -> None:
-    """DMN is a genuinely silent background channel (``RENDERS_HTML`` False) whose
-    output is never rendered to a human and which never sets ``RENDERS_HTML`` — it
-    must never be told to emit HTML."""
-    system = _assembled_system(DmnConfig())
+    """Discovery is a genuinely silent background channel (``RENDERS_HTML``
+    re-declared False) whose output is never rendered to a human — it must
+    never be told to emit HTML."""
+    system = _assembled_system(DiscoveryConfig())
 
     assert _RESPONSE_FORMAT not in system
     assert "## Response format" not in system

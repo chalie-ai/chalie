@@ -93,12 +93,12 @@ class ProcessorConfig(ABC):
     # ── Identity ──────────────────────────────────────────────────────────────
 
     channel: str
-    """Transcript / telemetry channel.  E.g. 'user', 'dmn',
+    """Transcript / telemetry channel.  E.g. 'user', 'discovery',
     'external-agent:mybot', 'delegate:web_search'."""
 
     role: str
-    """Transcript role for the input row.  E.g. 'user', 'proactive_thought',
-    'external_agent', 'pattern_match'."""
+    """Transcript role for the input row.  E.g. 'user', 'external_agent',
+    'pattern_match'."""
 
     policy_channel: "PolicyChannel"
     """Which policy channel this processor's tool calls are gated under."""

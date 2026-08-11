@@ -6,7 +6,7 @@ Policy defaults seeded by ``policy_defaults.json``:
 
 ``vision`` is ``DISCOVERABLE=True``, so it lives in the single global discovery
 roster (``AbilityRegistry.discoverable_names()``) and is selectable via
-find_tools on every channel that carries find_tools — including the DMN
+find_tools on every channel that carries find_tools — including the discovery
 background channel. Channel containment for vision is the policy gate above
 (subconscious → deny), NOT a discovery block. The policy gate and the discovery
 roster are orthogonal.
@@ -21,7 +21,7 @@ import pytest
 from abilities._registry import AbilityRegistry
 from abilities.find_tools import FindToolsAbility
 from abilities.vision import VisionAbility
-from configs.channels import DmnConfig, UserConfig
+from configs.channels import DiscoveryConfig, UserConfig
 from contracts.params.find_tools_params_bag import FindToolsParamsBag
 from configs.enums.policy_channel import PolicyChannel
 from services.database import Database
@@ -118,21 +118,21 @@ class TestVisionVisibility:
             f"vision must not be reported unavailable on the user channel. result={result!r}"
         )
 
-    def test_vision_selectable_on_dmn_channel(self, db: object) -> None:
-        """Discovery is global now: the DMN background channel carries find_tools,
-        and vision is DISCOVERABLE=True, so the DMN can discover and spawn the
-        vision delegate. Containing vision away from the subconscious is the policy
-        gate's job (subconscious → deny, asserted above), NOT a discovery block."""
-        mp = _mp_for(DmnConfig())
+    def test_vision_selectable_on_background_channel(self, db: object) -> None:
+        """Discovery is global: the discovery background channel carries
+        find_tools, and vision is DISCOVERABLE=True, so the research loop can
+        discover and spawn the vision delegate. Whether a channel may RUN vision
+        is the policy gate's job (asserted above), NOT a discovery block."""
+        mp = _mp_for(DiscoveryConfig())
 
         result = _find_tools_on(mp, {"query": ["vision"]})
 
         assert "vision" in mp.active_tools, (
-            f"vision must be discoverable on the DMN background channel. "
+            f"vision must be discoverable on the discovery background channel. "
             f"active_tools={mp.active_tools}"
         )
         assert result["not_found"] == [], (
-            f"vision must not be reported unavailable on the DMN channel. result={result!r}"
+            f"vision must not be reported unavailable on the discovery channel. result={result!r}"
         )
 
 

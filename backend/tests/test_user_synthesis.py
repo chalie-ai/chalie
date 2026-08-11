@@ -6,7 +6,7 @@ zero mocks). Covers the behaviour every former caller depended on:
 * the channel-response ingest (``persist_user_summary``) writes both rows, and
   ``get`` reads each back at its own shorthand;
 * the long read falls back to the short synthesis when no long row exists — the
-  contract DMN and the prompt spine relied on;
+  long→short fallback contract;
 * ``upsert`` routes to the right key per ``shorthand``;
 * an absent synthesis reads back as ``""`` (the falsy skip-gate every caller uses).
 """
@@ -41,7 +41,7 @@ class TestPersistAndGet:
 
     def test_long_read_falls_back_to_short(self, db: sqlite3.Connection) -> None:
         """When only the short row exists, the long read serves the short one —
-        the fallback DMN and _dmn_prompt depend on."""
+        the long→short fallback contract."""
         UserSynthesis.upsert("Loves espresso.", shorthand=True)
 
         assert UserSynthesis.get(shorthand=False) == "Loves espresso."

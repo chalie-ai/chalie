@@ -43,9 +43,9 @@ class PatternMatchJob(CursorGatedJob):
 
         # The cursor must count only rows the pattern LOAD window
         # (pattern.py) actually reads — user-behaviour channels, no compaction
-        # rows. Counting background-loop rows (dmn writes many) would advance
-        # the delta past the min-delta trigger and fire spurious pattern passes
-        # the load discards.
+        # rows. Counting background-loop rows (discovery writes many) would
+        # advance the delta past the min-delta trigger and fire spurious pattern
+        # passes the load discards.
         return Transcript.latest_id([Channel.USER.value]) or 0
 
     def _make_config(self, window_start: int, window_end: int) -> PatternConfig:
