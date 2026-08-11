@@ -29,19 +29,19 @@ chalie     # → http://localhost:31025
 
 ## Why Chalie is different
 
-Most AI tools forget you the moment you close the tab. Chalie runs on your own machine as a **reasoning engine that keeps working while you step away**: it remembers what matters and lets the rest decay, and acts only behind an **Allow / Ask / Deny** policy spanning you, its own background work, and other agents. One SQLite file, credentials encrypted at rest, zero telemetry, encrypted whole-instance backup — no Redis, no Postgres, no queue, just one Python process.
+Most AI tools forget you the moment you close the tab. Chalie runs on your own machine as a **reasoning engine that keeps working while you step away**: it remembers what matters and lets the rest go, and acts only behind an **Allow / Ask / Deny** policy spanning you, its own background work, and other agents. One SQLite file, credentials encrypted at rest, zero telemetry, encrypted whole-instance backup — no Redis, no Postgres, no queue, just one Python process.
 
 ## What it can do today
 
 | | |
 |---|---|
-| 🧠 **Self-managing memory** | Episodes → concepts → abstractions, weighted by source, with decay and automatic roll-up. |
+| 🧠 **Self-managing memory** | A background pass distills conversation into durable facts and remembered moments — recalled automatically, never something you save by hand. |
 | 🎯 **Goals & proactive research** | Spots goals from casual mentions; researches topics in the background before you ask. |
 | 👁 **Vision** | Reads photos, screenshots, and scans — and indexes them so you can find an image by what's in it. |
 | 🌐 **Real web browsing** | Drives a live browser: clicks, fills forms, scrolls, and inspects its own screenshots. |
 | 🔌 **MCP, in and out** | Connects to remote MCP servers and exposes its own tools to other agents. |
 | 📬 **Email, calendar, contacts** | IMAP, CalDAV, CardDAV — the accounts you already have. |
-| 🗓 **Scheduler & places** | Natural-language recurring jobs and location-aware nudges. |
+| 🗓 **Scheduler** | Natural-language recurring jobs. |
 | 🧰 **Files, shell & code** | Searches files, runs guarded shell commands, and delegates coding tasks to an agent that writes and runs TypeScript in its own persistent, sandboxed workspace. |
 | 🎙 **Voice, fully local** | Moonshine STT + Kokoro TTS, both ONNX. No cloud transcription, ever. |
 | 💾 **Backup & restore** | Snapshot the whole instance to one file, optionally AES-256 encrypted. |
@@ -118,7 +118,7 @@ chalie logs             # tail the log
 - **Judgment over activity.** Fewer high-confidence actions beat many low-confidence ones.
 - **Restraint builds trust.** Every token, notification, and action earns its place.
 - **Continuity is intelligence.** The persistent runtime — not any single response — is the product.
-- **Constraints are features.** Decay, capacity limits, and token budgets are what make wisdom emerge.
+- **Constraints are features.** Forgetting on purpose, hard limits, and token budgets are what make wisdom emerge.
 
 Full product compass and design rationale live at [chalie.ai/docs](https://chalie.ai/docs).
 
