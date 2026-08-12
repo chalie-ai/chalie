@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import email as _email_mod
+import email.message
 import email.policy
 import logging
+import mimetypes
+import os
+import uuid
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import TYPE_CHECKING, cast
 
+from services.filename_utils import safe_filename
+from services.tmp_storage import new_tmp_path
 from services.time_utils import utc_now
 
 if TYPE_CHECKING:
@@ -112,16 +118,144 @@ def parse_headers(uid: int, header_bytes: bytes) -> dict[str, object]:
     }
 
 
+def _bodystructure_has_attachments(bs: object) -> bool:
+    """Return True when an imapclient BODYSTRUCTURE contains an attachment
+    content-disposition or a filename/name parameter.  Never raises."""
+    try:
+        def _walk(node: object) -> bool:
+            if isinstance(node, bytes):
+                if node.lower() in (b"attachment", b"filename", b"name"):
+                    return True
+            elif isinstance(node, str):
+                if node.lower() in ("attachment", "filename", "name"):
+                    return True
+            elif isinstance(node, (tuple, list)):
+                return any(_walk(child) for child in node)
+            return False
+        return _walk(bs)
+    except Exception:
+        return False
+
+
+def _is_attachment(part: _email_mod.message.Message) -> bool:
+    # mypy's email.Message stub lacks is_attachment; cast through Any to get
+    # past the type checker while keeping the runtime behaviour unchanged.
+    _p = cast("object", part)
+    is_att = getattr(_p, "is_attachment", lambda: False)()
+    has_filename = part.get_filename()
+    maintype = part.get_content_maintype()
+    return bool(is_att or (has_filename and maintype != "multipart"))
+
+
 def extract_body(raw_bytes: bytes) -> str:
     msg = _email_mod.message_from_bytes(raw_bytes, policy=_email_mod.policy.default)
     parts = list(msg.walk()) if msg.is_multipart() else [msg]
     chunks: list[str] = []
     for p in parts:
+        if _is_attachment(p):
+            continue
         if p.get_content_type() == "text/plain":
             c = p.get_content()
             if isinstance(c, str):
                 chunks.append(c)
     return "\n".join(chunks)
+
+
+def _part_payload_bytes(p: _email_mod.message.Message) -> bytes:
+    """Decoded payload of an attachment part.
+
+    ``message/rfc822`` parts return ``None`` from ``get_payload(decode=True)``;
+    there the inner message is serialized whole instead."""
+    if p.get_content_maintype() == "message":
+        inner = p.get_payload()
+        if isinstance(inner, list) and inner:
+            return cast("_email_mod.message.Message", inner[0]).as_bytes()
+        return b""
+    raw = p.get_payload(decode=True)
+    return raw if isinstance(raw, bytes) else b""
+
+
+def attachment_meta(raw_bytes: bytes) -> list[dict[str, object]]:
+    """filename/size/mime of each attachment part — read-time discovery
+    metadata, computed without writing anything to disk."""
+    msg = _email_mod.message_from_bytes(raw_bytes, policy=_email_mod.policy.default)
+    parts = list(msg.walk()) if msg.is_multipart() else [msg]
+    meta: list[dict[str, object]] = []
+    for n, p in enumerate(part for part in parts if _is_attachment(part)):
+        meta.append({
+            "filename": p.get_filename() or f"attachment_{n}",
+            "size": len(_part_payload_bytes(p)),
+            "mime": p.get_content_type(),
+        })
+    return meta
+
+
+def extract_attachments(raw_bytes: bytes, dest_dir: str) -> list[dict[str, object]]:
+    msg = _email_mod.message_from_bytes(raw_bytes, policy=_email_mod.policy.default)
+    parts = list(msg.walk()) if msg.is_multipart() else [msg]
+    existing: set[str] = set()
+    if os.path.isdir(dest_dir):
+        existing = set(os.listdir(dest_dir))
+    results: list[dict[str, object]] = []
+    os.makedirs(dest_dir, exist_ok=True)
+    n = 0
+    for p in parts:
+        if not _is_attachment(p):
+            continue
+        raw_name = p.get_filename() or ""
+        name = safe_filename(raw_name)
+        if not name:
+            name = f"attachment_{n}"
+            ext = mimetypes.guess_extension(p.get_content_type())
+            if ext:
+                name += ext
+        # Handle collision within this dest_dir
+        stem, ext = os.path.splitext(name)
+        candidate = name
+        counter = 2
+        while candidate in existing:
+            candidate = f"{stem}_{counter}{ext}"
+            counter += 1
+        existing.add(candidate)
+        payload_bytes = _part_payload_bytes(p)
+        path = os.path.join(dest_dir, candidate)
+        with open(path, "wb") as fh:
+            fh.write(payload_bytes)
+        results.append({
+            "path": path,
+            "filename": candidate,
+            "size": len(payload_bytes),
+            "mime": p.get_content_type(),
+        })
+        n += 1
+    return results
+
+
+def build_outgoing_message(from_addr: str, params: dict[str, object]) -> _email_mod.message.EmailMessage:
+    """Assemble an outgoing message from send-family params.
+
+    Pure builder shared by send and draft: no network, no Message-ID —
+    callers that need one (SMTP send) stamp it themselves.  Attachment
+    paths are read here, so file errors surface before any connection."""
+    msg = _email_mod.message.EmailMessage()
+    msg.set_content((cast(str, params.get("body")) or "").strip())
+    msg["From"] = from_addr
+    msg["To"] = (cast(str, params.get("to")) or "").strip()
+    msg["Subject"] = (cast(str, params.get("subject")) or "").strip()
+    cc = (cast(str, params.get("cc")) or "").strip()
+    if cc:
+        msg["Cc"] = cc
+    in_reply_to = (cast(str, params.get("in_reply_to")) or "").strip()
+    if in_reply_to:
+        msg["In-Reply-To"] = in_reply_to
+        msg["References"] = in_reply_to
+    for path in cast("list[str]", params.get("attachments") or []):
+        with open(path, "rb") as fh:
+            data = fh.read()
+        mime, _encoding = mimetypes.guess_type(path)
+        maintype, subtype = (mime or "application/octet-stream").split("/", 1)
+        msg.add_attachment(data, maintype=maintype, subtype=subtype, filename=os.path.basename(path))
+    return msg
 
 
 # ---------------------------------------------------------------------------
@@ -227,7 +361,7 @@ class ImapHandler:
             uids = uids[-_SEARCH_LIMIT:] if len(uids) > _SEARCH_LIMIT else uids
             if not uids:
                 return {"emails": [], "count": 0, "query": query}
-            raw = client.fetch(uids, [_IMAP_FETCH_HEADER])
+            raw = client.fetch(uids, [_IMAP_FETCH_HEADER, b"BODYSTRUCTURE"])
             results = []
             for u in sorted(raw.keys(), reverse=True):
                 item = parse_headers(u, raw[u][_IMAP_FETCH_HEADER])
@@ -244,6 +378,7 @@ class ImapHandler:
                     "date": item.get("date", ""),
                     "triage": item["triage"],
                     "is_thread": item["is_thread"],
+                    "has_attachments": _bodystructure_has_attachments(raw[u].get(b"BODYSTRUCTURE")),
                 })
             return {"emails": results, "count": len(results), "query": query}
         except Exception as exc:
@@ -269,7 +404,7 @@ class ImapHandler:
                 return {"error": f"Email UID {uid} not found"}
             raw_bytes = raw[uid][b"RFC822"]
             headers = parse_headers(uid, raw_bytes)
-            return {
+            result: dict[str, object] = {
                 "uid": uid,
                 "message_id": headers.get("message_id", ""),
                 "subject": headers.get("subject", ""),
@@ -278,8 +413,38 @@ class ImapHandler:
                 "date": headers.get("date", ""),
                 "body": extract_body(raw_bytes),
             }
+            attachments = attachment_meta(raw_bytes)
+            if attachments:
+                result["attachments"] = attachments
+            return result
         except Exception as exc:
             logger.exception("[imap_handler] read_email: %s", exc)
+            return {"error": str(exc)}
+
+    # ------------------------------------------------------------------
+    # Download attachments
+    # ------------------------------------------------------------------
+
+    def download_attachments(self, client: "_ImapClient", params: dict[str, object]) -> dict[str, object]:
+        uid = params.get("uid")
+        if not uid:
+            return {"error": "uid is required"}
+        try:
+            uid = int(cast(int, uid))
+        except (TypeError, ValueError):
+            return {"error": "uid must be an integer"}
+        try:
+            client.select_folder("INBOX", readonly=True)
+            raw = client.fetch([uid], [b"RFC822"])
+            if uid not in raw:
+                return {"error": f"Email UID {uid} not found"}
+            raw_bytes = raw[uid][b"RFC822"]
+            dir_name = new_tmp_path(f"email_{uid}_{uuid.uuid4().hex[:8]}")
+            os.makedirs(dir_name, exist_ok=True)
+            files = extract_attachments(raw_bytes, dir_name)
+            return {"files": files, "uid": uid, "count": len(files)}
+        except Exception as exc:
+            logger.exception("[imap_handler] download_attachments: %s", exc)
             return {"error": str(exc)}
 
     # ------------------------------------------------------------------
@@ -287,20 +452,15 @@ class ImapHandler:
     # ------------------------------------------------------------------
 
     def draft_email(self, client: "_ImapClient", *, from_addr: str, params: dict[str, object]) -> dict[str, object]:
-        from email.mime.text import MIMEText
         to = (cast(str, params.get("to")) or "").strip()
         subject = (cast(str, params.get("subject")) or "").strip()
         body = (cast(str, params.get("body")) or "").strip()
-        in_reply_to = (cast(str, params.get("in_reply_to")) or "").strip()
         if not to or not subject or not body:
             return {"error": "to, subject, and body are required"}
-        msg = MIMEText(body, "plain", "utf-8")
-        msg["From"] = from_addr
-        msg["To"] = to
-        msg["Subject"] = subject
-        if in_reply_to:
-            msg["In-Reply-To"] = in_reply_to
-            msg["References"] = in_reply_to
+        # The draft action does not support attachments: strip the key so the
+        # shared builder cannot attach files on this path.
+        draft_params = {k: v for k, v in params.items() if k != "attachments"}
+        msg = build_outgoing_message(from_addr, draft_params)
         drafts = _find_drafts_folder(client)
         if not drafts:
             return {"error": "No drafts folder found on this mail server"}
@@ -311,32 +471,23 @@ class ImapHandler:
             logger.exception("[imap_handler] draft_email: %s", exc)
             return {"error": str(exc)}
 
-    # ------------------------------------------------------------------
-    # Send via SMTP
-    # ------------------------------------------------------------------
-
     def send_email(self, *, creds: SmtpCreds, params: dict[str, object]) -> dict[str, object]:
         import smtplib
-        from email.mime.text import MIMEText
 
         to = (cast(str, params.get("to")) or "").strip()
         subject = (cast(str, params.get("subject")) or "").strip()
         body = (cast(str, params.get("body")) or "").strip()
-        in_reply_to = (cast(str, params.get("in_reply_to")) or "").strip()
-        cc = (cast(str, params.get("cc")) or "").strip()
 
         if not to or not subject or not body:
             return {"error": "to, subject, and body are required"}
 
-        msg = MIMEText(body, "plain", "utf-8")
-        msg["From"] = creds.from_addr
-        msg["To"] = to
-        msg["Subject"] = subject
-        if cc:
-            msg["Cc"] = cc
-        if in_reply_to:
-            msg["In-Reply-To"] = in_reply_to
-            msg["References"] = in_reply_to
+        try:
+            msg = build_outgoing_message(creds.from_addr, params)
+        except OSError as exc:
+            # File-read failures name the offending attachment path; SMTP
+            # errors (also OSError subclasses) are handled separately below.
+            logger.exception("[imap_handler] send_email: %s", exc)
+            return {"error": f"attachment error: {exc}"}
 
         # Stamp our own Message-ID: the SMTP server mints one only AFTER send
         # when the client supplies none, so a self-stamped id is the only key
@@ -362,7 +513,11 @@ class ImapHandler:
                     except smtplib.SMTPNotSupportedError:
                         logger.warning("[imap_handler] AUTH not supported by %s:%s — sending unauthenticated", creds.host, creds.port)
                     server.send_message(msg)
-            return {"success": True, "to": to, "subject": subject, "message_id": stamp}
+            result: dict[str, object] = {"success": True, "to": to, "subject": subject, "message_id": stamp}
+            attached = cast("list[str]", params.get("attachments") or [])
+            if attached:
+                result["attachments"] = [os.path.basename(p) for p in attached]
+            return result
         except Exception as exc:
             logger.exception("[imap_handler] send_email: %s", exc)
             return {"error": str(exc)}

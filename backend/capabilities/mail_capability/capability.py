@@ -520,6 +520,9 @@ class MailCapability(AbstractCapability):
     def _th_read_email(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
         return self._run_imap(lambda client: self._imap_handler.read_email(client, params))
 
+    def _th_download_attachments(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
+        return self._run_imap(lambda client: self._imap_handler.download_attachments(client, params))
+
     def _th_draft_email(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
         return self._run_imap(lambda client: self._imap_handler.draft_email(
             client, from_addr=cast(str, self.load_credential(_K_EMAIL)), params=params,
@@ -568,6 +571,7 @@ class MailCapability(AbstractCapability):
                     "subject": f"Re: {original.get('subject', '')}",
                     "body": params.get("body", ""),
                     "in_reply_to": original.get("message_id", ""),
+                    "attachments": params.get("attachments"),
                 },
             )
             if result.get("success"):
@@ -618,6 +622,7 @@ class MailCapability(AbstractCapability):
                     "to": to,
                     "subject": f"Fwd: {original.get('subject', '')}",
                     "body": body,
+                    "attachments": params.get("attachments"),
                 },
             )
             if result.get("success"):
@@ -710,6 +715,11 @@ class MailCapability(AbstractCapability):
                             "type": "string",
                             "description": "Message-ID for threading this as a reply",
                         },
+                        "attachments": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "absolute file paths to attach",
+                        },
                     },
                     "required": ["to", "subject", "body"],
                 },
@@ -727,6 +737,11 @@ class MailCapability(AbstractCapability):
                     "properties": {
                         "uid": {"type": "integer", "description": "IMAP UID of the email to reply to"},
                         "body": {"type": "string", "description": "Plain-text reply body"},
+                        "attachments": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "absolute file paths to attach",
+                        },
                     },
                     "required": ["uid", "body"],
                 },
@@ -744,6 +759,11 @@ class MailCapability(AbstractCapability):
                     "properties": {
                         "uid": {"type": "integer", "description": "IMAP UID of the email to forward"},
                         "to": {"type": "string", "description": "Recipient email address"},
+                        "attachments": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "absolute file paths to attach",
+                        },
                     },
                     "required": ["uid", "to"],
                 },
@@ -790,6 +810,22 @@ class MailCapability(AbstractCapability):
                     "required": ["uid"],
                 },
                 "handler": self._th_read_email,
+                "timeout": 30,
+            },
+            {
+                "name": "download_attachments",
+                "description": (
+                    "Save all attachments of an email (by IMAP uid) to a temporary folder. "
+                    "Returns the absolute paths of the downloaded attachment files."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "uid": {"type": "integer", "description": "IMAP UID of the email"},
+                    },
+                    "required": ["uid"],
+                },
+                "handler": self._th_download_attachments,
                 "timeout": 30,
             },
             {
