@@ -118,13 +118,6 @@ def register_kind(kind: str, config: SearchConfig | None) -> None:
     _REGISTRY[kind] = config
 
 
-def config_for_kind(kind: str) -> SearchConfig | None:
-    """The declared config for ``kind``, or ``None`` when the kind is
-    non-searchable OR not yet registered (its model not imported). Callers that
-    need to distinguish those two cases must ensure the model is imported."""
-    return _REGISTRY.get(kind)
-
-
 def is_searchable(kind: str) -> bool:
     """Whether rows of ``kind`` earn a search-index posting — the single
     authority the write-side engine consults, mirroring the save path's

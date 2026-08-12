@@ -162,20 +162,6 @@ def format_date(dt: datetime | str | None, fmt: str = "%Y-%m-%d %H:%M", for_ui: 
     return dt.strftime(fmt)
 
 
-def to_utc(dt: datetime | str) -> datetime:
-    """Ensure a datetime is timezone-aware UTC.
-
-    Use this before ANY database write involving a timestamp.
-
-    Args:
-        dt: A datetime (naive or aware), or ISO string.
-
-    Returns:
-        Timezone-aware UTC datetime.
-    """
-    return parse_utc(dt)
-
-
 def to_local(dt: datetime | str) -> datetime:
     """Convert a datetime to the user's local timezone.
 
@@ -205,8 +191,7 @@ def parse_local(dt: datetime | str) -> datetime:
 
     Use for user/LLM-supplied wall-clock values (e.g. the scheduler "Start
     Time", which the World State surfaces in local time and which is never
-    timezone-converted upstream). This is the inverse intent of ``to_utc``,
-    which assumes a naive input is already UTC — here a naive input is assumed
+    timezone-converted upstream). Here a naive input is assumed
     to be in the user's timezone. Aware inputs are converted as-is.
 
     Args:

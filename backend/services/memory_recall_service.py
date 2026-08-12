@@ -112,10 +112,6 @@ def _composite_score(row: DataGraphRow, signals: RecallSignals) -> float:
     return base * retrieval_weight * (1 + _ACTR_SIGMOID_WEIGHT * _sigmoid(actr_boost))
 
 
-def _cos_score(key_cos: float, value_cos: float) -> float:
-    return max(key_cos, value_cos)
-
-
 def _project(row: DataGraphRow, composite: float, signals: RecallSignals) -> dict[str, object]:
     """The data-graph recall hit shape (mirrors the deleted ``recall()``'s
     return dict) — the one contract both ``MemoryService._search_data_graph``
@@ -130,7 +126,7 @@ def _project(row: DataGraphRow, composite: float, signals: RecallSignals) -> dic
         "retrieval_weight": row.retrieval_weight,
         "evidence_count": row.evidence_count,
         "composite_score": composite,
-        "cos_score": _cos_score(signals.key_cos, signals.value_cos),
+        "cos_score": max(signals.key_cos, signals.value_cos),
     }
 
 
