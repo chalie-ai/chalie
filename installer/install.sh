@@ -507,23 +507,50 @@ case "$_cmd" in
   start)
     _is_running && echo "Chalie is already running (PID $(cat "$PID_FILE"))" && exit 0
     mkdir -p "$DATA_DIR"
-    CHALIE_VENV="$CHALIE_HOME/venv" \
+    rm -f "$PID_FILE"
+    CHALIE_VENV="$CHALIE_HOME/venv" CHALIE_PID_FILE="$PID_FILE" \
       bash "$CHALIE_HOME/app/run.sh" --port="$_port" --host="$_host" \
       >> "$LOG_FILE" 2>&1 &
-    echo $! > "$PID_FILE"
+    # run.sh writes the backend's pid once Python is launched. Wait for it so
+    # `status` and `stop` are never blind to a backend that is already live.
+    _waited=0
+    while [[ ! -s "$PID_FILE" ]] && [[ "$_waited" -lt 300 ]]; do
+      sleep 0.1
+      _waited=$((_waited + 1))
+    done
+    if [[ ! -s "$PID_FILE" ]]; then
+      echo "Chalie failed to start — see $LOG_FILE" >&2
+      exit 1
+    fi
     echo "Chalie started → http://localhost:$_port"
     ;;
   stop)
-    _is_running || { echo "Chalie is not running"; exit 0; }
-    kill "$(cat "$PID_FILE")" && rm -f "$PID_FILE" && echo "Chalie stopped"
+    _is_running || { rm -f "$PID_FILE"; echo "Chalie is not running"; exit 0; }
+    _pid="$(cat "$PID_FILE")"
+    # SIGINT is the same signal Ctrl+C sends; the backend handles it and shuts
+    # its services down cleanly.
+    kill -INT "$_pid" 2>/dev/null || true
+    # Never clear the pidfile while the process is still alive — doing so hides
+    # a running Chalie and lets the next `start` boot a second one on the same
+    # database.
+    _waited=0
+    while kill -0 "$_pid" 2>/dev/null && [[ "$_waited" -lt 300 ]]; do
+      sleep 0.1
+      _waited=$((_waited + 1))
+    done
+    if kill -0 "$_pid" 2>/dev/null; then
+      echo "Chalie (PID $_pid) did not stop within 30s — still running" >&2
+      exit 1
+    fi
+    rm -f "$PID_FILE"
+    echo "Chalie stopped"
     ;;
   restart)
-    "$0" stop
-    sleep 1
+    "$0" stop || exit 1
     "$0" --port="$_port" --host="$_host"
     ;;
   update)
-    "$0" stop
+    "$0" stop || exit 1
     curl -fsSL https://chalie.ai/install | bash
     "$0" --port="$_port" --host="$_host"
     ;;
