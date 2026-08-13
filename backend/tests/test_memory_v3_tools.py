@@ -11,7 +11,7 @@
 Exercises the four abilities end-to-end on the real ``db`` fixture: each tool's
 param bag (validation) + run() (store mutation), driving the real
 SearchExpanderService indexing where a vector lane is involved. The embedding
-model is stubbed deterministically (same seam as test_memory_recall.py).
+model is stubbed deterministically (the shared ``fixed_embedder`` fixture).
 """
 
 import json
@@ -35,32 +35,7 @@ from models.memory_graph import MemoryGraphRow
 from models.memory_map import MemoryMapRow
 from services.search_expander_service import SearchExpanderService
 
-pytestmark = pytest.mark.unit
-
-_DIM = 768
-
-
-def _unit(index: int) -> list[float]:
-    vec = [0.0] * _DIM
-    vec[index] = 1.0
-    return vec
-
-
-class _FixedEmbedder:
-    def generate_embedding(self, text: str, mp: object = None) -> list[float]:
-        return _unit(0)
-
-
-@pytest.fixture
-def fixed_embedder(monkeypatch: pytest.MonkeyPatch) -> _FixedEmbedder:
-    emb = _FixedEmbedder()
-    monkeypatch.setattr(
-        "services.embedding_service.get_embedding_service", lambda: emb
-    )
-    monkeypatch.setattr(
-        "services.memory_recall_service.get_embedding_service", lambda: emb
-    )
-    return emb
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("fixed_embedder")]
 
 
 def _index(table: str, rowid: int) -> None:
@@ -78,7 +53,7 @@ def _bag(bag_cls: type[_T], params: dict[str, object]) -> _T:
     return cast("_T", bag)
 
 
-def test_save_graph_writes_subject_keyed_upsert(fixed_embedder: _FixedEmbedder, db: sqlite3.Connection) -> None:
+def test_save_graph_writes_subject_keyed_upsert(db: sqlite3.Connection) -> None:
     SaveGraph().run(_bag(SaveGraphParamsBag, {"subject": "user.residence", "contents": "Lisbon"}))
     row = MemoryGraphRow.by_subject("user.residence")
     assert row is not None and row.contents == "Lisbon"
@@ -90,7 +65,7 @@ def test_save_graph_writes_subject_keyed_upsert(fixed_embedder: _FixedEmbedder, 
     assert rows[0].contents == "Porto"
 
 
-def test_save_map_computes_iteration_from_derived_parents(fixed_embedder: _FixedEmbedder, db: sqlite3.Connection) -> None:
+def test_save_map_computes_iteration_from_derived_parents(db: sqlite3.Connection) -> None:
     SaveMap().run(_bag(SaveMapParamsBag, {"contents": "first episode"}))
     first = MemoryMapRow.all().order_by("id DESC").limit(1).get()[0]
     assert first.iteration == 1
@@ -104,7 +79,7 @@ def test_save_map_computes_iteration_from_derived_parents(fixed_embedder: _Fixed
     assert json.loads(derived.derived_from) == [first.id]
 
 
-def test_delete_graph_removes_a_fact(fixed_embedder: _FixedEmbedder, db: sqlite3.Connection) -> None:
+def test_delete_graph_removes_a_fact(db: sqlite3.Connection) -> None:
     SaveGraph().run(_bag(SaveGraphParamsBag, {"subject": "pet", "contents": "cat Tom"}))
     assert MemoryGraphRow.by_subject("pet") is not None
 
@@ -112,7 +87,7 @@ def test_delete_graph_removes_a_fact(fixed_embedder: _FixedEmbedder, db: sqlite3
     assert MemoryGraphRow.by_subject("pet") is None
 
 
-def test_recall_tool_returns_readable_summary(fixed_embedder: _FixedEmbedder, db: sqlite3.Connection) -> None:
+def test_recall_tool_returns_readable_summary(db: sqlite3.Connection) -> None:
     SaveGraph().run(
         _bag(SaveGraphParamsBag, {"subject": "user.residence", "contents": "Lisbon"})
     )

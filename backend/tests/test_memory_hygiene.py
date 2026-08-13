@@ -218,6 +218,10 @@ class TestPendingWindows:
 # render_listing
 # ---------------------------------------------------------------------------
 
+#: A closed 24 h window, UTC-stamped — the fixed frame every render test feeds.
+_R_START = datetime(2026, 5, 15, 4, 0, 0, tzinfo=timezone.utc)
+_R_END = datetime(2026, 5, 16, 4, 0, 0, tzinfo=timezone.utc)
+
 
 class TestRenderListing:
     """Tests for the pure render_listing function."""
@@ -226,54 +230,39 @@ class TestRenderListing:
         """Header line: '# Memories Generated/Updated — {%a %d %b %Y}' of
         window start in tz."""
         tz = ZoneInfo("Europe/Malta")
+        # A non-boundary start: proves the header formats the actual start.
         window_start = datetime(2026, 5, 15, 4, 30, 0, tzinfo=timezone.utc)
-        window_end = datetime(2026, 5, 16, 4, 0, 0, tzinfo=timezone.utc)
-        result = render_listing(window_start, window_end, [], [], tz)
-        lines = result.splitlines()
+        result = render_listing(window_start, _R_END, [], [], tz)
         header_date = window_start.astimezone(tz).strftime("%a %d %b %Y")
-        assert lines[0] == f"# Memories Generated/Updated — {header_date}"
+        assert result.splitlines()[0] == f"# Memories Generated/Updated — {header_date}"
 
     def test_window_line_format(self) -> None:
         """Second line: 'window: {start.isoformat()} → {end.isoformat()}'."""
-        tz = timezone.utc
-        window_start = datetime(2026, 5, 15, 4, 0, 0, tzinfo=tz)
-        window_end = datetime(2026, 5, 16, 4, 0, 0, tzinfo=tz)
-        result = render_listing(window_start, window_end, [], [], tz)
-        lines = result.splitlines()
-        expected = f"window: {window_start.isoformat()} → {window_end.isoformat()}"
-        assert lines[1] == expected
+        result = render_listing(_R_START, _R_END, [], [], timezone.utc)
+        expected = f"window: {_R_START.isoformat()} → {_R_END.isoformat()}"
+        assert result.splitlines()[1] == expected
 
     def test_empty_graph_section(self) -> None:
         """When graph_rows is empty the section shows '(none this window)'."""
-        tz = timezone.utc
-        window_start = datetime(2026, 5, 15, 4, 0, 0, tzinfo=tz)
-        window_end = datetime(2026, 5, 16, 4, 0, 0, tzinfo=tz)
-        result = render_listing(window_start, window_end, [], [], tz)
+        result = render_listing(_R_START, _R_END, [], [], timezone.utc)
         assert "(none this window)" in result
 
     def test_empty_map_section(self) -> None:
         """When map_rows is empty the section shows '(none this window)'."""
-        tz = timezone.utc
-        window_start = datetime(2026, 5, 15, 4, 0, 0, tzinfo=tz)
-        window_end = datetime(2026, 5, 16, 4, 0, 0, tzinfo=tz)
         # Graph has a row, map is empty. Real model instances, unsaved — the
         # renderer only reads attributes.
         graph_rows = [MemoryGraphRow(subject="user.city", contents="Lisbon")]
-        result = render_listing(window_start, window_end, graph_rows, [], tz)
+        result = render_listing(_R_START, _R_END, graph_rows, [], timezone.utc)
         assert "(none this window)" in result
 
     def test_graph_rows_render_as_single_json_object(self) -> None:
         """Graph rows are rendered as ONE single-line JSON object
         {subject: contents}."""
-        tz = timezone.utc
-        window_start = datetime(2026, 5, 15, 4, 0, 0, tzinfo=tz)
-        window_end = datetime(2026, 5, 16, 4, 0, 0, tzinfo=tz)
-
         graph_rows = [
             MemoryGraphRow(subject="user.city", contents="Lisbon"),
             MemoryGraphRow(subject="user.pet", contents="cat Tom"),
         ]
-        result = render_listing(window_start, window_end, graph_rows, [], tz)
+        result = render_listing(_R_START, _R_END, graph_rows, [], timezone.utc)
         lines = result.splitlines()
         # The graph rows section should have exactly one JSON line.
         json_line = None
@@ -294,41 +283,24 @@ class TestRenderListing:
 
     def test_map_rows_render_format(self) -> None:
         """Each map row renders as '[id {id} · {HH:MM in tz}] {contents}'."""
-        tz = ZoneInfo("Europe/Malta")
-        window_start = datetime(2026, 5, 15, 4, 0, 0, tzinfo=timezone.utc)
-        window_end = datetime(2026, 5, 16, 4, 0, 0, tzinfo=timezone.utc)
-
         # 2026-05-15 09:30 UTC = 11:30 CEST (Europe/Malta).
         generated_at = datetime(2026, 5, 15, 9, 30, 0, tzinfo=timezone.utc).isoformat()
         map_rows = [MemoryMapRow(id=42, generated_at=generated_at, contents="went to the park")]
-        result = render_listing(window_start, window_end, [], map_rows, tz)
-        lines = result.splitlines()
-        # Find the map row line.
-        map_line = None
-        for line in lines:
-            if line.startswith("[id "):
-                map_line = line
-                break
-        assert map_line is not None
+        result = render_listing(_R_START, _R_END, [], map_rows, ZoneInfo("Europe/Malta"))
+        map_line = next(
+            (line for line in result.splitlines() if line.startswith("[id ")), None
+        )
         assert map_line == "[id 42 · 11:30] went to the park"
 
     def test_round_trip_parse_window_bounds(self) -> None:
         """parse_window_bounds(render_listing(s, e, rows, rows, tz)) == (s, e)."""
-        tz = ZoneInfo("Europe/Malta")
-        window_start = datetime(2026, 5, 15, 4, 0, 0, tzinfo=timezone.utc)
-        window_end = datetime(2026, 5, 16, 4, 0, 0, tzinfo=timezone.utc)
-
         graph_rows = [MemoryGraphRow(subject="user.city", contents="Lisbon")]
         map_rows = [
-            MemoryMapRow(id=1, generated_at=window_start.isoformat(), contents="first episode")
+            MemoryMapRow(id=1, generated_at=_R_START.isoformat(), contents="first episode")
         ]
 
-        rendered = render_listing(window_start, window_end, graph_rows, map_rows, tz)
-        parsed = parse_window_bounds(rendered)
-        assert parsed is not None
-        parsed_start, parsed_end = parsed
-        assert parsed_start == window_start
-        assert parsed_end == window_end
+        rendered = render_listing(_R_START, _R_END, graph_rows, map_rows, ZoneInfo("Europe/Malta"))
+        assert parse_window_bounds(rendered) == (_R_START, _R_END)
 
 
 # ---------------------------------------------------------------------------
@@ -377,6 +349,29 @@ class TestParseWindowBounds:
 # ---------------------------------------------------------------------------
 
 
+def _seed_graph_row(db: sqlite3.Connection, subject: str, contents: str, at: datetime) -> None:
+    """Write a real graph row through the model's own save path, then backdate
+    its timestamps."""
+    MemoryGraphRow(subject=subject, contents=contents).save()
+    db.execute(
+        "UPDATE memory_graph SET created_at = ?, last_updated_at = ? WHERE subject = ?",
+        (_utc_iso(at), _utc_iso(at), subject),
+    )
+    db.commit()
+
+
+def _seed_map_row(db: sqlite3.Connection, contents: str, at: datetime) -> None:
+    """Map twin of :func:`_seed_graph_row` — backdates ``created_at`` and
+    ``generated_at``."""
+    row = MemoryMapRow(contents=contents)
+    row.save()
+    db.execute(
+        "UPDATE memory_map SET created_at = ?, generated_at = ? WHERE id = ?",
+        (_utc_iso(at), _utc_iso(at), row.id),
+    )
+    db.commit()
+
+
 class TestMemoryGraphRowWindowQuery:
     """Tests for MemoryGraphRow.updated_in_window and earliest_created_at."""
 
@@ -387,38 +382,11 @@ class TestMemoryGraphRowWindowQuery:
         is NOT — the interval is half-open [start, end)."""
         start = datetime(2026, 3, 1, 4, 0, 0, tzinfo=timezone.utc)
         end = datetime(2026, 3, 2, 4, 0, 0, tzinfo=timezone.utc)
-        start_iso = _utc_iso(start)
-        end_iso = _utc_iso(end)
+        _seed_graph_row(db, "test.at_start", "boundary start", start)
+        _seed_graph_row(db, "test.at_end", "boundary end", end)
+        _seed_graph_row(db, "test.inside", "middle", datetime(2026, 3, 1, 12, 0, 0, tzinfo=timezone.utc))
 
-        # Row exactly at start → must be included.
-        row_start = MemoryGraphRow(subject="test.at_start", contents="boundary start")
-        row_start.save()
-        # Manually stamp last_updated_at to the boundary value.
-        db.execute(
-            "UPDATE memory_graph SET last_updated_at = ? WHERE subject = ?",
-            (start_iso, "test.at_start"),
-        )
-
-        # Row exactly at end → must be excluded.
-        row_end = MemoryGraphRow(subject="test.at_end", contents="boundary end")
-        row_end.save()
-        db.execute(
-            "UPDATE memory_graph SET last_updated_at = ? WHERE subject = ?",
-            (end_iso, "test.at_end"),
-        )
-
-        # Row inside the window → must be included.
-        inside = datetime(2026, 3, 1, 12, 0, 0, tzinfo=timezone.utc)
-        row_inside = MemoryGraphRow(subject="test.inside", contents="middle")
-        row_inside.save()
-        db.execute(
-            "UPDATE memory_graph SET last_updated_at = ? WHERE subject = ?",
-            (_utc_iso(inside), "test.inside"),
-        )
-
-        db.commit()
-
-        results = MemoryGraphRow.updated_in_window(start_iso, end_iso)
+        results = MemoryGraphRow.updated_in_window(_utc_iso(start), _utc_iso(end))
         subjects = {r.subject for r in results}
         assert "test.at_start" in subjects
         assert "test.inside" in subjects
@@ -426,23 +394,14 @@ class TestMemoryGraphRowWindowQuery:
 
     def test_results_ordered_ascending(self, db: sqlite3.Connection) -> None:
         """Results are ordered by last_updated_at ASC."""
-        timestamps = [
-            datetime(2026, 3, 1, 10, 0, 0, tzinfo=timezone.utc),
-            datetime(2026, 3, 1, 6, 0, 0, tzinfo=timezone.utc),
-            datetime(2026, 3, 1, 8, 0, 0, tzinfo=timezone.utc),
-        ]
-        for ts in timestamps:
-            row = MemoryGraphRow(subject=f"test.ordered.{ts.hour}", contents=f"content {ts.hour}")
-            row.save()
-            db.execute(
-                "UPDATE memory_graph SET last_updated_at = ? WHERE subject = ?",
-                (_utc_iso(ts), f"test.ordered.{ts.hour}"),
-            )
-        db.commit()
+        for hour in (10, 6, 8):
+            _seed_graph_row(db, f"test.ordered.{hour}", f"content {hour}",
+                            datetime(2026, 3, 1, hour, 0, 0, tzinfo=timezone.utc))
 
-        start = datetime(2026, 3, 1, 4, 0, 0, tzinfo=timezone.utc)
-        end = datetime(2026, 3, 2, 4, 0, 0, tzinfo=timezone.utc)
-        results = MemoryGraphRow.updated_in_window(_utc_iso(start), _utc_iso(end))
+        results = MemoryGraphRow.updated_in_window(
+            _utc_iso(datetime(2026, 3, 1, 4, 0, 0, tzinfo=timezone.utc)),
+            _utc_iso(datetime(2026, 3, 2, 4, 0, 0, tzinfo=timezone.utc)),
+        )
         hours = [int(r.subject.split(".")[-1]) for r in results]
         assert hours == [6, 8, 10]
 
@@ -455,25 +414,14 @@ class TestMemoryGraphRowWindowQuery:
 
     def test_earliest_created_at_returns_minimum_after_seeding(self, db: sqlite3.Connection) -> None:
         """After seeding, earliest_created_at returns the minimum created_at."""
-        # Wipe table first.
-        MemoryGraphRow._bound_connection().execute("DELETE FROM memory_graph")
-        MemoryGraphRow._bound_connection().commit()
-
-        ts1 = datetime(2026, 3, 1, 10, 0, 0, tzinfo=timezone.utc)
-        ts2 = datetime(2026, 3, 1, 6, 0, 0, tzinfo=timezone.utc)
-        ts3 = datetime(2026, 3, 1, 8, 0, 0, tzinfo=timezone.utc)
-        for ts in (ts1, ts2, ts3):
-            row = MemoryGraphRow(subject=f"test.min.{ts.hour}", contents=f"content {ts.hour}")
-            row.save()
-            db.execute(
-                "UPDATE memory_graph SET created_at = ? WHERE subject = ?",
-                (_utc_iso(ts), f"test.min.{ts.hour}"),
-            )
+        db.execute("DELETE FROM memory_graph")
         db.commit()
+        for hour in (10, 6, 8):
+            _seed_graph_row(db, f"test.min.{hour}", f"content {hour}",
+                            datetime(2026, 3, 1, hour, 0, 0, tzinfo=timezone.utc))
 
         earliest = MemoryGraphRow.earliest_created_at()
-        assert earliest is not None
-        assert earliest == _utc_iso(ts2)
+        assert earliest == _utc_iso(datetime(2026, 3, 1, 6, 0, 0, tzinfo=timezone.utc))
 
 
 class TestMemoryMapRowWindowQuery:
@@ -486,37 +434,11 @@ class TestMemoryMapRowWindowQuery:
         is NOT — the interval is half-open [start, end)."""
         start = datetime(2026, 3, 1, 4, 0, 0, tzinfo=timezone.utc)
         end = datetime(2026, 3, 2, 4, 0, 0, tzinfo=timezone.utc)
-        start_iso = _utc_iso(start)
-        end_iso = _utc_iso(end)
+        _seed_map_row(db, "boundary start", start)
+        _seed_map_row(db, "boundary end", end)
+        _seed_map_row(db, "middle", datetime(2026, 3, 1, 12, 0, 0, tzinfo=timezone.utc))
 
-        # Row exactly at start → included.
-        row_start = MemoryMapRow(contents="boundary start")
-        row_start.save()
-        db.execute(
-            "UPDATE memory_map SET generated_at = ? WHERE id = ?",
-            (start_iso, row_start.id),
-        )
-
-        # Row exactly at end → excluded.
-        row_end = MemoryMapRow(contents="boundary end")
-        row_end.save()
-        db.execute(
-            "UPDATE memory_map SET generated_at = ? WHERE id = ?",
-            (end_iso, row_end.id),
-        )
-
-        # Row inside the window → included.
-        inside = datetime(2026, 3, 1, 12, 0, 0, tzinfo=timezone.utc)
-        row_inside = MemoryMapRow(contents="middle")
-        row_inside.save()
-        db.execute(
-            "UPDATE memory_map SET generated_at = ? WHERE id = ?",
-            (_utc_iso(inside), row_inside.id),
-        )
-
-        db.commit()
-
-        results = MemoryMapRow.generated_in_window(start_iso, end_iso)
+        results = MemoryMapRow.generated_in_window(_utc_iso(start), _utc_iso(end))
         contents = {r.contents for r in results}
         assert "boundary start" in contents
         assert "middle" in contents
@@ -524,25 +446,14 @@ class TestMemoryMapRowWindowQuery:
 
     def test_results_ordered_ascending(self, db: sqlite3.Connection) -> None:
         """Results are ordered by generated_at ASC."""
-        timestamps = [
-            datetime(2026, 3, 1, 10, 0, 0, tzinfo=timezone.utc),
-            datetime(2026, 3, 1, 6, 0, 0, tzinfo=timezone.utc),
-            datetime(2026, 3, 1, 8, 0, 0, tzinfo=timezone.utc),
-        ]
-        rows: list[MemoryMapRow] = []
-        for ts in timestamps:
-            row = MemoryMapRow(contents=f"content {ts.hour}")
-            row.save()
-            rows.append(row)
-            db.execute(
-                "UPDATE memory_map SET generated_at = ? WHERE id = ?",
-                (_utc_iso(ts), row.id),
-            )
-        db.commit()
+        for hour in (10, 6, 8):
+            _seed_map_row(db, f"content {hour}",
+                          datetime(2026, 3, 1, hour, 0, 0, tzinfo=timezone.utc))
 
-        start = datetime(2026, 3, 1, 4, 0, 0, tzinfo=timezone.utc)
-        end = datetime(2026, 3, 2, 4, 0, 0, tzinfo=timezone.utc)
-        results = MemoryMapRow.generated_in_window(_utc_iso(start), _utc_iso(end))
+        results = MemoryMapRow.generated_in_window(
+            _utc_iso(datetime(2026, 3, 1, 4, 0, 0, tzinfo=timezone.utc)),
+            _utc_iso(datetime(2026, 3, 2, 4, 0, 0, tzinfo=timezone.utc)),
+        )
         contents = [r.contents for r in results]
         assert contents == ["content 6", "content 8", "content 10"]
 
@@ -554,67 +465,40 @@ class TestMemoryMapRowWindowQuery:
 
     def test_earliest_created_at_returns_minimum_after_seeding(self, db: sqlite3.Connection) -> None:
         """After seeding, earliest_created_at returns the minimum created_at."""
-        MemoryMapRow._bound_connection().execute("DELETE FROM memory_map")
-        MemoryMapRow._bound_connection().commit()
-
-        ts1 = datetime(2026, 3, 1, 10, 0, 0, tzinfo=timezone.utc)
-        ts2 = datetime(2026, 3, 1, 6, 0, 0, tzinfo=timezone.utc)
-        ts3 = datetime(2026, 3, 1, 8, 0, 0, tzinfo=timezone.utc)
-        for ts in (ts1, ts2, ts3):
-            row = MemoryMapRow(contents=f"content {ts.hour}")
-            row.save()
-            db.execute(
-                "UPDATE memory_map SET created_at = ?, generated_at = ? WHERE id = ?",
-                (_utc_iso(ts), _utc_iso(ts), row.id),
-            )
+        db.execute("DELETE FROM memory_map")
         db.commit()
+        for hour in (10, 6, 8):
+            _seed_map_row(db, f"content {hour}",
+                          datetime(2026, 3, 1, hour, 0, 0, tzinfo=timezone.utc))
 
         earliest = MemoryMapRow.earliest_created_at()
-        assert earliest is not None
-        assert earliest == _utc_iso(ts2)
+        assert earliest == _utc_iso(datetime(2026, 3, 1, 6, 0, 0, tzinfo=timezone.utc))
 
 
 class TestProductionTimestampFormat:
     """Rows written through the models' production save paths carry
     'T'-shaped isoformat timestamps (no space between date and time) in
-    last_updated_at / generated_at / created_at."""
+    last_updated_at / generated_at / created_at — lexicographic TEXT
+    comparison against 'T'-shaped bounds is only chronological when every
+    row is 'T'-shaped too."""
 
-    def test_memory_graph_row_carry_t_shaped_timestamps(self, db: sqlite3.Connection) -> None:
-        """MemoryGraphRow.save() produces T-shaped ISO timestamps."""
-        row = MemoryGraphRow(subject="test.timestamp.graph", contents="check format")
-        row.save()
+    def test_save_paths_write_t_shaped_timestamps(self, db: sqlite3.Connection) -> None:
+        MemoryGraphRow(subject="test.timestamp.graph", contents="check format").save()
+        map_row = MemoryMapRow(contents="check format map")
+        map_row.save()
         db.commit()
 
-        cur = db.execute(
+        graph_stamps = db.execute(
             "SELECT last_updated_at, created_at FROM memory_graph WHERE subject = ?",
             ("test.timestamp.graph",),
-        )
-        recorded = cur.fetchone()
-        assert recorded is not None
-        last_updated, created_at = recorded
-        # Both must contain 'T' (not a space) between date and time.
-        assert "T" in last_updated
-        assert " " not in last_updated
-        assert "T" in created_at
-        assert " " not in created_at
-
-    def test_memory_map_row_carry_t_shaped_timestamps(self, db: sqlite3.Connection) -> None:
-        """MemoryMapRow.save() produces T-shaped ISO timestamps."""
-        row = MemoryMapRow(contents="check format map")
-        row.save()
-        db.commit()
-
-        cur = db.execute(
+        ).fetchone()
+        map_stamps = db.execute(
             "SELECT generated_at, created_at FROM memory_map WHERE id = ?",
-            (row.id,),
-        )
-        recorded = cur.fetchone()
-        assert recorded is not None
-        generated_at, created_at = recorded
-        assert "T" in generated_at
-        assert " " not in generated_at
-        assert "T" in created_at
-        assert " " not in created_at
+            (map_row.id,),
+        ).fetchone()
+        for stamp in (*graph_stamps, *map_stamps):
+            assert "T" in stamp
+            assert " " not in stamp
 
 
 # ===========================================================================
@@ -647,17 +531,6 @@ _BOUNDARY_2 = datetime(2026, 3, 5, 4, 0, 0, tzinfo=timezone.utc)
 def _window_line(start: datetime, end: datetime) -> str:
     """The listing's coverage line, exactly as ``render_listing`` writes it."""
     return f"window: {start.isoformat()} → {end.isoformat()}"
-
-
-def _seed_graph_row(db: sqlite3.Connection, subject: str, contents: str, at: datetime) -> None:
-    """Write a real graph row through the model's own save path, then backdate
-    its timestamps — the same seed shape the window-query tests above use."""
-    MemoryGraphRow(subject=subject, contents=contents).save()
-    db.execute(
-        "UPDATE memory_graph SET created_at = ?, last_updated_at = ? WHERE subject = ?",
-        (_utc_iso(at), _utc_iso(at), subject),
-    )
-    db.commit()
 
 
 # ── the scripted provider ───────────────────────────────────────────────────

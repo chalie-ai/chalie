@@ -192,6 +192,17 @@ def _drive_turn(raw_input: str = "hello") -> MessageProcessor:
     return mp
 
 
+def _lisbon_provider() -> _ScriptedProvider:
+    """One prose user turn; the step saves user.residence=Lisbon then settles."""
+    return _ScriptedProvider(
+        turn_script=[_Say("the answer")],
+        step_script=[
+            _Call(SaveGraph.NAME, {"subject": "user.residence", "contents": "Lisbon"}),
+            _Say("recorded"),
+        ],
+    )
+
+
 # ── tests ────────────────────────────────────────────────────────────────────
 
 def test_settled_user_turn_fires_one_step_with_turn_provenance() -> None:
@@ -201,13 +212,7 @@ def test_settled_user_turn_fires_one_step_with_turn_provenance() -> None:
     The provider returns a single prose answer for the user turn, then the
     step calls ``save_graph`` with the expected subject/contents and answers
     with a confirming prose line."""
-    provider = _ScriptedProvider(
-        turn_script=[_Say("the answer")],
-        step_script=[
-            _Call(SaveGraph.NAME, {"subject": "user.residence", "contents": "Lisbon"}),
-            _Say("recorded"),
-        ],
-    )
+    provider = _lisbon_provider()
     with patch(_BUILD_CLIENT, return_value=provider):
         mp = _drive_turn("I live in Lisbon")
         _await_step()
@@ -230,13 +235,7 @@ def test_step_iteration_two_sees_its_own_act_trail() -> None:
     ``save_graph`` tool call; the dispatcher runs it and feeds the result
     back. The second iteration's message list must contain both the call
     and the success response (which includes ``saved``)."""
-    provider = _ScriptedProvider(
-        turn_script=[_Say("the answer")],
-        step_script=[
-            _Call(SaveGraph.NAME, {"subject": "user.residence", "contents": "Lisbon"}),
-            _Say("recorded"),
-        ],
-    )
+    provider = _lisbon_provider()
     with patch(_BUILD_CLIENT, return_value=provider):
         _drive_turn("I live in Lisbon")
         _await_step()
@@ -255,13 +254,7 @@ def test_completed_step_does_not_fire_a_second_step(db: sqlite3.Connection) -> N
     request count is stable. We also assert the DB carries exactly one
     role='memory' row (the step's synthetic input) and zero assistant
     rows in that turn — the step never settles an assistant row."""
-    provider = _ScriptedProvider(
-        turn_script=[_Say("the answer")],
-        step_script=[
-            _Call(SaveGraph.NAME, {"subject": "user.residence", "contents": "Lisbon"}),
-            _Say("recorded"),
-        ],
-    )
+    provider = _lisbon_provider()
     with patch(_BUILD_CLIENT, return_value=provider):
         _drive_turn("I live in Lisbon")
         _await_step()
@@ -361,13 +354,7 @@ def test_step_request_carries_exactly_the_four_memory_tools_and_the_prompt() -> 
 
     This pins the contract: no more, no fewer tools, and the prompt is
     visible in the messages so a regression that drops it is caught."""
-    provider = _ScriptedProvider(
-        turn_script=[_Say("the answer")],
-        step_script=[
-            _Call(SaveGraph.NAME, {"subject": "user.residence", "contents": "Lisbon"}),
-            _Say("recorded"),
-        ],
-    )
+    provider = _lisbon_provider()
     with patch(_BUILD_CLIENT, return_value=provider):
         _drive_turn("I live in Lisbon")
         _await_step()

@@ -277,3 +277,21 @@ def tmp_state_file(tmp_path: Path) -> Path:
     """Temporary state file path for tools using JSON state."""
     state_file = tmp_path / "state.json"
     return state_file
+
+
+class _FixedEmbedder:
+    """Deterministic stand-in for the embedding model: every text maps to the
+    same 768-d unit vector, matching the vec-table dimension. Vector-lane hits
+    all end up equidistant from the query, so ranking is decided by secondary
+    keys (e.g. ``iteration``)."""
+
+    def generate_embedding(self, text: str, mp: object = None) -> list[float]:
+        return [1.0] + [0.0] * 767
+
+
+@pytest.fixture
+def fixed_embedder(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin both embedding seams — indexing and recall — to one deterministic model."""
+    emb = _FixedEmbedder()
+    monkeypatch.setattr("services.embedding_service.get_embedding_service", lambda: emb)
+    monkeypatch.setattr("services.memory_recall_service.get_embedding_service", lambda: emb)

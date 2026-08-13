@@ -27,36 +27,7 @@ from models.memory_map import MemoryMapRow
 from services.memory_recall_service import MemoryRecallService
 from services.search_expander_service import SearchExpanderService
 
-pytestmark = pytest.mark.unit
-
-_DIM = 768
-
-
-def _unit(index: int) -> list[float]:
-    vec = [0.0] * _DIM
-    vec[index] = 1.0
-    return vec
-
-
-class _FixedEmbedder:
-    """Deterministic stand-in for the embedding model: every text maps to the
-    same 768-d unit vector, matching the vec-table dimension. All map rows end
-    up equidistant from the query, so ranking is decided by ``iteration``."""
-
-    def generate_embedding(self, text: str, mp: object = None) -> list[float]:
-        return _unit(0)
-
-
-@pytest.fixture
-def fixed_embedder(monkeypatch: pytest.MonkeyPatch) -> _FixedEmbedder:
-    emb = _FixedEmbedder()
-    monkeypatch.setattr(
-        "services.embedding_service.get_embedding_service", lambda: emb
-    )
-    monkeypatch.setattr(
-        "services.memory_recall_service.get_embedding_service", lambda: emb
-    )
-    return emb
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("fixed_embedder")]
 
 
 def _index(table: str, rowid: int) -> None:
@@ -66,7 +37,7 @@ def _index(table: str, rowid: int) -> None:
     SearchExpanderService()._process_row(table, rowid, cfg)
 
 
-def test_graph_fts_lane_returns_subject_match(fixed_embedder: _FixedEmbedder, db: sqlite3.Connection) -> None:
+def test_graph_fts_lane_returns_subject_match(db: sqlite3.Connection) -> None:
     g = MemoryGraphRow(subject="user.residence", contents="Lisbon")
     g.save()
     assert isinstance(g.id, int)
@@ -79,9 +50,7 @@ def test_graph_fts_lane_returns_subject_match(fixed_embedder: _FixedEmbedder, db
     assert result["map"] == []
 
 
-def test_map_vector_lane_excludes_retired_rows_and_ranks_by_iteration(
-    fixed_embedder: _FixedEmbedder, db: sqlite3.Connection
-) -> None:
+def test_map_vector_lane_excludes_retired_rows_and_ranks_by_iteration(db: sqlite3.Connection) -> None:
     # A has the HIGHEST iteration; if it weren't retired it would rank first.
     a = MemoryMapRow(contents="moved to Lisbon years ago", iteration=5)
     a.save()
@@ -106,6 +75,6 @@ def test_map_vector_lane_excludes_retired_rows_and_ranks_by_iteration(
     assert hits[0]["contents"] == "settled in Lisbon"
 
 
-def test_recall_returns_empty_on_miss_without_raising(fixed_embedder: _FixedEmbedder, db: sqlite3.Connection) -> None:
+def test_recall_returns_empty_on_miss_without_raising(db: sqlite3.Connection) -> None:
     result = MemoryRecallService().recall("nothing matches this query")
     assert result == {"graph": [], "map": []}
