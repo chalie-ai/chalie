@@ -87,7 +87,6 @@ from services.provider_service import ProviderService
 from services.tool_call_service import ToolCallService
 from services.transcript_service import TranscriptService
 from services.turn_execution_service import TurnExecutionService
-from services.user_synthesis import UserSynthesis
 from services.websocket import Websocket
 
 if TYPE_CHECKING:
@@ -619,8 +618,6 @@ class MessageProcessor:
             if role == "user" and self.channel == Channel.USER:
                 self._voice_presynthesis()
                 self._proactive_suggestion()
-            elif role == "user_summary":
-                UserSynthesis.persist_user_summary(response_text)
             elif role == "pattern_match":
                 self._pattern_skill_sync()
             elif role == "external_agent":

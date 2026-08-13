@@ -42,7 +42,6 @@ from configs.channels.external_agent import EAMPConfig
 from configs.channels.user import UserConfig
 from configs.enums.channels import Channel
 from exceptions import UnroutedPromptChannel
-from models.behavioral_pattern import BehavioralPattern
 from models.tool_call import ToolCall
 from models.transcript import Transcript
 from models.transcript_thinking import TranscriptThinking
@@ -66,7 +65,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _CHANNEL_USER = Channel.USER
-_CHANNEL_USER_SUMMARY = Channel.USER_SUMMARY
 _CHANNEL_PATTERN_MATCH = Channel.PATTERN_MATCH
 _CHANNEL_SCHEDULE = Channel.SCHEDULE
 _CHANNEL_SKILL_ASSOCIATION = Channel.SKILL_ASSOCIATION
@@ -135,7 +133,6 @@ Some tools accept an `async` flag. Set `async: true` to run a tool in the backgr
 
 Choose `async: true` when the user asks for something to happen "in the background" or "while" they do something else, or when a call is likely to be slow (web research, browsing, lengthy shell or file work) and the user should not have to wait. Call tools normally (synchronously) for quick results the user is actively waiting on."""
 
-_MAX_PATTERN_ROWS = 25
 
 
 class PromptService:
@@ -195,8 +192,6 @@ class PromptService:
         channel = self._channel()
         if channel == _CHANNEL_USER:
             return self._user_prompt()
-        if channel == _CHANNEL_USER_SUMMARY:
-            return self._user_summary_prompt()
         if channel == _CHANNEL_PATTERN_MATCH:
             return self._pattern_prompt()
         if channel == _CHANNEL_SCHEDULE:
@@ -456,28 +451,6 @@ class PromptService:
         except Exception:  # noqa: BLE001 — a missing/misconfigured provider must not crash the turn
             label = None
         return body.replace(_CONTENT_FIELD_PLACEHOLDER, label) if label else body
-
-    # ── UserSummaryConfig (channel="user_summary") ───────────────────────────
-
-    def _user_summary_prompt(self) -> str:
-        """``UserSummaryConfig.get_user_prompt``: the active-patterns section
-        when any exist."""
-        return self._user_summary_patterns_block()
-
-    def _user_summary_patterns_block(self) -> str:
-        """Section 2 of ``UserSummaryConfig.get_user_prompt``: up to
-        ``_MAX_PATTERN_ROWS`` active behavioural patterns, most-recently-confirmed
-        first, via ``self.mp.behavioral_pattern_service.patterns()``."""
-        lines: list[str] = []
-        for row in self.mp.behavioral_pattern_service.patterns()[:_MAX_PATTERN_ROWS]:
-            content = BehavioralPattern.parse(row.value)
-            if content is not None:
-                lines.append(BehavioralPattern.render_line(content, include_last_seen=True))
-        if not lines:
-            return ""
-        return "## Behavioural patterns (frequency, last seen)\n" + "\n".join(
-            f"- {line}" for line in lines
-        )
 
     # ── PatternConfig (channel="pattern_match") ──────────────────────────────
 

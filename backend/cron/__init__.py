@@ -17,7 +17,6 @@ from cron.jobs.garbage_collection import GarbageCollectionJob
 from cron.jobs.geo_patterns import GeoPatternsJob
 from cron.jobs.pattern_match import PatternMatchJob
 from cron.jobs.scheduled_items import ScheduledItemsDispatcherJob
-from cron.jobs.synthesis import SynthesisJob
 
 # Concrete singleton instances (all subclass ScheduledJob, which satisfies
 # ScheduledJobProtocol and carries the runner's infra: ``name`` and ``_lock``).
@@ -28,7 +27,6 @@ from cron.jobs.synthesis import SynthesisJob
 JOBS: tuple[ScheduledJob, ...] = (
     ScheduledItemsDispatcherJob(),
     PatternMatchJob(),
-    SynthesisJob(),
     CapabilitySyncJob(),
     GeoPatternsJob(),
     DiscoveryJob(),
