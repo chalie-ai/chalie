@@ -520,6 +520,16 @@ CREATE TABLE IF NOT EXISTS compactions (
 );
 CREATE INDEX IF NOT EXISTS ix_compactions_scope ON compactions(channel, for_turn_id, id);
 
+-- ────────────────────────────────────────────────────────────────
+-- USER SYNTHESIS — versioned append-only user profile summary
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS user_synthesis (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    version    INTEGER NOT NULL,
+    content    TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 
 -- ────────────────────────────────────────────────────────────────
 -- TRANSCRIPT FILES — filepath-keyed attachment link.
