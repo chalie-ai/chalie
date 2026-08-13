@@ -59,20 +59,3 @@ class ExactKeyRow(DataGraphRow):
         self.valid_to = utc_now().isoformat()
         return self.save()
 
-    @classmethod
-    def forget(cls, key: str, value: str | None = None) -> int:
-        """Bi-temporally invalidate every live row for this kind's exact ``key``
-        (optionally only the row whose value matches, case-folded/trimmed):
-        ``active = 0``, ``valid_to = now``, ``retrieval_weight`` halved. Matches
-        VERBATIM (no canonicalisation). Returns the number of rows closed."""
-        now = utc_now().isoformat()
-        closed = 0
-        for row in cls.live().filter("key", key).get():
-            if value is not None and (row.value or "").lower().strip() != value.lower().strip():
-                continue
-            row.active = 0
-            row.valid_to = now
-            row.retrieval_weight *= cls._SUPERSEDE_RW_FACTOR
-            row.save()
-            closed += 1
-        return closed

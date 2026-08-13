@@ -32,11 +32,9 @@ import sqlite3
 from typing import ClassVar, Self, cast
 
 from contracts.search_config import DATA_GRAPH_SEARCH, SearchConfig, register_kind
-from contracts.tuples.recall_signals import RecallSignals
 from models.model import Model
 from models.query import Query
 from services._fts_delete import fts5_external_delete
-from services.embedding_utils import pack_embedding
 from services.search_expander_service import enqueue
 from services.time_utils import utc_now
 
@@ -239,114 +237,6 @@ class DataGraphRow(Model):
             (kind, q, f"%{q}%", f"%{q}%", limit, offset),
         )
         return [dict(row) for row in cursor.fetchall()]
-
-    # ── cross-kind recall primitives (E7 — ruling 1, layer 1) ────────────
-    #
-    # These are raw DB primitives: vec-KNN and the supersession-neighbour walk,
-    # both kind-scoped and RECALL-STRICT (``valid_to IS NULL`` on top of the
-    # ``live()`` predicate) so a superseded row never surfaces as a primary
-    # candidate. ``superseded_predecessors`` is the one place that deliberately
-    # reaches the ``valid_to IS NOT NULL`` rows this filter excludes elsewhere.
-    # ``services/memory_recall_service.py`` (layer 3) is the only caller these
-    # exist for; a vertical's own :meth:`gather_candidates` (layer 2) is the
-    # ORM composition in between.
-
-    @classmethod
-    def vec_candidates(cls, query_embedding: list[float] | None, k: int) -> dict[int, dict[str, float]]:
-        """Kind-scoped key_vec + value_vec KNN candidates (ported from
-        ``_recall_vec_search``, f035ebc0:services/data_graph_service.py — the
-        JOIN-then-filter idiom against a vec0 table is precedented in that same
-        commit's ``_recall_variant_search``). Each vec0 table is joined back to
-        ``data_graph`` and filtered to this kind under the RECALL-STRICT live
-        predicate (``active = 1 AND deleted_at IS NULL AND valid_to IS NULL`` —
-        stricter than :meth:`live`, which omits ``valid_to``). Returns
-        ``{rowid: {'key_cos', 'value_cos'}}`` — raw per-lane cosine signals, not
-        a final score."""
-        blob = pack_embedding(query_embedding) if query_embedding else None
-        if not blob:
-            return {}
-        candidates: dict[int, dict[str, float]] = {}
-        conn = cls._bound_connection()
-        for table, signal in (("data_graph_key_vec", "key_cos"), ("data_graph_value_vec", "value_cos")):
-            try:
-                cursor = conn.execute(
-                    f"SELECT v.rowid, v.distance FROM {table} v "
-                    "JOIN data_graph d ON d.id = v.rowid "
-                    "WHERE v.embedding MATCH ? AND k = ? "
-                    "AND d.kind = ? AND d.active = 1 AND d.deleted_at IS NULL AND d.valid_to IS NULL "
-                    "ORDER BY v.distance",
-                    (blob, k, cls.KIND),
-                )
-                for rowid, dist in cursor.fetchall():
-                    cos = max(0.0, 1.0 - (dist ** 2 / 2.0))
-                    row_sig = candidates.setdefault(rowid, {"key_cos": 0.0, "value_cos": 0.0})
-                    row_sig[signal] = max(row_sig[signal], cos)
-            except Exception:
-                logger.debug(
-                    "[DATA GRAPH] %s KNN failed (non-fatal) for kind=%s", table, cls.KIND, exc_info=True
-                )
-        return candidates
-
-    @classmethod
-    def superseded_predecessors(cls, key: str, limit: int = 5) -> list[Self]:
-        """Historical predecessor rows for this kind's exact ``key`` — the
-        supersession-neighbour walk (ruling 3) that REPLACES the deleted
-        ``data_graph_edges`` walk: rows sharing ``(kind, key)`` closed out by a
-        later supersession (``valid_to IS NOT NULL``), most-recently-valid
-        first. A recall seed is always a LIVE row (the newest version), so its
-        only supersession neighbours are its own predecessors — read backward
-        off the temporal chain rather than an edge table (out of scope; the
-        richer relatedness graph stays deleted)."""
-        return (cls.filter("kind", cls.KIND).filter("key", key)
-                   .filter("valid_to", None, "IS NOT")
-                   .order_by("valid_from DESC")
-                   .limit(limit).get())
-
-    @classmethod
-    def _hydrate_candidates(cls, signals: dict[int, dict[str, float]]) -> dict[int, tuple[Self, RecallSignals]]:
-        """Fetch the full row for every candidate id in one query and pair it
-        with its signals — the ORM hydration step every ``gather_candidates``
-        below shares."""
-        if not signals:
-            return {}
-        ids = list(signals.keys())
-        rows = {row.id: row for row in cls.filter_in("id", ids).get()}
-        return {
-            rowid: (
-                rows[rowid],
-                RecallSignals(
-                    key_cos=sig.get("key_cos", 0.0),
-                    value_cos=sig.get("value_cos", 0.0),
-                    fts_bonus=sig.get("fts_bonus", 0.0),
-                ),
-            )
-            for rowid, sig in signals.items()
-            if rowid in rows
-        }
-
-    @classmethod
-    def gather_candidates(
-        cls, query: str, query_embedding: list[float] | None, k: int
-    ) -> dict[int, tuple[Self, RecallSignals]]:
-        """This vertical's raw per-lane recall signals — vec (key/value) +
-        FTS bonus — composed from the primitives above (ruling 1, layer 2).
-        Shared here since every searchable vertical composes
-        the identical set of lanes. Non-searchable kinds (behavioural patterns,
-        ``machine_state``) declare the ``Searchable`` trait off (``__search__ =
-        None``) and sit outside the recall span entirely, so this never runs for
-        them. Each entry is a ``(row, RecallSignals)`` pair — the hydrated row
-        alongside its raw per-lane signals; fusing these into one composite score
-        is the recall service's job (ruling 2), not this layer's."""
-        signals = cls.vec_candidates(query_embedding, k)
-        for hit in cls.search(query, 30) if query else []:
-            # search() filters active=1/deleted_at only (no valid_to) — guard
-            # here so a superseded row's FTS posting can never surface as a
-            # live candidate (the recall-strict filter every other lane keeps).
-            if hit.valid_to is not None:
-                continue
-            row_sig = signals.setdefault(cast("int", hit.id), {"key_cos": 0.0, "value_cos": 0.0})
-            row_sig["fts_bonus"] = 1.0
-        return cls._hydrate_candidates(signals)
 
     # ── reinforce ────────────────────────────────────────────────────────
 

@@ -18,7 +18,6 @@ import json
 from typing import ClassVar, Self, cast
 
 from models.model import Model
-from models.query import Query
 
 
 class Transcript(Model):
@@ -64,14 +63,6 @@ class Transcript(Model):
     _TURN_KEY: ClassVar[str] = "COALESCE(turn_id, -id)"
 
     _PREVIEW_CHARS: ClassVar[int] = 200
-
-    # ── query scopes ────────────────────────────────────────────────────────
-
-    @classmethod
-    def settled_assistants(cls) -> Query[Self]:
-        """Late-binding scope over the settle predicate — the settled-assistant
-        rows (turn settle0 candidates); compose channel/turn filters onto it."""
-        return cls.filter("role", "assistant").filter("settled", 1)
 
     # ── turn-id allocation (§6.8, atomic in a single-writer begin()) ─────────
 
@@ -157,21 +148,6 @@ class Transcript(Model):
             "SELECT MAX(created_at) FROM transcript WHERE role = 'user'",
         ).fetchone()
         return cast("str | None", row[0]) if row else None
-
-    @classmethod
-    def channel_activity(cls, since_days: int) -> list[tuple[str, int, str]]:
-        """Per-channel user-message frequency over the last ``since_days`` (world
-        awareness's topic-interest signal): ``(channel, freq, last_seen)`` ordered
-        by frequency."""
-        rows = cls._bound_connection().execute(
-            "SELECT channel, COUNT(*) AS freq, MAX(created_at) AS last_seen "
-            "FROM transcript "
-            "WHERE created_at >= datetime('now', '-' || ? || ' days') "
-            "  AND role = 'user' AND channel IS NOT NULL AND channel != '' "
-            "GROUP BY channel ORDER BY freq DESC LIMIT 20",
-            (since_days,),
-        ).fetchall()
-        return [(cast("str", r[0]), int(r[1]), cast("str", r[2])) for r in rows]
 
     @classmethod
     def distinct_channels(cls) -> list[str]:
@@ -282,23 +258,6 @@ class Transcript(Model):
             row.to_dict()
             for row in cls.filter("channel", channel)
             .filter("turn_id", turn_id)
-            .order_by("id ASC")
-            .get()
-        ]
-
-    @classmethod
-    def by_ids(cls, ids: list[int]) -> list[dict[str, object]]:
-        """Rows for an explicit ``id`` list, ordered by ``id`` ascending, as
-        plain column dicts — the memory-retrieval span fetch and the
-        super-episode transcript projection. Empty list → no query, empty
-        result; absent ids are simply omitted. Dict-shaped (like ``by_turn``)
-        because callers read ``r['id']``/``r['role']``/``r['content']``/
-        ``r['created_at']``/``r['tool_name']``."""
-        if not ids:
-            return []
-        return [
-            row.to_dict()
-            for row in cls.filter_in("id", ids)
             .order_by("id ASC")
             .get()
         ]

@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
-from typing import ClassVar, Self, cast
+from typing import ClassVar, Self
 
 from models.model import Model
 
@@ -143,20 +143,6 @@ class ToolCall(Model):
         autoincrement id — the batch-anchor read. Empty input short-circuits to
         ``[]``."""
         return cls.filter_in("transcript_id", transcript_ids).order_by("id").get()
-
-    @classmethod
-    def memory_recall_results(cls, transcript_ids: list[int]) -> list[str]:
-        """The non-null ``result`` payloads of every ``memory`` tool call
-        anchored to the given input rows — the recall envelopes an episode
-        window already cited (``tool_name='memory'`` covers both auto-seed and
-        LLM-invoked recall). Empty input short-circuits to ``[]``."""
-        return [
-            cast("str", result)
-            for result in cls.filter_in("transcript_id", transcript_ids)
-            .filter("tool_name", "memory")
-            .filter("result", None, "IS NOT")
-            .pluck("result")
-        ]
 
     # Off-turn GC: an orphaned tool call (its anchoring transcript row purged by
     # retention out from under it) is unreachable — every read joins transcript —
