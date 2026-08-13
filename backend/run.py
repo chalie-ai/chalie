@@ -268,10 +268,6 @@ def _init_services() -> None:
     _get_write_queue()
     logger.info("[Startup] WriteQueueService started")
 
-    from services.telemetry_service import get_telemetry_collector as _get_telemetry_collector
-    _get_telemetry_collector()
-    logger.info("[Startup] TelemetryCollector initialized")
-
 
 def _register_workers(manager: "_WorkerManager", host: str, port: int) -> None:
     """Register all service workers with the WorkerManager.

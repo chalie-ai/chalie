@@ -1,11 +1,11 @@
 """System namespace — /health, /ready, /metrics (probes) and /api/system/status, /api/system/observability/* (admin).
 
-Read-only observability + diagnostics (not CRUD): 17 of 18 routes are GETs
+Read-only observability + diagnostics (not CRUD): 16 of 17 routes are GETs
 returning a status/diagnostic DTO or an opaque service-owned shape. The one
 mutating-ish route (``POST /health`` heartbeat ingest) is an action endpoint
 kept at 200 (it returns status/result, not a created resource). Datetimes serialize as ISO-8601 UTC via the foundation serializer — the
 local ``_now_iso()`` helper is deleted. Where a protected test pins an exact shape
-(records 400, degraded-200, non-ISO ``compacted_at``, raw telemetry/metrics),
+(records 400, degraded-200, non-ISO ``compacted_at``, raw metrics),
 current behavior is preserved.
 """
 
@@ -437,23 +437,6 @@ class ObservabilityWriteQueueResource(Resource):
         except Exception as e:
             logger.exception(f"[REST API] observability/write-queue error: {e}")
             return error("Failed to retrieve write queue stats", 500)
-
-
-@system_ns.route("/observability/telemetry")
-class ObservabilityTelemetryResource(Resource):
-    @require_session
-    @system_ns.response(200, "Telemetry summary (opaque, dynamic event-type keys)")
-    @system_ns.response(500, "Failed to retrieve telemetry summary", model=_S["Error"])
-    @responds(code=200)
-    def get(self) -> ResponseReturnValue:
-        """Telemetry event summary across all tracked event types (raw passthrough)."""
-        try:
-            from services.telemetry_service import get_telemetry_collector
-            summary = get_telemetry_collector().get_summary()
-            return {"generated_at": utc_now().isoformat(), **summary}
-        except Exception as e:
-            logger.exception(f"[REST API] observability/telemetry error: {e}")
-            return error("Failed to retrieve telemetry summary", 500)
 
 
 def _tail_error_lines() -> list[dict[str, object]]:
