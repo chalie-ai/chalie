@@ -272,13 +272,6 @@ def authed_client(db: sqlite3.Connection) -> Iterator[tuple[object, sqlite3.Conn
             yield (client, db, real_store)
 
 
-@pytest.fixture
-def tmp_state_file(tmp_path: Path) -> Path:
-    """Temporary state file path for tools using JSON state."""
-    state_file = tmp_path / "state.json"
-    return state_file
-
-
 class _FixedEmbedder:
     """Deterministic stand-in for the embedding model: every text maps to the
     same 768-d unit vector, matching the vec-table dimension. Vector-lane hits

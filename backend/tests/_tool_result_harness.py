@@ -10,7 +10,6 @@
 for the ``test_ability_*_tool_result`` suite, plus the :func:`built` unwrap
 every happy-path ``from_params`` call site uses."""
 
-import json
 import sqlite3
 from typing import TypeVar, cast
 
@@ -45,16 +44,6 @@ def seed_transcript(db: sqlite3.Connection, channel: str = "chat", content: str 
     return cast(int, cur.lastrowid)
 
 
-def allow_policy(db: sqlite3.Connection, permission: str, channel: str = "chat") -> None:
-    """Flip the real ``policy`` table so *permission* is ``allow`` on *channel*."""
-    db.execute(
-        "INSERT OR REPLACE INTO policy (channel, permission, setting) "
-        "VALUES (?, ?, 'allow')",
-        (channel, permission),
-    )
-    db.commit()
-
-
 def head(rendered: str, tool: str) -> str:
     line = rendered.splitlines()[0]
     assert line.startswith(f"[{tool}("), rendered
@@ -75,7 +64,3 @@ def body(rendered: str, tool: str, rich: bool = False) -> str:
     if rich:
         return text.split("\n\n", 1)[0]
     return text
-
-
-def parse_body(rendered: str, tool: str, rich: bool = False) -> object:
-    return json.loads(body(rendered, tool, rich=rich))
