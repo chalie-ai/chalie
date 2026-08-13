@@ -14,7 +14,6 @@ from configs.channels._common import DEFAULT_ALWAYS_AVAILABLE
 from configs.channels.discovery import DiscoveryConfig
 from configs.channels.external_agent import EAMPConfig
 from configs.channels.scheduled import ScheduledConfig
-from configs.channels.skill_association import SkillAssociationConfig
 from configs.channels.skill_suggestion import SkillSuggestionConfig
 from configs.channels.thread_gist import ThreadGistConfig
 from configs.channels.user import UserConfig
@@ -43,7 +42,6 @@ def config_for(config_type: "ConfigTypeEnum | str") -> ProcessorConfig:
 
 
 __all__ = [
-    "SkillAssociationConfig",
     "DEFAULT_ALWAYS_AVAILABLE",
     "DiscoveryConfig",
     "EAMPConfig",

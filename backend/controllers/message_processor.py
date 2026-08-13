@@ -47,9 +47,9 @@ decides normally.
 over-cap) → store any prose → dispatch tool calls → recurse; it bottoms out when
 the model returns a turn with no tool calls. The first ``_step()`` is isolated onto
 the daemon thread by ``begin()``; every recursive call is synchronous within that
-thread. Synchronous text-consumers (delegate abilities, mcp_server,
-skill_association) call ``process()`` then ``result()`` to join the thread and
-read the final text.
+thread. Synchronous text-consumers (delegate abilities, mcp_server, the
+user-synthesis generator) call ``process()`` then ``result()`` to join the
+thread and read the final text.
 """
 
 from __future__ import annotations
@@ -292,8 +292,8 @@ class MessageProcessor:
 
     def result(self) -> str:
         """Join the drive thread and return the turn's final text — the
-        synchronous read for text-consuming callers (delegate abilities,
-        skill-association). Fire-and-forget callers simply ignore it."""
+        synchronous read for text-consuming callers (delegate abilities, the
+        user-synthesis generator). Fire-and-forget callers simply ignore it."""
         if self._thread is not None:
             self._thread.join()
         return self._result_text

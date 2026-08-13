@@ -1,13 +1,10 @@
 """Response DTOs for the skills module.
 
 Mirrors the field shape of the legacy DTOs (``backend/api/dto/skill.py``,
-``skill_association.py``, ``skill_toggle.py``) so the wire format stays
-identical.
+``skill_toggle.py``) so the wire format stays identical.
 """
 
 from __future__ import annotations
-
-from datetime import datetime
 
 from .response import Response
 
@@ -24,16 +21,6 @@ class SkillResponse(Response):
     source: str
     enabled: bool
     based_on: int | None
-
-
-class SkillAssociationResponse(Response):
-    """Read shape for one pattern -> skill association rule."""
-
-    skill_id: int
-    skill_title: str
-    pattern_name: str
-    rule: str
-    created_at: datetime
 
 
 class SkillToggleResponse(Response):

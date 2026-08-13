@@ -30,10 +30,9 @@ class Channel(str, Enum):
     SCHEDULE      = "schedule"
 
     # ── Reflection / subconscious ────────────────────────────────────────────
-    SKILLS_BUILDING   = "skills_building"
-    SKILL_ASSOCIATION = "skill_association"
-    MEMORY_HYGIENE    = "memory_hygiene"
-    USER_SYNTHESIS    = "user_synthesis"
+    SKILLS_BUILDING = "skills_building"
+    MEMORY_HYGIENE  = "memory_hygiene"
+    USER_SYNTHESIS  = "user_synthesis"
 
     # ── Compaction ───────────────────────────────────────────────────────────
     COMPACTION      = "compaction"

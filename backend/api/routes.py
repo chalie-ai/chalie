@@ -45,7 +45,6 @@ from .actions.providers.test import ProviderTest
 from .actions.providers.vision import ProviderVision
 from .actions.scheduler.turns import SchedulerTurns
 from .actions.settings.personality import PersonalityAction
-from .actions.skills.associations import SkillAssociations
 from .actions.skills.copy import SkillCopy
 from .actions.skills.toggle import SkillToggle
 from .actions.snapshot.export import SnapshotExportAction
@@ -108,7 +107,6 @@ ROUTES: tuple[Endpoint, ...] = (
     PersonalityAction("settings", "personality"),
 
     Skills("skills"),
-    SkillAssociations("skills", "associations"),
     SkillCopy("skills", "copy"),
     SkillToggle("skills", "toggle"),
 

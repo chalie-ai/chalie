@@ -7,7 +7,6 @@
  *
  * Routes consumed here:
  *   GET    /api/skills/all?page=N&limit=M   paginated listing (fetchAllPages).
- *   GET    /api/skills/associations         pattern → skill rules (listing).
  *   POST   /api/skills/-1                   create → 201, result DTO.
  *   POST   /api/skills/<id>                 update → result DTO.
  *   DELETE /api/skills/<id>                 → 204 empty body.
@@ -15,15 +14,7 @@
  *   POST   /api/skills/copy/<id>            duplicate a curated skill → 201.
  */
 import { api } from '@chalie/shared';
-import { fetchAllPages, type ListingEnvelope } from './paginate';
-
-export interface Association {
-  skill_title: string;
-  pattern_name: string;
-  rule: string;
-  created_at?: string | null;
-  [key: string]: unknown;
-}
+import { fetchAllPages } from './paginate';
 
 export interface Skill {
   id: string | number;
@@ -50,12 +41,8 @@ interface SingleEnvelope<T> {
 }
 
 export const skills = {
-  async list(): Promise<{ skills: Skill[]; associations: Association[] }> {
-    const [skillRows, associations] = await Promise.all([
-      fetchAllPages<Skill>('/api/skills/all'),
-      api.get<ListingEnvelope<Association>>('/api/skills/associations'),
-    ]);
-    return { skills: skillRows, associations: associations.result };
+  async list(): Promise<Skill[]> {
+    return fetchAllPages<Skill>('/api/skills/all');
   },
 
   async create(body: SkillInput): Promise<Skill> {

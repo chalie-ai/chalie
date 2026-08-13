@@ -4,8 +4,7 @@ Covers the CRUD routes over skills.sqlite (via the
 :class:`~models.skill.Skill` active-record model) plus user-skill YAML
 write-back to ``data/skills/user/``:
 
-- GET    /api/skills/all   → get_all (listing only — associations moved to
-                              the ``skills/associations`` action)
+- GET    /api/skills/all   → get_all (listing)
 - POST   /api/skills/<id>  → post (create when id=-1, update otherwise)
 - DELETE /api/skills/<id>  → delete
 

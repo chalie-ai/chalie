@@ -62,7 +62,6 @@ logger = logging.getLogger(__name__)
 
 _CHANNEL_USER = Channel.USER
 _CHANNEL_SCHEDULE = Channel.SCHEDULE
-_CHANNEL_SKILL_ASSOCIATION = Channel.SKILL_ASSOCIATION
 _CHANNEL_SKILLS_BUILDING = Channel.SKILLS_BUILDING
 _CHANNEL_THREAD_GIST = Channel.DELEGATE_THREAD_GIST
 _CHANNEL_VISION = Channel.DELEGATE_VISION
@@ -205,10 +204,9 @@ class PromptService:
             return self._code_agent_prompt()
         if channel == _CHANNEL_EXTERNAL_AGENT:
             return self._external_agent_prompt()
-        # skill_association, vision, compaction and user_synthesis pass the
-        # raw input straight through.
+        # vision, compaction and user_synthesis pass the raw input straight
+        # through.
         if channel in (
-            _CHANNEL_SKILL_ASSOCIATION,
             _CHANNEL_VISION,
             _CHANNEL_COMPACTION,
             _CHANNEL_USER_SYNTHESIS,

@@ -113,7 +113,7 @@ def test_corrupt_db_is_loud_not_zero_hit(skills_db: Path, db: sqlite3.Connection
 
 def test_exact_title_match_returns_playbook_content(skills_db: Path, db: sqlite3.Connection) -> None:
     """An exact title pins that one skill (rung 1) and returns its full playbook —
-    each row is ``{name, content, rules}`` (no search-internal ``source`` field)."""
+    each row is ``{name, content}`` (no search-internal ``source`` field)."""
     _id, title, content = _pick_known_title(skills_db)
     mp = _mp(db)
     out = mp.dispatch_service.dispatch("find_skills", {"query": [title], "act_summary": "x"})
@@ -124,8 +124,7 @@ def test_exact_title_match_returns_playbook_content(skills_db: Path, db: sqlite3
     assert isinstance(rows, list)
     assert len(rows) >= 1
     for row in rows:
-        assert set(row.keys()) == {"name", "content", "rules"}
-        assert isinstance(row["rules"], list)
+        assert set(row.keys()) == {"name", "content"}
     count = int(head.split("count=")[1].split(",")[0].rstrip(")]"))
     assert count == len(rows)
     mine = next((r for r in rows if r["name"] == title), None)
