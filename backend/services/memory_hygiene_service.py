@@ -42,19 +42,18 @@ class MemoryHygieneService:
     def __init__(self) -> None:
         self._empty_until: datetime | None = None
 
-    def tick(self) -> str:
-        """Run one consolidation tick.
+    def _covered_end(self) -> "datetime | str":
+        """Return the covered-end datetime, or an early-return status string.
 
-        Returns a short status string the cron job logs under ``[MEMORY HYGIENE]``.
+        Reads the last ``memory_hygiene`` transcript row and parses its
+        coverage bounds, or falls back to the minimum ``created_at`` across
+        both store tables on first run.  Returns a status string (which
+        includes the relevant ERROR log) when no chain can start.
         """
         from models.memory_graph import MemoryGraphRow  # noqa: PLC0415
         from models.memory_map import MemoryMapRow  # noqa: PLC0415
         from models.transcript import Transcript  # noqa: PLC0415
-        from services.locale_service import get_timezone  # noqa: PLC0415
 
-        tz = get_timezone()
-
-        # ── coverage read ──────────────────────────────────────────────────
         row = (
             Transcript.filter("role", "memory_hygiene")
             .order_by("id DESC")
@@ -67,27 +66,63 @@ class MemoryHygieneService:
                 head = (content[:200] + "...") if len(content) > 200 else content
                 logger.error("[MEMORY HYGIENE] corrupt coverage row content: %s", head)
                 return "corrupt coverage"
-            covered_end_dt: datetime = bounds[1]  # end of last covered window
-        else:
-            # First run: covered_end = minimum earliest-created-at across both tables.
-            graph_min_raw = MemoryGraphRow.earliest_created_at()
-            map_min_raw = MemoryMapRow.earliest_created_at()
-            graph_min = parse_utc(graph_min_raw) if graph_min_raw is not None else PARSE_SENTINEL
-            map_min = parse_utc(map_min_raw) if map_min_raw is not None else PARSE_SENTINEL
-            if graph_min == PARSE_SENTINEL and map_min == PARSE_SENTINEL:
-                return "empty store"
-            if graph_min == PARSE_SENTINEL:
-                covered_end_dt = map_min
-            elif map_min == PARSE_SENTINEL:
-                covered_end_dt = graph_min
-            else:
-                covered_end_dt = min(graph_min, map_min)
-            if covered_end_dt == PARSE_SENTINEL:
-                logger.error("[MEMORY HYGIENE] could not parse earliest created_at from store")
-                return "corrupt store timestamps"
+            return bounds[1]  # end of last covered window
+
+        # First run: covered_end = minimum earliest-created-at across both tables.
+        graph_min_raw = MemoryGraphRow.earliest_created_at()
+        map_min_raw = MemoryMapRow.earliest_created_at()
+        graph_min = parse_utc(graph_min_raw) if graph_min_raw is not None else PARSE_SENTINEL
+        map_min = parse_utc(map_min_raw) if map_min_raw is not None else PARSE_SENTINEL
+        if graph_min == PARSE_SENTINEL and map_min == PARSE_SENTINEL:
+            return "empty store"
+        if graph_min == PARSE_SENTINEL:
+            return map_min
+        if map_min == PARSE_SENTINEL:
+            return graph_min
+        covered_end_dt = min(graph_min, map_min)
+        if covered_end_dt == PARSE_SENTINEL:
+            logger.error("[MEMORY HYGIENE] could not parse earliest created_at from store")
+            return "corrupt store timestamps"
+        return covered_end_dt
+
+    def due(self) -> bool:
+        """Per-minute cron gate for the daily memory-hygiene consolidation.
+
+        Returns True only when at least one closed window is pending. Reads
+        one indexed transcript row, runs pure datetime math, and checks the
+        in-memory ``_empty_until`` short-circuit — no table scans of
+        memory_graph/memory_map and no MessageProcessor work.
+        """
+        from services.locale_service import get_timezone  # noqa: PLC0415
+
+        covered = self._covered_end()
+        if isinstance(covered, str):
+            return False
+        windows = pending_windows(covered, utc_now(), get_timezone())
+        if not windows:
+            return False
+        newest_end = windows[-1][1]
+        if self._empty_until is not None and newest_end <= self._empty_until:
+            return False
+        return True
+
+    def tick(self) -> str:
+        """Run one consolidation tick.
+
+        Returns a short status string the cron job logs under ``[MEMORY HYGIENE]``.
+        """
+        from models.memory_graph import MemoryGraphRow  # noqa: PLC0415
+        from models.memory_map import MemoryMapRow  # noqa: PLC0415
+        from services.locale_service import get_timezone  # noqa: PLC0415
+
+        tz = get_timezone()
+
+        covered = self._covered_end()
+        if isinstance(covered, str):
+            return covered
 
         # ── pending chain ──────────────────────────────────────────────────
-        windows = pending_windows(covered_end_dt, utc_now(), tz)
+        windows = pending_windows(covered, utc_now(), tz)
         if not windows:
             return "no pending windows"
 
