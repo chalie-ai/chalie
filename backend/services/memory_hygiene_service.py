@@ -134,6 +134,10 @@ class MemoryHygieneService:
             listing,
             turn_id=turn_id if turn_id is not None else -1,
         )
+        # Join the turn: passes must settle sequentially (the next window's
+        # fork reads this one's handoff) and crash_exception is only
+        # meaningful once the drive thread has finished.
+        mp.result()
         if turn_id is None:
             MachineStateRow.store(
                 key=_TURN_ID_KEY,
