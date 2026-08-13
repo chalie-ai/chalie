@@ -45,8 +45,8 @@ def _db_template(tmp_path_factory: pytest.TempPathFactory) -> str:
         # Mirror production boot (run.py / consumer.py): converge() applies only
         # static column DEFAULTs, never value backfills, so the deterministic
         # redesign-column backfill runs as a separate step right after it. Without
-        # this the template diverges from a real boot — last_relevant_at / valid_from
-        # / valid_to stay NULL where production would have populated them.
+        # this the template diverges from a real boot — valid_from / valid_to stay
+        # NULL where production would have populated them.
         convergence.backfill_redesign_columns()
 
         # Mirror boot: seed the flat policy table so gated tool calls on non-chat

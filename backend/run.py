@@ -186,7 +186,7 @@ def _init_database() -> None:
     convergence = SchemaConvergenceService()
     convergence.converge()
     # Separate deterministic value backfill — convergence applies only static
-    # column DEFAULTs, never derived values (last_relevant_at, valid_from, etc.).
+    # column DEFAULTs, never derived values (valid_from, valid_to, etc.).
     convergence.backfill_redesign_columns()
 
     # Policy: apply the declarative seed (idempotent) AFTER convergence has created

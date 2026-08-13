@@ -173,7 +173,6 @@ class SchemaConvergenceService:
 
     def backfill_redesign_columns(self) -> None:
         with Database.transaction() as conn:
-            self._backfill_episode_columns(conn)
             self._backfill_data_graph_columns(conn)
             self._backfill_tool_call_columns(conn)
         logger.info("[convergence] Redesign-column backfill complete")
@@ -198,12 +197,6 @@ class SchemaConvergenceService:
         conn.execute(
             "UPDATE tool_calls SET state = 'done', ended_at = COALESCE(ended_at, created_at) "
             "WHERE state = 'started' AND ended_at IS NULL"
-        )
-
-    def _backfill_episode_columns(self, conn: sqlite3.Connection) -> None:
-        conn.execute(
-            "UPDATE episodes SET last_relevant_at = COALESCE(last_accessed_at, created_at) "
-            "WHERE last_relevant_at IS NULL"
         )
 
     def _backfill_data_graph_columns(self, conn: sqlite3.Connection) -> None:
