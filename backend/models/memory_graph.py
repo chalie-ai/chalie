@@ -123,6 +123,28 @@ class MemoryGraphRow(Model):
     # ── Reads ─────────────────────────────────────────────────────────────
 
     @classmethod
+    def updated_in_window(cls, start_iso: str, end_iso: str) -> list[Self]:
+        """Rows whose ``last_updated_at`` falls in the half-open interval
+        ``[start_iso, end_iso)`` — plain lexicographic comparison is correct
+        because both bounds are ISO-8601 UTC text and the column is TEXT."""
+        return (
+            cls.all()
+            .filter("last_updated_at", start_iso, operator=">=")
+            .filter("last_updated_at", end_iso, operator="<")
+            .order_by("last_updated_at ASC")
+            .get()
+        )
+
+    @classmethod
+    def earliest_created_at(cls) -> str | None:
+        """The minimum ``created_at`` across the table, or ``None`` when the
+        table is empty."""
+        row = cls._bound_connection().execute(
+            "SELECT MIN(created_at) FROM memory_graph"
+        ).fetchone()
+        return str(row[0]) if row is not None and row[0] is not None else None
+
+    @classmethod
     def by_subject(cls, subject: str) -> Self | None:
         """The single live row for an exact ``subject`` (the store lookup)."""
         return cls.filter("subject", subject).first()

@@ -101,6 +101,28 @@ class MemoryMapRow(Model):
     # ── Reads ─────────────────────────────────────────────────────────────
 
     @classmethod
+    def generated_in_window(cls, start_iso: str, end_iso: str) -> list[Self]:
+        """Rows whose ``generated_at`` falls in the half-open interval
+        ``[start_iso, end_iso)`` — plain lexicographic comparison is correct
+        because both bounds are ISO-8601 UTC text and the column is TEXT."""
+        return (
+            cls.all()
+            .filter("generated_at", start_iso, operator=">=")
+            .filter("generated_at", end_iso, operator="<")
+            .order_by("generated_at ASC")
+            .get()
+        )
+
+    @classmethod
+    def earliest_created_at(cls) -> str | None:
+        """The minimum ``created_at`` across the table, or ``None`` when the
+        table is empty."""
+        row = cls._bound_connection().execute(
+            "SELECT MIN(created_at) FROM memory_map"
+        ).fetchone()
+        return str(row[0]) if row is not None and row[0] is not None else None
+
+    @classmethod
     def by_id(cls, row_id: int) -> Self | None:
         """The single map row for an exact ``id``."""
         return cls.filter("id", row_id).first()
