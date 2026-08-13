@@ -17,6 +17,12 @@ use. The double is keyed on the LISTING CONTENT of each request, never on its
 tool set: every hygiene pass carries the same four memory tools, so the tools
 cannot tell one window's pass from another's.
 
+The last part (from ``TestDueGate`` down) drives the per-minute *gate* rather
+than the work: ``due()``, the gates ``MemoryHygieneJob.should_run`` stacks in
+front of it, and the two properties the surrounding system depends on a
+hygiene pass NOT having — it must not trigger a memory step of its own, and it
+must not read as user activity.
+
 Time is pinned by patching ``utc_now`` in the service's OWN namespace (it
 imports the symbol, so that is the binding the window chain reads), and the
 timezone falls back to UTC under test (no heartbeat), which puts every hygiene
@@ -41,12 +47,14 @@ from abilities.recall import Recall
 from configs.channels.memory_hygiene import MemoryHygieneConfig
 from configs.enums.channels import Channel
 from controllers.message_processor import MessageProcessor
+from cron.jobs.memory_hygiene import MemoryHygieneJob
 from exceptions import ContextLimit
 from models.machine_state import MachineStateRow
 from models.memory_graph import MemoryGraphRow
 from models.memory_map import MemoryMapRow
 from models.provider_request import ProviderRequest
 from models.provider_response import ProviderResponse
+from models.transcript import Transcript
 from models.turn_execution import TurnExecution
 from services import memory_hygiene_service
 from services.memory_hygiene_service import (
@@ -55,6 +63,7 @@ from services.memory_hygiene_service import (
     pending_windows,
     render_listing,
 )
+from services.memory_step_service import _in_scope
 
 pytestmark = pytest.mark.unit
 
@@ -1426,3 +1435,364 @@ class TestCleanTurnCarriesNoCrash:
         assert mp.crash_exception is None
         assert _listings(provider), "the pass never reached the provider"
         assert _window_of(_listings(provider)[0]) == _window_line(_ALPHA_AT, _BOUNDARY_1)
+
+
+# ===========================================================================
+# The per-minute gate — due(), and the cron job wrapped around it
+# ===========================================================================
+
+#: The LLM-provider precondition, named where the JOB binds it.
+#: ``cron.jobs.memory_hygiene`` imports the symbol at module load, so this —
+#: not ``cron.base.llm_provider_configured`` — is the binding ``should_run``
+#: actually calls.
+_PROVIDER_GATE = "cron.jobs.memory_hygiene.llm_provider_configured"
+
+#: Six minutes past a boundary: one minute clear of the 5-minute grace, so the
+#: window the boundary closed is genuinely pending rather than still open.
+_PAST_GRACE = timedelta(minutes=6)
+
+
+def _provider_gate(monkeypatch: pytest.MonkeyPatch, *, configured: bool) -> None:
+    """Pin the job's LLM-provider precondition, in whichever direction.
+
+    Pinned in BOTH directions, never read: the real function asks
+    ``ProviderCacheService`` whether a provider exists, and a test that pinned
+    only the False case would be asserting its True case against whatever
+    cache state the session happened to leave behind.
+    """
+    monkeypatch.setattr(_PROVIDER_GATE, lambda: configured)
+
+
+# ---------------------------------------------------------------------------
+# 9 — due() answers the minute tick without doing any work
+# ---------------------------------------------------------------------------
+
+
+class TestDueGate:
+    """``due()`` is asked once a minute forever, so it must answer from one
+    indexed read and pure datetime math — never from a turn."""
+
+    pytestmark = [pytest.mark.usefixtures("chat_provider")]
+
+    def test_due_stays_false_until_the_days_boundary_has_closed(
+        self, db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A store whose only memory is from earlier today is not due; the same
+        store is due once 04:00 has passed and the grace has run out.
+
+        This is the whole contract of the gate — it is what stops the job
+        consolidating a day that is still being written to. Both answers are
+        taken from ONE service instance, so the flip is the calendar moving and
+        nothing else, and the provider double is patched in throughout: asking
+        whether work is pending must not do the work.
+        """
+        clock = _Clock(monkeypatch, datetime(2026, 3, 3, 20, 0, 0, tzinfo=timezone.utc))
+        _seed_graph_row(db, "hygiene.alpha", _ALPHA, _ALPHA_AT)
+        service = MemoryHygieneService()
+        provider = _ScriptedProvider()
+
+        with patch(_BUILD_CLIENT, return_value=provider):
+            assert service.due() is False, (
+                "the still-open window was offered as pending"
+            )
+            clock.now = _BOUNDARY_1 + _PAST_GRACE
+            assert service.due() is True, (
+                "the first closed window never became pending"
+            )
+
+        assert provider.requests == [], (
+            f"asking due() fired {len(provider.requests)} provider call(s)"
+        )
+        assert db.execute("SELECT COUNT(*) FROM transcript").fetchone()[0] == 0, (
+            "asking due() opened a hygiene thread"
+        )
+
+    def test_due_is_false_while_the_store_holds_nothing(
+        self, db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Both memory tables empty: no chain can start, so the gate is closed
+        however far the calendar runs.
+
+        A fresh install sits here — minute after minute, for as long as it
+        takes the user to say something worth remembering. There is no coverage
+        row to resume from and no earliest row to anchor on, so the coverage
+        read returns its ``empty store`` status rather than a datetime, and the
+        gate must read that as "nothing to do" rather than "start from zero".
+        """
+        clock = _Clock(monkeypatch, _NOW)
+        db.execute("DELETE FROM memory_graph")
+        db.execute("DELETE FROM memory_map")
+        db.commit()
+        service = MemoryHygieneService()
+        provider = _ScriptedProvider()
+
+        with patch(_BUILD_CLIENT, return_value=provider):
+            assert service.due() is False
+            # A month later, still nothing stored — still nothing to do. The
+            # gate must not drift open just because boundaries kept passing.
+            clock.now = datetime(2026, 4, 5, 12, 0, 0, tzinfo=timezone.utc)
+            assert service.due() is False
+
+        assert provider.requests == [], (
+            f"an empty store fired {len(provider.requests)} provider call(s)"
+        )
+
+    def test_an_all_empty_tick_silences_due_until_a_newer_boundary_closes(
+        self, db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A tick that found every pending window empty stops re-offering those
+        windows, and starts offering again the moment a newer boundary closes.
+
+        Coverage only ever advances off a transcript row a pass actually wrote,
+        so a window skipped for being empty stays pending forever — and would
+        make the gate answer True on every single minute tick for the rest of
+        the day. The short-circuit is what caps that at one wasted tick per
+        boundary, and it lives in memory on the service instance, so the whole
+        arc is asserted on ONE instance.
+        """
+        clock = _Clock(monkeypatch, _NOW)
+        _seed_graph_row(db, "hygiene.alpha", _ALPHA, _ALPHA_AT)
+        service = MemoryHygieneService()
+        provider = _ScriptedProvider()
+
+        # Mar 3 → Mar 4 carries alpha and is consolidated; Mar 4 → Mar 5 is
+        # empty and skipped, which leaves coverage at Mar 4 04:00.
+        with patch(_BUILD_CLIENT, return_value=provider):
+            assert service.tick() == "processed=1 skipped=1"
+            _drain_turns()
+        served = len(_listings(provider))
+        assert served == 1
+
+        # A tick that DID work clears the short-circuit, so the empty window
+        # the last tick skipped is offered once more — coverage never reached it.
+        assert service.due() is True, (
+            "the skipped window was dropped rather than left pending"
+        )
+
+        with patch(_BUILD_CLIENT, return_value=provider):
+            assert service.tick() == "processed=0 skipped=1"
+            _drain_turns()
+        assert len(_listings(provider)) == served, (
+            "the all-empty tick fired a pass on a window with nothing in it"
+        )
+
+        assert service.due() is False, (
+            "the same empty window is still being offered every minute"
+        )
+
+        # A newer boundary closes: the chain now reaches past the point the
+        # empty tick armed, so the gate has to open again.
+        clock.now = datetime(2026, 3, 6, 4, 0, 0, tzinfo=timezone.utc) + _PAST_GRACE
+        assert service.due() is True, (
+            "the short-circuit swallowed a window that closed after it was armed"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 10 — the cron job: three gates in series, and one cached service
+# ---------------------------------------------------------------------------
+
+
+class TestJobGates:
+    """``MemoryHygieneJob.should_run`` stacks the base cron match, a configured
+    LLM provider, and the service's ``due()`` — and every tick must ask the
+    SAME service, or the gate loses its memory."""
+
+    pytestmark = [pytest.mark.usefixtures("chat_provider")]
+
+    def test_the_job_holds_back_until_an_llm_provider_is_configured(
+        self, db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A store with a closed window pending still does not run while no
+        provider is configured, and runs as soon as one is.
+
+        A hygiene pass is an LLM turn: fired with nothing to send it to, it
+        would crash the window and — because a crashed window is a skip, never
+        a retry — burn that day's consolidation permanently. Both directions
+        are asserted on the one store, so the False is provably the provider
+        gate and not an empty chain.
+        """
+        _Clock(monkeypatch, _NOW)
+        _seed_graph_row(db, "hygiene.alpha", _ALPHA, _ALPHA_AT)
+        job = MemoryHygieneJob()
+
+        _provider_gate(monkeypatch, configured=False)
+        assert job.should_run() is False, (
+            "the job would have driven an LLM turn with no provider to send it to"
+        )
+
+        _provider_gate(monkeypatch, configured=True)
+        assert job.should_run() is True, (
+            "the store is due — the provider gate was the only thing holding it"
+        )
+
+    def test_the_job_holds_back_on_an_empty_store_even_with_a_provider(
+        self, db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A configured provider is a precondition, not a reason to run: with
+        nothing stored, the job stays quiet.
+
+        The gates are in series and the service's ``due()`` is the last word.
+        A job that ran on "provider exists" alone would open a hygiene thread
+        on every fresh install, before a single memory had been written.
+        """
+        _Clock(monkeypatch, _NOW)
+        db.execute("DELETE FROM memory_graph")
+        db.execute("DELETE FROM memory_map")
+        db.commit()
+        _provider_gate(monkeypatch, configured=True)
+
+        assert MemoryHygieneJob().should_run() is False
+
+    def test_the_job_keeps_one_service_so_an_empty_tick_stays_remembered(
+        self, db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The job caches its service, so the short-circuit an empty tick armed
+        is still there at the next minute's gate.
+
+        The short-circuit is in-memory state on the service instance. A job that
+        built a fresh service per tick would throw it away every minute and go
+        back to re-offering the same empty window until the next boundary — the
+        exact behaviour the short-circuit exists to prevent. The contrast at the
+        end is what proves it: a NEW job, on this same store and clock, still
+        says True.
+        """
+        _Clock(monkeypatch, _NOW)
+        _seed_graph_row(db, "hygiene.alpha", _ALPHA, _ALPHA_AT)
+        _provider_gate(monkeypatch, configured=True)
+        job = MemoryHygieneJob()
+        assert job._get_service() is job._get_service(), (
+            "the job hands out a new service per call"
+        )
+
+        provider = _ScriptedProvider()
+        with patch(_BUILD_CLIENT, return_value=provider):
+            assert job._run() == "processed=1 skipped=1"
+            _drain_turns()
+            assert job._run() == "processed=0 skipped=1"
+            _drain_turns()
+
+        assert job.should_run() is False, (
+            "the job forgot the empty tick and re-offered the same window"
+        )
+        assert MemoryHygieneJob().should_run() is True, (
+            "the window really is still pending — the False above came from the "
+            "cached short-circuit, not from an exhausted chain"
+        )
+
+
+class TestJobWiring:
+    """``_run`` is the job's only work hook: it must drive a real pass through
+    the cached service and report that service's own status."""
+
+    pytestmark = [pytest.mark.usefixtures("chat_provider")]
+
+    def test_run_drives_a_real_pass_and_reports_the_services_own_status(
+        self, db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """One due window, run through the job rather than the service: the
+        listing reaches the provider and the status comes back verbatim.
+
+        The cron runner logs whatever ``_run`` returns and nothing else, so that
+        string is the only operator-visible record that a day was consolidated.
+        The gate is asserted open before the run and closed after it, which is
+        what makes the pass a single daily event rather than a loop.
+        """
+        _Clock(monkeypatch, datetime(2026, 3, 4, 12, 0, 0, tzinfo=timezone.utc))
+        _seed_graph_row(db, "hygiene.alpha", _ALPHA, _ALPHA_AT)
+        _provider_gate(monkeypatch, configured=True)
+        job = MemoryHygieneJob()
+        assert job.should_run() is True
+
+        provider = _ScriptedProvider()
+        with patch(_BUILD_CLIENT, return_value=provider):
+            status = job._run()
+            _drain_turns()
+
+        assert status == "processed=1 skipped=0"
+        listings = _listings(provider)
+        assert len(listings) == 1, (
+            f"expected one pass, got {[_window_of(r) for r in listings]}"
+        )
+        assert _window_of(listings[0]) == _window_line(_ALPHA_AT, _BOUNDARY_1)
+        assert _ALPHA in _listing_of(listings[0]), "the seeded row never reached the listing"
+        assert job.should_run() is False, (
+            "the job would run the window it just consolidated again next minute"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 11 — what a hygiene pass must NOT set off
+# ---------------------------------------------------------------------------
+
+
+class TestNoMemoryStepOnTheHygieneChannel:
+    """The settle-triggered memory step must never fire on this channel."""
+
+    def test_the_hygiene_channel_is_out_of_scope_for_the_memory_step(self) -> None:
+        """``memory_hygiene`` is not a memory-stepping channel; ``user`` is.
+
+        The memory step fires when a turn settles and writes memories from what
+        the thread just said. A hygiene pass settles on the hygiene thread — so
+        a step here would read the pass's own consolidation bullets and write
+        them back into the store as new memories, on the same stable turn the
+        next day's pass forks from. That is a feedback loop that grows the store
+        every night, on the one channel whose entire job is to shrink it. The
+        ``user`` half of the assertion is what proves the scope check is
+        discriminating rather than closed.
+        """
+        assert _in_scope(Channel.MEMORY_HYGIENE.value) is False
+        assert _in_scope(Channel.USER.value) is True
+
+
+class TestHygieneDoesNotLookLikeUserActivity:
+    """A whole pass must leave the last-user-message clock exactly as it found
+    it."""
+
+    pytestmark = [pytest.mark.usefixtures("chat_provider")]
+
+    def test_a_full_pass_leaves_the_last_user_message_clock_untouched(
+        self, db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Nothing a hygiene pass writes carries the ``user`` role — before the
+        pass the clock is unset, and after a real pass it still is.
+
+        ``Transcript.last_user_message_at()`` is the timestamp every idle-gated
+        cron job reads to decide whether the user is present; one ``user`` row
+        written by a background pass re-arms that 30-minute window and holds the
+        whole idle-gated cohort off for half an hour, every night. The hygiene
+        config declares its own ``memory_hygiene`` role for exactly this reason,
+        and this asserts the whole pass — input row, tool round, settle, and the
+        daemons the settle spawns — honours it.
+        """
+        assert Transcript.last_user_message_at() is None, (
+            "the store already had a user-role row before the pass — this test "
+            "cannot prove anything about what the pass wrote"
+        )
+
+        _Clock(monkeypatch, datetime(2026, 3, 4, 12, 0, 0, tzinfo=timezone.utc))
+        _seed_graph_row(db, "hygiene.alpha", _ALPHA, _ALPHA_AT)
+        provider = _ScriptedProvider(
+            [_Lane(_listing_carries(_ALPHA), [
+                _Call(Recall.NAME, {"query": "alpha facts"}),
+                _Say("- merged alpha facts into one subject"),
+            ])],
+        )
+
+        with patch(_BUILD_CLIENT, return_value=provider):
+            assert MemoryHygieneService().tick() == "processed=1 skipped=0"
+            _drain_turns()
+
+        # The pass really ran — otherwise "no user rows" would be vacuous.
+        assert _listings(provider), "the pass never reached the provider"
+        assert _transcript(db, "memory_hygiene"), "the pass wrote no input row"
+        assert [content for _id, _turn, content in _transcript(db, "assistant")], (
+            "the pass never settled"
+        )
+
+        assert db.execute(
+            "SELECT COUNT(*) FROM transcript WHERE role = 'user'"
+        ).fetchone()[0] == 0, "the pass wrote a user-role transcript row"
+        assert Transcript.last_user_message_at() is None, (
+            "the pass armed the idle gate every idle-gated cron job reads"
+        )
