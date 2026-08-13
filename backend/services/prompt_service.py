@@ -41,11 +41,11 @@ from exceptions import UnroutedPromptChannel
 from models.tool_call import ToolCall
 from models.transcript import Transcript
 from models.transcript_thinking import TranscriptThinking
+from models.user_synthesis import UserSynthesisRow
 from services.locale_service import CHAT_TIMESTAMP_FMT, format_date
 from services.markup import PROMPT_TAGS
 from services.personality.personality_service import personality_service
 from services.time_formatter_service import TimeFormatterService
-from services.user_synthesis import UserSynthesis
 from services.world_state import world_state
 
 if TYPE_CHECKING:
@@ -169,9 +169,9 @@ class PromptService:
         return config.system_prompt
 
     def user_definition(self) -> str:
-        """``UserConfig.get_user_definition``: the user synthesis via
-        :class:`UserSynthesis`, or the peer-to-peer fallback."""
-        return UserSynthesis.get() or _USER_DEFINITION_FALLBACK
+        """``UserConfig.get_user_definition``: the newest ``user_synthesis``
+        version via :class:`UserSynthesisRow`, or the peer-to-peer fallback."""
+        return UserSynthesisRow.latest_content() or _USER_DEFINITION_FALLBACK
 
     def user_prompt(self) -> str:
         """The turn's user-message body, ported from each config's
@@ -598,15 +598,17 @@ class PromptService:
 
     def _external_agent_system_prompt(self) -> str:
         """``EAMPConfig.get_system_prompt``: the external-agent producer body
-        with the user's first name resolved from data_graph and the
-        agent/project placeholders filled — prefixed with the agent identity
+        with the user's first name resolved from the latest user synthesis and
+        the agent/project placeholders filled — prefixed with the agent identity
         definition. Any failure yields ``""`` (the pre-rewrite try/except
         contract)."""
         config = cast("_ExternalAgentConfig", self.mp.config)
         try:
             body = config.system_prompt
-            summary = UserSynthesis.get()
-            user_name = summary.split()[0] if summary and summary.split() else "the user"
+            # Bullet-form synthesis opens with punctuation — only a clean
+            # leading word can be read as the user's name.
+            tokens = UserSynthesisRow.latest_content().split()
+            user_name = tokens[0] if tokens and tokens[0].isalpha() else "the user"
             body = (
                 body
                 .replace("{user_name}", user_name)
