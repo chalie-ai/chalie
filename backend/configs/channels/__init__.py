@@ -18,6 +18,7 @@ from configs.channels.skill_association import SkillAssociationConfig
 from configs.channels.skill_suggestion import SkillSuggestionConfig
 from configs.channels.thread_gist import ThreadGistConfig
 from configs.channels.user import UserConfig
+from configs.channels.user_synthesis import UserSynthesisConfig
 from configs.channels.vision import VisionConfig
 from configs.channels.web_browse import WebBrowseConfig
 from configs.channels.web_search import WebSearchConfig
@@ -51,6 +52,7 @@ __all__ = [
     "SkillSuggestionConfig",
     "ThreadGistConfig",
     "UserConfig",
+    "UserSynthesisConfig",
     "VisionConfig",
     "WebBrowseConfig",
     "WebSearchConfig",

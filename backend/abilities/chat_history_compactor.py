@@ -43,6 +43,7 @@ if TYPE_CHECKING:
 
     class _CompactionParent(Protocol):
         _compaction_kept_rows: int
+        _compaction_folded_block: str
         turn_id: "int | None"
         _forked: bool
 
@@ -189,6 +190,15 @@ class ChatHistoryCompactor(Ability[ChatHistoryCompactorParamsBag]):
             else max(cast(int, tid) for r in rows if (tid := r.to_dict()["turn_id"]) is not None)
         )
         Compaction.write(channel, for_turn_id, compacted_up_to, summary)
+        # A folded USER window is the user-synthesis trigger — hand over the
+        # block stashed pre-watermark. Never allowed to break the recovery
+        # path the compactor sits on.
+        try:
+            from services.user_synthesis_generator import UserSynthesisGenerator  # noqa: PLC0415
+
+            UserSynthesisGenerator.instance().on_compaction(channel, mp._compaction_folded_block)
+        except Exception:  # noqa: BLE001
+            logger.exception("[chat_history_compactor] user-synthesis handoff failed")
         return ToolResult.ok("Chat history compacted.", rows_compacted=rows_compacted)
 
     @staticmethod
@@ -205,13 +215,21 @@ class ChatHistoryCompactor(Ability[ChatHistoryCompactorParamsBag]):
         Returns the combined text to summarise, or None when there is nothing
         left to compact.  Surfaces the row count folded into
         ``parent._compaction_kept_rows`` so ``run()`` can attach an honest
-        ``rows_compacted`` to the success result without recomputing.
+        ``rows_compacted`` to the success result without recomputing, and the
+        folded window itself into ``parent._compaction_folded_block`` for the
+        user-synthesis handoff (it cannot be re-read once the watermark
+        advances).
         """
         total = len(parent.transcript_service.read())
         prev = parent.prompt_service.previous_messages()
         if not prev.strip():
             parent._compaction_kept_rows = 0
+            parent._compaction_folded_block = ""
             return None
         combined = prev if not prior else f"## Previous Summary\n\n{prior}\n\n## New Turns\n\n{prev}"
         parent._compaction_kept_rows = total
+        # The folded window WITHOUT the prior checkpoint — stashed here because
+        # the handoff fires only after Compaction.write, when these rows can no
+        # longer be read.
+        parent._compaction_folded_block = prev
         return combined

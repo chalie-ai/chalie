@@ -33,6 +33,7 @@ class Channel(str, Enum):
     SKILLS_BUILDING   = "skills_building"
     SKILL_ASSOCIATION = "skill_association"
     MEMORY_HYGIENE    = "memory_hygiene"
+    USER_SYNTHESIS    = "user_synthesis"
 
     # ── Compaction ───────────────────────────────────────────────────────────
     COMPACTION      = "compaction"

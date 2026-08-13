@@ -187,6 +187,35 @@ def real_memory_step(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(MemoryStepService, "on_settle", _REAL_ON_SETTLE)
 
 
+# The chat-history compactor hands every folded USER window to the
+# user-synthesis generator, which spawns a live background MessageProcessor —
+# the same leak shape as the memory step above, quiesced session-scoped for
+# the same reason: no teardown/setup gap where a late real compaction could
+# hit the real trigger. Feature tests re-arm with ``real_user_synthesis``.
+
+_REAL_ON_COMPACTION = None
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _quiesce_user_synthesis() -> "Iterator[None]":
+    global _REAL_ON_COMPACTION
+    from services.user_synthesis_generator import UserSynthesisGenerator
+    _REAL_ON_COMPACTION = UserSynthesisGenerator.on_compaction
+    patch_ = pytest.MonkeyPatch()
+    patch_.setattr(
+        UserSynthesisGenerator, "on_compaction", lambda self, channel, folded_block: None
+    )
+    yield
+    patch_.undo()
+
+
+@pytest.fixture
+def real_user_synthesis(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Re-arm the real compaction trigger for generator feature tests."""
+    from services.user_synthesis_generator import UserSynthesisGenerator
+    monkeypatch.setattr(UserSynthesisGenerator, "on_compaction", _REAL_ON_COMPACTION)
+
+
 # ── Non-DB mock fixtures ──────────────────────────────────────────
 
 @pytest.fixture

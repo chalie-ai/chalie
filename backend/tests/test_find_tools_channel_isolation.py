@@ -196,6 +196,7 @@ _EXPECTED_NON_DISCOVERABLE = frozenset({
 
     "mcp_manager",             # framework — always_available only
     "chat_history_compactor",  # internal — dispatched programmatically
+    "save_synthesis",          # user-synthesis generator only
     "skill_manager",           # system variant — SkillSuggestionConfig only
     "email",                   # personal info — pim delegate only
     "calendar",                # personal info — pim delegate only

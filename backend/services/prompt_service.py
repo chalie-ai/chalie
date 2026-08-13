@@ -73,6 +73,7 @@ _CHANNEL_CODE_AGENT = Channel.DELEGATE_CODE_AGENT
 _CHANNEL_EXTERNAL_AGENT = "external_agent"
 _CHANNEL_COMPACTION = Channel.COMPACTION
 _CHANNEL_MEMORY_HYGIENE = Channel.MEMORY_HYGIENE
+_CHANNEL_USER_SYNTHESIS = Channel.USER_SYNTHESIS
 
 _USER_DEFINITION_FALLBACK = (
     "The user is a real human. Treat this conversation as peer-to-peer dialogue."
@@ -204,9 +205,14 @@ class PromptService:
             return self._code_agent_prompt()
         if channel == _CHANNEL_EXTERNAL_AGENT:
             return self._external_agent_prompt()
-        # skill_association, vision and compaction pass the raw input straight
-        # through.
-        if channel in (_CHANNEL_SKILL_ASSOCIATION, _CHANNEL_VISION, _CHANNEL_COMPACTION):
+        # skill_association, vision, compaction and user_synthesis pass the
+        # raw input straight through.
+        if channel in (
+            _CHANNEL_SKILL_ASSOCIATION,
+            _CHANNEL_VISION,
+            _CHANNEL_COMPACTION,
+            _CHANNEL_USER_SYNTHESIS,
+        ):
             return self.mp.raw_input
         raise UnroutedPromptChannel(channel)
 
