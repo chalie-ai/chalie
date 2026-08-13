@@ -1,31 +1,16 @@
-"""Feature tests for the geo-tagging components.
+"""Feature tests for geo_utils — pure distance / travel / speed functions.
 
-Three services are covered:
-
-* geo_utils          — pure distance / travel / speed functions
-* GeoPatternProcessor — LLM processor that extracts location-based patterns
-* PlaceAbility        — save/list/get/delete named places via data_graph
-
-All tests run against real production code with the real DB (via the `db`
-fixture from conftest.py which uses SchemaConvergenceService). No mocks of
-in-process code.
+All tests run against real production code. No mocks of in-process code.
 
 geopy is required. Tests are skipped if the package is absent so the CI
 baseline is not broken in environments that haven't installed it yet.
 """
 
-import sqlite3
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
 import pytest
-
-from configs.channels.geo_pattern import GeoConfig
-from configs.enums.channels import Channel
-
-if TYPE_CHECKING:
-    from controllers.message_processor import MessageProcessor
 
 pytestmark = pytest.mark.unit
 
@@ -127,65 +112,3 @@ class TestEstimateSpeedFromHistory:
 
         result = estimate_speed_from_history(cast(list[object], entries_fn(self)))
         assert result is None, f"Expected None for {reason}, got {result}"
-
-
-# ---------------------------------------------------------------------------
-# Test 4: geo-pattern window honours the per-source channel allowlist
-# ---------------------------------------------------------------------------
-
-def _seed_located_row(db: sqlite3.Connection, *, channel: str, role: str = "user", content: str) -> None:
-    db.execute(
-        "INSERT INTO transcript (channel, role, content, created_at, "
-        "location_lat, location_lon, location_name) "
-        "VALUES (?, ?, ?, datetime('now'), 35.9, 14.5, 'Valletta')",
-        (channel, role, content),
-    )
-    db.commit()
-
-
-class TestGeoPatternWindowChannelFilter:
-    """The geo-pattern window feeds the model ONLY the user's own location-tagged
-    rows. A located row on any non-user channel — a delegate's coordinates, a
-    reflection, an external agent — must never enter the window, or a delegate's
-    location could masquerade as the user being somewhere.
-
-    Driven through the real ``TranscriptService.location_window()`` (the exact
-    id-bounded read the geo pass runs), scoped by the bound ``GeoConfig``'s
-    ``_window_start``/``_window_end``, over mixed-channel fixtures.
-    """
-
-    def test_only_user_geoactivity_rows_enter_the_window(self, db: sqlite3.Connection) -> None:
-        from controllers.message_processor import MessageProcessor
-        from services.transcript_service import TranscriptService
-
-        # One located row per representative channel, all inside the window.
-        _seed_located_row(db, channel=Channel.USER.value, content="USER at the gym")
-        _seed_located_row(db, channel=Channel.DISCOVERY.value, content="DISCOVERY research located")
-        _seed_located_row(db, channel="delegate:research", content="DELEGATE located")
-        _seed_located_row(db, channel=Channel.for_external_agent("bob"), content="EXT located")
-
-        last_id = cast(int, db.execute("SELECT MAX(id) FROM transcript").fetchone()[0])
-
-        # A GeoConfig whose window spans every seeded row, bound to an inert MP —
-        # the same collaborator the geo pass binds in production (§6.13/I2).
-        mp = MessageProcessor(GeoConfig(window_start=0, window_end=last_id))
-        rows = TranscriptService(mp).location_window()
-        contents = [r.to_dict()["content"] for r in rows]
-
-        # Only the user's own geo-activity row is admitted.
-        assert "USER at the gym" in contents
-        # Every non-user channel is excluded — the window can't be widened past the user.
-        assert "DISCOVERY research located" not in contents
-        assert "DELEGATE located" not in contents
-        assert "EXT located" not in contents
-
-    def test_existing_patterns_block_empty_db_returns_no_patterns(self, db: sqlite3.Connection) -> None:
-        """The behavioural-pattern lane feeding the existing-patterns block is
-        empty on a fresh DB. The '(none yet)' prose now lives in
-        PromptService._pattern_existing_patterns_block; the data-level surface it
-        renders from is BehavioralPatternService.top_patterns(). The read path
-        (top_patterns -> patterns -> BehavioralPattern.recent()) runs over the
-        class-bound connection and never touches ``mp``."""
-        from services.behavioral_pattern_service import BehavioralPatternService
-
-        assert BehavioralPatternService(cast("MessageProcessor", None)).top_patterns() == {}

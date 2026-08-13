@@ -13,8 +13,6 @@ from __future__ import annotations
 from configs.channels._common import DEFAULT_ALWAYS_AVAILABLE
 from configs.channels.discovery import DiscoveryConfig
 from configs.channels.external_agent import EAMPConfig
-from configs.channels.geo_pattern import GeoConfig
-from configs.channels.pattern import PatternConfig
 from configs.channels.scheduled import ScheduledConfig
 from configs.channels.skill_association import SkillAssociationConfig
 from configs.channels.skill_suggestion import SkillSuggestionConfig
@@ -48,8 +46,6 @@ __all__ = [
     "DEFAULT_ALWAYS_AVAILABLE",
     "DiscoveryConfig",
     "EAMPConfig",
-    "GeoConfig",
-    "PatternConfig",
     "ProcessorConfig",
     "ScheduledConfig",
     "SkillSuggestionConfig",

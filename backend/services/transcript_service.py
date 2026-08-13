@@ -18,13 +18,10 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, cast
 
-from configs.enums.channels import Channel
 from models.transcript import Transcript
 from models.turn_signal import TurnSignal
 
 if TYPE_CHECKING:
-    from configs.channels.geo_pattern import GeoConfig
-    from configs.channels.pattern import PatternConfig
     from controllers.message_processor import MessageProcessor
 
 logger = logging.getLogger(__name__)
@@ -122,52 +119,6 @@ class TranscriptService:
         if self.mp.uid is not None:
             q = q.filter("id", self.mp.uid, ">")
         return q.get()
-
-    def window(self) -> list[Transcript]:
-        """The pattern channel's id-bounded window over the ``user`` channel's
-        content rows (ported from ``Transcript.window(["user"], after_id,
-        before_id, require_content=True)`` — the pre-rewrite pattern-recognition
-        read). Bounds come off this turn's ``PatternConfig`` (``_window_start``
-        exclusive, ``_window_end`` inclusive); empty-content rows are excluded so
-        the model only ever sees real utterances. Memory-step input rows live
-        on the user channel but are plumbing, not utterances, so they are
-        excluded. Zero-param (§2.4): the id bounds are config fields, reachable
-        off ``self.mp.config``."""
-        config = cast("PatternConfig", self.mp.config)
-        return (
-            Transcript.filter("channel", Channel.USER.value)
-            .filter("id", config._window_start, ">")
-            .filter("id", config._window_end, "<=")
-            .filter("role", "memory", "!=")
-            .filter("content", None, "IS NOT")
-            .filter("content", "", "!=")
-            .order_by("id ASC")
-            .get()
-        )
-
-    def location_window(self) -> list[Transcript]:
-        """The geo-pattern channel's id-bounded window over the ``user``
-        channel's location-tagged content rows (ported from
-        ``Transcript.window(["user"], after_id, before_id, require_location=True,
-        require_content=True)`` — the pre-rewrite geo read). Bounds come off this
-        turn's ``GeoConfig`` (``_window_start`` exclusive, ``_window_end``
-        inclusive), same semantics as :meth:`window`; only rows carrying a
-        latitude/longitude and real content survive. Memory-step input rows live
-        on the user channel but are plumbing, not utterances, so they are
-        excluded. Zero-param (§2.4)."""
-        config = cast("GeoConfig", self.mp.config)
-        return (
-            Transcript.filter("channel", Channel.USER.value)
-            .filter("id", config._window_start, ">")
-            .filter("id", config._window_end, "<=")
-            .filter("location_lat", None, "IS NOT")
-            .filter("location_lon", None, "IS NOT")
-            .filter("role", "memory", "!=")
-            .filter("content", None, "IS NOT")
-            .filter("content", "", "!=")
-            .order_by("id ASC")
-            .get()
-        )
 
     def deliberation_score(self) -> float:
         """This turn's persisted deliberation score (§6.12) off its anchoring

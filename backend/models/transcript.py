@@ -159,26 +159,6 @@ class Transcript(Model):
         return cast("str | None", row[0]) if row else None
 
     @classmethod
-    def latest_id(cls, channels: list[str], *, exclude_roles: tuple[str, ...] = (),
-                  require_location: bool = False) -> int | None:
-        """``MAX(id)`` over a channel allowlist (the subconscious cursor-delta
-        check), optionally floored to geolocated rows. None on an empty set."""
-        if not channels:
-            return None
-        where = [f"channel IN ({cls._placeholders(len(channels))})"]
-        params: list[object] = list(channels)
-        if require_location:
-            where.append("location_lat IS NOT NULL AND location_lon IS NOT NULL")
-        for role in exclude_roles:
-            where.append("role != ?")
-            params.append(role)
-        row = cls._bound_connection().execute(
-            f"SELECT MAX(id) FROM transcript WHERE {' AND '.join(where)}",
-            tuple(params),
-        ).fetchone()
-        return int(row[0]) if row and row[0] is not None else None
-
-    @classmethod
     def channel_activity(cls, since_days: int) -> list[tuple[str, int, str]]:
         """Per-channel user-message frequency over the last ``since_days`` (world
         awareness's topic-interest signal): ``(channel, freq, last_seen)`` ordered

@@ -76,7 +76,6 @@ from models.provider_request import ProviderRequest
 from models.turn_execution import TurnExecution
 from models.transcript import Transcript
 from models.transcript_thinking import TranscriptThinking
-from services.behavioral_pattern_service import BehavioralPatternService
 from services.compaction_service import CompactionService
 from services.database import Database
 from services.dispatch_service import DispatchService
@@ -214,7 +213,6 @@ class MessageProcessor:
         self.turn_execution_service = TurnExecutionService(self)
         self.provider_service = ProviderService(self)
         self.compaction_service = CompactionService(self)
-        self.behavioral_pattern_service = BehavioralPatternService(self)
         self.dispatch_service = DispatchService(self)
         self.llm_log_service = LlmLogService(self)
         self.prompt_service = PromptService(self)
@@ -618,8 +616,6 @@ class MessageProcessor:
             if role == "user" and self.channel == Channel.USER:
                 self._voice_presynthesis()
                 self._proactive_suggestion()
-            elif role == "pattern_match":
-                self._pattern_skill_sync()
             elif role == "external_agent":
                 self._disclose_to_human(response_text)
         except Exception as exc:  # noqa: BLE001 — post-turn work must never fail the turn
@@ -655,33 +651,6 @@ class MessageProcessor:
         act_trail = rendered.split("\n") if rendered else []
         from services.skill_suggestion_message_processor import maybe_suggest_skill  # noqa: PLC0415
         maybe_suggest_skill(act_trail, self.raw_input, self.channel, self.turn_id)
-
-    def _pattern_skill_sync(self) -> None:
-        """Decay untouched patterns, then run the skill-association pass over the
-        patterns written this turn. An empty touched set is NOT a no-op for the
-        decay half: nothing is exempt, so every live pattern row decays — the
-        intended sweep for a turn that wrote no patterns, not an edge case. The
-        association pass does skip on empty."""
-        touched = self._touched_pattern_names()
-        self.behavioral_pattern_service.decay_untouched(touched)
-        from services.skill_association_service import SkillAssociationService  # noqa: PLC0415
-        SkillAssociationService().run_pass(self.behavioral_pattern_service.ids_for_touched(touched))
-
-    def _touched_pattern_names(self) -> set[str]:
-        """Names of the patterns saved this turn — the ``save_pattern`` calls'
-        ``name`` params, skipping any malformed row."""
-        names: set[str] = set()
-        for call in self.tool_call_service.by_turn():
-            if call.tool_name != "save_pattern":
-                continue
-            try:
-                params = json.loads(call.params)
-            except (json.JSONDecodeError, TypeError):
-                continue
-            name = params.get("name") if isinstance(params, dict) else None
-            if isinstance(name, str) and name:
-                names.add(name)
-        return names
 
     def _disclose_to_human(self, response_text: str) -> None:
         """When an external-agent config opts into looping in the human, open a

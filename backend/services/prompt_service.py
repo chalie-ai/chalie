@@ -13,10 +13,7 @@ in Phase E — the configs are now pure declarative data. Each builder's docstri
 names the config it was ported from.
 
 Memory boundary (§3.11): every structured user-context read goes through a
-sibling service — ``self.mp.behavioral_pattern_service`` for the pattern lane —
-never a raw ``data_graph`` read here. The behavioural-pattern confidence ranking
-+ cap lives on ``BehavioralPatternService.top_patterns``; this file only formats
-the rows the service hands back.
+sibling service — never a raw ``data_graph`` read here.
 
 Cross-turn / cross-channel reads (skill-building's trigger-turn tool trail,
 thread-gist's opener rows) are the trigger turn's identity — a DIFFERENT
@@ -33,7 +30,6 @@ the compactor erases the act trail.
 from __future__ import annotations
 
 import base64
-import json
 import logging
 from typing import TYPE_CHECKING, cast
 
@@ -65,7 +61,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _CHANNEL_USER = Channel.USER
-_CHANNEL_PATTERN_MATCH = Channel.PATTERN_MATCH
 _CHANNEL_SCHEDULE = Channel.SCHEDULE
 _CHANNEL_SKILL_ASSOCIATION = Channel.SKILL_ASSOCIATION
 _CHANNEL_SKILLS_BUILDING = Channel.SKILLS_BUILDING
@@ -77,7 +72,6 @@ _CHANNEL_PIM = Channel.DELEGATE_PIM
 _CHANNEL_CODE_AGENT = Channel.DELEGATE_CODE_AGENT
 _CHANNEL_EXTERNAL_AGENT = "external_agent"
 _CHANNEL_COMPACTION = Channel.COMPACTION
-_CHANNEL_GEO_PATTERN = Channel.GEO_PATTERN
 _CHANNEL_MEMORY_HYGIENE = Channel.MEMORY_HYGIENE
 
 _USER_DEFINITION_FALLBACK = (
@@ -192,8 +186,6 @@ class PromptService:
         channel = self._channel()
         if channel == _CHANNEL_USER:
             return self._user_prompt()
-        if channel == _CHANNEL_PATTERN_MATCH:
-            return self._pattern_prompt()
         if channel == _CHANNEL_SCHEDULE:
             return self._schedule_prompt()
         if channel == _CHANNEL_MEMORY_HYGIENE:
@@ -212,8 +204,6 @@ class PromptService:
             return self._code_agent_prompt()
         if channel == _CHANNEL_EXTERNAL_AGENT:
             return self._external_agent_prompt()
-        if channel == _CHANNEL_GEO_PATTERN:
-            return self._geo_pattern_prompt()
         # skill_association, vision and compaction pass the raw input straight
         # through.
         if channel in (_CHANNEL_SKILL_ASSOCIATION, _CHANNEL_VISION, _CHANNEL_COMPACTION):
@@ -452,37 +442,6 @@ class PromptService:
             label = None
         return body.replace(_CONTENT_FIELD_PLACEHOLDER, label) if label else body
 
-    # ── PatternConfig (channel="pattern_match") ──────────────────────────────
-
-    def _pattern_prompt(self) -> str:
-        """``PatternConfig.get_user_prompt``: the pattern window's transcripts
-        (``self.mp.transcript_service.window()`` — the id-bounded ``user`` read)
-        + the existing-patterns block + this turn's act trail."""
-        rows = self.mp.transcript_service.window()
-        transcript_block = (
-            "\n".join(
-                f"[id={row.id} | {cast('str', row.to_dict()['role'])} | "
-                f"{cast('str', row.to_dict()['created_at'])}] "
-                f"{cast('str', row.to_dict()['content'])}"
-                for row in rows
-            )
-            if rows
-            else "(no transcripts in window)"
-        )
-        parts = [f"Existing patterns:\n{self._pattern_existing_patterns_block()}", transcript_block]
-        trail = self._trail()
-        if trail:
-            parts.append(trail)
-        return "\n\n".join(parts)
-
-    def _pattern_existing_patterns_block(self) -> str:
-        """The top behavioural patterns by confidence as a ``name -> summary``
-        JSON object — the pattern/geo channels' existing-patterns block. The
-        confidence ranking + cap live on ``BehavioralPatternService.top_patterns``;
-        this builder only renders the result as prompt text."""
-        patterns = self.mp.behavioral_pattern_service.top_patterns()
-        return json.dumps(patterns, indent=2) if patterns else "(none yet)"
-
     # ── ScheduledConfig (channel="schedule") ─────────────────────────────────
 
     def _schedule_prompt(self) -> str:
@@ -673,45 +632,6 @@ class PromptService:
         if trail:
             parts.append(trail)
         return "\n".join(parts)
-
-    # ── GeoConfig (channel="geo_pattern") ────────────────────────────────────
-
-    def _geo_pattern_prompt(self) -> str:
-        """``GeoConfig.get_user_prompt``: the existing-patterns block, the
-        location-tagged transcript window, then this turn's act trail."""
-        parts = [
-            f"Existing patterns:\n{self._pattern_existing_patterns_block()}",
-            self._geo_transcript_block(),
-        ]
-        trail = self._trail()
-        if trail:
-            parts.append(trail)
-        return "\n\n".join(parts)
-
-    def _geo_transcript_block(self) -> str:
-        """The geo window's location-tagged ``user`` rows
-        (``self.mp.transcript_service.location_window()``) rendered
-        ``[id | role | ts | lat,lon place] content``. Guarded — a window-read
-        hiccup must not crash the turn (the pre-rewrite builder wrapped this)."""
-        try:
-            rows = self.mp.transcript_service.location_window()
-        except Exception as exc:  # noqa: BLE001 — a window-read hiccup must not crash the turn
-            logger.warning("[PromptService] geo transcript block failed: %s", exc)
-            return "(transcript fetch failed)"
-        if not rows:
-            return "(no location-tagged transcripts in window)"
-        lines: list[str] = []
-        for row in rows:
-            fields = row.to_dict()
-            lat, lon = fields.get("location_lat"), fields.get("location_lon")
-            place = cast("str", fields.get("location_name") or "")
-            location = f"{lat},{lon}" if not place else f"{lat},{lon} {place}"
-            lines.append(
-                f"[id={fields.get('id')} | {cast('str', fields.get('role'))} | "
-                f"{cast('str', fields.get('created_at'))} | {location}] "
-                f"{cast('str', fields.get('content'))}"
-            )
-        return "\n".join(lines)
 
     # ── formatting helpers ───────────────────────────────────────────────────
 

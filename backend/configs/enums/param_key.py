@@ -83,10 +83,8 @@ class Keys(StrEnum):
     duration_seconds = "duration_seconds"
     end_line = "end_line"
     entity_id = "entity_id"
-    evidence_transcript_ids = "evidence_transcript_ids"
     file_path = "file_path"
     frequency = "frequency"
-    fuzzy = "fuzzy"
     glob = "glob"
     goal = "goal"
     headers = "headers"
@@ -142,7 +140,6 @@ class Keys(StrEnum):
     summary = "summary"
     tags = "tags"
     target = "target"
-    time_anchor = "time_anchor"
     time_range = "time_range"
     timeout = "timeout"
     timeout_s = "timeout_s"
@@ -258,8 +255,6 @@ VARIANTS: "dict[str, frozenset[str]]" = {
     Keys.dtstart: frozenset({"start_date", "start_datetime", "start_time"}),
     Keys.duration_seconds: frozenset({"duration", "length", "seconds"}),
     Keys.entity_id: frozenset({"device", "device_id", "entity", "ha_id"}),
-    Keys.evidence_transcript_ids: frozenset({"evidence_ids", "transcript_ids"}),
-    Keys.frequency: frozenset({"recurrence", "repeat", "schedule"}),
     Keys.headers: frozenset({"auth_headers", "extra_headers", "http_headers", "request_headers"}),
     Keys.host: frozenset({"address", "endpoint", "server_url", Keys.url}),
     Keys.id: frozenset({"doc_id", "document_id", "item_id", Keys.uid}),

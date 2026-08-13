@@ -53,7 +53,7 @@ _LOG_PREFIX = "[SKILL_BUILDER]"
 _META_TOOLS = frozenset({
     "find_tools", "find_skills", "skill_builder", "skill_manager",
     "review_tool_calls", "review_transcript",
-    "save_graph", "save_pattern",
+    "save_graph",
 })
 
 

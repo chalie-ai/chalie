@@ -122,11 +122,11 @@ class TestUserChannelCannotReachRawWebTools:
 class TestBackgroundChannelDiscovery:
 
     def test_background_channel_cannot_reach_raw_web_or_pattern_tools(self, db: object) -> None:
-        """The raw, non-discoverable tools (browser/search/news/save_pattern/
-        save_graph) are absent from the global roster, so a background-channel
-        query naming them can never inject them either."""
+        """The raw, non-discoverable tools (browser/search/news/save_graph)
+        are absent from the global roster, so a background-channel query
+        naming them can never inject them either."""
         mp = _mp_for(DiscoveryConfig())
-        non_discoverable = ["browser", "search", "news", "save_pattern", "save_graph"]
+        non_discoverable = ["browser", "search", "news", "save_graph"]
 
         _find_tools_on(mp, {"query": non_discoverable})
 
@@ -191,7 +191,6 @@ _EXPECTED_NON_DISCOVERABLE = frozenset({
     "save_map",                # memory step only (Map episodic lineage)
     "delete_graph",            # memory step only
     "recall",                  # memory-v3 — model's only memory surface
-    "save_pattern",            # pattern-write — PatternMatchProcessor only
     "find_tools",              # the discovery entry point itself
     "find_skills",             # framework — always_available only
 

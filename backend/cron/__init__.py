@@ -14,9 +14,7 @@ from cron.base import IdleGatedJob, ScheduledJob, ScheduledJobProtocol
 from cron.jobs.capability_sync import CapabilitySyncJob
 from cron.jobs.discovery import DiscoveryJob
 from cron.jobs.garbage_collection import GarbageCollectionJob
-from cron.jobs.geo_patterns import GeoPatternsJob
 from cron.jobs.memory_hygiene import MemoryHygieneJob
-from cron.jobs.pattern_match import PatternMatchJob
 from cron.jobs.scheduled_items import ScheduledItemsDispatcherJob
 
 # Concrete singleton instances (all subclass ScheduledJob, which satisfies
@@ -27,9 +25,7 @@ from cron.jobs.scheduled_items import ScheduledItemsDispatcherJob
 # independently regardless of position.
 JOBS: tuple[ScheduledJob, ...] = (
     ScheduledItemsDispatcherJob(),
-    PatternMatchJob(),
     CapabilitySyncJob(),
-    GeoPatternsJob(),
     DiscoveryJob(),
     GarbageCollectionJob(),
     MemoryHygieneJob(),

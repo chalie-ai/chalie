@@ -1,6 +1,6 @@
 """Regression guard for ``MachineStateRow.newest_active_by_key`` — the hardened
-machine-state cursor read the subconscious worker uses for its
-``pattern_match_cursor`` and ``geo_pattern_cursor`` watermarks.
+machine-state cursor read the background jobs use for their
+``memory_hygiene:turn_id`` and ``discovery:turn_id`` watermarks.
 
 Unlike ``active_by_key`` (the store lookup: ``active``-only, unordered), this
 read adds ``deleted_at IS NULL`` and a deterministic ``ORDER BY id DESC`` so a
@@ -32,11 +32,11 @@ def _seed(db: sqlite3.Connection, key: str, value: str, *, active: int = 1, dele
 def test_newest_active_row_wins(db: sqlite3.Connection) -> None:
     """Two active rows for one key resolve to the newest (highest id) — the
     duplicate-active-collision defense the raw SQL's ORDER BY id DESC provided."""
-    _seed(db, "pattern_match_cursor", "100")
-    _seed(db, "pattern_match_cursor", "250")
+    _seed(db, "memory_hygiene:turn_id", "100")
+    _seed(db, "memory_hygiene:turn_id", "250")
     db.commit()
 
-    row = MachineStateRow.newest_active_by_key("pattern_match_cursor")
+    row = MachineStateRow.newest_active_by_key("memory_hygiene:turn_id")
 
     assert row is not None
     assert row.value == "250"
@@ -45,11 +45,11 @@ def test_newest_active_row_wins(db: sqlite3.Connection) -> None:
 def test_deleted_and_inactive_rows_excluded(db: sqlite3.Connection) -> None:
     """A soft-deleted row (``deleted_at`` set) and an inactive row are both
     outside the live predicate, so a key holding only those reads as None."""
-    _seed(db, "geo_pattern_cursor", "5", deleted=True)
-    _seed(db, "geo_pattern_cursor", "9", active=0)
+    _seed(db, "discovery:turn_id", "5", deleted=True)
+    _seed(db, "discovery:turn_id", "9", active=0)
     db.commit()
 
-    assert MachineStateRow.newest_active_by_key("geo_pattern_cursor") is None
+    assert MachineStateRow.newest_active_by_key("discovery:turn_id") is None
 
 
 def test_missing_key_returns_none(db: sqlite3.Connection) -> None:

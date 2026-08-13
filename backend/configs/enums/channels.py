@@ -30,8 +30,6 @@ class Channel(str, Enum):
     SCHEDULE      = "schedule"
 
     # ── Reflection / subconscious ────────────────────────────────────────────
-    PATTERN_MATCH     = "pattern_match"
-    GEO_PATTERN       = "geo_pattern"
     SKILLS_BUILDING   = "skills_building"
     SKILL_ASSOCIATION = "skill_association"
     MEMORY_HYGIENE    = "memory_hygiene"
