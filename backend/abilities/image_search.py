@@ -41,8 +41,8 @@ _VISION_PROMPT = "Does this image match: '{query}'? Answer yes/no and briefly wh
 class ImageSearchAbility(Ability[ImageSearchParamsBag]):
     # Action-less single-purpose tool: the dispatcher pre-gate rejects a MISSING
     # or empty query as code=missing-params before run() is reached (precedent:
-    # save_graph.py, save_pattern.py). The pre-gate is truthiness-based; the
-    # bag's from_params rejects the whitespace-only residue.
+    # save_graph.py). The pre-gate is truthiness-based; the bag's from_params
+    # rejects the whitespace-only residue.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.query,)}
     NAME: ClassVar[str] = "image_search"
     # Nothing here is the image — it is metadata the hosting site controls.

@@ -87,7 +87,7 @@ class DataGraphRow(Model):
 
     #: The declared search-index footprint (the ``Searchable`` trait). Full
     #: ``data_graph`` config by default — inherited by every searchable vertical;
-    #: non-searchable kinds (``behavioral_pattern``, ``machine_state``) override
+    #: non-searchable kinds (``contact``, ``machine_state``) override
     #: to ``None``. Presence of a config IS the enablement signal: the save path
     #: gates on ``self.__search__ is not None`` and the write-side engine reads
     #: it (no flags, no policy table — one authority per Rule 5).

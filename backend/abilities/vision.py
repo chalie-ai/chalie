@@ -59,8 +59,8 @@ class VisionAbility(DelegateAbility[VisionParamsBag]):
 
     # Action-less single-purpose tool: the dispatcher pre-gate rejects a MISSING
     # or empty image/instructions as code=missing-params before run() is reached
-    # (precedent: save_graph.py, save_pattern.py). The pre-gate is
-    # truthiness-based; the bag's from_params rejects the whitespace-only residue.
+    # (precedent: save_graph.py). The pre-gate is truthiness-based; the bag's
+    # from_params rejects the whitespace-only residue.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.image, Keys.instructions)}
 
     # The typed input contract: the dispatch seam builds the bag via

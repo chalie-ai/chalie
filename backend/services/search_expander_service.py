@@ -30,7 +30,7 @@ _QUEUE_KEY = "ses:queue"          # MemoryStore list key — FIFO via rpush/lpop
 # via ``kind_column``), ``is_searchable(kind)`` further gates each row against
 # the kind→config registry populated by ``DataGraphRow.__init_subclass__``,
 # mirroring the save path's ``self.__search__ is not None`` — so non-searchable
-# kinds (behavioral_pattern, machine_state) enter no index from either enqueue
+# kinds (contact, machine_state) enter no index from either enqueue
 # path (save-time or self-heal). ``contracts`` imports nothing from
 # models/services, so this dependency does not cycle.
 

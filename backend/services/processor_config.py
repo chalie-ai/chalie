@@ -98,7 +98,7 @@ class ProcessorConfig(ABC):
 
     role: str
     """Transcript role for the input row.  E.g. 'user', 'external_agent',
-    'pattern_match'."""
+    'user_synthesis'."""
 
     policy_channel: "PolicyChannel"
     """Which policy channel this processor's tool calls are gated under."""

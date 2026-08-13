@@ -38,9 +38,7 @@ _TELEMETRY_HIDDEN_KEYS = {"saved_at", "_location_name_stale", "connection"}
 # it stays out of the chat/system prompt. Backend consumers read the coordinates
 # directly (departure advisory, weather, locale_service); the chat LLM only ever
 # sees the resolved ``location_name`` scalar, which renders under the synthetic
-# ``user`` group. (The background geo-pattern pass — configs/channels/geo_pattern.py
-# — is the one model-facing consumer still given coordinates, to cluster
-# location-tagged transcripts into place-based habits.)
+# ``user`` group.
 _TELEMETRY_HIDDEN_GROUPS = {"behavioral", "location"}
 
 # Strftime format for the synthesised local_time field — "Sat 02 May 2026 11:35".

@@ -280,7 +280,7 @@ def _register_workers(manager: "_WorkerManager", host: str, port: int) -> None:
     cognition loop (``subconscious_worker``) were unified into the ``cron``
     package: ``cron-runner`` fires every registered ``ScheduledJob`` on its own
     schedule (``ScheduledItemsDispatcherJob`` folds in the schedule poller; the
-    nine idle-gated cognition jobs fold in the subconscious tick).
+    two idle-gated cognition jobs fold in the subconscious tick).
     """
     from workers.tmp_cleanup_worker import tmp_cleanup_worker
     manager.register_service("tmp-cleanup-service", tmp_cleanup_worker)
