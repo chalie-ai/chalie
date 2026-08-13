@@ -70,7 +70,7 @@ class TestOllamaThinkPayload:
 
         # The host is never dialled — _build_payload assembles a dict in process.
         client = OllamaClient({"host": "http://127.0.0.1:1", "model": "m"})
-        client._thinking_supported = True
+        client._show_payload = {"capabilities": ["thinking"]}
 
         none_payload = client._build_payload("s", [], None, ThinkingLevel.NONE)
         assert none_payload.get("think") is False
@@ -86,7 +86,7 @@ class TestOllamaThinkPayload:
         from services.llm_clients.ollama import OllamaClient
 
         client = OllamaClient({"host": "http://127.0.0.1:1", "model": "m"})
-        client._thinking_supported = False
+        client._show_payload = {}
 
         for level in (ThinkingLevel.NONE, ThinkingLevel.LOW,
                       ThinkingLevel.MEDIUM, ThinkingLevel.HIGH, ThinkingLevel.MAX):

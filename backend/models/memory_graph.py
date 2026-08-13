@@ -24,7 +24,6 @@ from typing import ClassVar, Self, cast
 
 from contracts.search_config import GRAPH_SEARCH, SearchConfig
 from models.model import Model
-from models.query import Query
 from services.search_expander_service import enqueue
 from services.time_utils import utc_now
 
@@ -98,8 +97,6 @@ class MemoryGraphRow(Model):
             )
             self.id = rowid
         else:
-            if self.sourced_from == "":
-                self.sourced_from = "[]"
             self.created_at = now
             self.last_updated_at = now
             cursor = conn.execute(
@@ -204,23 +201,3 @@ class MemoryGraphRow(Model):
             (q, f"%{q}%", f"%{q}%", limit, offset),
         )
         return [dict(row) for row in cursor.fetchall()]
-
-    @classmethod
-    def iterate(cls) -> Query[Self]:
-        """Bulk reader: all graph rows, ordered by insertion time. Returns a
-        lazy :class:`~models.query.Query` — callers drive iteration themselves
-        to avoid loading the whole table into memory at once."""
-        return cls.all().order_by("created_at ASC")
-
-    # ── Projection ────────────────────────────────────────────────────────
-
-    def to_dict(self) -> dict[str, object]:
-        d = super().to_dict()
-        # Ensure sourced_from is always a valid JSON array string.
-        sourced = d.get("sourced_from")
-        if sourced is not None:
-            try:
-                json.loads(str(sourced))  # validate
-            except (json.JSONDecodeError, TypeError):
-                d["sourced_from"] = "[]"
-        return d

@@ -228,7 +228,9 @@ class OpenAICompatibleClient(ProviderClient):
     #: first. The base carries the union of the documented spellings because it
     #: also serves unknown hosts; a subclass narrows this to what its vendor
     #: actually documents, so a coincidental key on another vendor's payload
-    #: can never be read as a window.
+    #: can never be read as a window. An empty tuple declares the vendor
+    #: publishes no size anywhere on ``/models``: the probe then skips the
+    #: listing round trip and goes straight to the ping.
     WINDOW_FIELDS: ClassVar[tuple[str, ...]] = (
         'max_model_len',                # vLLM / NVIDIA NIM ModelCard
         'context_length',               # xAI, Moonshot, OpenRouter
@@ -251,7 +253,6 @@ class OpenAICompatibleClient(ProviderClient):
     def __init__(self, config: dict[str, object]) -> None:
         self._config = config
         self.model: str = cast(str, config.get('model', ''))
-        self._format: str = cast(str, config.get('format', 'text'))
         self.platform: str = cast(str, config.get('platform', self.PLATFORM))
     def _api_key(self) -> str:
         """The credential to present, honouring this platform's own key rule.
@@ -504,8 +505,9 @@ class OpenAICompatibleClient(ProviderClient):
         earns the default window — when the listing names no size.
 
         Override this, do not extend it with a condition, when a vendor
-        publishes elsewhere (a different path, a different response shape) or
-        publishes nothing at all.
+        publishes elsewhere (a different path, a different response shape). A
+        vendor that publishes nothing at all declares ``WINDOW_FIELDS = ()``
+        instead — no override needed.
         """
         window = self._window_from_models_endpoint()
         return window if window is not None else self._probe_via_ping()
@@ -539,7 +541,11 @@ class OpenAICompatibleClient(ProviderClient):
 
         Returns None — never raises — when the host is down, serves no matching
         entry, or names no size, leaving the caller to fall through to a ping.
+        A class that declares no ``WINDOW_FIELDS`` skips the round trip
+        outright: nothing could be read from the listing anyway.
         """
+        if not self.WINDOW_FIELDS:
+            return None
         try:
             # Materialised eagerly: the SDK returns a lazily-iterated page, and
             # a network failure part-way through must be caught here, not later.

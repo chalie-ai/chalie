@@ -26,8 +26,5 @@ class FireworksClient(OpenAICompatibleClient):
     LABEL: ClassVar[str] = 'Fireworks AI'
     DEFAULT_BASE_URL: ClassVar[str] = 'https://api.fireworks.ai/inference/v1'
 
+    #: Ping only — the inference listing names no size.
     WINDOW_FIELDS: ClassVar[tuple[str, ...]] = ()
-
-    def _probe_context_window(self) -> int | None:
-        """Ping only — the inference listing names no size."""
-        return self._probe_via_ping()

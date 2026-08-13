@@ -85,21 +85,21 @@ def test_save_graph_writes_subject_keyed_upsert(fixed_embedder: _FixedEmbedder, 
 
     # Re-saving the same subject overwrites (one row, new contents).
     SaveGraph().run(_bag(SaveGraphParamsBag, {"subject": "user.residence", "contents": "Porto"}))
-    rows = MemoryGraphRow.iterate().get()
+    rows = MemoryGraphRow.all().get()
     assert len(rows) == 1
     assert rows[0].contents == "Porto"
 
 
 def test_save_map_computes_iteration_from_derived_parents(fixed_embedder: _FixedEmbedder, db: sqlite3.Connection) -> None:
     SaveMap().run(_bag(SaveMapParamsBag, {"contents": "first episode"}))
-    first = MemoryMapRow.recent(limit=1)[0]
+    first = MemoryMapRow.all().order_by("id DESC").limit(1).get()[0]
     assert first.iteration == 1
     assert first.id is not None
 
     SaveMap().run(
         _bag(SaveMapParamsBag, {"contents": "follow-up", "derived_from": [first.id]})
     )
-    derived = MemoryMapRow.recent(limit=1)[0]
+    derived = MemoryMapRow.all().order_by("id DESC").limit(1).get()[0]
     assert derived.iteration == 2
     assert json.loads(derived.derived_from) == [first.id]
 

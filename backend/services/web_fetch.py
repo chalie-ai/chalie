@@ -8,10 +8,9 @@ timeouts.
 
 This module is the single place those concerns live:
 
-* :class:`FetchProfile` — a named bundle of (User-Agent + Accept headers). Three
-  ship by default: ``BROWSER`` (impersonates Chrome, for article/page reads),
-  ``API`` (a polite identified bot, for JSON/HTML doc APIs), and ``DOWNLOAD``
-  (minimal headers for binary file pulls).
+* Three header profiles (plain dicts): ``BROWSER`` (impersonates Chrome, for
+  article/page reads), ``API`` (a polite identified bot, for JSON/HTML doc
+  APIs), and ``DOWNLOAD`` (minimal headers for binary file pulls).
 * :func:`fetch_text` — GET a URL and return the decoded text.
 * :func:`stream_to_file` — GET a URL and stream the body to a path in fixed-size
   chunks (never buffering the whole file in memory).
@@ -22,7 +21,6 @@ Any host is reachable — public, private, or on the local network.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
 
 import requests
 
@@ -34,67 +32,50 @@ DEFAULT_CHUNK_SIZE = 8192
 # Default request timeout (seconds) when a caller does not specify one.
 DEFAULT_TIMEOUT = 15
 
-
-@dataclass(frozen=True)
-class FetchProfile:
-
-    name: str
-    headers: dict[str, str]
-
-
 #: Impersonates a current Chrome on macOS — used by ``read`` so article and page
 #: servers that gate on a real browser UA serve their content.
-BROWSER = FetchProfile(
-    name="browser",
-    headers={
-        "User-Agent": (
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/131.0.0.0 Safari/537.36"
-        ),
-        "Accept": (
-            "text/html,application/xhtml+xml,application/xml;q=0.9,"
-            "image/avif,image/webp,image/apng,*/*;q=0.8,"
-            "application/signed-exchange;v=b3;q=0.7"
-        ),
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Cache-Control": "max-age=0",
-        "Sec-Ch-Ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
-        "Sec-Ch-Ua-Mobile": "?0",
-        "Sec-Ch-Ua-Platform": '"macOS"',
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "none",
-        "Sec-Fetch-User": "?1",
-        "Upgrade-Insecure-Requests": "1",
-    },
-)
+BROWSER: dict[str, str] = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/131.0.0.0 Safari/537.36"
+    ),
+    "Accept": (
+        "text/html,application/xhtml+xml,application/xml;q=0.9,"
+        "image/avif,image/webp,image/apng,*/*;q=0.8,"
+        "application/signed-exchange;v=b3;q=0.7"
+    ),
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Cache-Control": "max-age=0",
+    "Sec-Ch-Ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"macOS"',
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
+}
 
 #: A politely identified bot — used against documentation search APIs that prefer
 #: an honest, attributable User-Agent over browser impersonation.
-API = FetchProfile(
-    name="api",
-    headers={
-        "User-Agent": "Mozilla/5.0 (compatible; ChalieBot/1.0; +https://chalie.ai)",
-        "Accept": "text/html,application/xhtml+xml,application/json",
-        "Accept-Language": "en-US,en;q=0.9",
-    },
-)
+API: dict[str, str] = {
+    "User-Agent": "Mozilla/5.0 (compatible; ChalieBot/1.0; +https://chalie.ai)",
+    "Accept": "text/html,application/xhtml+xml,application/json",
+    "Accept-Language": "en-US,en;q=0.9",
+}
 
 #: Minimal headers for pulling binary files; no Accept gymnastics.
-DOWNLOAD = FetchProfile(
-    name="download",
-    headers={
-        "User-Agent": "Mozilla/5.0 (compatible; ChalieBot/1.0; +https://chalie.ai)",
-    },
-)
+DOWNLOAD: dict[str, str] = {
+    "User-Agent": "Mozilla/5.0 (compatible; ChalieBot/1.0; +https://chalie.ai)",
+}
 
 
 def fetch_text(
     url: str,
     *,
-    profile: FetchProfile = BROWSER,
+    profile: dict[str, str] = BROWSER,
     timeout: float = DEFAULT_TIMEOUT,
     verify: bool = False,
     allow_redirects: bool = True,
@@ -117,7 +98,7 @@ def fetch_text(
 def fetch_page(
     url: str,
     *,
-    profile: FetchProfile = BROWSER,
+    profile: dict[str, str] = BROWSER,
     timeout: float = DEFAULT_TIMEOUT,
     verify: bool = False,
     allow_redirects: bool = True,
@@ -134,7 +115,7 @@ def fetch_page(
     HTTP failure — errors bubble so callers surface them, never swallow.
     """
     with requests.Session() as session:
-        session.headers.update(profile.headers)
+        session.headers.update(profile)
         response = session.get(
             url, timeout=timeout, allow_redirects=allow_redirects, verify=verify
         )
@@ -147,7 +128,7 @@ def stream_to_file(
     url: str,
     dest_path: str,
     *,
-    profile: FetchProfile = DOWNLOAD,
+    profile: dict[str, str] = DOWNLOAD,
     timeout: float = DEFAULT_TIMEOUT,
     chunk_size: int = DEFAULT_CHUNK_SIZE,
     max_bytes: int | None = None,
@@ -167,7 +148,7 @@ def stream_to_file(
     os.makedirs(os.path.dirname(dest_path), exist_ok=True)
 
     response = requests.get(
-        url, stream=True, timeout=timeout, headers=profile.headers
+        url, stream=True, timeout=timeout, headers=profile
     )
     with response:
         response.raise_for_status()

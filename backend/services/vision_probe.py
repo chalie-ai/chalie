@@ -14,14 +14,10 @@ Scoring scheme (weights sum to 1.0):
             fall back to matching on shape alone and award only that half.
     * 0.25  text  — equality of the normalised forms
 
-The three slot totals are the probe's original balance and are deliberately
-unchanged: the pass threshold sits at 0.80, so a reply that misses the count or
-the text still fails on 0.70 / 0.75. What *did* change is how each slot is
-earned — matching is case-insensitive and synonym-aware (see _COLOUR_SYNONYMS /
-_SHAPE_SYNONYMS), colour and shape score independently, and both fields of an
-entry contribute to one token bag. A model folding colour into the shape name
-({"shape": "red rod"}) therefore scores the rectangle in full, which is a
-correct observation phrased differently — not a vision failure. Leniency belongs
+Matching is case-insensitive and synonym-aware (_COLOUR_SYNONYMS /
+_SHAPE_SYNONYMS), and both fields of an entry contribute to one token bag, so a
+model folding colour into the shape name ({"shape": "red rod"}) scores the
+rectangle in full — a correct observation phrased differently. Leniency belongs
 in what counts as the right answer, never in how much of the answer is required.
 
 Normaliser for every comparison (shape tokens, colour tokens, and the text
@@ -110,31 +106,17 @@ def _normalise_tokens(value: str) -> List[str]:
 _EXPECTED_TEXT_TOKENS = _normalise_tokens(_EXPECTED_TEXT)
 
 
-class _TokenBag:
-    """Frozen set of normalised tokens derived from two string fields, treated
-    as one combined bag for matching purposes. Useful when models fold colour
-    into the shape name (e.g. ``{"shape": "red rod"}``).
+def _token_bag(color: str, shape: str) -> Set[str]:
+    """Normalised tokens of both fields as ONE combined bag: the model might
+    put the colour in the shape field (``{"shape": "red rod"}``), so which
+    field a token arrived in carries no information."""
+    return set(_normalise_tokens(color)) | set(_normalise_tokens(shape))
 
-    Tokens are always lowercased so that a model reply of ``{"shape": "Red
-    Rect", "color": "BLUE"}`` still matches the lowercase synonym sets.
-    """
 
-    __slots__ = ('token_set',)
-
-    def __init__(self, color: str, shape: str) -> None:
-        # One combined bag, not two: the model might put the colour in the shape
-        # field, so which field a token arrived in carries no information.
-        self.token_set = set(_normalise_tokens(color)) | set(_normalise_tokens(shape))
-
-    def matches_colour(self, colour: str) -> bool:
-        # Keys are canonical (lowercase); also compare against normalised tokens
-        # so mixed-case inputs still resolve.
-        key: str = colour.lower().strip()
-        return bool(self.token_set & _COLOUR_SYNONYMS.get(key, _NO_SYNONYMS))
-
-    def matches_shape(self, shape: str) -> bool:
-        key: str = shape.lower().strip()
-        return bool(self.token_set & _SHAPE_SYNONYMS.get(key, _NO_SYNONYMS))
+def _bag_matches(bag: Set[str], key: str, synonyms: Dict[str, Set[str]]) -> bool:
+    """Whether the bag holds any accepted surface form of ``key`` (canonical
+    lowercase; the key is normalised so mixed-case inputs still resolve)."""
+    return bool(bag & synonyms.get(key.lower().strip(), _NO_SYNONYMS))
 
 
 def _extract_json(text: str) -> Optional[Dict[str, object]]:
@@ -176,7 +158,7 @@ def score_probe_response(text: str) -> float:
             pass
 
     # ---- build bags -------------------------------------------------------
-    bags: List[_TokenBag] = []
+    bags: List[Set[str]] = []
     shapes = data.get('shapes')
     if isinstance(shapes, list):
         for item in shapes:
@@ -185,7 +167,7 @@ def score_probe_response(text: str) -> float:
             color = str(item.get('color', '') or '').strip()
             shape = str(item.get('shape', '') or '').strip()
             if color or shape:
-                bags.append(_TokenBag(color, shape))
+                bags.append(_token_bag(color, shape))
 
     # ---- attribute matching -----------------------------------------------
     # Colour and shape score independently, so a reply naming one correctly is
@@ -199,13 +181,13 @@ def score_probe_response(text: str) -> float:
         # colour is the more discriminating of the two, since every shape
         # synonym set overlaps ordinary description ("round", "box").
         for i, bag in enumerate(bags):
-            if i not in used_indices and bag.matches_colour(expected_colour):
+            if i not in used_indices and _bag_matches(bag, expected_colour, _COLOUR_SYNONYMS):
                 chosen_idx = i
                 break
 
         if chosen_idx is None:
             for i, bag in enumerate(bags):
-                if i not in used_indices and bag.matches_shape(expected_shape):
+                if i not in used_indices and _bag_matches(bag, expected_shape, _SHAPE_SYNONYMS):
                     chosen_idx = i
                     break
 
@@ -216,9 +198,9 @@ def score_probe_response(text: str) -> float:
         # copies of the same correct answer cannot score as three shapes seen.
         used_indices.add(chosen_idx)
         bag = bags[chosen_idx]
-        if bag.matches_colour(expected_colour):
+        if _bag_matches(bag, expected_colour, _COLOUR_SYNONYMS):
             score += _ATTRIBUTE_HALF_WEIGHT
-        if bag.matches_shape(expected_shape):
+        if _bag_matches(bag, expected_shape, _SHAPE_SYNONYMS):
             score += _ATTRIBUTE_HALF_WEIGHT
 
     # ---- text -------------------------------------------------------------

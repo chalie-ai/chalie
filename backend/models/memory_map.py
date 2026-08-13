@@ -18,13 +18,11 @@ model is the SOLE home of ``memory_map`` SQL (I6).
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import ClassVar, Self, cast
 
 from contracts.search_config import MAP_SEARCH, SearchConfig
 from models.model import Model
-from models.query import Query
 from services.embedding_utils import pack_embedding
 from services.search_expander_service import enqueue
 from services.time_utils import utc_now
@@ -128,17 +126,6 @@ class MemoryMapRow(Model):
         return cls.filter("id", row_id).first()
 
     @classmethod
-    def recent(
-        cls, iteration: int | None = None, limit: int = 50
-    ) -> list[Self]:
-        """Recent map rows, optionally scoped to a single ``iteration``
-        (salience tier), most-recently-generated first."""
-        q: Query[Self] = cls.all()
-        if iteration is not None:
-            q = q.filter("iteration", iteration)
-        return q.order_by("generated_at DESC").limit(limit).get()
-
-    @classmethod
     def records_page(
         cls, q: str, limit: int, offset: int
     ) -> list[dict[str, object]]:
@@ -159,13 +146,6 @@ class MemoryMapRow(Model):
             (q, f"%{q}%", limit, offset),
         )
         return [dict(row) for row in cursor.fetchall()]
-
-    @classmethod
-    def iterate(cls) -> Query[Self]:
-        """Bulk reader: all map rows, ordered by insertion time. Returns a
-        lazy :class:`~models.query.Query` — callers drive iteration themselves
-        to avoid loading the whole table into memory at once."""
-        return cls.all().order_by("created_at ASC")
 
     # ── Pool membership ───────────────────────────────────────────────────
 
@@ -223,17 +203,3 @@ class MemoryMapRow(Model):
             ids,
         ).fetchone()
         return int(row[0]) if row is not None else 0
-
-    # ── Projection ────────────────────────────────────────────────────────
-
-    def to_dict(self) -> dict[str, object]:
-        d = super().to_dict()
-        # Ensure JSON columns are always valid.
-        for col in ("derived_from", "sourced_from"):
-            val = d.get(col)
-            if val is not None:
-                try:
-                    json.loads(str(val))  # validate
-                except (TypeError, ValueError):
-                    d[col] = "[]"
-        return d

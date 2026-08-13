@@ -1,4 +1,4 @@
-"""Url-to-markdown converter backed by trafilatura.
+"""Url-to-markdown conversion backed by trafilatura.
 
 Performs no HTTP itself: takes already-fetched HTML, extracts markdown, and
 appends an ``## Embedded media`` section listing iframe/video/source URLs
@@ -46,59 +46,58 @@ class _MediaSrcCollector(HTMLParser):
                     self.media_srcs.add(val.strip())
 
 
-class UrlToMarkdownService:
-    """Convert already-fetched HTML to markdown and persist under the web-pages directory."""
+def convert_to_markdown(html: str | bytes, url: str) -> str:
+    """Extract markdown and append the embedded-media section.
 
-    def convert(self, html: str | bytes, url: str) -> str:
-        """Extract markdown and append the embedded-media section.
+    Raw ``bytes`` go to trafilatura verbatim so it sniffs the declared
+    charset; the media scan decodes them UTF-8-with-replacement, lossless
+    for the ASCII ``src`` URLs it looks for. *url* resolves relative links.
 
-        Raw ``bytes`` go to trafilatura verbatim so it sniffs the declared
-        charset; the media scan decodes them UTF-8-with-replacement, lossless
-        for the ASCII ``src`` URLs it looks for. *url* resolves relative links.
+    Raises:
+        ValueError: trafilatura found nothing extractable.
+    """
+    import trafilatura
 
-        Raises:
-            ValueError: trafilatura found nothing extractable.
-        """
-        import trafilatura
+    markdown = trafilatura.extract(
+        html,
+        url=url,
+        output_format="markdown",
+        include_images=True,
+        include_links=True,
+        include_tables=True,
+        favor_recall=True,
+    )
 
-        markdown = trafilatura.extract(
-            html,
-            url=url,
-            output_format="markdown",
-            include_images=True,
-            include_links=True,
-            include_tables=True,
-            favor_recall=True,
+    if not markdown or not markdown.strip():
+        raise ValueError(
+            f"trafilatura produced no content for URL '{url}'; "
+            "the supplied HTML is empty or contains no extractable body."
         )
 
-        if not markdown or not markdown.strip():
-            raise ValueError(
-                f"trafilatura produced no content for URL '{url}'; "
-                "the supplied HTML is empty or contains no extractable body."
-            )
+    collector = _MediaSrcCollector()
+    collector.feed(html if isinstance(html, str) else html.decode("utf-8", "replace"))
 
-        collector = _MediaSrcCollector()
-        collector.feed(html if isinstance(html, str) else html.decode("utf-8", "replace"))
+    media_srcs = sorted(collector.media_srcs)
+    if not media_srcs:
+        return markdown
 
-        media_srcs = sorted(collector.media_srcs)
-        if not media_srcs:
-            return markdown
+    links_block = "\n".join(
+        f"[{urljoin(url, src)}]({urljoin(url, src)})" for src in media_srcs
+    )
+    section = f"\n## Embedded media\n\n{links_block}\n"
+    return markdown + section
 
-        links_block = "\n".join(
-            f"[{urljoin(url, src)}]({urljoin(url, src)})" for src in media_srcs
-        )
-        section = f"\n## Embedded media\n\n{links_block}\n"
-        return markdown + section
 
-    def filename_for(self, url: str, extension: str) -> str:
-        """Flat filename ``<host>--<path-slug>.<extension>`` (rules: :func:`url_slug`)."""
-        return f"{url_slug(url)}.{extension}"
+def filename_for(url: str, extension: str) -> str:
+    """Flat filename ``<host>--<path-slug>.<extension>`` (rules: :func:`url_slug`)."""
+    return f"{url_slug(url)}.{extension}"
 
-    def persist(self, content: str, url: str, extension: str) -> Path:
-        """Write *content* under the web-pages directory for *url*, overwriting
-        any previous fetch, and return the absolute path."""
-        fname = self.filename_for(url, extension)
-        target = FileMapperService.get_web_pages_path(fname)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
-        return target.absolute()
+
+def persist(content: str, url: str, extension: str) -> Path:
+    """Write *content* under the web-pages directory for *url*, overwriting
+    any previous fetch, and return the absolute path."""
+    fname = filename_for(url, extension)
+    target = FileMapperService.get_web_pages_path(fname)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content, encoding="utf-8")
+    return target.absolute()

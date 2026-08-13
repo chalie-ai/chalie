@@ -166,21 +166,20 @@ class OllamaClient(ProviderClient):
         self.host: str = _validate_host(config.get('host'))
         self.model: str = _validate_model(config.get('model'))
         self._keep_alive: str = cast(str, config.get('keep_alive', '0'))
-        # Cached result of _model_supports_thinking(). None = not yet checked.
-        self._thinking_supported: Optional[bool] = None
 
     def _user_agent(self) -> dict[str, str]:
         from services.llm_service import _app_user_agent  # noqa: PLC0415
         return {"User-Agent": _app_user_agent()}
 
-    def _model_supports_thinking(self) -> bool:
-        """Return True if the configured model advertises thinking capability.
+    def _show(self) -> Optional[dict[str, object]]:
+        """POST ``/api/show`` for the configured model, one call per instance.
 
-        Queries /api/show once per instance and caches the result. Returns
-        False on any error (safe default — think flag simply won't be sent).
+        The capability and window reads share this response. Returns None —
+        never raises — when the host cannot be reached or refuses the model.
         """
-        if self._thinking_supported is not None:
-            return self._thinking_supported
+        if hasattr(self, '_show_payload'):
+            return self._show_payload
+        payload: Optional[dict[str, object]] = None
         try:
             resp = requests.post(
                 f"{self.host}/api/show",
@@ -189,16 +188,25 @@ class OllamaClient(ProviderClient):
                 headers=self._user_agent(),
             )
             if resp.ok:
-                caps = resp.json().get('capabilities', [])
-                self._thinking_supported = 'thinking' in caps
-                return self._thinking_supported
+                payload = resp.json()
+            else:
+                logger.warning(
+                    "[OllamaClient] /api/show returned HTTP %s for model=%s",
+                    resp.status_code, self.model,
+                )
         except Exception as exc:
-            logger.debug(
-                "[OllamaClient] _model_supports_thinking check failed for model=%s: %s",
-                self.model, exc,
+            logger.warning(
+                "[OllamaClient] Could not reach %s for /api/show on model=%s: %s",
+                self.host, self.model, exc,
             )
-        self._thinking_supported = False
-        return False
+        self._show_payload: Optional[dict[str, object]] = payload
+        return payload
+
+    def _model_supports_thinking(self) -> bool:
+        """True if the configured model advertises thinking capability; False
+        on any error (safe default — the think flag simply won't be sent)."""
+        payload = self._show() or {}
+        return 'thinking' in cast(list[object], payload.get('capabilities', []))
 
     def _build_payload(self, system: str, api_messages: list[dict[str, object]], tools: Optional[list[dict[str, object]]],
                        thinking_mode: ThinkingLevel) -> dict[str, object]:
@@ -289,37 +297,20 @@ class OllamaClient(ProviderClient):
         if hasattr(self, '_cached_context_limit'):
             return self._cached_context_limit
         raw_limit: int | None = None
-        try:
-            resp = requests.post(
-                f"{self.host}/api/show",
-                json={"name": self.model},
-                timeout=5,
-                headers=self._user_agent(),
-            )
-            if resp.ok:
-                model_info = resp.json().get('model_info', {})
-                for key, val in model_info.items():
-                    if 'context_length' in key.lower():
-                        raw_limit = int(val)
-                        break
-                if raw_limit is None:
-                    raw_limit = DEFAULT_WINDOW
-                    logger.info(
-                        "[OllamaClient] /api/show reported no context_length for model=%s "
-                        "— using DEFAULT_WINDOW=%d",
-                        self.model, raw_limit,
-                    )
-            else:
-                logger.warning(
-                    "[OllamaClient] /api/show returned HTTP %s for model=%s — "
-                    "leaving the window unset; the next send re-probes it",
-                    resp.status_code, self.model,
+        payload = self._show()
+        if payload is not None:
+            model_info = cast(dict[str, object], payload.get('model_info', {}))
+            for key, val in model_info.items():
+                if 'context_length' in key.lower():
+                    raw_limit = int(cast(int, val))
+                    break
+            if raw_limit is None:
+                raw_limit = DEFAULT_WINDOW
+                logger.info(
+                    "[OllamaClient] /api/show reported no context_length for model=%s "
+                    "— using DEFAULT_WINDOW=%d",
+                    self.model, raw_limit,
                 )
-        except Exception as exc:
-            logger.warning(
-                "[OllamaClient] Could not reach %s to size model=%s: %s",
-                self.host, self.model, exc,
-            )
 
         self._cached_context_limit: int | None = raw_limit
         return self._cached_context_limit

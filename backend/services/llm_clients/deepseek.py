@@ -25,8 +25,5 @@ class DeepSeekClient(OpenAICompatibleClient):
     LABEL: ClassVar[str] = 'DeepSeek'
     DEFAULT_BASE_URL: ClassVar[str] = 'https://api.deepseek.com'
 
+    #: Ping only — a listing with no size field is not worth the round trip.
     WINDOW_FIELDS: ClassVar[tuple[str, ...]] = ()
-
-    def _probe_context_window(self) -> int | None:
-        """Ping only — a listing with no size field is not worth the round trip."""
-        return self._probe_via_ping()

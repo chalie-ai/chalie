@@ -30,7 +30,7 @@ from contracts.params.param_bag import ParamBag
 from contracts.params.web_fetch_params_bag import WebFetchParamsBag
 from exceptions import DownloadTooLarge
 from services.file_mapper_service import FileMapperService
-from services.url_to_markdown_service import UrlToMarkdownService, url_slug
+from services.url_to_markdown_service import convert_to_markdown, filename_for, persist, url_slug
 from services.web_fetch import BROWSER, stream_to_file
 
 
@@ -169,10 +169,9 @@ class WebFetchAbility(Ability[WebFetchParamsBag]):
             # For pages the downloads copy is only a fetch buffer — never keep it.
             dest.unlink(missing_ok=True)
 
-        converter = UrlToMarkdownService()
         if convert:
             try:
-                content = converter.convert(raw_bytes, url)
+                content = convert_to_markdown(raw_bytes, url)
             except ValueError as e:
                 return ToolResult.err(
                     str(e),
@@ -180,9 +179,9 @@ class WebFetchAbility(Ability[WebFetchParamsBag]):
                     hint="fetch with convert_to_markdown as false to keep the raw HTML instead",
                     source=url,
                 )
-            page_path = converter.persist(content, url, "md")
+            page_path = persist(content, url, "md")
         else:
-            page_path = FileMapperService.get_web_pages_path(converter.filename_for(url, "html"))
+            page_path = FileMapperService.get_web_pages_path(filename_for(url, "html"))
             page_path.parent.mkdir(parents=True, exist_ok=True)
             page_path.write_bytes(raw_bytes)
             page_path = page_path.absolute()

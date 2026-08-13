@@ -23,8 +23,5 @@ class AlibabaClient(OpenAICompatibleClient):
     LABEL: ClassVar[str] = 'Alibaba Model Studio (Qwen)'
     DEFAULT_BASE_URL: ClassVar[str] = 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1'
 
+    #: Ping only — this vendor serves no listing to read.
     WINDOW_FIELDS: ClassVar[tuple[str, ...]] = ()
-
-    def _probe_context_window(self) -> int | None:
-        """Ping only — this vendor serves no listing to read."""
-        return self._probe_via_ping()

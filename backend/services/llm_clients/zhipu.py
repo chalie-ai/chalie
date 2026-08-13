@@ -24,8 +24,5 @@ class ZhipuClient(OpenAICompatibleClient):
     LABEL: ClassVar[str] = 'Zhipu AI (GLM)'
     DEFAULT_BASE_URL: ClassVar[str] = 'https://open.bigmodel.cn/api/paas/v4'
 
+    #: Ping only — this vendor serves no listing to read.
     WINDOW_FIELDS: ClassVar[tuple[str, ...]] = ()
-
-    def _probe_context_window(self) -> int | None:
-        """Ping only — this vendor serves no listing to read."""
-        return self._probe_via_ping()

@@ -85,26 +85,30 @@ class MemoryHygieneService:
             return "corrupt store timestamps"
         return covered_end_dt
 
-    def due(self) -> bool:
-        """Per-minute cron gate for the daily memory-hygiene consolidation.
+    def _pending(self) -> "list[tuple[datetime, datetime]] | str":
+        """The pending closed windows, or an early-return status string.
 
-        Returns True only when at least one closed window is pending. Reads
-        one indexed transcript row, runs pure datetime math, and checks the
-        in-memory ``_empty_until`` short-circuit — no table scans of
+        The shared gate under both ``due()`` and ``tick()``: reads one indexed
+        transcript row (``_covered_end``), runs pure datetime math, and checks
+        the in-memory ``_empty_until`` short-circuit — no table scans of
         memory_graph/memory_map and no MessageProcessor work.
         """
         from services.locale_service import get_timezone  # noqa: PLC0415
 
         covered = self._covered_end()
         if isinstance(covered, str):
-            return False
+            return covered
         windows = pending_windows(covered, utc_now(), get_timezone())
         if not windows:
-            return False
-        newest_end = windows[-1][1]
-        if self._empty_until is not None and newest_end <= self._empty_until:
-            return False
-        return True
+            return "no pending windows"
+        if self._empty_until is not None and windows[-1][1] <= self._empty_until:
+            return "no new windows since last empty tick"
+        return windows
+
+    def due(self) -> bool:
+        """Per-minute cron gate: True only when at least one closed window is
+        pending (see ``_pending`` for what one answer costs)."""
+        return not isinstance(self._pending(), str)
 
     def tick(self) -> str:
         """Run one consolidation tick.
@@ -115,22 +119,12 @@ class MemoryHygieneService:
         from models.memory_map import MemoryMapRow  # noqa: PLC0415
         from services.locale_service import get_timezone  # noqa: PLC0415
 
+        windows = self._pending()
+        if isinstance(windows, str):
+            return windows
+
         tz = get_timezone()
-
-        covered = self._covered_end()
-        if isinstance(covered, str):
-            return covered
-
-        # ── pending chain ──────────────────────────────────────────────────
-        windows = pending_windows(covered, utc_now(), tz)
-        if not windows:
-            return "no pending windows"
-
-        # ── _empty_until gate ──────────────────────────────────────────────
         newest_end = windows[-1][1]
-        if self._empty_until is not None and newest_end <= self._empty_until:
-            return "no new windows since last empty tick"
-
         processed = 0
         skipped = 0
         fired_any = False
@@ -244,6 +238,17 @@ class MemoryHygieneService:
         return left_graph, left_map, right_graph, right_map
 
 
+def _next_boundary_after(instant: datetime, tz: tzinfo) -> datetime:
+    """The first 04:00-local boundary strictly after ``instant``, as UTC."""
+    local = instant.astimezone(tz)
+    candidate = datetime(
+        local.year, local.month, local.day, _HYGIENE_HOUR, 0, 0, tzinfo=tz
+    )
+    if candidate <= local:
+        candidate += timedelta(days=1)
+    return candidate.astimezone(timezone.utc)
+
+
 def pending_windows(
     covered_end: datetime,
     now_utc: datetime,
@@ -263,55 +268,19 @@ def pending_windows(
     offsets — so a spring-forward day yields a 23 h window and a fall-back
     day yields 25 h.
     """
-    # Materialise the first local boundary at or after covered_end.
-    # covered_end is UTC-aware; we convert to local, snap to 04:00, then back
-    # to UTC.
     if covered_end.tzinfo is None:
         covered_end = covered_end.replace(tzinfo=timezone.utc)
 
-    local_covered = covered_end.astimezone(tz)
-    candidate = datetime(
-        local_covered.year,
-        local_covered.month,
-        local_covered.day,
-        _HYGIENE_HOUR,
-        0,
-        0,
-        tzinfo=tz,
-    )
-    # If 04:00 today is already at or before covered_end, step to tomorrow.
-    if candidate <= covered_end.astimezone(tz):
-        candidate += timedelta(days=1)
-
-    # candidate is now the first boundary strictly after covered_end.
     windows: list[tuple[datetime, datetime]] = []
     window_start = covered_end
-    boundary = candidate.astimezone(timezone.utc)
+    boundary = _next_boundary_after(covered_end, tz)
 
-    while True:
-        window_end = boundary
-        # Include this window only if the grace period has expired.
-        if now_utc >= window_end + _GRACE:
-            windows.append((window_start, window_end))
-        else:
-            # Once we hit the first window that hasn't expired yet, everything
-            # after it is also not expired — stop.
-            break
-        # Advance to the next boundary.
-        local_boundary = boundary.astimezone(tz)
-        next_candidate = datetime(
-            local_boundary.year,
-            local_boundary.month,
-            local_boundary.day,
-            _HYGIENE_HOUR,
-            0,
-            0,
-            tzinfo=tz,
-        )
-        if next_candidate <= local_boundary:
-            next_candidate += timedelta(days=1)
-        boundary = next_candidate.astimezone(timezone.utc)
-        window_start = window_end
+    # A window is included only once its grace period has expired; the first
+    # unexpired window ends the chain (everything after it is younger).
+    while now_utc >= boundary + _GRACE:
+        windows.append((window_start, boundary))
+        window_start = boundary
+        boundary = _next_boundary_after(boundary, tz)
 
     return windows
 
