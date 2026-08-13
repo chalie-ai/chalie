@@ -80,6 +80,7 @@ _CHANNEL_CODE_AGENT = Channel.DELEGATE_CODE_AGENT
 _CHANNEL_EXTERNAL_AGENT = "external_agent"
 _CHANNEL_COMPACTION = Channel.COMPACTION
 _CHANNEL_GEO_PATTERN = Channel.GEO_PATTERN
+_CHANNEL_MEMORY_HYGIENE = Channel.MEMORY_HYGIENE
 
 _USER_DEFINITION_FALLBACK = (
     "The user is a real human. Treat this conversation as peer-to-peer dialogue."
@@ -200,6 +201,8 @@ class PromptService:
             return self._pattern_prompt()
         if channel == _CHANNEL_SCHEDULE:
             return self._schedule_prompt()
+        if channel == _CHANNEL_MEMORY_HYGIENE:
+            return self._memory_hygiene_prompt()
         if channel == _CHANNEL_SKILLS_BUILDING:
             return self._skill_suggestion_prompt()
         if channel == _CHANNEL_THREAD_GIST:
@@ -520,6 +523,24 @@ class PromptService:
         if handover:
             parts.append(handover)
         parts.append(f"Scheduled task:\n{self.mp.raw_input}")
+        trail = self._trail()
+        if trail:
+            parts.append(trail)
+        return "\n\n".join(parts)
+
+    # ── MemoryHygieneConfig (channel="memory_hygiene") ─────────────────────
+
+    def _memory_hygiene_prompt(self) -> str:
+        """``MemoryHygieneConfig.get_user_prompt``: previous messages, the day-window
+        listing, then this turn's act trail — joined by blank lines."""
+        parts: list[str] = []
+        prev = self._prev()
+        if prev:
+            parts.append(f"## Previous Messages\n{prev}")
+        handover = self._handover()
+        if handover:
+            parts.append(handover)
+        parts.append(self.mp.raw_input)
         trail = self._trail()
         if trail:
             parts.append(trail)

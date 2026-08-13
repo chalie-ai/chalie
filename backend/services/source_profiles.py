@@ -36,6 +36,7 @@ CHANNEL_USER = Channel.USER.value
 CHANNEL_SKILLS_BUILDING = Channel.SKILLS_BUILDING.value
 CHANNEL_SCHEDULE = Channel.SCHEDULE.value
 CHANNEL_DISCOVERY = Channel.DISCOVERY.value
+CHANNEL_MEMORY_HYGIENE = Channel.MEMORY_HYGIENE.value
 
 # ── Channel patterns (SQL LIKE prefixes) ──────────────────────────────────────
 # External-agent channels are tagged ``external-agent:<id>`` (HYPHEN + colon);
@@ -95,6 +96,9 @@ _EXACT_PROFILES: dict[str, Profile] = {
     # row (allowlist default is muted, but a write-capable channel states it). Its
     # findings are saved as discovery memories, never re-derived as episodes/facts.
     CHANNEL_DISCOVERY: _MUTED,
+    # The hygiene pass reorganizes the memory stores in place; its consolidation
+    # chatter must never be re-derived into new memories.
+    CHANNEL_MEMORY_HYGIENE: _MUTED,
 }
 
 # Profile applied to every channel matching the prefix. The first matching

@@ -179,6 +179,10 @@ class MessageProcessor:
         self._trigger_turn_id: int | None = cast("int | None", self.metadata.get("trigger_turn_id"))
         self._thread: Thread | None = None
         self._result_text: str = ""
+        # Stashes the caught exception (if any) so callers can isinstance-check
+        # the crash's exception class — the stop_reason string loses that. None
+        # on clean turns.
+        self.crash_exception: Exception | None = None
 
         # Runaway-loop guard tallies — scoped to this turn_execution (this
         # instance persists across the whole recursive _step chain). Keyed by
@@ -314,6 +318,7 @@ class MessageProcessor:
             self.turn_execution_service.finish(TurnExecution.CANCELLED)
         except Exception as exc:  # noqa: BLE001 — the drive thread is the last line of defence
             logger.exception("[MessageProcessor] turn %s crashed", self.turn_id)
+            self.crash_exception = exc
             self.turn_execution_service.finish(TurnExecution.CRASHED, str(exc))
 
     def _step(self) -> str:
