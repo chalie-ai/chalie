@@ -224,12 +224,11 @@ class TranscriptService:
         return cast("int", row.id)
 
     def _location(self) -> dict[str, object]:
-        """Live location for a new row, gated to channels whose source profile
-        permits backfill (user-activity channels) — muted/background channels
-        store NULL so their rows never corrupt the geo signal. ``{}`` when
-        gated off or when the lookup fails."""
-        from services.source_profiles import profile_for  # noqa: PLC0415
-        if not profile_for(self.mp.channel).location_backfill:
+        """Live location for a new row — user-channel turns only. Background
+        channels store NULL so their rows never corrupt the geo signal. ``{}``
+        when gated off or when the lookup fails."""
+        from configs.enums.channels import Channel  # noqa: PLC0415
+        if self.mp.channel != Channel.USER.value:
             return {}
         from services.locale_service import get_location  # noqa: PLC0415
         try:

@@ -781,8 +781,9 @@ class SchemaConvergenceService:
     def _strip_data_graph_check_constraint(self, live_conn: sqlite3.Connection) -> None:
         """Strip CHECK constraint from data_graph.kind on existing databases.
 
-        Python validates kind via VALID_KINDS in contracts/constants/data_graph.py.
-        To be removed when SchemaConvergence handles constraint changes fully.
+        Python validates kind via the vertical models' KIND ClassVars
+        (models/data_graph.py). To be removed when SchemaConvergence handles
+        constraint changes fully.
 
         The embedded ``data_graph_new`` DDL below must stay in lockstep with the
         ``data_graph`` table in schema.sql. The copy matches columns BY NAME

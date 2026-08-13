@@ -86,7 +86,6 @@ _PACKAGES = [
     "mcp_server",
     "migrations",
     "models",
-    "orchestrators",
     "services",
     "tests",
     "tools",

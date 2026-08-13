@@ -8,7 +8,7 @@ a model with ``__search__ = None`` earns no FTS/vec posting and is excluded from
 recall. There are no flags or policy tables; the single authority is the
 declaration.
 
-Model-free by design (like ``contracts/constants/data_graph.py``): this module
+Model-free by design: this module
 imports nothing from ``models`` or ``services``, so both the model layer (which
 reads ``self.__search__`` on the save path) and the write-side engine
 (``services.search_expander_service``, which resolves a raw ``kind`` string to

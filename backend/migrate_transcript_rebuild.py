@@ -11,7 +11,7 @@ build_messages() reads tool_calls[] joined to a tool_call_id IS NOT NULL row;
 with no re-created tool_calls rows, assistant messages rebuild with an empty
 tool_calls[] — valid provider format, no orphaned tool/result sequences.
 
-Collateral tables (episodes, memory_recall_log, compaction tool_calls) get
+Collateral tables (episodes, compaction tool_calls) get
 orphaned integer IDs that are harmless: episode retrieval uses vector
 similarity, not transcript ID lookup; compaction lookup filters by
 transcript.channel JOIN so orphaned tool_calls rows for deleted IDs are

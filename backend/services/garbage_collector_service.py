@@ -2,7 +2,7 @@
 and everything anchored to it: ``tool_calls`` rows and stored voice audio.
 
 Consolidates what used to be two separate mechanisms (a dedicated
-tool-call-orphan Decayable, and a never-finished transcript sweep) into one
+tool-call-orphan sweep, and a never-finished transcript sweep) into one
 owner, one window: both tables only ever drop rows once they age past
 :attr:`~models.transcript.Transcript.UNLINKED_GC_AFTER_DAYS` /
 :attr:`~models.tool_call.ToolCall.ORPHAN_GC_AFTER_DAYS`.

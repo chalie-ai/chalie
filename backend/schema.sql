@@ -288,23 +288,6 @@ INSERT OR IGNORE INTO schema_version (version) VALUES (1);
 -- schema_migrations table declared at the end of this file.
 
 -- ────────────────────────────────────────────────────────────────
--- CONCEPT LUT MISSES — keys that didn't match the concept LUT
--- Rows accumulate as the LUT is encountered at runtime; used to
--- identify canonical key candidates for future LUT expansion.
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS concept_lut_misses (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    kind       TEXT NOT NULL,
-    key        TEXT NOT NULL,
-    value_preview TEXT,
-    count      INTEGER NOT NULL DEFAULT 1,
-    first_seen TEXT NOT NULL,
-    last_seen  TEXT NOT NULL,
-    UNIQUE(kind, key)
-);
-CREATE INDEX IF NOT EXISTS idx_lut_misses_kind ON concept_lut_misses(kind, count DESC);
-
--- ────────────────────────────────────────────────────────────────
 -- WORLD STATE VECTOR TABLES — salience-based retrieval
 -- ────────────────────────────────────────────────────────────────
 CREATE VIRTUAL TABLE IF NOT EXISTS episodes_vec USING vec0(embedding float[768]);
@@ -372,32 +355,6 @@ CREATE INDEX IF NOT EXISTS idx_llm_call_log_created
     ON llm_call_log (created_at);
 CREATE INDEX IF NOT EXISTS idx_llm_call_log_channel
     ON llm_call_log (channel, id);
-
--- ────────────────────────────────────────────────────────────────
--- MEMORY RECALL LOG — telemetry for the per-lane retrieval pipeline
--- One row per memory recall call (seed or llm-driven). Written after
--- episode recall returns. The legacy radius-tuning columns were removed
--- in favour of the per-lane relative-floor telemetry below.
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS memory_recall_log (
-    id                       INTEGER PRIMARY KEY AUTOINCREMENT,
-    created_at               TEXT NOT NULL DEFAULT (datetime('now')),
-    turn_uid                 TEXT NOT NULL,
-    transcript_id            INTEGER,
-    channel                  TEXT NOT NULL,
-    caller                   TEXT NOT NULL CHECK(caller IN ('seed', 'llm_recall')),
-    query                    TEXT NOT NULL,
-    query_embedding_hash     TEXT NOT NULL,
-    episode_count            INTEGER NOT NULL DEFAULT 0,
-    floor_cut_count          INTEGER NOT NULL DEFAULT 0,  -- candidates dropped by the per-lane relative score floor
-    final_rrf_count          INTEGER NOT NULL DEFAULT 0,  -- results surfaced after composite rerank
-    top_distances            TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_memory_recall_log_turn
-    ON memory_recall_log (turn_uid, id);
-CREATE INDEX IF NOT EXISTS idx_memory_recall_log_caller
-    ON memory_recall_log (caller, created_at DESC);
 
 -- ────────────────────────────────────────────────────────────────
 -- MCP_CLIENT_SERVERS — outbound MCP client connections
@@ -601,8 +558,9 @@ CREATE INDEX IF NOT EXISTS idx_turn_executions_open
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS data_graph (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
-    -- CHECK constraint removed: Python validates kind via VALID_KINDS in data_graph_service.py.
-    -- To be restored when SchemaConvergence handles constraint changes (v0.5.0 TODO).
+    -- CHECK constraint removed: Python validates kind via the vertical models'
+    -- KIND ClassVars (models/data_graph.py). To be restored when
+    -- SchemaConvergence handles constraint changes (v0.5.0 TODO).
     kind              TEXT NOT NULL,
     key               TEXT NOT NULL,
     value             TEXT,

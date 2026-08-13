@@ -201,7 +201,7 @@ class ToolCall(Model):
 
     @classmethod
     def decay(cls) -> int:
-        """Off-turn Decayable sweep: hard-delete every tool_calls row older than
+        """Off-turn GC sweep: hard-delete every tool_calls row older than
         :attr:`ORPHAN_GC_AFTER_DAYS` whose anchoring ``transcript`` row no longer
         exists. Retention purges transcript rows out from under the calls that
         referenced them, leaving dangling ``transcript_id``s no live read can
