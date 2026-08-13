@@ -9,9 +9,8 @@ imported by whichever service owns the consolidation loop.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from typing import TYPE_CHECKING
-from zoneinfo import ZoneInfo
 
 from services.time_utils import PARSE_SENTINEL, parse_utc
 
@@ -26,7 +25,7 @@ _GRACE = timedelta(minutes=5)
 def pending_windows(
     covered_end: datetime,
     now_utc: datetime,
-    tz: ZoneInfo,
+    tz: tzinfo,
 ) -> list[tuple[datetime, datetime]]:
     """Return the list of completed (start, end) windows that still need
     hygiene.
@@ -100,7 +99,7 @@ def render_listing(
     window_end: datetime,
     graph_rows: list["MemoryGraphRow"],
     map_rows: list["MemoryMapRow"],
-    tz: ZoneInfo,
+    tz: tzinfo,
 ) -> str:
     """Render a human-readable consolidation listing for one window."""
     header_date = window_start.astimezone(tz).strftime("%a %d %b %Y")
