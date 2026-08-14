@@ -311,10 +311,17 @@ def render_listing(
     lines.append("## Map Memories")
     lines.append("**Episodes, Incidents, Discussions, etc...**")
     if map_rows:
+        # Each episode arrives with its source so a consolidation can generalise
+        # the sources it merges. Its cues are deliberately absent — the agent
+        # authors fresh tags from the merged episode rather than copying the
+        # parents', which is the only way tags stay about the situation.
         for row in map_rows:
             generated_local = parse_utc(row.generated_at).astimezone(tz)
             time_str = generated_local.strftime("%H:%M")
-            lines.append(f"[id {row.id} · {time_str}] {row.contents}")
+            episode = {"source": row.source, "memory": row.contents}
+            lines.append(
+                f"[id {row.id} · {time_str}] {json.dumps(episode, ensure_ascii=False)}"
+            )
     else:
         lines.append("(none this window)")
 

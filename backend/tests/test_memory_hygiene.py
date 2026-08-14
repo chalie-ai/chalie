@@ -281,16 +281,46 @@ class TestRenderListing:
         parsed = json.loads(json_line)
         assert parsed == {"user.city": "Lisbon", "user.pet": "cat Tom"}
 
-    def test_map_rows_render_format(self) -> None:
-        """Each map row renders as '[id {id} · {HH:MM in tz}] {contents}'."""
+    def test_map_rows_render_with_their_source(self) -> None:
+        """Each map row renders as '[id {id} · {HH:MM in tz}] {source, memory}' —
+        the source is what a consolidation generalises from."""
         # 2026-05-15 09:30 UTC = 11:30 CEST (Europe/Malta).
         generated_at = datetime(2026, 5, 15, 9, 30, 0, tzinfo=timezone.utc).isoformat()
-        map_rows = [MemoryMapRow(id=42, generated_at=generated_at, contents="went to the park")]
+        map_rows = [
+            MemoryMapRow(
+                id=42,
+                generated_at=generated_at,
+                contents="went to the park",
+                source="Saturday outing in May 2026",
+            )
+        ]
         result = render_listing(_R_START, _R_END, [], map_rows, ZoneInfo("Europe/Malta"))
         map_line = next(
             (line for line in result.splitlines() if line.startswith("[id ")), None
         )
-        assert map_line == "[id 42 · 11:30] went to the park"
+        assert map_line == (
+            '[id 42 · 11:30] {"source": "Saturday outing in May 2026", '
+            '"memory": "went to the park"}'
+        )
+
+    def test_map_rows_never_render_their_cues(self) -> None:
+        """The listing is the one surface that could hand an agent the tags it
+        wrote yesterday. It must not — fresh tags describe the situation, copied
+        tags describe the last set of tags."""
+        map_rows = [
+            MemoryMapRow(
+                id=42,
+                generated_at=_R_START.isoformat(),
+                contents="went to the park",
+                source="Saturday outing in May 2026",
+                cues="marmalade, aubergine",
+            )
+        ]
+        result = render_listing(_R_START, _R_END, [], map_rows, ZoneInfo("Europe/Malta"))
+
+        assert "went to the park" in result
+        assert "marmalade" not in result
+        assert "aubergine" not in result
 
     def test_round_trip_parse_window_bounds(self) -> None:
         """parse_window_bounds(render_listing(s, e, rows, rows, tz)) == (s, e)."""

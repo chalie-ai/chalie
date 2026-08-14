@@ -40,7 +40,7 @@ MEMORY_STEP_PROMPT = (
     "Record what has transpired in this thread since the last memory update.\n"
     "Start with `recall` to see what is already stored. Then create, update, or delete memories so they match the current state of things — reuse the exact subject recall returned instead of minting a new one, and do not re-store a fact that is already recorded unchanged.\n"
     "Use `save_graph` for concrete facts: names, dates, locations, schedules, decisions, preferences.\n"
-    "Use `save_map` to describe what happened — the narrative of this thread.\n"
+    "Use `save_map` to describe what happened — the narrative of this thread. Every episode needs three things: `contents` (what happened), `source` (one sentence naming where it came from, e.g. 'Grocery trip in Zabbar in May 2026'), and `cues` (up to 5 tags of 1-3 words naming the SITUATION, e.g. 'shopping', 'dead phone battery'). The cues are the only way the episode is ever found again, so tag the situation a person would be in when this memory would help — not the words of the story. Keep all three as short as they can be while still true.\n"
     "Use `delete_graph` to remove facts that no longer hold."
 )
 

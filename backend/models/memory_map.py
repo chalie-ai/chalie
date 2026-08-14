@@ -54,8 +54,14 @@ class MemoryMapRow(Model):
     created_at: str
     generated_at: str
     contents: str
-    source: str
-    cues: str
+    #: The two columns a caller may legitimately omit, so they carry the same
+    #: empty default the schema does. Class defaults are invisible to
+    #: ``_fields()`` (which reads ``__dict__``), so an unset column is still
+    #: omitted from the INSERT and the SQL default still fires — this only
+    #: spares every read site a ``getattr`` guard against an attribute that a
+    #: hand-built row never set.
+    source: str = ""
+    cues: str = ""
     derived_from: str
     sourced_from: str
     iteration: int
