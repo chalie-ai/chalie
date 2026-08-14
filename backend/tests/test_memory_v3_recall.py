@@ -109,11 +109,12 @@ def test_map_recall_matches_the_situation_not_the_narrative(
     assert hits[0]["source"] == "Grocery trip in Zabbar in May 2026"
 
 
-def test_map_recall_ranks_by_distance_not_iteration(
+def test_map_recall_ranks_consolidated_memories_above_closer_ones(
     db: sqlite3.Connection, lexical_embedder: None
 ) -> None:
-    """A heavily-consolidated memory no longer outranks the one that fits the
-    moment — ``iteration`` is lineage bookkeeping, not relevance."""
+    """Cues decide who is a candidate; ``iteration`` decides who speaks first. A
+    memory that absorbed others carries everything they said, so it outranks a
+    single moment that merely matches the query more tightly."""
     consolidated = MemoryMapRow(
         contents="a much-consolidated memory about money",
         source="Mortgage review in June 2026",
@@ -121,20 +122,46 @@ def test_map_recall_ranks_by_distance_not_iteration(
         iteration=9,
     )
     consolidated.save()
-    fitting = MemoryMapRow(
+    closer = MemoryMapRow(
         contents="forgot half the list again",
         source="Grocery trip in May 2026",
         cues="grocery shopping",
         iteration=1,
     )
-    fitting.save()
-    for row in (consolidated, fitting):
+    closer.save()
+    for row in (consolidated, closer):
         assert isinstance(row.id, int)
         _index("memory_map", row.id)
 
     hits = MemoryRecallService().recall("grocery shopping", k_graph=0, k_map=2)["map"]
 
-    assert [h["iteration"] for h in hits] == [1, 9]
+    assert [h["iteration"] for h in hits] == [9, 1]
+
+
+def test_consolidating_two_episodes_hides_both_parents(
+    db: sqlite3.Connection, fixed_embedder: None
+) -> None:
+    """Of A, B, C, D, E — once A and B are consolidated into F, only F is
+    searchable. Both parents leave the pool together, and the rows that were
+    never consolidated are untouched."""
+    a = MemoryMapRow(contents="A", cues="shopping", iteration=1)
+    a.save()
+    b = MemoryMapRow(contents="B", cues="shopping", iteration=1)
+    b.save()
+    others = [MemoryMapRow(contents=t, cues="shopping", iteration=1) for t in "CDE"]
+    for row in others:
+        row.save()
+    f = MemoryMapRow(
+        contents="F", cues="shopping", iteration=2, derived_from=json.dumps([a.id, b.id])
+    )
+    f.save()
+    for row in (a, b, *others, f):
+        assert isinstance(row.id, int)
+        _index("memory_map", row.id)
+
+    hits = MemoryRecallService().recall("shopping", k_graph=0, k_map=10)["map"]
+
+    assert {h["contents"] for h in hits} == {"C", "D", "E", "F"}
 
 
 def test_recall_returns_empty_on_miss_without_raising(

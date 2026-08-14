@@ -181,8 +181,8 @@ class MemoryMapRow(Model):
         ``{rowid: distance}`` for the top-``k`` nearest CUE embeddings — the
         episode text and its ``source`` are not indexed, so a match means the
         query situation resembles the situations the memory is about. Callers
-        restrict to the searchable pool (:meth:`searchable_pool`) and rank by
-        distance. Non-fatal -> empty dict."""
+        restrict to the searchable pool (:meth:`searchable_pool`) and re-rank by
+        iteration DESC, distance ASC. Non-fatal -> empty dict."""
         if k <= 0:
             return {}
         blob = pack_embedding(query_embedding) if query_embedding else None

@@ -4,14 +4,16 @@ into one recall result.
 The two raw primitives live on the models (model-owns-SQL rule):
 ``MemoryGraphRow.fts_subject_search`` (FTS5 over ``subject``) and
 ``MemoryMapRow.vec_knn`` (vec0 KNN over cues). This service owns keyword
-extraction, the query embedding, searchable-pool restriction, distance
-ranking, and the fused result shape.
+extraction, the query embedding, searchable-pool restriction, ranking, and
+the fused result shape.
 
 Design: "keyword extraction -> FTS5 over graph subject (top 3) plus whole-prompt
-vector over the map's situational cues (top 3, closest first)". Matching the
-situation the user is in against the situations a memory is about is what makes
-a consolidated episode surface at the moment it helps — matching two narratives
-never did. Never raises — a recall miss returns empty lists, never breaks a turn.
+vector over the map's situational cues (top 3, most-consolidated first)".
+Matching the situation the user is in against the situations a memory is about
+is what makes a consolidated episode surface at the moment it helps — matching
+two narratives never did. Cues pick the candidates; ``iteration`` orders them,
+so the memory that absorbed the most history speaks before any single moment.
+Never raises — a recall miss returns empty lists, never breaks a turn.
 """
 from __future__ import annotations
 
@@ -52,8 +54,8 @@ class MemoryRecallService:
         self, query: str, *, k_graph: int = 3, k_map: int = 3
     ) -> dict[str, list[dict[str, object]]]:
         """Top ``k_graph`` Graph facts (FTS over subject) plus top ``k_map`` Map
-        episodes (vector over cues, closest first, retired rows excluded).
-        Empty lists on miss; never raises."""
+        episodes (vector over cues, most-consolidated first, retired rows
+        excluded). Empty lists on miss; never raises."""
         return {
             "graph": self._recall_graph(query, k_graph),
             "map": self._recall_map(query, k_map),
@@ -83,19 +85,19 @@ class MemoryRecallService:
         if not embedding:
             return []
         # KNN over the whole vec table with a generous window, then restrict to
-        # the searchable pool and rank on distance alone — closest situation
-        # first. ``iteration`` stays the lineage/salience record; letting it
-        # outrank distance surfaced the most-consolidated memory rather than the
-        # one that fits the moment.
+        # the searchable pool and re-rank by iteration DESC, distance ASC. The
+        # cues decide WHICH episodes are candidates; iteration decides which of
+        # them speaks first, because a consolidated memory carries everything its
+        # parents said and outranks any single moment it was distilled from.
         knn = MemoryMapRow.vec_knn(embedding, k=max(k * 10, 20))
-        ranked: list[tuple[float, MemoryMapRow]] = []
+        ranked: list[tuple[int, float, MemoryMapRow]] = []
         for rowid, distance in knn.items():
             if rowid not in pool_ids:
                 continue
             row = MemoryMapRow.by_id(rowid)
             if row is not None:
-                ranked.append((distance, row))
-        ranked.sort(key=lambda item: item[0])
+                ranked.append((row.iteration, distance, row))
+        ranked.sort(key=lambda item: (-item[0], item[1]))
         return [
             {
                 "source": row.source,
@@ -103,5 +105,5 @@ class MemoryRecallService:
                 "iteration": row.iteration,
                 "generated_at": row.generated_at,
             }
-            for _, row in ranked[:k]
+            for _, _, row in ranked[:k]
         ]

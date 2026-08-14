@@ -1,6 +1,7 @@
 """Recall — search existing memory before writing (Memory v3).
 
-Fuses Graph FTS (subject) + Map vector (situational cues, closest first). Both
+Fuses Graph FTS (subject) + Map vector (situational cues, most-consolidated
+first — a memory that absorbed others outranks any of them). Both
 halves render in one shape — ``{"source": …, "memory": …}`` — where a fact's
 source is its subject and an episode's is the origin it was distilled from.
 ``cues`` are the search key only: they are never fetched into this render path,
