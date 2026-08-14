@@ -82,10 +82,15 @@ class TestSystemAPI:
 
     def test_records_search_filters_by_like(self, client: FlaskClient, db: sqlite3.Connection) -> None:
         """q substring-filters graph rows (subject/contents); map rows serialise
-        iteration-as-key with contents as value."""
+        source-as-key with contents as value."""
         MemoryGraphRow(subject='favorite_color', contents='blue').save()
         MemoryGraphRow(subject='pet_name', contents='Rex').save()
-        map_row = MemoryMapRow(contents='Went hiking in the Alps', iteration=2).save()
+        map_row = MemoryMapRow(
+            contents='Went hiking in the Alps',
+            source='Alpine holiday in July 2026',
+            cues='hiking, mountains',
+            iteration=2,
+        ).save()
         # save() stamps generated_at itself — pin it so the wire mapping
         # (last_accessed ← generated_at) is assertable deterministically.
         db.execute(
@@ -105,9 +110,11 @@ class TestSystemAPI:
         assert resp.status_code == 200
         data = resp.get_json()
         assert data['returned'] == 1
-        assert data['rows'][0]['key'] == '2'
+        assert data['rows'][0]['key'] == 'Alpine holiday in July 2026'
         assert data['rows'][0]['value'] == 'Went hiking in the Alps'
         assert data['rows'][0]['last_accessed'] == '2026-01-01T00:00:00+00:00'
+        # The tags a memory is found by are not part of what it is.
+        assert 'hiking, mountains' not in resp.get_data(as_text=True)
 
     def test_records_invalid_source_400(self, client: FlaskClient, db: sqlite3.Connection) -> None:
         """Unknown source returns 400 — including the retired user/system sources."""

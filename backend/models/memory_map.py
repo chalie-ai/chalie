@@ -138,15 +138,16 @@ class MemoryMapRow(Model):
         cls, q: str, limit: int, offset: int
     ) -> list[dict[str, object]]:
         """One page of map rows for the observability record browser —
-        ``{created_at, generated_at, contents, iteration}`` per row, most
+        ``{created_at, generated_at, contents, source}`` per row, most
         recently generated first. ``q`` substring-filters ``contents``; an
-        empty ``q`` returns the unfiltered page.
+        empty ``q`` returns the unfiltered page. ``cues`` stay out: the browser
+        shows what a memory is, and the tags it is found by are not that.
 
         Raw SQL: the "unfiltered OR substring-match" predicate can't be
         expressed by the AND-only structured filter builder."""
         conn = cls._bound_connection()
         cursor = conn.execute(
-            "SELECT created_at, generated_at, contents, iteration "
+            "SELECT created_at, generated_at, contents, source "
             "FROM memory_map "
             "WHERE (? = '' OR contents LIKE ?) "
             "ORDER BY generated_at DESC, created_at DESC "

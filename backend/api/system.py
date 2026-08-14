@@ -301,7 +301,7 @@ class ObservabilityRecordsResource(Resource):
                     {
                         "created": r["created_at"],
                         "last_accessed": r["generated_at"],
-                        "key": str(r["iteration"]),
+                        "key": r["source"],
                         "value": r["contents"],
                     }
                     for r in (rows or [])

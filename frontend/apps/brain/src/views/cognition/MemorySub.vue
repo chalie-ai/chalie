@@ -81,7 +81,7 @@ function loadMore(): void {
           <tr>
             <th>Created</th>
             <th>Last Accessed</th>
-            <th>{{ source === 'graph' ? 'Subject' : 'Iteration' }}</th>
+            <th>{{ source === 'graph' ? 'Subject' : 'Source' }}</th>
             <th>Value</th>
           </tr>
         </thead>
