@@ -66,17 +66,85 @@ def test_save_graph_writes_subject_keyed_upsert(db: sqlite3.Connection) -> None:
 
 
 def test_save_map_computes_iteration_from_derived_parents(db: sqlite3.Connection) -> None:
-    SaveMap().run(_bag(SaveMapParamsBag, {"contents": "first episode"}))
+    SaveMap().run(
+        _bag(
+            SaveMapParamsBag,
+            {
+                "contents": "first episode",
+                "source": "Grocery trip in May 2026",
+                "cues": ["shopping"],
+            },
+        )
+    )
     first = MemoryMapRow.all().order_by("id DESC").limit(1).get()[0]
     assert first.iteration == 1
     assert first.id is not None
 
     SaveMap().run(
-        _bag(SaveMapParamsBag, {"contents": "follow-up", "derived_from": [first.id]})
+        _bag(
+            SaveMapParamsBag,
+            {
+                "contents": "follow-up",
+                "source": "Shopping trips in 2026",
+                "cues": ["shopping", "dead phone battery"],
+                "derived_from": [first.id],
+            },
+        )
     )
     derived = MemoryMapRow.all().order_by("id DESC").limit(1).get()[0]
     assert derived.iteration == 2
     assert json.loads(derived.derived_from) == [first.id]
+
+
+def test_save_map_stores_source_verbatim_and_joins_cues(db: sqlite3.Connection) -> None:
+    source = "Grocery trip in Zabbar in May 2026"
+    SaveMap().run(
+        _bag(
+            SaveMapParamsBag,
+            {
+                "contents": "forgot half the list",
+                "source": source,
+                "cues": ["shopping", "incomplete shopping list"],
+            },
+        )
+    )
+    row = MemoryMapRow.all().order_by("id DESC").limit(1).get()[0]
+    assert row.source == source
+    assert row.cues == "shopping, incomplete shopping list"
+
+
+def test_save_map_rejects_more_than_five_cues(db: sqlite3.Connection) -> None:
+    """Overflow is refused, never silently trimmed — only the model can choose
+    which five tags a memory is found by."""
+    rejected = SaveMapParamsBag.from_params(
+        {
+            "contents": "an episode",
+            "source": "somewhere",
+            "cues": ["one", "two", "three", "four", "five", "six"],
+        }
+    )
+    assert isinstance(rejected, ToolResult)
+    assert rejected.code == "invalid-param"
+    assert MemoryMapRow.all().get() == []
+
+
+@pytest.mark.parametrize("missing", ["source", "cues"])
+def test_save_map_refuses_an_episode_missing_source_or_cues(
+    db: sqlite3.Connection, missing: str
+) -> None:
+    """A row without cues can never be recalled, so the write is rejected at the
+    contract rather than landing an unreachable episode."""
+    params: dict[str, object] = {
+        "contents": "an episode",
+        "source": "somewhere",
+        "cues": ["shopping"],
+    }
+    del params[missing]
+
+    rejected = SaveMapParamsBag.from_params(params)
+    assert isinstance(rejected, ToolResult)
+    assert rejected.code == "missing-params"
+    assert MemoryMapRow.all().get() == []
 
 
 def test_delete_graph_removes_a_fact(db: sqlite3.Connection) -> None:
