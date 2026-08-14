@@ -8,10 +8,10 @@
 
 """Feature tests for the Memory v3 recall service (Slice D of the redesign).
 
-Drives the real Graph FTS (subject) + Map vec0 (contents) lanes on the real
+Drives the real Graph FTS (subject) + Map vec0 (cues) lanes on the real
 ``db`` fixture with zero mocks of the code under test. The only substitution is
 the embedding model (a deterministic 768-d stand-in at the ``get_embedding_service``
-seam) so the query vector and the indexed contents vectors come from one source.
+seam) so the query vector and the indexed cue vectors come from one source.
 ``SearchExpanderService._process_row`` is driven directly so indexing is
 synchronous and deterministic.
 """
@@ -52,13 +52,16 @@ def test_graph_fts_lane_returns_subject_match(db: sqlite3.Connection) -> None:
 
 def test_map_vector_lane_excludes_retired_rows_and_ranks_by_iteration(db: sqlite3.Connection) -> None:
     # A has the HIGHEST iteration; if it weren't retired it would rank first.
-    a = MemoryMapRow(contents="moved to Lisbon years ago", iteration=5)
+    a = MemoryMapRow(contents="moved to Lisbon years ago", cues="relocation", iteration=5)
     a.save()
-    b = MemoryMapRow(contents="settled in Lisbon", iteration=2)
+    b = MemoryMapRow(contents="settled in Lisbon", cues="relocation", iteration=2)
     b.save()
     # C derives from A -> A leaves the searchable pool (retired, lineage-only).
     c = MemoryMapRow(
-        contents="still in Lisbon now", iteration=1, derived_from=json.dumps([a.id])
+        contents="still in Lisbon now",
+        cues="relocation",
+        iteration=1,
+        derived_from=json.dumps([a.id]),
     )
     c.save()
     for row in (a, b, c):

@@ -618,13 +618,18 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memory_graph_fts USING fts5(
 );
 
 -- ────────────────────────────────────────────────────────────────
--- MEMORY MAP — episodic lineage with vector contents (Memory v3)
+-- MEMORY MAP — episodic lineage searched by situational cues (Memory v3)
 -- ────────────────────────────────────────────────────────────────
+-- `source` is the one-sentence origin of the episode, rendered on recall.
+-- `cues` is the comma-joined situational tag set — the ONLY indexed column,
+-- never rendered and never shown back to a model.
 CREATE TABLE IF NOT EXISTS memory_map (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at   TEXT NOT NULL DEFAULT (datetime('now')),
     generated_at TEXT NOT NULL DEFAULT (datetime('now')),
     contents     TEXT NOT NULL,
+    source       TEXT NOT NULL DEFAULT '',
+    cues         TEXT NOT NULL DEFAULT '',
     derived_from TEXT NOT NULL DEFAULT '[]',
     sourced_from TEXT NOT NULL DEFAULT '[]',
     iteration    INTEGER NOT NULL DEFAULT 1,
@@ -633,7 +638,7 @@ CREATE TABLE IF NOT EXISTS memory_map (
 
 CREATE INDEX IF NOT EXISTS idx_memory_map_iteration ON memory_map(iteration DESC);
 
-CREATE VIRTUAL TABLE IF NOT EXISTS memory_map_contents_vec USING vec0(embedding float[768]);
+CREATE VIRTUAL TABLE IF NOT EXISTS memory_map_cues_vec USING vec0(embedding float[768]);
 
 -- ────────────────────────────────────────────────────────────────
 -- DATA GRAPH EDGES — typed join table for graph traversal

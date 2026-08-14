@@ -1,5 +1,5 @@
-"""The ``memory_map`` active-record model — episodic lineage with vector
-contents (Memory v3).
+"""The ``memory_map`` active-record model — episodic lineage searched by
+situational cues (Memory v3).
 
 :class:`MemoryMapRow` is a thin persistent shell for the ``memory_map``
 table: field storage, CRUD, the post-commit vec write-sync, and a
@@ -35,8 +35,8 @@ class MemoryMapRow(Model):
     write-sync and the searchable-pool helper."""
 
     __columns__: ClassVar[tuple[str, ...]] = (
-        "id", "created_at", "generated_at", "contents", "derived_from",
-        "sourced_from", "iteration", "indexed_at",
+        "id", "created_at", "generated_at", "contents", "source", "cues",
+        "derived_from", "sourced_from", "iteration", "indexed_at",
     )
 
     @classmethod
@@ -54,6 +54,8 @@ class MemoryMapRow(Model):
     created_at: str
     generated_at: str
     contents: str
+    source: str
+    cues: str
     derived_from: str
     sourced_from: str
     iteration: int
@@ -168,10 +170,12 @@ class MemoryMapRow(Model):
 
     @classmethod
     def vec_knn(cls, query_embedding: list[float] | None, k: int) -> dict[int, float]:
-        """Vec0 KNN over ``memory_map_contents_vec`` for recall. Returns
-        ``{rowid: distance}`` for the top-``k`` nearest contents embeddings.
-        Callers restrict to the searchable pool (:meth:`searchable_pool`) and
-        rank by ``iteration`` then distance. Non-fatal -> empty dict."""
+        """Vec0 KNN over ``memory_map_cues_vec`` for recall. Returns
+        ``{rowid: distance}`` for the top-``k`` nearest CUE embeddings — the
+        episode text and its ``source`` are not indexed, so a match means the
+        query situation resembles the situations the memory is about. Callers
+        restrict to the searchable pool (:meth:`searchable_pool`) and rank by
+        distance. Non-fatal -> empty dict."""
         if k <= 0:
             return {}
         blob = pack_embedding(query_embedding) if query_embedding else None
@@ -179,7 +183,7 @@ class MemoryMapRow(Model):
             return {}
         try:
             cursor = cls._bound_connection().execute(
-                "SELECT v.rowid, v.distance FROM memory_map_contents_vec v "
+                "SELECT v.rowid, v.distance FROM memory_map_cues_vec v "
                 "WHERE v.embedding MATCH ? AND k = ? "
                 "ORDER BY v.distance",
                 (blob, k),

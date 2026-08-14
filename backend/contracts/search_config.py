@@ -143,16 +143,17 @@ GRAPH_SEARCH = SearchConfig(
     heal_where="1=1",
 )
 
-#: Memory map search footprint. Map rows carry episodic lineage; their
-#: contents are embedded into a single vector lane. No FTS — map recall
-#: is purely semantic (vector KNN), with ``iteration`` acting as the
-#: salience dimension on the base table.
+#: Memory map search footprint. Map rows carry episodic lineage; only their
+#: ``cues`` — the situational tag set — are embedded. Neither the episode text
+#: nor its ``source`` is indexed: recall matches the situation the user is in
+#: against the situations a memory is about, not two narratives. No FTS.
+#: A row with empty cues is unreachable by design.
 MAP_SEARCH = SearchConfig(
     base_table="memory_map",
     fts_table="",
     fts_columns=(),
-    vec_lanes=(VecLane("memory_map_contents_vec", "contents"),),
-    text_columns=("contents",),
+    vec_lanes=(VecLane("memory_map_cues_vec", "cues"),),
+    text_columns=("cues",),
     heal_where="1=1",
 )
 
