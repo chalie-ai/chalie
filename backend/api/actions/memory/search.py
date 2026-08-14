@@ -1,7 +1,7 @@
 """Memory search action — read-only search across the memory graph + map.
 
 A single retrieval route fans the query out through ``MemoryRecallService``
-which fuses Graph FTS (subject) + Map vector (contents) into one result.
+which fuses Graph FTS (subject) + Map vector (situational cues) into one result.
 Returns ranked hit DTOs; never raises — a miss surfaces as an empty listing.
 """
 

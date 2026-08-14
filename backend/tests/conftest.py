@@ -1,8 +1,11 @@
 # Baseline: 2249 passed, 65 failed, 499 errors (2026-03-27)
 # Errors are pre-existing: 15 files excluded (numpy import failure in this env),
 # and 499 test-setup errors caused by missing sqlite-vec extension (vec0 module).
+import math
+import re
 import shutil
 import sqlite3
+import zlib
 from collections.abc import Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -286,5 +289,32 @@ class _FixedEmbedder:
 def fixed_embedder(monkeypatch: pytest.MonkeyPatch) -> None:
     """Pin both embedding seams — indexing and recall — to one deterministic model."""
     emb = _FixedEmbedder()
+    monkeypatch.setattr("services.embedding_service.get_embedding_service", lambda: emb)
+    monkeypatch.setattr("services.memory_recall_service.get_embedding_service", lambda: emb)
+
+
+class _LexicalEmbedder:
+    """Deterministic stand-in whose vectors actually MOVE with the words in the
+    text: each distinct token claims one of the 768 dimensions and the vector is
+    L2-normalised, so vec0 distance falls as word overlap rises.
+
+    Needed wherever a test must prove WHICH column the search key reads, or that
+    ranking follows distance — neither is observable under
+    :class:`_FixedEmbedder`, where every text is equidistant from every query.
+    """
+
+    def generate_embedding(self, text: str, mp: object = None) -> list[float]:
+        vec = [0.0] * 768
+        for token in re.findall(r"[a-z0-9]+", text.lower()):
+            vec[zlib.crc32(token.encode()) % 768] += 1.0
+        norm = math.sqrt(sum(v * v for v in vec))
+        return [v / norm for v in vec] if norm else vec
+
+
+@pytest.fixture
+def lexical_embedder(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin both embedding seams to a model whose distances discriminate by word
+    overlap — the only way a recall test can tell one candidate from another."""
+    emb = _LexicalEmbedder()
     monkeypatch.setattr("services.embedding_service.get_embedding_service", lambda: emb)
     monkeypatch.setattr("services.memory_recall_service.get_embedding_service", lambda: emb)

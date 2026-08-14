@@ -1,8 +1,12 @@
 """Recall — search existing memory before writing (Memory v3).
 
-Fuses Graph FTS (subject) + Map vector (contents, iteration-ranked). The one
-memory surface the in-conversation model may use, and the memory step's
-recall-first step. Never writes.
+Fuses Graph FTS (subject) + Map vector (situational cues, closest first). Both
+halves render in one shape — ``{"source": …, "memory": …}`` — where a fact's
+source is its subject and an episode's is the origin it was distilled from.
+``cues`` are the search key only: they are never fetched into this render path,
+so no model ever reads back the tags it wrote. The one memory surface the
+in-conversation model may use, and the memory step's recall-first step. Never
+writes.
 """
 
 from __future__ import annotations
@@ -27,12 +31,14 @@ class Recall(Ability[RecallParamsBag]):
     def get_summary(self) -> str:
         return (
             "Search existing memory before deciding to store/update/augment/"
-            "forget. Returns top facts (Graph) and episodes (Map). Always recall "
-            "first; never store blindly."
+            "forget. Returns a list of {\"source\", \"memory\"} — the origin of "
+            "each memory and the memory itself. Episodes are matched on the "
+            "SITUATION they are about, so describe the situation, not the wording "
+            "you expect. Always recall first; never store blindly."
         )
 
     def get_examples(self) -> list[str]:
-        return ["query='where does the user live'", "query='pet history'"]
+        return ["query='where does the user live'", "query='going shopping later'"]
 
     def get_search_tooltip(self) -> str:
         return "search the memory graph and map"
@@ -49,16 +55,16 @@ class Recall(Ability[RecallParamsBag]):
     def run(self, params: RecallParamsBag) -> ToolResult:
         k = self.mp.config.recall_k if self.mp is not None else 3
         result = MemoryRecallService().recall(params.query, k_graph=k, k_map=k)
-        graph = result.get("graph", [])
-        episodes = result.get("map", [])
-        lines: list[str] = []
-        if graph:
-            lines.append("Facts:")
-            for hit in graph:
-                lines.append(f"- {hit.get('subject')}: {hit.get('contents')}")
-        if episodes:
-            lines.append("Episodes:")
-            for hit in episodes:
-                lines.append(f"- {hit.get('contents')}")
-        body = "\n".join(lines) if lines else "No existing memory found."
-        return ToolResult.ok(body)
+        hits: list[dict[str, object]] = [
+            {"source": hit.get("subject"), "memory": hit.get("contents")}
+            for hit in result.get("graph", [])
+        ]
+        hits.extend(
+            {"source": hit.get("source"), "memory": hit.get("contents")}
+            for hit in result.get("map", [])
+        )
+        if not hits:
+            return ToolResult.ok("No existing memory found.")
+        # The dispatcher renders a list body as compact JSON, verbatim and
+        # uncapped — a memory is never trimmed on its way to the model.
+        return ToolResult.ok(hits)

@@ -16,7 +16,7 @@ model is stubbed deterministically (the shared ``fixed_embedder`` fixture).
 
 import json
 import sqlite3
-from typing import TypeVar, cast
+from typing import TYPE_CHECKING, TypeVar, cast
 
 import pytest
 
@@ -33,7 +33,11 @@ from contracts.params.save_map_params_bag import SaveMapParamsBag
 from contracts.search_config import config_for_table
 from models.memory_graph import MemoryGraphRow
 from models.memory_map import MemoryMapRow
+from services.dispatch_service import DispatchService
 from services.search_expander_service import SearchExpanderService
+
+if TYPE_CHECKING:
+    from controllers.message_processor import MessageProcessor
 
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("fixed_embedder")]
 
@@ -155,7 +159,7 @@ def test_delete_graph_removes_a_fact(db: sqlite3.Connection) -> None:
     assert MemoryGraphRow.by_subject("pet") is None
 
 
-def test_recall_tool_returns_readable_summary(db: sqlite3.Connection) -> None:
+def test_recall_renders_source_and_memory_for_both_halves(db: sqlite3.Connection) -> None:
     SaveGraph().run(
         _bag(SaveGraphParamsBag, {"subject": "user.residence", "contents": "Lisbon"})
     )
@@ -164,7 +168,49 @@ def test_recall_tool_returns_readable_summary(db: sqlite3.Connection) -> None:
     assert isinstance(g.id, int)
     _index("memory_graph", g.id)
 
+    SaveMap().run(
+        _bag(
+            SaveMapParamsBag,
+            {
+                "contents": "forgot half the list",
+                "source": "Grocery trip in Zabbar in May 2026",
+                "cues": ["residence", "incomplete shopping list"],
+            },
+        )
+    )
+    m = MemoryMapRow.all().order_by("id DESC").limit(1).get()[0]
+    assert isinstance(m.id, int)
+    _index("memory_map", m.id)
+
     res = Recall().run(_bag(RecallParamsBag, {"query": "residence"}))
     assert res.status == "success"
-    assert isinstance(res.body, str)
-    assert "Lisbon" in res.body
+    assert res.body == [
+        {"source": "user.residence", "memory": "Lisbon"},
+        {"source": "Grocery trip in Zabbar in May 2026", "memory": "forgot half the list"},
+    ]
+
+
+def test_recall_never_shows_the_model_its_own_cues(db: sqlite3.Connection) -> None:
+    """Cues are the search key and nothing else — an author that reads back its
+    previous tags starts copying them instead of describing the situation."""
+    SaveMap().run(
+        _bag(
+            SaveMapParamsBag,
+            {
+                "contents": "forgot half the list",
+                "source": "Grocery trip in Zabbar in May 2026",
+                "cues": ["marmalade", "aubergine"],
+            },
+        )
+    )
+    m = MemoryMapRow.all().order_by("id DESC").limit(1).get()[0]
+    assert isinstance(m.id, int)
+    _index("memory_map", m.id)
+
+    res = Recall().run(_bag(RecallParamsBag, {"query": "marmalade"}))
+    rendered = DispatchService(mp=cast("MessageProcessor", None))._render("recall", res)
+
+    assert "forgot half the list" in rendered
+    assert "marmalade" not in rendered
+    assert "aubergine" not in rendered
+    assert "cues" not in rendered

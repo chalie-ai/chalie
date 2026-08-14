@@ -12,6 +12,8 @@ Drives the real Graph FTS (subject) + Map vec0 (cues) lanes on the real
 ``db`` fixture with zero mocks of the code under test. The only substitution is
 the embedding model (a deterministic 768-d stand-in at the ``get_embedding_service``
 seam) so the query vector and the indexed cue vectors come from one source.
+Tests that must tell candidates apart take ``lexical_embedder``, whose distances
+move with word overlap; the rest keep the equidistant ``fixed_embedder``.
 ``SearchExpanderService._process_row`` is driven directly so indexing is
 synchronous and deterministic.
 """
@@ -27,7 +29,9 @@ from models.memory_map import MemoryMapRow
 from services.memory_recall_service import MemoryRecallService
 from services.search_expander_service import SearchExpanderService
 
-pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("fixed_embedder")]
+# No module-level embedder: each test names the one whose distances it relies on,
+# so the two never race to patch the same seam.
+pytestmark = [pytest.mark.unit]
 
 
 def _index(table: str, rowid: int) -> None:
@@ -37,7 +41,9 @@ def _index(table: str, rowid: int) -> None:
     SearchExpanderService()._process_row(table, rowid, cfg)
 
 
-def test_graph_fts_lane_returns_subject_match(db: sqlite3.Connection) -> None:
+def test_graph_fts_lane_returns_subject_match(
+    db: sqlite3.Connection, fixed_embedder: None
+) -> None:
     g = MemoryGraphRow(subject="user.residence", contents="Lisbon")
     g.save()
     assert isinstance(g.id, int)
@@ -50,8 +56,10 @@ def test_graph_fts_lane_returns_subject_match(db: sqlite3.Connection) -> None:
     assert result["map"] == []
 
 
-def test_map_vector_lane_excludes_retired_rows_and_ranks_by_iteration(db: sqlite3.Connection) -> None:
-    # A has the HIGHEST iteration; if it weren't retired it would rank first.
+def test_map_vector_lane_excludes_retired_rows(
+    db: sqlite3.Connection, fixed_embedder: None
+) -> None:
+    # A has the highest iteration; retirement must beat salience regardless.
     a = MemoryMapRow(contents="moved to Lisbon years ago", cues="relocation", iteration=5)
     a.save()
     b = MemoryMapRow(contents="settled in Lisbon", cues="relocation", iteration=2)
@@ -68,16 +76,69 @@ def test_map_vector_lane_excludes_retired_rows_and_ranks_by_iteration(db: sqlite
         assert isinstance(row.id, int)
         _index("memory_map", row.id)
 
-    hits = MemoryRecallService().recall("Lisbon", k_graph=0, k_map=3)["map"]
+    hits = MemoryRecallService().recall("relocation", k_graph=0, k_map=3)["map"]
 
-    # A (iteration 5) must NOT surface — it's retired by C's derived_from.
-    iterations = [h["iteration"] for h in hits]
-    assert 5 not in iterations
-    # Remaining pool {B(2), C(1)} ranked by iteration DESC -> B before C.
-    assert iterations == [2, 1]
-    assert hits[0]["contents"] == "settled in Lisbon"
+    assert {h["contents"] for h in hits} == {"settled in Lisbon", "still in Lisbon now"}
 
 
-def test_recall_returns_empty_on_miss_without_raising(db: sqlite3.Connection) -> None:
+def test_map_recall_matches_the_situation_not_the_narrative(
+    db: sqlite3.Connection, lexical_embedder: None
+) -> None:
+    """The whole point of the phase: an episode is found by the situation it is
+    ABOUT, not by the words it is written in. The decoy's *contents* are the
+    query verbatim — under the old contents-keyed lane it would win outright."""
+    wanted = MemoryMapRow(
+        contents="his wife never sent the list so he drove back twice",
+        source="Grocery trip in Zabbar in May 2026",
+        cues="grocery shopping",
+    )
+    wanted.save()
+    decoy = MemoryMapRow(
+        contents="grocery shopping downtown was pleasant",
+        source="Afternoon walk in June 2026",
+        cues="mortgage refinancing",
+    )
+    decoy.save()
+    for row in (wanted, decoy):
+        assert isinstance(row.id, int)
+        _index("memory_map", row.id)
+
+    hits = MemoryRecallService().recall("grocery shopping", k_graph=0, k_map=2)["map"]
+
+    assert hits[0]["contents"] == "his wife never sent the list so he drove back twice"
+    assert hits[0]["source"] == "Grocery trip in Zabbar in May 2026"
+
+
+def test_map_recall_ranks_by_distance_not_iteration(
+    db: sqlite3.Connection, lexical_embedder: None
+) -> None:
+    """A heavily-consolidated memory no longer outranks the one that fits the
+    moment — ``iteration`` is lineage bookkeeping, not relevance."""
+    consolidated = MemoryMapRow(
+        contents="a much-consolidated memory about money",
+        source="Mortgage review in June 2026",
+        cues="mortgage refinancing",
+        iteration=9,
+    )
+    consolidated.save()
+    fitting = MemoryMapRow(
+        contents="forgot half the list again",
+        source="Grocery trip in May 2026",
+        cues="grocery shopping",
+        iteration=1,
+    )
+    fitting.save()
+    for row in (consolidated, fitting):
+        assert isinstance(row.id, int)
+        _index("memory_map", row.id)
+
+    hits = MemoryRecallService().recall("grocery shopping", k_graph=0, k_map=2)["map"]
+
+    assert [h["iteration"] for h in hits] == [1, 9]
+
+
+def test_recall_returns_empty_on_miss_without_raising(
+    db: sqlite3.Connection, fixed_embedder: None
+) -> None:
     result = MemoryRecallService().recall("nothing matches this query")
     assert result == {"graph": [], "map": []}
