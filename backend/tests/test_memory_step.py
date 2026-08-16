@@ -1,13 +1,14 @@
 """Feature tests for the settle-triggered memory step.
 
 After any turn settles on an in-scope channel, ``MemoryStepService.on_settle``
-spawns a daemon ``MessageProcessor`` on the SAME channel with a cloned config
-so it runs the four memory tools against the settled turn's act trail. This
-suite drives that end-to-end: the step fires, it sees its own tool trail, the
-next turn is never polluted, rapid settles coalesce into at most two runs, the
-REST thread listing never surfaces the step's synthetic input row, and a
-discovery settle's step forks into the research thread rather than the user
-spine.
+spawns a daemon ``MessageProcessor`` on the SAME channel under
+``MemoryStepConfig`` — the step's own system prompt and tool set, not the
+settling channel's — so it runs the four memory tools against the settled
+turn's act trail. This suite drives that end-to-end: the step fires, it sees
+its own tool trail and a history window capped at ``HISTORY_LIMIT``, the next
+turn is never polluted, rapid settles coalesce into at most two runs, the REST
+thread listing never surfaces the step's synthetic input row, and a discovery
+settle's step forks into the research thread rather than the user spine.
 
 Every test drives a real user turn through the production ``MessageProcessor``
 entry point against the real SQLite ``db``, with the LLM network boundary
@@ -37,6 +38,7 @@ from abilities.recall import Recall
 from abilities.save_graph import SaveGraph
 from abilities.save_map import SaveMap
 from configs.channels.discovery import DiscoveryConfig
+from configs.channels.memory_step import HISTORY_LIMIT, MemoryStepConfig
 from configs.channels.user import UserConfig
 from configs.enums.channels import Channel
 from controllers.message_processor import MessageProcessor
@@ -46,7 +48,6 @@ from models.provider_response import ProviderResponse
 from models.transcript import Transcript
 from services.compaction_service import CompactionService
 from services.memory_step_service import (
-    MEMORY_STEP_PROMPT,
     MemoryStepService,
     _in_scope,
     memory_step_config,
@@ -58,9 +59,8 @@ _BUILD_CLIENT = "services.provider_service.build_client"
 
 _MEMORY_TOOLS = {Recall.NAME, SaveGraph.NAME, SaveMap.NAME, DeleteGraph.NAME}
 
-#: Message payloads are compared as ``json.dumps`` strings, which escapes the
-#: prompt's newlines — so containment checks use its (newline-free) first line.
-_PROMPT_HEAD = MEMORY_STEP_PROMPT.splitlines()[0]
+#: The step's own system prompt — the same text whatever channel settled.
+_STEP_SYSTEM_PROMPT = memory_step_config(UserConfig(), []).system_prompt
 
 
 @dataclass(frozen=True)
@@ -87,6 +87,23 @@ def _is_step_request(request: ProviderRequest) -> bool:
 def _texts(request: ProviderRequest) -> str:
     """The request's message list as one searchable JSON string."""
     return json.dumps(request.messages)
+
+
+def _prev_lines(request: ProviderRequest) -> list[str]:
+    """The ``## Previous Messages`` rows of a request's (single) message body.
+
+    Each history row renders ``[ts] Role: content`` with its newlines flattened,
+    and the block ends at the blank line separating it from the act trail — so
+    the run of leading-``[`` lines after the heading IS the history window."""
+    body = "".join(str(m.get("content", "")) for m in request.messages)
+    if "## Previous Messages\n" not in body:
+        return []
+    lines: list[str] = []
+    for line in body.split("## Previous Messages\n", 1)[1].splitlines():
+        if not line.startswith("["):
+            break
+        lines.append(line)
+    return lines
 
 
 class _ScriptedProvider:
@@ -350,10 +367,13 @@ def test_out_of_scope_settles_fire_nothing(db: sqlite3.Connection) -> None:
 
 def test_step_request_carries_exactly_the_four_memory_tools_and_the_prompt() -> None:
     """The first step request carries exactly the four memory-tool names and
-    the memory instruction in its message list.
+    the step's OWN system prompt — byte for byte, not the user channel's.
 
-    This pins the contract: no more, no fewer tools, and the prompt is
-    visible in the messages so a regression that drops it is caught."""
+    This pins the contract: no more, no fewer tools; and since the step no
+    longer inherits the settling channel's config, the system field is exactly
+    ``MemoryStepConfig.system_prompt`` with nothing appended — a regression that
+    reinstates the channel's persona, its response-format contract or its async
+    guidance fails here."""
     provider = _lisbon_provider()
     with patch(_BUILD_CLIENT, return_value=provider):
         _drive_turn("I live in Lisbon")
@@ -364,7 +384,34 @@ def test_step_request_carries_exactly_the_four_memory_tools_and_the_prompt() -> 
     step1 = steps[0]
     tool_names = {t["name"] for t in (step1.tools or [])}
     assert tool_names == _MEMORY_TOOLS, f"step carried wrong tools: {tool_names!r}"
-    assert _PROMPT_HEAD in _texts(step1), "memory instruction not found in step messages"
+    assert step1.system == _STEP_SYSTEM_PROMPT, "step ran on a different system prompt"
+    assert step1.system != UserConfig().system_prompt, "step inherited the channel prompt"
+
+
+def test_step_sees_the_conversation_capped_to_the_history_limit() -> None:
+    """The step reads the transcript above the compaction watermark, newest
+    first, capped to ``MemoryStepConfig.history_limit`` rows.
+
+    Six user turns leave twelve rows above the watermark (an input and a
+    settled assistant row each — the step's own turns settle nothing, so they
+    are floored out). The last step must therefore see exactly ten, ending on
+    the newest exchange and no longer reaching the first."""
+    provider = _ScriptedProvider(
+        turn_script=[_Say("the answer")],
+        step_script=[_Say("recorded")],
+    )
+    with patch(_BUILD_CLIENT, return_value=provider):
+        for n in range(6):
+            _drive_turn(f"message number {n}")
+            _await_step()
+
+    last_step = _step_requests(provider)[-1]
+    window = _prev_lines(last_step)
+    assert len(window) == HISTORY_LIMIT, f"window was {len(window)} rows: {window!r}"
+    # The newest exchange is the last pair: its input row, then its answer.
+    assert "message number 5" in window[-2], f"window does not reach the newest turn: {window[-2]!r}"
+    assert window[-1].endswith("Assistant: the answer"), f"window truncated mid-exchange: {window[-1]!r}"
+    assert not any("message number 0" in line for line in window), "the oldest turn survived the cap"
 
 
 def test_step_is_invisible_to_the_next_turn(
@@ -375,7 +422,7 @@ def test_step_is_invisible_to_the_next_turn(
     listing.
 
     Turn 2's request that carries turn 1's answer proves history flows, and
-    must not contain the memory instruction, the saved contents, or the
+    must not contain a ``memory``-role row, the saved contents, or the
     subject. The thread feed must list both real turns (their openers appear
     as previews) while the step's turn — whose only row is role='memory' —
     never forms a thread."""
@@ -398,7 +445,9 @@ def test_step_is_invisible_to_the_next_turn(
     )
     assert turn2_first is not None, "turn 2 request carrying turn 1's history was not found"
     t2_text = _texts(turn2_first)
-    assert _PROMPT_HEAD not in t2_text, "memory step prompt leaked into turn 2"
+    assert not any("] memory:" in line for line in _prev_lines(turn2_first)), (
+        "the step's own transcript row leaked into turn 2"
+    )
     assert "Lisbon" not in t2_text, "memory step content leaked into turn 2"
     assert "user.residence" not in t2_text, "memory step subject leaked into turn 2"
 
@@ -407,30 +456,39 @@ def test_step_is_invisible_to_the_next_turn(
     body_str = json.dumps(resp.get_json())
     assert "hello" in body_str, "turn 1's opener missing from the thread feed"
     assert "again" in body_str, "turn 2's opener missing from the thread feed"
-    assert _PROMPT_HEAD not in body_str, "memory step prompt leaked into the thread feed"
     assert "Lisbon" not in body_str, "memory step content leaked into the thread feed"
 
 
-def test_memory_step_config_overrides_and_leaves_the_source_untouched() -> None:
-    """``memory_step_config`` must return a clone with all the expected
-    overrides and must NOT mutate the original config — a shared-instance
-    mutation would poison every later turn on the channel."""
+def test_memory_step_config_declares_its_own_posture_and_leaves_the_source_untouched() -> None:
+    """``memory_step_config`` must return a MemoryStepConfig carrying the step's
+    own declaration, carry across only what must follow the channel, and must
+    NOT mutate the source config — a shared-instance mutation would poison every
+    later turn on the channel."""
     cfg = UserConfig()
     original_role = cfg.role
     original_skip = cfg.skip_transcript
     original_always = list(cfg.always_available)
 
-    clone = memory_step_config(cfg, [1, 2, 3])
+    step = memory_step_config(cfg, [1, 2, 3])
 
-    assert clone.role == "memory"
-    assert clone.skip_transcript is True
-    assert clone.skip_input_row is False
-    assert clone.memory_seed is False
-    assert clone.recall_k == 10
-    assert clone.BROADCASTS_STATE is False
-    assert clone.USAGE_TYPE == "background"
-    assert getattr(clone, "_source_transcript_ids", None) == [1, 2, 3]
-    assert clone.always_available == [Recall.NAME, SaveGraph.NAME, SaveMap.NAME, DeleteGraph.NAME]
+    assert isinstance(step, MemoryStepConfig)
+    assert step.role == "memory"
+    assert step.skip_transcript is True
+    assert step.skip_input_row is False
+    assert step.memory_seed is False
+    assert step.recall_k == 10
+    assert step.history_limit == HISTORY_LIMIT
+    assert step.BROADCASTS_STATE is False
+    assert step.RENDERS_HTML is False
+    assert step.USAGE_TYPE == "background"
+    assert getattr(step, "_source_transcript_ids", None) == [1, 2, 3]
+    assert step.always_available == [Recall.NAME, SaveGraph.NAME, SaveMap.NAME, DeleteGraph.NAME]
+
+    # Carried across: where rows land, what gates the tools, who owns the turn id.
+    assert step.channel == cfg.channel
+    assert step.policy_channel == cfg.policy_channel
+    assert step.read_channel == cfg.read_channel
+    assert step.external_turn_id == cfg.external_turn_id
 
     assert cfg.role == original_role
     assert cfg.role != "memory"
@@ -438,13 +496,15 @@ def test_memory_step_config_overrides_and_leaves_the_source_untouched() -> None:
     assert cfg.skip_transcript is False
     assert cfg.always_available == original_always
     assert cfg.always_available != [Recall.NAME, SaveGraph.NAME, SaveMap.NAME, DeleteGraph.NAME]
+    assert cfg.history_limit is None, "the source channel must stay uncapped"
 
 
 def test_discovery_settle_forks_the_step_into_the_research_thread() -> None:
     """A discovery fire's settle triggers a memory step that reads the
     RESEARCH thread, never the user spine.
 
-    The step clone inherits ``external_turn_id`` and the stable discovery
+    The step config carries ``external_turn_id`` over from the settling config
+    along with the stable discovery
     turn_id, so it forks into the research thread — and a fork's history read
     must scope to the WRITE channel, not resolve ``read_channel``. The fire is
     deliberately given the USER turn's id as its stable turn_id: turn ids are

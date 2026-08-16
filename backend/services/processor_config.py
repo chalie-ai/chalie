@@ -177,6 +177,15 @@ class ProcessorConfig(ABC):
     recall-first pass surfaces enough context for distillation without
     duplicating the full turn history."""
 
+    history_limit: int | None = None
+    """Cap on the history view: keep only the newest N rows of what
+    ``TranscriptService.read()`` returns above the compaction watermark.
+    ``None`` ⇒ uncapped, which is every conversation channel — a turn must see
+    everything since its checkpoint or it answers from a hole. Only the memory
+    step pins a limit: it runs after every settle, so the rows it has not
+    recorded yet are always the newest ones, and an uncapped view would re-read
+    the whole post-checkpoint spine on every turn."""
+
     # ── Derived properties ────────────────────────────────────────────────────
 
     @property

@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING, cast
 
 from abilities.recall import Recall
 from configs.channels.external_agent import EAMPConfig
+from configs.channels.memory_step import PROMPT_CHANNEL as MEMORY_STEP_PROMPT_CHANNEL
 from configs.channels.user import UserConfig
 from configs.enums.channels import Channel
 from exceptions import UnroutedPromptChannel
@@ -73,6 +74,7 @@ _CHANNEL_EXTERNAL_AGENT = "external_agent"
 _CHANNEL_COMPACTION = Channel.COMPACTION
 _CHANNEL_MEMORY_HYGIENE = Channel.MEMORY_HYGIENE
 _CHANNEL_USER_SYNTHESIS = Channel.USER_SYNTHESIS
+_CHANNEL_MEMORY_STEP = MEMORY_STEP_PROMPT_CHANNEL
 
 _USER_DEFINITION_FALLBACK = (
     "The user is a real human. Treat this conversation as peer-to-peer dialogue."
@@ -190,6 +192,8 @@ class PromptService:
             return self._schedule_prompt()
         if channel == _CHANNEL_MEMORY_HYGIENE:
             return self._memory_hygiene_prompt()
+        if channel == _CHANNEL_MEMORY_STEP:
+            return self._memory_step_prompt()
         if channel == _CHANNEL_SKILLS_BUILDING:
             return self._skill_suggestion_prompt()
         if channel == _CHANNEL_THREAD_GIST:
@@ -477,6 +481,28 @@ class PromptService:
         if handover:
             parts.append(handover)
         parts.append(self.mp.raw_input)
+        trail = self._trail()
+        if trail:
+            parts.append(trail)
+        return "\n\n".join(parts)
+
+    # ── MemoryStepConfig (prompt_channel="memory_step") ──────────────────────
+
+    def _memory_step_prompt(self) -> str:
+        """``MemoryStepConfig``: the transcript window the step records, then
+        this turn's act trail — joined by blank lines.
+
+        There is no input line. The step's instruction lives entirely in its
+        system prompt, so the body is the conversation it is being asked to
+        look at: the newest ``history_limit`` rows above the compaction
+        watermark, under the same ``## Previous Messages`` heading every other
+        channel uses. When a checkpoint exists, ``CompactionService.checkpoint``
+        wraps this body with the prose covering everything below the
+        watermark."""
+        parts: list[str] = []
+        prev = self._prev()
+        if prev:
+            parts.append(f"## Previous Messages\n{prev}")
         trail = self._trail()
         if trail:
             parts.append(trail)

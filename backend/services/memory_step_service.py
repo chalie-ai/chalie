@@ -9,24 +9,23 @@
 """Memory step service — settle-triggered, ephemeral memory consolidation.
 
 After a turn settles on an in-scope channel, a background MessageProcessor on
-the SAME channel with the SAME config class reconciles memories using only the
-four memory tools (Recall, SaveGraph, SaveMap, DeleteGraph). The step is
-ephemeral: it runs once per settle window, single-flight per channel with
-trailing coalesce, and inherits the parent turn's config class so system
-prompt, persona, read_channel, and external_turn_id are preserved.
+the SAME channel reconciles memories using only the four memory tools (Recall,
+SaveGraph, SaveMap, DeleteGraph). The step is ephemeral: it runs once per settle
+window, single-flight per channel with trailing coalesce.
+
+It runs on :class:`~configs.channels.memory_step.MemoryStepConfig` — one config
+for every in-scope channel, carrying its own system prompt rather than the
+settling channel's. Only what must follow the channel is carried across:
+read_channel, policy_channel and external_turn_id.
 """
 from __future__ import annotations
 
-import copy
 import logging
 import threading
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from abilities.delete_graph import DeleteGraph
-from abilities.recall import Recall
-from abilities.save_graph import SaveGraph
-from abilities.save_map import SaveMap
+from configs.channels.memory_step import MemoryStepConfig
 from configs.enums.channels import Channel
 from models.transcript import Transcript
 from services.processor_config import ProcessorConfig
@@ -35,15 +34,6 @@ if TYPE_CHECKING:
     from controllers.message_processor import MessageProcessor
 
 logger = logging.getLogger(__name__)
-
-MEMORY_STEP_PROMPT = (
-    "Record what has transpired in this thread since the last memory update.\n"
-    "Start with `recall` to see what is already stored. Then create, update, or delete memories so they match the current state of things — reuse the exact subject recall returned instead of minting a new one, and do not re-store a fact that is already recorded unchanged.\n"
-    "Use `save_graph` for concrete facts: names, dates, locations, schedules, decisions, preferences.\n"
-    "Use `save_map` to describe what happened — the narrative of this thread. Every episode needs three things: `contents` (what happened), `source` (one sentence naming where it came from, e.g. 'Grocery trip in Zabbar in May 2026'), and `cues` (up to 5 tags of 1-3 words naming the SITUATION, e.g. 'shopping', 'dead phone battery'). The cues are the only way the episode is ever found again, so tag the situation a person would be in when this memory would help — not the words of the story. Keep all three as short as they can be while still true.\n"
-    "Use `delete_graph` to remove facts that no longer hold."
-)
-
 
 def _in_scope(channel: str) -> bool:
     """Return True when *channel* is in-scope for memory stepping.
@@ -60,37 +50,23 @@ def _in_scope(channel: str) -> bool:
 def memory_step_config(
     cfg: ProcessorConfig,
     source_transcript_ids: list[int],
-) -> ProcessorConfig:
-    """Clone *cfg* and override only the fields required for a memory step.
+) -> MemoryStepConfig:
+    """Build the memory step's config for the channel *cfg* settled on.
 
-    Mirrors the copy.copy + object.__setattr__ pattern from
-    :meth:`~services.processor_config.ProcessorConfig.with_hidden_input`.
-
-    ``skip_input_row`` is deliberately False: the input row assigns the uid
-    the act trail anchors on, and we must not skip it. ``recall_k`` is raised
-    to 10 so the recall-first pass surfaces enough existing memory for
-    distillation. ``BROADCASTS_STATE`` is shadowed to False on the
-    instance so the background step stays off the client's WS frames (the
-    gate reads the instance attribute, not the ClassVar). ``USAGE_TYPE`` is
-    shadowed to "background" for the same reason DiscoveryConfig declares it:
-    the user never asked for this pass and never sees it, so its spend must
-    not bill as foreground (the usage log reads the instance attribute too).
+    The step no longer clones the settling config: it declares its own system
+    prompt, tools and history window, so only the fields that must follow the
+    channel are read off *cfg* — where rows are written and read
+    (``channel``/``read_channel``), which policy gates the tool calls, and who
+    owns the turn id. Everything else is
+    :class:`~configs.channels.memory_step.MemoryStepConfig`'s declaration.
     """
-    clone = copy.copy(cfg)
-    object.__setattr__(
-        clone,
-        "always_available",
-        [Recall.NAME, SaveGraph.NAME, SaveMap.NAME, DeleteGraph.NAME],
+    return MemoryStepConfig(
+        channel=cfg.channel,
+        policy_channel=cfg.policy_channel,
+        read_channel=cfg.read_channel,
+        external_turn_id=cfg.external_turn_id,
+        source_transcript_ids=source_transcript_ids,
     )
-    object.__setattr__(clone, "role", "memory")
-    object.__setattr__(clone, "skip_transcript", True)
-    object.__setattr__(clone, "skip_input_row", False)
-    object.__setattr__(clone, "memory_seed", False)
-    object.__setattr__(clone, "recall_k", 10)
-    object.__setattr__(clone, "_source_transcript_ids", list(source_transcript_ids))
-    object.__setattr__(clone, "BROADCASTS_STATE", False)
-    object.__setattr__(clone, "USAGE_TYPE", "background")
-    return clone
 
 
 @dataclass
@@ -176,14 +152,20 @@ class MemoryStepService:
         turn_id: int,
         ids: list[int],
     ) -> None:
-        """Run one memory step for *channel*, then release and check pending."""
+        """Run one memory step for *channel*, then release and check pending.
+
+        No raw input: the instruction is the config's system prompt and the body
+        is the transcript window PromptService reads, so there is nothing for a
+        user message to carry. The empty input row still exists — it anchors the
+        act trail.
+        """
         try:
             step_config = memory_step_config(config, ids)
             from controllers.message_processor import MessageProcessor  # noqa: PLC0415
 
             mp = MessageProcessor.process(
                 step_config,
-                raw_input=MEMORY_STEP_PROMPT,
+                raw_input="",
                 turn_id=turn_id if step_config.external_turn_id else -1,
             )
             mp.result()

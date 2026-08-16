@@ -60,13 +60,18 @@ class TranscriptService:
         turn's rows; the split-channel read (``read_channel``, e.g.
         DiscoveryConfig) applies to the MAIN cross-turn view only. Turn ids
         are per-channel, so resolving ``read_channel`` on a FORK would cross
-        namespaces and return another channel's unrelated turn."""
+        namespaces and return another channel's unrelated turn.
+
+        Finally, a config declaring ``history_limit`` keeps only the newest N
+        rows of whichever view it is on (the memory step pins 10); ``None``
+        leaves the view uncapped, which is every conversation channel."""
         if self.mp.config.suppress_history:
             return []
         watermark = self.mp.compaction_service.watermark()
+        rows: list[Transcript] = []
         if self.mp._forked:
             ceiling = self.mp.uid if self.mp.uid is not None else _NO_CEILING
-            return (
+            rows = (
                 Transcript.filter("channel", self.mp.channel)
                 .filter("turn_id", self.mp.turn_id)
                 .filter("id", watermark, ">")
@@ -75,21 +80,22 @@ class TranscriptService:
                 .order_by("id ASC")
                 .get()
             )
-        channel = self.mp.config.read_channel or self.mp.channel
-        by_turn: dict[int, list[Transcript]] = {}
-        for row in (
-            Transcript.filter("channel", channel)
-            .filter("turn_id", watermark, ">")
-            .order_by("id ASC")
-            .get()
-        ):
-            by_turn.setdefault(cast("int", row.to_dict()["turn_id"]), []).append(row)
-        rows: list[Transcript] = []
-        for tid, turn_rows in by_turn.items():
-            floor = Transcript.settle0(channel, tid)
-            if floor is not None:
-                rows.extend(r for r in turn_rows if cast("int", r.id) <= floor)
-        return rows
+        else:
+            channel = self.mp.config.read_channel or self.mp.channel
+            by_turn: dict[int, list[Transcript]] = {}
+            for row in (
+                Transcript.filter("channel", channel)
+                .filter("turn_id", watermark, ">")
+                .order_by("id ASC")
+                .get()
+            ):
+                by_turn.setdefault(cast("int", row.to_dict()["turn_id"]), []).append(row)
+            for tid, turn_rows in by_turn.items():
+                floor = Transcript.settle0(channel, tid)
+                if floor is not None:
+                    rows.extend(r for r in turn_rows if cast("int", r.id) <= floor)
+        limit = self.mp.config.history_limit
+        return rows[-limit:] if limit is not None and limit > 0 else rows
 
     def turn_rows(self) -> list[Transcript]:
         """Every row of this turn, oldest-first, unfloored — the FORK/act-
