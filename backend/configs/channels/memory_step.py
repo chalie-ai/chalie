@@ -38,7 +38,7 @@ HISTORY_LIMIT = 10
 
 _SYSTEM_PROMPT = f"""\
 You are recording memories for the conversation between yourself (Chalie - Assistant) and the user.
-Your job is to look at the provided transcript in the "user messages" and user the `{SaveMap.NAME}` and `{SaveGraph.NAME}` tools to store memories on what is happening in the conversation.
+Your job is to look at the provided transcript in the "user messages" and use the `{SaveMap.NAME}` and `{SaveGraph.NAME}` tools to store memories on what is happening in the conversation.
 
 ## Operational Rules
 - User details such as preferences, dates of events, names, connections, relationships, life events, and other details the user discloses.
