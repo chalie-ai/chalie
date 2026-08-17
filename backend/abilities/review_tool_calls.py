@@ -4,7 +4,8 @@ ReviewToolCallsAbility — Drill back into raw tool call data from a previous tu
 Lets the LLM re-read raw tool call records from earlier in the conversation when
 the compact synthesis in Previous Turns doesn't include a specific detail it needs.
 Returns all durable tool calls (excluding narration rows) within ±5 minutes of a
-given timestamp. Rows are retained for 7 days by the decay-engine janitor.
+given timestamp. Rows are retained for 90 days, swept by the hourly
+garbage-collection job.
 
 All retrieval/formatting/error logic lives in ``ReviewWindowAbility``; this class
 declares only the windowed ``tool_calls`` SELECT and the structured row shape.

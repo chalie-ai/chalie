@@ -1,26 +1,31 @@
-"""The ``data_graph`` active-record models — one shared shell, two shapes.
+"""The ``data_graph`` active-record models — one shared shell, two supersede
+shapes.
 
-:class:`DataGraphRow` is the abstract base every per-kind vertical subclasses:
-it owns the table binding, the column set, the reinforce path, the kind-bound
-live/exact-key/FTS reads (scoped to the subclass's :attr:`~DataGraphRow.KIND`)
-and the post-commit FTS/vec write-sync. :class:`DataGraph` is the thin generic
-gateway that still spans every not-yet-ported kind: it leaves ``KIND`` unset and
-overrides the kind-bound reads with kind-parametrised ones, and carries the
-supersede machinery (``store``/``demote``/``_SUPERSEDING_KINDS``) and the
-``system``/``user_specific`` lanes.
+:class:`DataGraphRow` is the abstract base every kind subclasses: it owns
+the table binding, the column set, the kind-bound live/FTS reads (scoped to
+the subclass's :attr:`~DataGraphRow.KIND`) and the post-commit FTS/vec
+write-sync. Whether a kind supersedes a contradicting value at the same key
+is structural rather than a membership test:
+:class:`~models.exact_key.ExactKeyRow` is an abstract intermediate rung that
+adds the exact-key supersede machinery (``store``/``demote``) on top of the
+shared shell, and a superseding kind (e.g.
+:class:`~models.machine_state.MachineStateRow`) subclasses it; a
+non-superseding kind (e.g. :class:`~models.contact.ContactRow`) subclasses
+:class:`DataGraphRow` directly instead and carries its own non-superseding
+``store``.
 
 Pure CRUD (Rule-3 depth): holds no ``mp``, never emits WS, never reaches
 upstream. The single sanctioned ``services`` seam is the module-level
-:func:`services.search_expander_service.enqueue` — a lightweight queue push, not
-a stateful service object — that drives the async FTS + key/value-vec
-resync (the model owns the sync *trigger*, mirroring ``Episode.save``'s inline
-FTS write). These models are the SOLE home of ``data_graph`` SQL (I6); the
-services read and write exclusively through them.
+:func:`services.search_expander_service.enqueue` — a lightweight queue push,
+not a stateful service object — that drives the async FTS + key/value-vec
+resync (the model owns the sync *trigger*, mirroring ``Episode.save``'s
+inline FTS write). These models are the SOLE home of ``data_graph`` SQL
+(I6); the services read and write exclusively through them.
 
-Live-fact filters mirror today's code verbatim: the lane reads mirror
-``DataGraphService.fetch`` (``active = 1 AND deleted_at IS NULL``); the exact-key
-store lookup mirrors ``_SELECT_ACTIVE_BY_KIND_KEY_SQL`` (``active = 1`` only, no
-``deleted_at``).
+The live lane reads apply ``active = 1 AND deleted_at IS NULL``. The
+exact-key store lookup — in :class:`~models.exact_key.ExactKeyRow` and
+:class:`~models.contact.ContactRow`, not this class — is ``active = 1``
+only, deliberately not ``deleted_at``-filtered.
 """
 
 from __future__ import annotations
@@ -45,9 +50,9 @@ class DataGraphRow(Model):
     """The shared ``data_graph`` shell: field storage + CRUD + the reinforce
     path, the kind-bound reads a concrete vertical inherits, and the post-commit
     FTS/vec write-sync. Concrete verticals set :attr:`KIND` and read their own
-    lane with a bare ``live()`` / ``search()``; the generic :class:`DataGraph`
-    gateway leaves ``KIND`` unset and passes the kind explicitly to
-    :meth:`live`."""
+    lane with a bare ``live()`` / ``search()``; :meth:`live` also accepts an
+    explicit ``kind``, for a cross-kind read or a class that never set
+    :attr:`KIND`."""
 
     __columns__: ClassVar[tuple[str, ...]] = (
         "id", "kind", "key", "value", "storage_strength", "retrieval_weight",
@@ -125,9 +130,8 @@ class DataGraphRow(Model):
 
     def _sync_search_index(self) -> None:
         """Enqueue this freshly-inserted row for the async FTS + key/value-vec
-        backfill (the resync the old ``DataGraphService.store`` fired after
-        commit — regression R2). The model owns only the trigger; a queue-push
-        failure never breaks the write.
+        backfill. The model owns only the trigger; a queue-push failure never
+        breaks the write.
 
         Enablement is the ``Searchable`` trait: a kind with ``__search__ = None``
         (behavioural patterns, ``machine_state``) declares no search footprint
@@ -174,11 +178,11 @@ class DataGraphRow(Model):
     @classmethod
     def live(cls, kind: str | None = None) -> Query[Self]:
         """The live-fact scope — ``active = 1 AND deleted_at IS NULL`` for one
-        ``kind`` (mirroring ``DataGraphService.fetch``). The one shared live
-        predicate every lane builds on. ``kind`` defaults to this class's
-        :attr:`KIND` so a concrete vertical reads its own lane with a bare
-        ``live()``; the generic :class:`DataGraph` gateway (which spans kinds)
-        passes the kind explicitly."""
+        ``kind``. The one shared live predicate every lane builds on. ``kind``
+        defaults to this class's :attr:`KIND` so a concrete vertical reads its
+        own lane with a bare ``live()``; passing ``kind`` explicitly instead
+        reads a specific kind independent of the class it's called on — for a
+        cross-kind read or a class that never set :attr:`KIND`."""
         resolved = kind if kind is not None else cls.KIND
         return cls.filter("kind", resolved).filter("active", 1).filter("deleted_at", None, "IS")
 
@@ -188,11 +192,11 @@ class DataGraphRow(Model):
         FTS rank — the per-vertical single-kind read the cross-kind recall
         service fuses across verticals later. The query is sanitised to word
         characters and each term prefix-matched; an empty query, no candidates,
-        or any DB error yields ``[]``. Calling this on the generic KIND-less
-        :class:`DataGraph` gateway raises loudly (a misuse), never a silent
-        empty result."""
-        kind = cls.KIND  # loud AttributeError on the KIND-less gateway, before
-        # the try below can swallow it into a "no results" []
+        or any DB error yields ``[]``. Calling this on an abstract rung that
+        never set :attr:`KIND` raises loudly (a misuse), never a silent empty
+        result."""
+        kind = cls.KIND  # loud AttributeError on an abstract rung that never
+        # set KIND, before the try below can swallow it into a "no results" []
         safe = re.sub(r"[^\w\s]", " ", query or "")
         terms = " OR ".join(f'"{w}"*' for w in safe.split() if w)
         if not terms:
