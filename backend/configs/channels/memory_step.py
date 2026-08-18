@@ -51,9 +51,9 @@ class MemoryStepConfig(ProcessorConfig):
     """One memory step on ``channel``, reconciling memories after a settle.
 
     ``role="memory"`` is what keeps the step out of the conversation it reads:
-    the FORK history view filters that role out by name, and on MAIN the step
-    settles no assistant row (``skip_transcript``), so its own turn is dropped
-    by the per-turn settle0 floor.
+    both the FORK and the MAIN history view filter that role out by name.
+    ``skip_transcript`` means the step settles no assistant row, so its turn is
+    the lone input row that filter removes.
 
     ``skip_input_row`` is deliberately False: the input row assigns the uid the
     act trail anchors on, and we must not skip it. ``recall_k`` is raised to 10

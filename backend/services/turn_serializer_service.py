@@ -276,28 +276,16 @@ def _bulk_gists(channel: str, turn_ids: list[int]) -> dict[int, str]:
 def _drop_trailing_cancelled_orphan(
     rows: list[dict[str, object]], latest: TurnExecution | None,
 ) -> list[dict[str, object]]:
-    """A cancel observed at :meth:`MessageProcessor._step`'s checkpoint
-    discards the in-flight response before any reply row is stored (§2.7),
-    leaving one or more trailing, reply-less user rows behind — filtered out
-    here so a cancelled exchange never surfaces as a dangling, unanswered
-    bubble on refetch/refresh. Normally the FE gates this to exactly one
-    trailing user row, but a direct API/automation POST into an open
-    turn_id can append a second (or third) reply-less user row before the
-    cancel lands, so every CONSECUTIVE trailing user row is stripped, not
-    just the last — the loop stops the instant it hits a non-user row,
-    since a cancel observed mid-turn, after real assistant/tool content was
-    already written, leaves that content in place per existing doctrine
-    ('every row it already wrote stays'). Rows are dropped only when the
-    turn's own most recent execution (``latest``, fetched once by the caller)
-    actually ended cancelled, never on role alone."""
-    if not rows or rows[-1]["role"] != "user":
-        return rows
-    if latest is None or latest.state != TurnExecution.CANCELLED:
-        return rows
-    cutoff = len(rows)
-    while cutoff > 0 and rows[cutoff - 1]["role"] == "user":
-        cutoff -= 1
-    return rows[:cutoff]
+    """Strip a cancelled exchange's trailing, reply-less user rows so it never
+    surfaces as a dangling, unanswered bubble on refetch/refresh.
+
+    The rule itself is :meth:`TurnExecution.cancelled_orphan_cutoff` — shared
+    with the history ``TranscriptService`` hands the model, so the rendered
+    thread and the model's view of it cannot disagree. ``latest`` is fetched
+    once by the caller."""
+    return rows[:TurnExecution.cancelled_orphan_cutoff(
+        [cast("str", r["role"]) for r in rows], latest,
+    )]
 
 
 class TurnSerializerService:

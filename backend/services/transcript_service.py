@@ -19,6 +19,7 @@ import logging
 from typing import TYPE_CHECKING, cast
 
 from models.transcript import Transcript
+from models.turn_execution import TurnExecution
 from models.turn_signal import TurnSignal
 
 if TYPE_CHECKING:
@@ -52,10 +53,19 @@ class TranscriptService:
         ``settle0`` lookup can flip under a MAIN turn that settles more than
         one row before its terminal step; the fixed flag can't). Feeds
         ``PromptService``'s history assembly. ``[]`` when the config
-        suppresses history. The FORK view excludes ``role='memory'`` rows
-        (memory-step inputs — turn plumbing, not conversation); the MAIN view
-        needs no filter because a memory-step turn never settles an assistant
-        row, so the per-turn settle0 floor already drops it. A FORK always
+        suppresses history. BOTH views exclude ``role='memory'`` rows
+        (memory-step inputs — turn plumbing, not conversation) by name. A
+        PRIOR turn that never settled is NOT dropped: a crash leaves its input
+        row behind and the rendered thread still shows it, so dropping it here
+        would hide from the model a message the user is looking at — the
+        silent context hole this used to open. It has no settle0 to floor on
+        and so reads whole, minus whatever
+        :meth:`TurnExecution.cancelled_orphan_cutoff` trims, which is the same
+        rule the rendered thread trims itself with: the two views agree by
+        construction rather than by coincidence. Only the turn IN FLIGHT is
+        skipped while unsettled, and it is named by its own id rather than
+        inferred from a missing settle0 — the conflation that used to swallow
+        crashed turns with it. A FORK always
         reads ``self.mp.channel`` — a fork IS the thread, its view is its own
         turn's rows; the split-channel read (``read_channel``, e.g.
         DiscoveryConfig) applies to the MAIN cross-turn view only. Turn ids
@@ -82,10 +92,17 @@ class TranscriptService:
             )
         else:
             channel = self.mp.config.read_channel or self.mp.channel
+            # The turn in flight, named by identity rather than inferred from a
+            # missing settle0. Only when this view reads the channel the turn
+            # actually writes to: turn ids are per-channel, so on a split read
+            # (``read_channel``) the same number is a stranger's turn — and the
+            # current turn writes no rows there to exclude anyway.
+            in_flight = self.mp.turn_id if channel == self.mp.channel else None
             by_turn: dict[int, list[Transcript]] = {}
             for row in (
                 Transcript.filter("channel", channel)
                 .filter("turn_id", watermark, ">")
+                .filter("role", "memory", "!=")
                 .order_by("id ASC")
                 .get()
             ):
@@ -94,6 +111,14 @@ class TranscriptService:
                 floor = Transcript.settle0(channel, tid)
                 if floor is not None:
                     rows.extend(r for r in turn_rows if cast("int", r.id) <= floor)
+                elif tid != in_flight:
+                    # Never settled and not the turn in flight: a real exchange
+                    # the user can still see, so it reads whole — minus the
+                    # trailing input rows a cancel discarded, on the same rule
+                    # the rendered thread trims itself with.
+                    rows.extend(turn_rows[:TurnExecution.cancelled_orphan_cutoff(
+                        [r.role for r in turn_rows], TurnExecution.latest(channel, tid),
+                    )])
         limit = self.mp.config.history_limit
         return rows[-limit:] if limit is not None and limit > 0 else rows
 

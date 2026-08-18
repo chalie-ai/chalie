@@ -788,9 +788,15 @@ class MessageProcessor:
         only extracts content and dispatches ``vision`` (images) or ``read``
         (anything else) on the SAVED absolute path.
 
-        An extraction failure raises ``ValueError`` from ``FileParserService.index``
-        and logs a warning — the dispatched ``read`` below still surfaces the
-        failure loudly on the act trail.
+        Indexing is a derived search artifact, so no failure of it may take the
+        turn down with it — the dispatch below still runs and surfaces the file
+        loudly on the act trail. The catch is deliberately not narrowed to the
+        ``ValueError`` extraction raises: ``index`` also opens and writes the
+        file-index database, so it can raise ``sqlite3`` errors (a failing disk
+        surfaced as ``OperationalError: disk I/O error``), and a narrower catch
+        let those escape the pool, escape ``_seed_turn_zero`` and kill the whole
+        turn — attaching an image was enough to lose everything the user typed
+        with it. Logged with its traceback, never silent.
         """
         import mimetypes
 
@@ -798,10 +804,9 @@ class MessageProcessor:
 
         try:
             FileParserService().index(saved_path)
-        except ValueError as exc:
-            logger.warning(
-                "[MessageProcessor] indexing %s failed for turn-zero dispatch: %s",
-                saved_path, exc,
+        except Exception:  # noqa: BLE001 — indexing is derived; the turn outlives it
+            logger.exception(
+                "[MessageProcessor] indexing %s failed for turn-zero dispatch", saved_path,
             )
 
         mime = mimetypes.guess_type(saved_path)[0] or ""
