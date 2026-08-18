@@ -58,7 +58,25 @@ class BearerTokenMiddleware(BaseHTTPMiddleware):
                 status_code=401,
             )
 
-        wrapper_id = await asyncio.to_thread(self._validate_token, raw_token)
+        try:
+            wrapper_id = await asyncio.to_thread(self._validate_token, raw_token)
+        except Exception:
+            # Token validation is the mandatory gate on EVERY MCP request, and it
+            # reads the database. When that read fails the server is up but cannot
+            # serve anyone — a state the thread-liveness supervisor cannot see.
+            # Without this branch the traceback escapes into the ASGI server's own
+            # stdout logger, never reaching the app log, so the outage is silent.
+            # Log it loudly here and answer 503 instead of an opaque 500: the MCP
+            # server is not the broken component, so restarting it would not help.
+            logger.exception(
+                "[MCP] Token validation failed — MCP server is running but cannot "
+                "serve requests; the underlying store is unreachable"
+            )
+            return JSONResponse(
+                {"error": "MCP server temporarily unavailable"},
+                status_code=503,
+            )
+
         if wrapper_id is None:
             return JSONResponse(
                 {"error": "Invalid or revoked token"},
