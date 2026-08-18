@@ -27,8 +27,11 @@ logger = logging.getLogger(__name__)
 _SCAN_ROOT: str = "/"
 _MAX_FILE_SIZE: int = 50 * 1024 * 1024  # 50 MB
 
-# Subtrees to skip entirely during the walk.
+# Subtrees to skip entirely during the walk. Keep this a superset of the
+# prefixes TextReader refuses on the file branch — descending into a tree the
+# reader may never open buys nothing but a raise per file, every reconcile.
 _SKIP_SUBTREES: tuple[str, ...] = (
+    "/etc",
     "/proc",
     "/sys",
     "/dev",
@@ -155,6 +158,7 @@ def _should_index(path: str) -> bool:
     - No path component starts with a dot.
     - Not inside a Library/Caches tree.
     - Not a Chalie internal path.
+    - Not a symlink resolving onto a path the reader refuses.
     - Has a supported extension.
     - File size <= 50 MB.
     """
@@ -170,6 +174,14 @@ def _should_index(path: str) -> bool:
     if _is_chalie_path(path):
         return False
     if not _is_supported_extension(path):
+        return False
+    # A symlink is an ordinary path until it is resolved: /usr/lib/python3.13/
+    # sitecustomize.py sits outside every skipped subtree yet points into /etc,
+    # which TextReader refuses on the resolved path. Asking the reader anyway
+    # costs a raise and an ERROR line per reconcile to rediscover a permanent
+    # answer, so the walk applies the reader's own rule instead of guessing.
+    # Ordered after the string filters so it only resolves genuine candidates.
+    if TextReader._is_blocked_path(os.path.realpath(path)):  # noqa: SLF001
         return False
     try:
         size = os.path.getsize(path)
