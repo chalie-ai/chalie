@@ -1384,6 +1384,29 @@ input[type='checkbox'] {
   &.err { color: var(--error); }
 }
 
+// A field label with a control sitting beside it (the model list's reload).
+.label-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+
+  label { margin: 0; }
+}
+
+.model-reload-btn {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+
+  &:disabled { cursor: default; opacity: 0.6; }
+}
+
+.spinning { animation: spin 800ms linear infinite; }
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
 .cp-overlay {
   position: fixed;
   inset: 0;

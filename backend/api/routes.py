@@ -37,6 +37,7 @@ from .actions.memory.search import MemorySearch
 from .actions.policies.blocked import BlockedAction
 from .actions.policies.reset import ResetAction
 from .actions.policies.respond import RespondAction
+from .actions.providers.api_key import ProviderApiKey
 from .actions.providers.catalog import ProviderCatalog
 from .actions.providers.delegate import ProviderDelegate
 from .actions.providers.list_models import ProviderListModels
@@ -94,6 +95,7 @@ ROUTES: tuple[Endpoint, ...] = (
     RespondAction("policies", "respond"),
 
     Providers("providers"),
+    ProviderApiKey("providers", "api-key"),
     ProviderCatalog("providers", "catalog"),
     ProviderDelegate("providers", "delegate"),
     ProviderListModels("providers", "list-models"),

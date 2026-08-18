@@ -7,6 +7,7 @@
  *   POST   /api/providers/-1            create provider → 201, result DTO.
  *   POST   /api/providers/<id>          update provider → result DTO.
  *   DELETE /api/providers/<id>          → 204 empty body.
+ *   GET    /api/providers/api-key/<id>  stored API key, decrypted → result DTO.
  *   GET    /api/providers/catalog       curated presets (fetchAllPages).
  *   POST   /api/providers/list-models   list models for credentials → result DTO.
  *   POST   /api/providers/test          test connection → result DTO.
@@ -139,10 +140,22 @@ export const providers = {
     return api.del(`/api/providers/${id}`);
   },
 
+  // Only ever called from the edit form's "Change API key" button — the key is
+  // pulled on demand so the browser never holds it just for having the page open.
+  async getApiKey(id: number): Promise<string> {
+    const res = await api.get<SingleEnvelope<{ id: number; api_key: string | null }>>(
+      `/api/providers/api-key/${id}`,
+    );
+    return res.result.api_key ?? '';
+  },
+
+  // provider_id lets the backend fill host/api_key from the stored row, so the
+  // model list refreshes on an edit whose key was never revealed.
   async listModels(body: {
     platform: string;
     host?: string;
     api_key?: string;
+    provider_id?: number;
   }): Promise<{ models: ModelInfo[]; error?: string | null }> {
     const res = await api.post<SingleEnvelope<{ models: ModelInfo[]; error?: string | null }>>(
       '/api/providers/list-models',
