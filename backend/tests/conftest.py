@@ -219,6 +219,38 @@ def real_user_synthesis(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(UserSynthesisGenerator, "on_compaction", _REAL_ON_COMPACTION)
 
 
+# Every settled turn kicks background speech pre-synthesis on a fire-and-forget
+# daemon thread — the third instance of the leak shape above, and the one that
+# corrupts rather than merely races: the thread records against
+# ``voice_transcript.transcript_id``, a foreign key onto ``transcript(id)``, so
+# a turn settled by one test writes after that test's rows are gone and SQLite
+# raises IntegrityError inside a thread nobody joins. Session-scoped for the
+# same reason as the two above. Pre-synthesis tests re-arm the real hook with
+# ``real_voice_presynthesis``.
+
+_REAL_VOICE_PRESYNTHESIS = None
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _quiesce_voice_presynthesis() -> "Iterator[None]":
+    global _REAL_VOICE_PRESYNTHESIS
+    from controllers.message_processor import MessageProcessor
+    _REAL_VOICE_PRESYNTHESIS = MessageProcessor._voice_presynthesis
+    patch_ = pytest.MonkeyPatch()
+    patch_.setattr(MessageProcessor, "_voice_presynthesis", lambda self: None)
+    yield
+    patch_.undo()
+
+
+@pytest.fixture
+def real_voice_presynthesis(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Re-arm the real settle hook for pre-synthesis feature tests."""
+    from controllers.message_processor import MessageProcessor
+    monkeypatch.setattr(
+        MessageProcessor, "_voice_presynthesis", _REAL_VOICE_PRESYNTHESIS
+    )
+
+
 # ── Non-DB mock fixtures ──────────────────────────────────────────
 
 @pytest.fixture

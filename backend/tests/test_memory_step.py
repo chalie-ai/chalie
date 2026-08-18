@@ -167,13 +167,6 @@ def _fresh_step_service(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(MemoryStepService, "_instance", None)
 
 
-@pytest.fixture(autouse=True)
-def _quiet_voice(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Suppress voice synthesis — its ONNX model spawns threads that
-    outlive the test and pollute the step-wait loop."""
-    monkeypatch.setattr(MessageProcessor, "_voice_presynthesis", lambda self: None)
-
-
 def _await_step(timeout_s: float = 15.0) -> None:
     """Block until no memory-step thread is running and no pending work
     remains. Raises ``AssertionError`` on timeout naming the stuck state."""

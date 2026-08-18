@@ -106,7 +106,12 @@ def _await_outcome(transcript_id: int, timeout_s: float = 30.0) -> VoiceTranscri
     return None
 
 
+@pytest.mark.usefixtures("real_voice_presynthesis")
 class TestSettleKicksSynthesis:
+    """The settle hook itself is under test here, so both cases re-arm the real
+    method the suite-wide fixture parks — without it one test would pass against
+    a no-op and the other could not go red."""
+
     def test_a_settled_turn_gets_its_speech_without_anyone_asking(
         self, db: sqlite3.Connection, voice_dir: Path,
     ) -> None:
