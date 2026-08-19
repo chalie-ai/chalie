@@ -10,13 +10,19 @@ https://github.com/vllm-project/vllm/blob/main/vllm/entrypoints/openai/engine/pr
 No key by default: vLLM only installs its authentication middleware when
 ``--api-key`` or ``VLLM_API_KEY`` is set, so one is optional here rather than
 required.
+
+Its reasoning scale is its own — ``low``/``medium``/``xhigh``, with no
+``high`` — so it states one instead of inheriting OpenAI's, which would spend
+every HIGH and MAX request on a 400. See VLLM_REASONING_EFFORTS.
 """
 
 from __future__ import annotations
 
 from typing import ClassVar
 
+from configs.enums.thinking_level import ThinkingLevel
 from services.llm_clients.openai_compatible import OpenAICompatibleClient
+from services.llm_clients.thinking_map import VLLM_REASONING_EFFORTS
 
 
 class VllmClient(OpenAICompatibleClient):
@@ -26,3 +32,5 @@ class VllmClient(OpenAICompatibleClient):
     REQUIRES_KEY: ClassVar[bool] = False
 
     WINDOW_FIELDS: ClassVar[tuple[str, ...]] = ('max_model_len',)
+
+    REASONING_EFFORTS: ClassVar[dict[ThinkingLevel, str]] = VLLM_REASONING_EFFORTS

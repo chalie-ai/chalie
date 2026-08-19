@@ -55,31 +55,32 @@ def _strip_think_blocks(text: str) -> tuple[str, str | None]:
 
 
 def _is_thinking_rejection(exc: BaseException, create_kwargs: dict[str, object]) -> bool:
-    """Return True when the provider rejected a thinking-related parameter.
+    """Return True when the provider refused a request that carried thinking params.
 
-    Two rejection shapes are recognized:
+    Two facts decide it, and neither is the vendor's prose: the request we sent
+    carried a thinking parameter — ``reasoning_effort``, or an ``extra_body``
+    ``thinking`` key — and the provider answered **400**, a rejection of the
+    request's shape rather than a server, auth or rate fault.
 
-    1. reasoning_effort rejection (OpenAI native):
-       create_kwargs carries 'reasoning_effort' and the error text mentions
-       'reasoning_effort' or 'unsupported'.
+    Reading the message text is what this deliberately stopped doing. The old
+    rule looked for 'reasoning_effort' or 'unsupported' in the error, and some
+    servers write neither: "Unexpected reasoning effort high. Supported types
+    are xhigh (default), medium, and low." spells the parameter with a space and
+    says "Unexpected"/"Supported". A correct strip-and-retry ladder sat unreached
+    behind that match, so every high-effort turn died on a refusal it could have
+    recovered from.
 
-    2. extra_body thinking rejection (OpenAI-compatible / vLLM style):
-       create_kwargs carries an 'extra_body' dict containing a 'thinking' key
-       (the vendor-extension disable param) and the error text mentions
-       'thinking', 'extra_forbidden', 'extra inputs', or 'unsupported'.
-       Strict servers reject unknown body fields with 400 'Extra inputs are
-       not permitted'; the field must be dropped and retried.
+    Callers reach this only inside a BadRequestError/APIError handler and only
+    after the context-length branch has claimed its own case, so what is left is
+    a request-shape fault. An unrelated one — a malformed tool schema, say —
+    costs one retry without the thinking params and then raises as before. That
+    is the price of not making recovery depend on wording nobody controls.
     """
-    if 'reasoning_effort' in create_kwargs:
-        err = str(exc).lower()
-        if 'reasoning_effort' in err or 'unsupported' in err:
-            return True
-    extra_body = create_kwargs.get('extra_body')
-    if isinstance(extra_body, dict) and 'thinking' in extra_body:
-        err = str(exc).lower()
-        if any(term in err for term in ('thinking', 'extra_forbidden', 'extra inputs', 'unsupported')):
-            return True
-    return False
+    sent_thinking = 'reasoning_effort' in create_kwargs
+    if not sent_thinking:
+        extra_body = create_kwargs.get('extra_body')
+        sent_thinking = isinstance(extra_body, dict) and 'thinking' in extra_body
+    return sent_thinking and getattr(exc, 'status_code', 0) == 400
 
 
 def _resolve_api_key(config: dict[str, object]) -> str:

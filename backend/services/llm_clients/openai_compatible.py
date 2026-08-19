@@ -222,6 +222,16 @@ class OpenAICompatibleClient(ProviderClient):
     #: field. Vendor extension: official OpenAI rejects unknown top-level keys.
     SENDS_THINKING_EXTRA_BODY: ClassVar[bool] = True
 
+    #: This vendor's ``reasoning_effort`` vocabulary, keyed by ThinkingLevel.
+    #: A level absent from the map sends no flag and takes the vendor default.
+    #:
+    #: The base carries OpenAI's spelling because it also serves unknown hosts,
+    #: and speaking the protocol's originator is the best available guess for a
+    #: host nobody has characterised. It is only a guess: a subclass whose
+    #: vendor publishes a different scale states it here rather than inheriting
+    #: one that produces a 400 on every request at that level.
+    REASONING_EFFORTS: ClassVar[dict[ThinkingLevel, str]] = OPENAI_REASONING_EFFORTS
+
     #: Where this vendor publishes the context window on a ``/models`` entry,
     #: as dotted paths tried in order — so a subclass that has both a precise
     #: and an approximate spelling states which one wins simply by listing it
@@ -292,12 +302,12 @@ class OpenAICompatibleClient(ProviderClient):
         return cast("Callable[..., _openai_mod.OpenAI]", OpenAI)(**kwargs)
 
     def _thinking_native(self, level: ThinkingLevel) -> Optional[str]:
-        """Return the reasoning_effort string or None when thinking is off."""
-        effort = OPENAI_REASONING_EFFORTS.get(level)
+        """Return this vendor's reasoning_effort string, or None to send no flag."""
+        effort = self.REASONING_EFFORTS.get(level)
         if effort:
             logger.info(
-                "[THINKING] native flag passed: provider=openai mode=%s model=%s",
-                level.value, self.model,
+                "[THINKING] native flag passed: provider=%s mode=%s native=%s model=%s",
+                self.PLATFORM, level.value, effort, self.model,
             )
         return effort
 
@@ -360,8 +370,8 @@ class OpenAICompatibleClient(ProviderClient):
                 if create_kwargs.get('reasoning_effort') == 'none':
                     # Step 1: retry with minimal effort, no extra_body
                     logger.info(
-                        "[THINKING] native flag rejected by provider=openai model=%s — retried with minimal",
-                        self.model,
+                        "[THINKING] native flag %r rejected by provider=%s model=%s — retried with minimal",
+                        create_kwargs.get('reasoning_effort'), self.PLATFORM, self.model,
                     )
                     fallback1 = {k: v for k, v in create_kwargs.items() if k not in ('reasoning_effort', 'extra_body')}
                     fallback1['reasoning_effort'] = OPENAI_NONE_FALLBACK_EFFORT
@@ -371,22 +381,27 @@ class OpenAICompatibleClient(ProviderClient):
                         if _is_thinking_rejection(retry_exc, fallback1):
                             # Step 2: retry bare — no reasoning_effort, no extra_body
                             logger.info(
-                                "[THINKING] native flag rejected by provider=openai model=%s — retried without",
-                                self.model,
+                                "[THINKING] native flag %r rejected by provider=%s model=%s — retried without",
+                                OPENAI_NONE_FALLBACK_EFFORT, self.PLATFORM, self.model,
                             )
                             fallback2 = {k: v for k, v in create_kwargs.items() if k not in ('reasoning_effort', 'extra_body')}
                             return cast("Callable[..., _openai_mod.types.chat.ChatCompletion]", client.chat.completions.create)(**fallback2)
                         raise
                 else:
-                    # Single bare-strip retry for other reasoning_effort values
-                    logger.info(
-                        "[THINKING] native flag rejected by provider=openai model=%s — retried without",
-                        self.model,
+                    # Single bare-strip retry for other reasoning_effort values.
+                    # This rescues the call but sends NO thinking flag, so the
+                    # level the user picked is silently traded for the vendor
+                    # default. A platform that lands here repeatedly is telling
+                    # you its REASONING_EFFORTS row is wrong or missing.
+                    logger.warning(
+                        "[THINKING] native flag %r rejected by provider=%s model=%s — "
+                        "retried without, so this call ran at the vendor default",
+                        create_kwargs.get('reasoning_effort'), self.PLATFORM, self.model,
                     )
                     fallback = {k: v for k, v in create_kwargs.items() if k not in ('reasoning_effort', 'extra_body')}
                     return cast("Callable[..., _openai_mod.types.chat.ChatCompletion]", client.chat.completions.create)(**fallback)
             status = getattr(exc, 'status_code', 0)
-            raise ProviderResponseError(str(exc), response_code=status, provider='openai') from exc
+            raise ProviderResponseError(str(exc), response_code=status, provider=self.PLATFORM) from exc
 
     def send(self, dto: ProviderApiRequest) -> ProviderApiResponse:
         """Transform DTO → OpenAI Chat Completions API → ProviderApiResponse."""
