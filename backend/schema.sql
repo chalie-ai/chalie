@@ -360,8 +360,8 @@ CREATE INDEX IF NOT EXISTS idx_llm_call_log_channel
 -- MCP_CLIENT_SERVERS — outbound MCP client connections
 --
 -- Chalie connects OUT to remote MCP servers (inverse of the inbound
--- MCP server in mcp_server/server.py, which uses wrapper_tokens for
--- auth).  Each row represents one configured remote server.
+-- MCP server in mcp_server/server.py).  Each row represents one
+-- configured remote server.
 -- status:  'unknown' | 'online' | 'offline'  — updated by heartbeat.
 -- headers: JSON object of extra HTTP headers (e.g. Authorization).
 -- ────────────────────────────────────────────────────────────────

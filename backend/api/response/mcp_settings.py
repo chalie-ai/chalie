@@ -1,10 +1,8 @@
-"""Response DTOs for the MCP server settings endpoint.
+"""Response DTO for the MCP server settings endpoint.
 
-Mirrors the field shape of the DTOs this endpoint group replaced, so the
-wire format stays identical. ``token`` is the raw bearer credential —
-owner-visible on read and on regenerate (preserved current behaviour);
-there is NO write path for it. ``wrapper_id`` is the opaque identifier
-for the wrapper token record.
+``enabled`` and ``port`` are the stored intent; ``listening``,
+``listening_port`` and ``error`` are the listener's live state at read time,
+so a toggle or port change is confirmed from the same record it was written to.
 """
 
 from __future__ import annotations
@@ -17,12 +15,6 @@ class McpServerSettings(Response):
 
     enabled: bool
     port: int
-    token: str | None
-    wrapper_id: str | None
-
-
-class RegenerateTokenResult(Response):
-    """Result of regenerating the MCP server bearer token."""
-
-    token: str
-    wrapper_id: str
+    listening: bool
+    listening_port: int | None
+    error: str | None

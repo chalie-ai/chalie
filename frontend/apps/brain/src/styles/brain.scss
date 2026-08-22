@@ -1571,9 +1571,8 @@ input[type='checkbox'] {
 .mcp-settings { display: flex; flex-direction: column; gap: 16px; max-width: 600px; }
 .mcp-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; }
 .mcp-label { font-size: 13px; font-weight: 500; }
-.mcp-token-section { margin-top: 8px; }
-.mcp-token-section h4 { font-size: 14px; font-weight: 600; margin: 0 0 4px; }
 .mcp-hint { font-size: 12px; color: var(--text-secondary); margin: 0 0 10px; }
+.mcp-status-error { color: var(--error); }
 
 .mcp-section-title {
   font-size: 13px;

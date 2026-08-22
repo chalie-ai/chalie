@@ -32,7 +32,6 @@ from .actions.lists.items import ListItems
 from .actions.mcp_clients.discoverable import McpDiscoverable
 from .actions.mcp_clients.test import McpTest
 from .actions.mcp_clients.tools import McpTools
-from .actions.mcp_server.regenerate_token import RegenerateTokenAction
 from .actions.memory.search import MemorySearch
 from .actions.policies.blocked import BlockedAction
 from .actions.policies.reset import ResetAction
@@ -85,7 +84,6 @@ ROUTES: tuple[Endpoint, ...] = (
     McpTools("mcp-clients", "tools"),
 
     McpSettingsEndpoint("mcp-server"),
-    RegenerateTokenAction("mcp-server", "regenerate-token"),
 
     MemorySearch("memory", "search"),
 

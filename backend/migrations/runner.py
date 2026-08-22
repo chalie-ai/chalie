@@ -67,6 +67,7 @@ _STEPS: tuple[tuple[str, str], ...] = (
     ("llm-call-log-timings-v1", "migrations.migration_017_llm_call_log_timings"),
     ("usage-type-foreground-background-v1", "migrations.migration_018_usage_type_foreground_background"),
     ("user-synthesis-seed-v1", "migrations.migration_020_seed_user_synthesis"),
+    ("mcp-server-token-removal-v1", "migrations.migration_021_drop_mcp_server_token"),
 )
 
 # Extra wrapper-era sentinel stems a step's resolution must also satisfy:
