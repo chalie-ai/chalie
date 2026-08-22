@@ -34,6 +34,7 @@ from .actions.mcp_clients.test import McpTest
 from .actions.mcp_clients.tools import McpTools
 from .actions.memory.search import MemorySearch
 from .actions.policies.blocked import BlockedAction
+from .actions.policies.pending import PendingAction
 from .actions.policies.reset import ResetAction
 from .actions.policies.respond import RespondAction
 from .actions.providers.api_key import ProviderApiKey
@@ -89,6 +90,7 @@ ROUTES: tuple[Endpoint, ...] = (
 
     PoliciesEndpoint("policies"),
     BlockedAction("policies", "blocked"),
+    PendingAction("policies", "pending"),
     ResetAction("policies", "reset"),
     RespondAction("policies", "respond"),
 

@@ -114,9 +114,12 @@ class PimAbility(DelegateAbility[DelegateParamsBag]):
         if mp is None:
             raise RuntimeError("pim.run() dispatched without a bound MessageProcessor")
 
+        # A gated tool inside the delegate prompts on the CALLER's turn — the
+        # delegate's own turn has no surface a human could answer from.
         result = MessageProcessor.process(
             PimConfig(mp.config.policy_channel),
             raw_input=params.instructions,
+            metadata={"origin": mp.origin},
         ).result()
         return delegate_result(
             result, hint="Rephrase the instruction or split it into smaller PIM tasks, then retry."

@@ -120,7 +120,9 @@ class WebBrowseAbility(DelegateAbility[DelegateParamsBag]):
             raise RuntimeError("web_browse.run() dispatched without a bound MessageProcessor")
 
         cfg = WebBrowseConfig(mp.config.policy_channel)
-        delegate_mp = MessageProcessor.process(cfg, raw_input=params.instructions)
+        # A gated tool inside the delegate prompts on the CALLER's turn — the
+        # delegate's own turn has no surface a human could answer from.
+        delegate_mp = MessageProcessor.process(cfg, raw_input=params.instructions, metadata={"origin": mp.origin})
         result = delegate_mp.result()
         return delegate_result(
             result, hint="Restate the goal more concretely or break it into steps, then retry."

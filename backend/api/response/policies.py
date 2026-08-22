@@ -27,3 +27,22 @@ class BlockedEntryResponse(Response):
     context: str
     reason: str
     created_at: datetime
+
+
+class PermissionOriginResponse(Response):
+    """The interactive turn a pending permission prompt belongs to — where the
+    interface shows the card (main spine, thread panel or scheduled panel)."""
+
+    type: str
+    turn_id: int
+    forked: bool
+
+
+class PermissionRequestResponse(Response):
+    """Read shape for one parked ask-gate: the fields of the ``permission_request``
+    socket frame, so a client restoring over REST gets the card it missed."""
+
+    request_id: str
+    action_id: str
+    summary: str
+    origin: PermissionOriginResponse

@@ -233,7 +233,7 @@ class DispatchService:
             )
             return text
 
-        result_text = self._authorize(permission, _run_gated)
+        result_text = self._authorize(permission, _run_gated, act_summary)
         return result_text, call_id, state
 
     def _repeat_error_steer(self, tool_name: str, result_text: str) -> str:
@@ -282,18 +282,23 @@ class DispatchService:
 
     # ── Policy gate ─────────────────────────────────────────────────────────────
 
-    def _authorize(self, permission: str, callback: "Callable[[], str]") -> str:
+    def _authorize(self, permission: str, callback: "Callable[[], str]", summary: str | None = None) -> str:
         """Gate *callback* for this turn's (channel, permission) — the spine's
         replacement for the static ``PolicyManager.wrap`` entry point: the
-        instance method (``authorize``) is invoked directly, with the channel and
-        the cooperative ``should_stop`` sourced off the typed ``self.mp`` instead
-        of the old getattr wedges. ``should_stop`` lets a parked ask-prompt unwind
-        when the turn is cancelled instead of pinning the per-channel lock."""
+        instance method (``authorize``) is invoked directly, with the channel,
+        the cooperative ``should_stop`` and the turn's ``origin`` sourced off the
+        typed ``self.mp`` instead of the old getattr wedges. ``should_stop`` lets
+        a parked ask-prompt unwind when the turn is cancelled instead of pinning
+        the per-channel lock; ``origin`` tells the gate which interactive turn a
+        prompt belongs to (none → an ``ask`` denies at once); ``summary`` is the
+        model's one-line account of the call, shown on the prompt."""
         return PolicyManager().authorize(
             channel=self.mp.config.policy_channel,
             permission=permission,
             callback=callback,
             should_stop=self.mp.turn_execution_service.should_stop,
+            origin=self.mp.origin,
+            summary=summary or "",
         )
 
     # ── Resolution ─────────────────────────────────────────────────────────────

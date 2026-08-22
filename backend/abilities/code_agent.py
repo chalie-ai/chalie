@@ -111,9 +111,12 @@ class CodeAgentAbility(DelegateAbility[DelegateParamsBag]):
             parents=True, exist_ok=True
         )
 
+        # A gated tool inside the delegate prompts on the CALLER's turn — the
+        # delegate's own turn has no surface a human could answer from.
         agent_mp = MessageProcessor.process(
             CodeAgentConfig(mp.config.policy_channel),
             raw_input=params.instructions,
+            metadata={"origin": mp.origin},
         )
         return delegate_result(
             agent_mp.result(),
