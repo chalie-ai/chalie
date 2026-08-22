@@ -166,6 +166,11 @@ onBeforeUnmount(() => {
         <div ref="turnsRef" class="thread-panel__turns" />
       </div>
 
+      <!-- Permission cards for the turn this panel shows: PermissionStack.vue
+           teleports them here, in flow above this dock, while the panel is open
+           on their turn. The target lives only with the open panel. -->
+      <div id="permStackPanel" class="permission-stack permission-stack--panel"></div>
+
       <InputDock
         v-if="session.panelThreadId != null"
         dock-id="thread_view_dock"

@@ -42,6 +42,7 @@ import {
 } from '../utils/turnDom';
 import { laneKey, useQueueStore } from './queue';
 import { useNotificationsStore } from './notifications';
+import { usePermissionsStore } from './permissions';
 import { useAmbientSensor } from '../composables/useAmbientSensor';
 
 /** Guard: init() must be idempotent (HMR / Vue StrictMode). */
@@ -144,6 +145,11 @@ export const useSessionStore = defineStore('session', {
       ws.onConnect(() => {
         conn.setConnected(true);
         void this._reconcileWorking();
+        // Pending permission gates outlive the socket (the backend thread keeps
+        // waiting; the WS frame was only the visual trigger) — re-read them on
+        // every connect, first load and reconnect alike, so a reload or a drop
+        // brings the cards back instead of parking the turn for ever.
+        void usePermissionsStore().refreshPending();
       });
 
       ws.onDisconnect(() => {

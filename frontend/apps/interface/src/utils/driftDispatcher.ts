@@ -386,6 +386,14 @@ function _dispatchSimpleEvent(data: WsPushEvent): boolean {
     case 'permission_request':
       usePermissionsStore().enqueue(data);
       return true;
+    case 'permission_resolved': {
+      // The gate ended elsewhere — answered in another tab, cancelled with its
+      // turn, or failed on the backend — so the card must not wait for an
+      // answer nobody can deliver.
+      const requestId = (data as { request_id?: unknown }).request_id;
+      if (typeof requestId === 'string') usePermissionsStore().remove(requestId);
+      return true;
+    }
     default:
       return false;
   }

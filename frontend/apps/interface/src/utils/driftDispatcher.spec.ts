@@ -71,9 +71,9 @@ vi.mock('../stores/tasks', () => ({
   useTasksStore: () => ({ applyDriftEvent: applyDriftEventMock }),
 }));
 
-const { enqueueMock } = vi.hoisted(() => ({ enqueueMock: vi.fn() }));
+const { enqueueMock, removeMock } = vi.hoisted(() => ({ enqueueMock: vi.fn(), removeMock: vi.fn() }));
 vi.mock('../stores/permissions', () => ({
-  usePermissionsStore: () => ({ enqueue: enqueueMock }),
+  usePermissionsStore: () => ({ enqueue: enqueueMock, remove: removeMock }),
 }));
 
 const { recordVoiceMock } = vi.hoisted(() => ({ recordVoiceMock: vi.fn() }));
@@ -438,6 +438,16 @@ describe('dispatchDrift — simple (content-free) events', () => {
   it('permission_request reaches the permissions store', () => {
     dispatchDrift(frame({ type: 'permission_request', request_id: 'r1', action_id: 'email.send' }));
     expect(enqueueMock).toHaveBeenCalled();
+  });
+
+  it('permission_resolved removes that gate\'s card from the permissions store', () => {
+    dispatchDrift(frame({ type: 'permission_resolved', request_id: 'r1' }));
+    expect(removeMock).toHaveBeenCalledWith('r1');
+  });
+
+  it('permission_resolved without a request_id touches nothing', () => {
+    dispatchDrift(frame({ type: 'permission_resolved' }));
+    expect(removeMock).not.toHaveBeenCalled();
   });
 
   it('subagent_start reaches the tasks store', () => {
