@@ -1,8 +1,7 @@
 """PolicyManager — flat (channel, permission, setting) permission gate.
 
-Single entry point: PolicyManager.wrap(channel, permission, callback, error).
-Every native AND MCP tool call flows through it (ToolDispatcher.dispatch passes
-ToolDispatcher._execute as the callback).
+Single entry point: ``DispatchService._authorize`` → ``PolicyManager.authorize``.
+Every native AND MCP tool call flows through it.
 
 Settings: internal (always allowed, hidden in Brain) · allow · ask · deny.
 Channels: PolicyChannel values.
@@ -93,24 +92,6 @@ _GATE_POLL_SECONDS = 0.25
 
 
 class PolicyManager:
-    # ── The single entry point dispatch calls ─────────────────────────────────
-
-    @staticmethod
-    def wrap(
-        channel: PolicyChannel,
-        permission: str,
-        callback: Callable[[], str],
-        error: str = _BLOCK,
-        should_stop: "Callable[[], bool] | None" = None,
-        origin: dict[str, object] | None = None,
-        summary: str = "",
-    ) -> str:
-        """Gate `callback` for (channel, permission). `should_stop` (the turn's)
-        lets a parked `ask` prompt unwind when the turn is cancelled; `origin`
-        names the interactive turn a prompt would surface on (none → an `ask`
-        denies at once); `summary` labels the prompt for the user."""
-        return PolicyManager().authorize(channel, permission, callback, error, should_stop, origin, summary)
-
     # ── The gate: run | block | ask (dead simple) ─────────────────────────────
 
     def authorize(

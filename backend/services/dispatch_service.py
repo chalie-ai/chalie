@@ -284,7 +284,7 @@ class DispatchService:
 
     def _authorize(self, permission: str, callback: "Callable[[], str]", summary: str | None = None) -> str:
         """Gate *callback* for this turn's (channel, permission) — the spine's
-        replacement for the static ``PolicyManager.wrap`` entry point: the
+        gate for every tool call: the
         instance method (``authorize``) is invoked directly, with the channel,
         the cooperative ``should_stop`` and the turn's ``origin`` sourced off the
         typed ``self.mp`` instead of the old getattr wedges. ``should_stop`` lets

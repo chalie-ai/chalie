@@ -33,7 +33,7 @@ def _dispatch_mcp(tool_name: str, params: "dict[str, object]") -> ToolResult:
     """Route an ``_mcp_<server>_<tool>`` call through ``McpClientService`` and map
     the remote outcome onto the ``ToolResult`` contract.
 
-    Policy is enforced by ``PolicyManager.wrap()`` in the dispatcher (via the
+    Policy is enforced by ``PolicyManager.authorize`` in the dispatcher (via the
     ``_MCPAbility`` proxy) BEFORE this runs; this only performs the MCP call.
 
     The shaping is the service's job (``dispatch_mcp_tool`` returns

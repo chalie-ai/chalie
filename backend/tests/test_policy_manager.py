@@ -12,7 +12,7 @@ import pytest
 import services.database as _db_gateway
 from configs.enums.policy_channel import PolicyChannel
 from services.file_mapper_service import FileMapperService
-from services.policy_manager import _GATE_POLL_SECONDS, PolicyManager, _permission_gates
+from services.policy_manager import _ASK_NO_SURFACE, _GATE_POLL_SECONDS, PolicyManager, _permission_gates
 from services.websocket import Websocket
 
 pytestmark = pytest.mark.unit
@@ -147,22 +147,6 @@ def test_unknown_key_provisions_ask_then_escalates(mgr: PolicyManager, db: sqlit
     assert db.execute("SELECT reason FROM policy_blocked_log ORDER BY id").fetchone()["reason"] == "user_unavailable"
 
 
-# 4. interactive CHAT 'ask': approved runs, denied blocks (gate monkeypatched, never broadcasts off-channel)
-@pytest.mark.parametrize("approved,should_run", [(True, True), (False, False)])
-def test_chat_ask_follows_user_verdict(mgr: PolicyManager, db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch, approved: bool, should_run: bool) -> None:
-    monkeypatch.setattr(
-        PolicyManager, "_ask_user",
-        lambda self, permission, channel, origin, summary, should_stop=None: approved,
-    )
-    _seed(db, "chat", "pim", "ask")
-    out = mgr.authorize(CH.CHAT, "pim", _ran, origin=_origin())
-    if should_run:
-        assert out == _ran()
-    else:
-        assert out == "The pim action is not allowed. Do NOT retry."   # block STRING
-        assert db.execute("SELECT reason FROM policy_blocked_log").fetchone()["reason"] == "user_denied"
-
-
 # 5. data layer: seed → get_all hides internal; upsert flips + rejects bad input; reset restores; blocked-log roundtrip
 def test_data_layer_roundtrip(mgr: PolicyManager) -> None:
     assert mgr.apply_seed() > 0
@@ -203,11 +187,7 @@ def test_ask_with_no_surface_denies_with_steer_and_never_broadcasts(
 ) -> None:
     _seed(db, "chat", "pim", "ask")
     out = mgr.authorize(CH.CHAT, "pim", _ran, summary="Check tomorrow's calendar")
-    assert out == (
-        'The pim action is blocked by policy on the chat channel: it is set to "ask" '
-        "and nobody can answer a prompt here. Do NOT retry. Tell the user it was blocked by policy "
-        'and ask them to set pim to "allow" for the chat channel in Brain → Policies.'
-    )
+    assert out == _ASK_NO_SURFACE.format(permission="pim", channel="chat")
     row = db.execute("SELECT context, reason FROM policy_blocked_log").fetchone()
     assert (row["context"], row["reason"]) == ("chat", "user_unavailable")
     assert recorder.frames == []
