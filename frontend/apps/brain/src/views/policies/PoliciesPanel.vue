@@ -100,6 +100,11 @@ onMounted(load);
     </div>
   </div>
 
+  <p v-if="channel !== 'chat'" class="panel-desc">
+    Nobody answers prompts on this channel — Ask denies the call and tells the model to request
+    access from you.
+  </p>
+
   <div v-if="loading" class="loading">Loading…</div>
 
   <div v-else class="policies-grid">
