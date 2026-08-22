@@ -94,8 +94,10 @@ async function deleteSkill(skill: Skill): Promise<void> {
     failMsg: 'Failed to delete skill',
   });
   if (done) {
-    skills.value = skills.value.filter((s) => s.id !== skill.id);
     editingId.value = null;
+    // Reload rather than splice: deleting a copy re-enables the curated
+    // original, and only the server knows which card that is.
+    await load();
   }
 }
 

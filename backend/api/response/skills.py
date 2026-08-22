@@ -6,6 +6,9 @@ Mirrors the field shape of the legacy DTOs (``backend/api/dto/skill.py``,
 
 from __future__ import annotations
 
+from typing import cast
+
+from models.skill import Skill
 from .response import Response
 
 
@@ -21,6 +24,26 @@ class SkillResponse(Response):
     source: str
     enabled: bool
     based_on: int | None
+
+    @classmethod
+    def from_model(cls, skill: Skill) -> "SkillResponse":
+        """Project a persisted :class:`~models.skill.Skill` row into this read DTO.
+
+        ``enabled`` and ``based_on`` are SQL defaults: an instance built for
+        INSERT never carries them, so callers pass a row read back from the
+        database, never the instance they just saved.
+        """
+        return cls(
+            id=cast(int, skill.id),
+            title=skill.title,
+            use_for=skill.use_for,
+            content=skill.content,
+            tags=skill.tags or "",
+            version=skill.version,
+            source=skill.source,
+            enabled=bool(skill.enabled),
+            based_on=skill.based_on,
+        )
 
 
 class SkillToggleResponse(Response):

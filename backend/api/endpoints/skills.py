@@ -75,7 +75,7 @@ class Skills(Endpoint):
             return SkillResponse.listing([], page, limit, 0)
 
         rows = SkillModel.order_by("source, title").get()
-        items = [self._to_response(row) for row in rows]
+        items = [SkillResponse.from_model(row) for row in rows]
         total = len(items)
         start = (page - 1) * limit
         return SkillResponse.listing(items[start : start + limit], page, limit, total)
@@ -102,6 +102,14 @@ class Skills(Endpoint):
 
         with Database.transaction(str(FileMapperService.get_skills_db_path())) as conn:
             remove_search_entries(conn, skill_id)
+            if skill.based_on is not None:
+                # Copying disabled the curated original this copy superseded;
+                # deleting the copy hands it back.
+                SkillModel.filter("id", skill.based_on).update(enabled=1)
+                logger.info(
+                    "[SKILLS API] Re-enabled curated skill id=%d superseded by deleted copy id=%d",
+                    skill.based_on, skill_id,
+                )
             skill.delete()
 
         if path.exists() and path.resolve().is_relative_to(FileMapperService.get_user_skills_path().resolve()):
@@ -130,17 +138,20 @@ class Skills(Endpoint):
         tags = dto.tags if dto.tags is not None else ""
 
         with Database.transaction(str(FileMapperService.get_skills_db_path())) as conn:
-            skill = SkillModel(
+            skill_id = cast(int, SkillModel(
                 title=title,
                 use_for=use_for,
                 content=content,
                 tags=tags,
                 version=DEFAULT_VERSION,
                 source="user",
-            ).save()
-            skill_id = cast(int, skill.id)
+            ).save().id)
 
             _index_new_skill(conn, skill_id, title, use_for, tags)
+
+            # Re-read inside the transaction: enabled/based_on are SQL defaults the
+            # saved instance never carries, and the row is still ours to read here.
+            created = cast(SkillModel, SkillModel.get(skill_id))
 
         ensure_user_skills_dir()
         write_skill_file(
@@ -155,7 +166,7 @@ class Skills(Endpoint):
         )
 
         logger.info("[SKILLS API] Created skill '%s' (id=%d)", title, skill_id)
-        return self._to_response(skill).single(), 201
+        return SkillResponse.from_model(created).single(), 201
 
     def _update(self, skill_id: int, dto: SkillRequest) -> ResponseReturnValue:
         if not FileMapperService.get_skills_db_path().exists():
@@ -196,17 +207,4 @@ class Skills(Endpoint):
         )
 
         logger.info("[SKILLS API] Updated skill id=%d '%s' to v%d", skill_id, title, version)
-        return self._to_response(skill).single()
-
-    def _to_response(self, skill: SkillModel) -> SkillResponse:
-        return SkillResponse(
-            id=cast(int, skill.id),
-            title=skill.title,
-            use_for=skill.use_for,
-            content=skill.content,
-            tags=skill.tags or "",
-            version=skill.version,
-            source=skill.source,
-            enabled=bool(skill.enabled),
-            based_on=skill.based_on,
-        )
+        return SkillResponse.from_model(skill).single()
