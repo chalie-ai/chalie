@@ -49,6 +49,7 @@ This is model steering, not a sandbox. It raises the bar; it is not a guarantee.
 - All authenticated endpoints use the `@require_session` decorator
 - No default or hardcoded credentials — account password is set during onboarding
 - Optional `credentials.json` at the install root logs the instance in on the first request — a development convenience; Chalie never creates the file, it is gitignored, and in its absence every request follows the normal login flow
+- The built-in MCP server — the `talk_to_chalie` endpoint other agents call — carries no inbound token: nothing is issued, rotated, or checked, and an upgrade removes any token an earlier version stored. Access is bounded per tool by the External agent policy channel, where an `ask` rule denies outright because nobody is there to answer. The listener binds every network interface, so exposure beyond a trusted network is the operator's network-control responsibility (firewall, VPN, reverse proxy) — not something the server enforces
 
 ---
 
