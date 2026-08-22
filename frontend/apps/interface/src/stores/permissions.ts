@@ -5,8 +5,9 @@
  * `permission_request` frame here via `enqueue(data)` and every
  * `permission_resolved` frame via `remove(id)`; the session store calls
  * `refreshPending()` on every WS connect so a reload or a dropped socket
- * restores the cards the frames would have painted (the backend thread keeps
- * waiting on the gate regardless — the frame is only the visual trigger).
+ * restores the cards the frames would have painted and drops the ones whose
+ * resolution was missed (the backend thread keeps waiting on the gate
+ * regardless — the frame is only the visual trigger).
  * `enqueue` dedupes on `request_id`, so the live frame and the REST listing
  * overlapping is harmless. PermissionStack.vue renders the queue and calls
  * `respond()` when the user taps Allow or Deny.
@@ -71,11 +72,17 @@ export const usePermissionsStore = defineStore('permissions', {
     },
 
     /**
-     * Re-read the pending gates over REST and enqueue whatever is missing —
-     * called on every WS connect (initial load and reconnect). Best-effort:
-     * a failed fetch leaves the queue as it is; the next connect retries.
+     * Reconcile the queue with the pending gates over REST — called on every
+     * WS connect (initial load and reconnect) and after a failed `respond`.
+     * A card queued before the fetch that the listing no longer has is dropped
+     * (its `permission_resolved` frame was missed while the socket was down);
+     * a frame that arrives while the fetch is in flight is not in that
+     * snapshot, so it is never pruned; the listing's gates are enqueued.
+     * Best-effort: a failed fetch leaves the queue as it is; the next connect
+     * retries.
      */
     async refreshPending(): Promise<void> {
+      const queuedBefore = new Set(this.queue.map((r) => r.request_id));
       let pending: PendingPermission[];
       try {
         pending = await policies.pending();
@@ -83,19 +90,27 @@ export const usePermissionsStore = defineStore('permissions', {
         console.warn('[permissions] pending gates fetch failed:', err);
         return;
       }
+      const listed = new Set(pending.map((item) => item.request_id));
+      this.queue = this.queue.filter(
+        (r) => listed.has(r.request_id) || !queuedBefore.has(r.request_id),
+      );
       for (const item of pending) this.enqueue(item);
     },
 
-    /** Optimistic removal: dismiss the card before the network round-trip. */
+    /**
+     * Optimistic removal: dismiss the card before the network round-trip. If
+     * the POST fails the gate is still parked on the backend, so the listing is
+     * re-read to bring the card back — it only returns gates that are still
+     * open, so one answered elsewhere in the meantime stays gone.
+     */
     async respond(requestId: string, approved: boolean): Promise<void> {
       this.remove(requestId);
 
       try {
         await policies.respond({ request_id: requestId, approved });
       } catch (err) {
-        // Don't re-surface the card — the user already decided; if the gate is
-        // in fact still open, the next connect's refreshPending brings it back.
         console.warn('[permissions] respond failed:', err);
+        void this.refreshPending();
       }
     },
   },

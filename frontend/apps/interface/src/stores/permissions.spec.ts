@@ -5,7 +5,7 @@
  * `GET /api/policies/pending` listing (re-read on every WS connect) overlap on
  * purpose, and `enqueue` dedupes on `request_id` so a card is never doubled;
  * `remove` is what a `permission_resolved` frame drives; `respond` stays
- * optimistic.
+ * optimistic and re-reads the listing when the POST fails.
  *
  * Real Pinia, real store. Only the REST boundary (`api/policies.ts`) is mocked
  * — the transport this store would otherwise hit.
@@ -30,6 +30,9 @@ const liveFrame = {
   summary: 'Read the inbox',
   origin: { type: 'user', turn_id: 7, forked: true },
 };
+
+/** Drain the microtask queue — `respond` re-reads the listing without awaiting it. */
+const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 beforeEach(() => {
   setActivePinia(createPinia());
@@ -106,6 +109,31 @@ describe('refreshPending', () => {
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
   });
+
+  it('drops a queued card the listing no longer has — its permission_resolved frame was missed while the socket was down', async () => {
+    const store = usePermissionsStore();
+    store.enqueue(liveFrame);
+    store.enqueue({ ...liveFrame, request_id: 'r2' });
+    pendingMock.mockResolvedValue([{ ...liveFrame, request_id: 'r2' }]);
+
+    await store.refreshPending();
+
+    expect(store.queue.map((r) => r.request_id)).toEqual(['r2']);
+  });
+
+  it('a frame that arrives while the fetch is in flight survives the reconcile — only cards queued before the fetch can be pruned', async () => {
+    const store = usePermissionsStore();
+    store.enqueue(liveFrame); // queued before the fetch and absent from the listing: pruned
+    let deliver!: (listing: unknown[]) => void;
+    pendingMock.mockReturnValue(new Promise<unknown[]>((resolve) => { deliver = resolve; }));
+
+    const refreshing = store.refreshPending();
+    store.enqueue({ ...liveFrame, request_id: 'r3' }); // live frame, mid-fetch
+    deliver([{ ...liveFrame, request_id: 'r2' }]);
+    await refreshing;
+
+    expect(store.queue.map((r) => r.request_id)).toEqual(['r3', 'r2']);
+  });
 });
 
 describe('remove / respond', () => {
@@ -133,16 +161,33 @@ describe('remove / respond', () => {
     expect(respondMock).toHaveBeenCalledWith({ request_id: 'r1', approved: true });
   });
 
-  it('a failed respond does not resurrect the card — the user already decided', async () => {
+  it('a failed respond brings the card back when the listing still has the gate — it is still parked on the backend', async () => {
     const store = usePermissionsStore();
     store.enqueue(liveFrame);
     respondMock.mockRejectedValue(new Error('500'));
+    pendingMock.mockResolvedValue([liveFrame]);
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
     await store.respond('r1', false);
+    await flush();
 
-    expect(store.queue).toEqual([]);
+    expect(store.queue.map((r) => r.request_id)).toEqual(['r1']);
     expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('a failed respond leaves the card gone when the listing no longer has the gate — it was answered or cancelled elsewhere', async () => {
+    const store = usePermissionsStore();
+    store.enqueue(liveFrame);
+    respondMock.mockRejectedValue(new Error('500'));
+    pendingMock.mockResolvedValue([]);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    await store.respond('r1', true);
+    await flush();
+
+    expect(pendingMock).toHaveBeenCalledTimes(1); // re-read, not a blind re-add
+    expect(store.queue).toEqual([]);
     warn.mockRestore();
   });
 });
