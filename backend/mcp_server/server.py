@@ -193,7 +193,10 @@ class McpListener:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             sock.bind((_BIND_HOST, port))
-        except OSError as exc:
+        except (OSError, OverflowError) as exc:
+            # OverflowError is bind()'s answer to a port outside 0-65535, which
+            # only a hand-edited settings row can produce: record it like any
+            # other bind failure instead of crashing the reconcile loop.
             sock.close()
             self.error = f"cannot bind port {port}: {exc}"
             logger.warning("[MCP] %s — retrying every %gs", self.error, _RECONCILE_INTERVAL_S)
