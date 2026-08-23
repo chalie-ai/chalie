@@ -108,8 +108,7 @@ def test_inventory_lists_server_names_only_never_their_tools(
     from services.mcp_client_service import _sanitize_name
 
     server_id = _add("notes", "https://mcp.example.com/notes")
-    db.execute("UPDATE mcp_client_servers SET status='online' WHERE id=?", (server_id,))
-    db.commit()
+    McpClientService._connected[server_id] = True
     tool_name = f"_mcp_{_sanitize_name('notes')}_create_document"
     conn_tools = get_tools_connection()
     conn_tools.execute(

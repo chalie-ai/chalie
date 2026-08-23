@@ -130,7 +130,6 @@ def mcp_client(monkeypatch: pytest.MonkeyPatch) -> "Generator[FlaskClient, None,
         "action_id TEXT, context TEXT, reason TEXT, params_json TEXT, created_at TEXT);"
         "CREATE TABLE mcp_client_servers (id TEXT PRIMARY KEY, name TEXT NOT NULL, "
         "host TEXT NOT NULL, headers TEXT NOT NULL DEFAULT '{}', enabled INTEGER NOT NULL DEFAULT 1, "
-        "status TEXT NOT NULL DEFAULT 'unknown', last_pinged_at TEXT, "
         "created_at TEXT NOT NULL, updated_at TEXT NOT NULL);"
     )
 

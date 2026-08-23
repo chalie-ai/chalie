@@ -1,7 +1,7 @@
 """MCP discoverable-tools action — nested resource under /api/mcp-clients/discoverable.
 
 Covers:
-- GET /api/mcp-clients/discoverable  → get (online, enabled server tool names)
+- GET /api/mcp-clients/discoverable  → get (connected, enabled server tool names)
 
 Only the sentinel/id-less form is meaningful — an id-addressed call 404s,
 since discoverable tools are not addressed by a single server id.
@@ -21,7 +21,7 @@ from services.mcp_client_service import McpClientService
 
 
 class McpDiscoverable(Action):
-    """Action listing every discoverable (enabled+online) MCP tool name."""
+    """Action listing every discoverable (enabled+connected) MCP tool name."""
 
     cookie_only_methods: ClassVar[frozenset[str]] = frozenset({"get"})
     response_dto = {"get": DocumentedResponse(DiscoverableTools)}
@@ -29,5 +29,5 @@ class McpDiscoverable(Action):
     def get(self, id: int | str) -> ResponseReturnValue:
         if not self.is_create(id):
             raise NotFoundError("Not found")
-        names = McpClientService().get_online_mcp_tool_names()
+        names = McpClientService().get_connected_mcp_tool_names()
         return DiscoverableTools(tools=names, count=len(names)).single()

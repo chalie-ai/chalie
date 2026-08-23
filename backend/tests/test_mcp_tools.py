@@ -38,8 +38,8 @@ def _run(action: str, tools: "list[str] | None" = None) -> tuple[ToolResult, dic
     return result, cast("dict[str, object]", body), mp
 
 
-def _seed_online_server_with_tool(db: sqlite3.Connection) -> str:
-    """Seed one enabled+online server and one synced tool row via the real
+def _seed_connected_server_with_tool() -> str:
+    """Seed one enabled+connected server and one synced tool row via the real
     production writers. Returns the prefixed tool name. Callers MUST have
     redirected ``_DATA_DIR`` first so mcp_tools.sqlite lands in tmp."""
     from services.mcp_tools_db import get_tools_connection
@@ -48,9 +48,9 @@ def _seed_online_server_with_tool(db: sqlite3.Connection) -> str:
     server = McpClientService().add_server(
         name="test-server", host="https://mcp.example.com/mcp", headers={}, enabled=True,
     )
-    # Manually set status (bypassing ping_and_sync, which needs network).
-    db.execute("UPDATE mcp_client_servers SET status='online' WHERE id=?", (server["id"],))
-    db.commit()
+    # Mark it connected in the process-memory map (bypassing ping_and_sync,
+    # which needs network).
+    McpClientService._connected[cast(str, server["id"])] = True
 
     tool_name = f"_mcp_{_sanitize_name('test-server')}_fetch"
     conn_tools = get_tools_connection()
@@ -63,16 +63,17 @@ def _seed_online_server_with_tool(db: sqlite3.Connection) -> str:
     return tool_name
 
 
-# ── action "list" — every server, tools only for enabled+online ─────────────────
+# ── action "list" — every server, tools only for enabled+connected ────────────────
 
 
-def test_list_returns_all_servers_with_status(
+def test_list_returns_all_servers_with_connected(
     db: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Action 'list' returns every configured MCP server with its status; tool
-    lists ({name, summary}) appear only for enabled+online servers."""
+    """Action 'list' returns every configured MCP server with whether each is
+    connected; tool lists ({name, summary}) appear only for enabled+connected
+    servers."""
     monkeypatch.setattr(FileMapperService, "_DATA_DIR", tmp_path)
-    tool_name = _seed_online_server_with_tool(db)
+    tool_name = _seed_connected_server_with_tool()
 
     result, body, _mp = _run("list")
 
@@ -80,22 +81,22 @@ def test_list_returns_all_servers_with_status(
     servers = cast("list[dict[str, object]]", body["servers"])
     assert len(servers) == 1, f"one seeded server must be listed. servers={servers!r}"
     assert servers[0]["name"] == "test-server"
-    assert servers[0]["status"] == "online"
+    assert servers[0]["connected"] is True
     tools = cast("list[dict[str, str]]", servers[0]["tools"])
     assert [t["name"] for t in tools] == [tool_name]
     assert tools[0]["summary"] == "Test tool"
 
 
-# ── action "activate" — exact online tool name goes live for the turn ───────────
+# ── action "activate" — exact connected tool name goes live for the turn ──────────
 
 
-def test_activate_appends_online_tool_to_active_tools(
+def test_activate_appends_connected_tool_to_active_tools(
     db: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Activating an exact synced online tool name appends it to the run's
+    """Activating an exact synced connected tool name appends it to the run's
     ``mp.active_tools`` and returns it under ``body["activated"]``."""
     monkeypatch.setattr(FileMapperService, "_DATA_DIR", tmp_path)
-    tool_name = _seed_online_server_with_tool(db)
+    tool_name = _seed_connected_server_with_tool()
 
     result, body, mp = _run("activate", [tool_name])
 

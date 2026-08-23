@@ -144,10 +144,10 @@ async function testServer(id: string | number, silent = false): Promise<void> {
   try {
     const data = await mcp.testClient(id);
     if (!silent) {
-      const msg = data.reachable
-        ? `Online — ${data.tool_count} tool(s) synced`
-        : `Offline (${data.status})`;
-      showToast(msg, data.reachable ? 'success' : 'error');
+      const msg = data.connected
+        ? `Connected — ${data.tool_count} tool(s) synced`
+        : data.error ? `Offline — ${data.error}` : 'Offline';
+      showToast(msg, data.connected ? 'success' : 'error');
     }
   } catch (e) {
     if (!silent)
@@ -324,7 +324,7 @@ onMounted(async () => {
               <span class="mcp-out-host"> — {{ server.host }}</span>
             </div>
             <div class="mcp-out-badges">
-              <span :class="`badge badge-status badge-${server.status}`">{{ server.status }}</span>
+              <span :class="server.connected ? 'badge badge-status badge-online' : 'badge badge-status badge-offline'">{{ server.connected ? 'connected' : 'offline' }}</span>
               <span :class="server.enabled ? 'badge badge-enabled' : 'badge badge-disabled'">
                 {{ server.enabled ? 'enabled' : 'disabled' }}
               </span>

@@ -39,7 +39,7 @@ _CASES: dict[str, tuple[ToolResult, str]] = {
         "`calendar` is now available and can be called.",
     ),
     "mcp_manager": (
-        ToolResult.ok({"id": "x", "name": "weather", "url": "h", "status": "online"}),
+        ToolResult.ok({"id": "x", "name": "weather", "url": "h", "connected": True}),
         "`weather` is now available. Call `mcp_tools` with action `list`",
     ),
     "review_tool_calls": (

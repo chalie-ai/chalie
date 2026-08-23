@@ -37,8 +37,7 @@ class McpTest(Action):
             raise NotFoundError("Server not found")
         result = svc.ping_and_sync(server_id)
         return McpTestResult(
-            status=cast(str, result["status"]),
+            connected=cast(bool, result["connected"]),
             tool_count=cast(int, result["tool_count"]),
-            reachable=cast(bool, result["reachable"]),
             error=cast("str | None", result["error"]),
         ).single()

@@ -107,6 +107,10 @@ def db(_db_template: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> It
     # JSON file (the write path persists to the patched tmp location above).
     from services.telemetry_service import TelemetryService
     TelemetryService._cache = None
+    # Clear the MCP connection map too — it is process-memory, not per-DB, so
+    # one test's pings must never leak into the next.
+    from services.mcp_client_service import McpClientService
+    McpClientService._connected = {}
 
     conn = _newdb.Database.conn()
     try:
@@ -114,6 +118,7 @@ def db(_db_template: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> It
     finally:
         _newdb.Database.close()
         TelemetryService._cache = None
+        McpClientService._connected = {}
 
 
 #: Deliberately below MAX_CONTEXT_WINDOW (200_000) so a test asserting this

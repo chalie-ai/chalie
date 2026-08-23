@@ -33,7 +33,7 @@ export interface McpClient {
   id: string | number;
   name: string;
   host: string;
-  status?: string;
+  connected?: boolean;
   enabled?: boolean;
   headers?: Record<string, string>;
   [key: string]: unknown;
@@ -80,8 +80,8 @@ export const mcp = {
     return api.del(`/api/mcp-clients/${id}`);
   },
 
-  async testClient(id: string | number): Promise<{ reachable: boolean; tool_count?: number; status?: string }> {
-    const res = await api.post<SingleEnvelope<{ reachable: boolean; tool_count?: number; status?: string }>>(
+  async testClient(id: string | number): Promise<{ connected: boolean; tool_count?: number; error?: string | null }> {
+    const res = await api.post<SingleEnvelope<{ connected: boolean; tool_count?: number; error?: string | null }>>(
       `/api/mcp-clients/test/${id}`,
       {},
     );
