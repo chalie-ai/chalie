@@ -50,7 +50,6 @@ from configs.enums.channels import Channel
 from configs.enums.policy_channel import PolicyChannel
 from controllers.message_processor import MessageProcessor
 from exceptions import UnroutedPromptChannel
-from models.telemetry import Telemetry
 from services.processor_config import ProcessorConfig
 from tests.helpers import make_stub_config
 
@@ -60,12 +59,17 @@ _TASK = "write a Deno script that reverses a string and prove it runs"
 
 
 def _seed_telemetry(ctx: dict[str, object]) -> None:
-    """Persist a heartbeat the way POST /health does, and drop the singleton's
-    cache either side so the read comes from the row, not a neighbour's state."""
-    from services.heartbeat_service import heartbeat_service
-    heartbeat_service._ctx = None
-    Telemetry.replace(ctx)
-    heartbeat_service._ctx = None
+    """Persist a heartbeat snapshot the way POST /health does."""
+    from services.telemetry_service import TelemetryService
+    TelemetryService.write(ctx)
+
+
+def _clear_telemetry() -> None:
+    """The no-heartbeat state: no snapshot file, no cache."""
+    from services.file_mapper_service import FileMapperService
+    from services.telemetry_service import TelemetryService
+    FileMapperService.get_telemetry_json_path().unlink(missing_ok=True)
+    TelemetryService._cache = None
 
 
 def _code_agent_prompt(task: str = _TASK) -> str:
@@ -133,7 +137,7 @@ def test_code_agent_prompt_carries_the_date_anchor(db: sqlite3.Connection) -> No
 def test_code_agent_prompt_survives_an_absent_heartbeat(db: sqlite3.Connection) -> None:
     """Telemetry is off-spine: with no heartbeat persisted the block renders
     empty, and the task must still arrive rather than the body collapsing."""
-    _seed_telemetry({})
+    _clear_telemetry()
     prompt = _code_agent_prompt()
     assert _TASK in prompt, (
         f"an empty telemetry block must not cost the delegate its task. prompt={prompt!r}"

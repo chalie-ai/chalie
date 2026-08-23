@@ -253,15 +253,16 @@ class WorldState:
     def _render_telemetry(self) -> list[str]:
         """Produce bullet lines for the [telemetry] section.
 
-        Reads the latest heartbeat from the ``telemetry`` table (populated by
-        ``ClientContextService.save()``) and surfaces every key the frontend
-        sent, grouped by top-level prefix.  Top-level scalar keys aggregate
-        under the synthetic ``user`` group; nested dicts (``device`` …) form
-        their own groups.  ``local_time`` is overwritten with a freshly-computed
-        value derived from the stored IANA timezone so it never goes stale.
+        Reads the latest heartbeat snapshot (``data/telemetry.json``,
+        populated by ``ClientContextService.save()`` → ``TelemetryService``)
+        and surfaces every key the frontend sent, grouped by top-level
+        prefix.  Top-level scalar keys aggregate under the synthetic ``user``
+        group; nested dicts (``device`` …) form their own groups.
+        ``local_time`` is overwritten with a freshly-computed value derived
+        from the stored IANA timezone so it never goes stale.
         """
-        from services.heartbeat_service import heartbeat_service
-        ctx = dict(heartbeat_service.read())  # shallow copy — _render mutates local_time
+        from services.telemetry_service import TelemetryService
+        ctx = dict(TelemetryService.read().as_dict())  # shallow copy — _render mutates local_time
         if not ctx:
             return []
 

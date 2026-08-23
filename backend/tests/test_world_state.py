@@ -9,7 +9,6 @@ import sqlite3
 
 import pytest
 
-from models.telemetry import Telemetry
 from services.world_state import WorldState
 
 _HEADER = "### Background Telemetry,Processes"
@@ -24,10 +23,10 @@ def _fresh() -> WorldState:
 
 
 def _seed_telemetry(db: sqlite3.Connection, ctx: dict[str, object]) -> None:
-    from services.heartbeat_service import heartbeat_service
-    heartbeat_service._ctx = None
-    Telemetry.replace(ctx)
-    heartbeat_service._ctx = None
+    """Persist a heartbeat snapshot the way POST /health does (the ``db``
+    fixture redirects the snapshot path into this test's tmp dir)."""
+    from services.telemetry_service import TelemetryService
+    TelemetryService.write(ctx)
 
 
 # ---------------------------------------------------------------------------

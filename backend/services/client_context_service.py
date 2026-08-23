@@ -1,12 +1,12 @@
 """Stores and retrieves client timezone, location, device info, behavioral
 signals, and system info.
 
-The raw heartbeat payload (whatever the frontend sends) is persisted to the
-``telemetry`` table as flat key/value rows, e.g. ``device.name`` →
-``"iPhone"``. The frontend (heartbeat.js) is the single source of truth for
-which keys are collected; this service blindly persists what it receives
-and reconstructs the nested dict on read so existing consumers (time_utils,
-scheduler_skill, …) see the same shape they always did.
+The raw heartbeat payload (whatever the frontend sends) is persisted as a
+nested JSON document (``data/telemetry.json``) by ``TelemetryService``.
+The frontend (heartbeat.js) is the single source of truth for which keys
+are collected; this service handles location resolution + behavioral
+merging on save, and read-side consumers (locale_service, world_state, …)
+see the same nested shape they always did.
 
 Side concerns that stay in MemoryStore (NOT telemetry): the location-history
 ring buffer (mobility inference) and session re-entry / place-transition
@@ -19,10 +19,10 @@ service.
 
 import json
 import logging
-import time
 from typing import TYPE_CHECKING, Optional, cast
 
 from services.memory_client import MemoryClientService
+from services.telemetry_service import TelemetryService
 
 if TYPE_CHECKING:
     from typing import Protocol
@@ -60,9 +60,11 @@ TTL = 3600  # 1 hour (used by ephemeral MemoryStore keys, not telemetry)
 class ClientContextService:
     """Manages client context (timezone, location, device, behavioral signals).
 
-    Telemetry persistence is delegated to ``TelemetryCacheService``.
-    MemoryStore is retained for ephemeral inference flags (place-transition,
-    session-reentry) and the location-history ring buffer.
+    Telemetry persistence is a JSON file (``data/telemetry.json``) owned by
+    ``TelemetryService``; this service only handles save-side concerns —
+    location resolution and behavioral merging. MemoryStore is retained for
+    ephemeral inference flags (place-transition, session-reentry) and the
+    location-history ring buffer.
     """
 
     def __init__(self) -> None:
@@ -96,24 +98,20 @@ class ClientContextService:
     def save(self, ctx: dict[str, object]) -> None:
         """Handles location resolution, behavioral-data merging, location
         history, and session re-entry."""
-        cached_ctx = self.get()
+        cached = TelemetryService.read()
 
         # Merge behavioral data: don't overwrite if new heartbeat lacks it
-        if "behavioral" not in ctx and "behavioral" in cached_ctx:
-            ctx["behavioral"] = cached_ctx["behavioral"]
+        if "behavioral" not in ctx and cached.behavioral is not None:
+            ctx["behavioral"] = cached.behavioral
 
         # Resolve location name if location changed significantly
-        if location := cast(dict[str, object], ctx.get("location")):
-            # ``cached_ctx.get("X", {})`` returns ``None`` when the key exists
-            # with value ``None`` — which it will, because ``_flatten`` JSON-
-            # encodes ``None`` as ``"null"`` and ``_unflatten`` decodes it back
-            # to ``None``. Coerce explicitly so ``.get()`` chaining is safe.
-            cached_location = cast(dict[str, object], cached_ctx.get("location") or {})
+        if location := cast("dict[str, object]", ctx.get("location")):
+            cached_location = cast("dict[str, object]", cached.location or {})
             lat_changed = abs(cast(float, location.get("lat", 0)) - cast(float, cached_location.get("lat", 0))) > 0.05
             lon_changed = abs(cast(float, location.get("lon", 0)) - cast(float, cached_location.get("lon", 0))) > 0.05
 
-            no_cached_name = "location_name" not in cached_ctx
-            cached_stale = cached_ctx.get("_location_name_stale", False)
+            no_cached_name = cached.location_name is None
+            cached_stale = cached.location_name_stale
 
             if lat_changed or lon_changed or no_cached_name or cached_stale:
                 location_name = self._resolve_location_name(cast(float, location["lat"]), cast(float, location["lon"]))
@@ -122,39 +120,21 @@ class ClientContextService:
                     ctx.pop("_location_name_stale", None)
                     logging.debug(f"[CLIENT CONTEXT] Resolved location: {location_name}")
                 else:
-                    if "location_name" in cached_ctx:
-                        ctx["location_name"] = cached_ctx["location_name"]
+                    if cached.location_name is not None:
+                        ctx["location_name"] = cached.location_name
                     ctx["_location_name_stale"] = True
                     logging.debug("[CLIENT CONTEXT] Location resolve failed, marked stale for retry")
             else:
-                if "location_name" in cached_ctx:
-                    ctx["location_name"] = cached_ctx["location_name"]
+                if cached.location_name is not None:
+                    ctx["location_name"] = cached.location_name
 
-
-        from services.heartbeat_service import heartbeat_service
-        heartbeat_service.write(ctx)
+        TelemetryService.write(ctx)
 
         # Location history ring buffer (for mobility inference)
         self._push_history(ctx)
 
         logging.debug(f"[CLIENT CONTEXT] Saved context with timezone={ctx.get('timezone')}, "
                      f"device={cast(dict[str, object], ctx.get('device') or {}).get('class')}")
-
-    def get(self) -> dict[str, object]:
-        """Retrieve client context from the heartbeat cache."""
-        from services.heartbeat_service import heartbeat_service
-        return heartbeat_service.read()
-
-    def is_stale(self, max_age_seconds: int = 600) -> bool:
-        """``True`` if the stored context is missing or its ``saved_at`` is
-        older than ``max_age_seconds`` (default 600 = 10 min)."""
-        ctx = self.get()
-        saved_at = cast(float, ctx.get("saved_at", 0))
-        is_stale = (time.time() - saved_at) > max_age_seconds
-        if is_stale and ctx:
-            age = time.time() - saved_at
-            logging.debug(f"[CLIENT CONTEXT] Context is stale (age={age:.0f}s, max={max_age_seconds}s)")
-        return is_stale
 
     # ── Location History ───────────────────────────────────────────────
 

@@ -92,6 +92,10 @@ def db(_db_template: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> It
     # through FileMapperService) so every Database.conn() call lands on it, then
     # drop any stale thread connection bound to another path.
     monkeypatch.setattr(FileMapperService, 'get_db_path', lambda *_: Path(test_db_path))
+    # Redirect the telemetry snapshot to this test's tmp dir, next to the DB
+    # patch above, so a heartbeat in a test never touches the real
+    # data/telemetry.json.
+    monkeypatch.setattr(FileMapperService, 'get_telemetry_json_path', lambda *_: tmp_path / 'telemetry.json')
     _newdb.Database.close()
     # Bind the connection getter onto Model — the boot step run.py runs once at
     # startup (``Database().bind()``). Repeated per test because each Database()
@@ -99,16 +103,17 @@ def db(_db_template: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> It
     # test's file, not a prior test's or the real chalie.db.
     _newdb.Database().bind()
 
-    # Invalidate heartbeat cache so it reads from this test's DB.
-    from services.heartbeat_service import heartbeat_service
-    heartbeat_service._ctx = None
+    # Invalidate the telemetry cache so the next read re-loads this test's
+    # JSON file (the write path persists to the patched tmp location above).
+    from services.telemetry_service import TelemetryService
+    TelemetryService._cache = None
 
     conn = _newdb.Database.conn()
     try:
         yield conn
     finally:
         _newdb.Database.close()
-        heartbeat_service._ctx = None
+        TelemetryService._cache = None
 
 
 #: Deliberately below MAX_CONTEXT_WINDOW (200_000) so a test asserting this

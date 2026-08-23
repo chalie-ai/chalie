@@ -7,7 +7,6 @@ import sqlite3
 import pytest
 from flask.testing import FlaskClient
 
-from models.telemetry import Telemetry
 
 
 # ---------------------------------------------------------------------------
@@ -17,17 +16,17 @@ from models.telemetry import Telemetry
 def _reset_world_state(db_conn: sqlite3.Connection | None = None) -> None:
 
     if db_conn is not None:
-        from services.heartbeat_service import heartbeat_service
-        heartbeat_service._ctx = None
-        db_conn.execute("DELETE FROM telemetry")
-        db_conn.commit()
+        from services.file_mapper_service import FileMapperService
+        from services.telemetry_service import TelemetryService
+        FileMapperService.get_telemetry_json_path().unlink(missing_ok=True)
+        TelemetryService._cache = None
 
 
 def _seed_telemetry(db_conn: sqlite3.Connection, ctx: dict[str, object]) -> None:
-    from services.heartbeat_service import heartbeat_service
-    heartbeat_service._ctx = None
-    Telemetry.replace(ctx)
-    heartbeat_service._ctx = None
+    """Persist a heartbeat snapshot the way POST /health does (the ``db``
+    fixture behind ``db_conn`` redirects the snapshot path into tmp)."""
+    from services.telemetry_service import TelemetryService
+    TelemetryService.write(ctx)
 
 
 # ---------------------------------------------------------------------------

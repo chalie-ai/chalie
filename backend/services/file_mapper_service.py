@@ -47,6 +47,11 @@ class FileMapperService:
         return cls._DATA_DIR / "chalie.db"
 
     @classmethod
+    def get_telemetry_json_path(cls) -> Path:
+        """Return path to the JSON client-telemetry snapshot file."""
+        return cls._DATA_DIR / "telemetry.json"
+
+    @classmethod
     def get_secure_dir(cls) -> Path:
         """Return the vault key-material backups directory."""
         return cls._SECURE_DIR

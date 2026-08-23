@@ -1,11 +1,10 @@
 """Tests for services.locale_service — the single localisation chokepoint.
 
-Uses the real telemetry table via the `db` fixture. No mocks.
-Tests the service's actual behavior: seed telemetry rows, call the service,
-verify the output.
+Uses the real telemetry JSON snapshot via the `db` fixture (which redirects
+the snapshot path into the test's tmp dir). No mocks. Tests the service's
+actual behavior: persist a heartbeat, call the service, verify the output.
 """
 
-import json
 import sqlite3
 from datetime import datetime, timezone
 
@@ -13,24 +12,17 @@ import pytest
 
 
 def _seed_telemetry(db: sqlite3.Connection, **kwargs: object) -> None:
-    """Insert locale fields into the real telemetry table."""
-    from services.heartbeat_service import heartbeat_service
-    heartbeat_service._ctx = None
-    db.execute("DELETE FROM telemetry")
-    for key, value in kwargs.items():
-        db.execute(
-            "INSERT INTO telemetry (key, value) VALUES (?, ?)",
-            (key, json.dumps(value)),
-        )
-    db.commit()
+    """Persist locale fields as a heartbeat snapshot, the way POST /health does."""
+    from services.telemetry_service import TelemetryService
+    TelemetryService.write(dict(kwargs))
 
 
 @pytest.mark.unit
 class TestLocaleServiceReads:
     def test_reads_stored_values(self, db: sqlite3.Connection) -> None:
         _seed_telemetry(
-            db, timezone="Europe/Malta", locale="en-MT",
-            currency="EUR", **{"location.lat": 35.899, "location.lon": 14.514, "location_name": "Valletta"},
+            db, timezone="Europe/Malta", locale="en-MT", currency="EUR",
+            location={"lat": 35.899, "lon": 14.514}, location_name="Valletta",
         )
         from services.locale_service import get_timezone, get_locale, get_currency, get_location
         assert get_timezone().key == "Europe/Malta"
@@ -39,8 +31,7 @@ class TestLocaleServiceReads:
         assert get_location()["lat"] == 35.899
 
     def test_defaults_when_empty(self, db: sqlite3.Connection) -> None:
-        db.execute("DELETE FROM telemetry")
-        db.commit()
+        # Fresh db fixture = no snapshot file yet: the no-heartbeat state.
         from services.locale_service import get_timezone, get_locale, get_currency, get_location
         assert get_timezone().key == "UTC"
         assert get_locale() == "en-US"

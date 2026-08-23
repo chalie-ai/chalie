@@ -46,7 +46,6 @@ from .dto.write_queue import WriteQueueStats
 if TYPE_CHECKING:
     from pathlib import Path
     from werkzeug.datastructures import FileStorage
-    from services.client_context_service import ClientContextService
 
 logger = logging.getLogger(__name__)
 
@@ -105,10 +104,12 @@ def _health() -> Health:
     return Health(status="ok", version=APP_VERSION)
 
 
-def _mirror_telemetry_to_world_state(svc: "ClientContextService", data: dict[str, object]) -> None:
-    """Mirror persisted client telemetry into WorldState as Signals."""
+def _absorb_heartbeat_signals(data: dict[str, object]) -> None:
+    """Absorb the heartbeat into WorldState as Signals (heartbeat / device /
+    local_time). The old telemetry mirror is gone: nothing reads the
+    world-state ``"telemetry"`` key — WorldState renders telemetry straight
+    from ``TelemetryService``."""
     from services.world_state import world_state, Signal
-    world_state.set("telemetry", svc.get() or data)
     world_state.absorb(Signal(source=_SIGNAL_SOURCE_HEALTH, kind="heartbeat", payload=data))
     device_class = data.get("device_class") or cast(dict[str, object], data.get("device") or {}).get("class")
     if device_class:
@@ -119,14 +120,13 @@ def _mirror_telemetry_to_world_state(svc: "ClientContextService", data: dict[str
 
 
 def _persist_heartbeat(data: dict[str, object]) -> None:
-    """Persist client context + mirror to WorldState. Each step is independently logged on failure."""
+    """Persist client context + absorb heartbeat signals into WorldState. Each step is independently logged on failure."""
     from services.client_context_service import ClientContextService
-    svc = ClientContextService()
-    svc.save(data)
+    ClientContextService().save(data)
     try:
-        _mirror_telemetry_to_world_state(svc, data)
+        _absorb_heartbeat_signals(data)
     except Exception as ws_err:
-        logger.warning(f"[HEALTH] Failed to mirror telemetry to WorldState: {ws_err}")
+        logger.warning(f"[HEALTH] Failed to absorb heartbeat signals into WorldState: {ws_err}")
 
 
 # ---------------------------------------------------------------------------
@@ -379,12 +379,12 @@ class ObservabilityWorldStateResource(Resource):
         """World state as seen by the ACT loop — rendered block + raw inputs (raw passthrough)."""
         try:
             from services.world_state import world_state
-            from services.heartbeat_service import heartbeat_service
+            from services.telemetry_service import TelemetryService
 
             return {
                 "rendered": world_state.render(),
                 "inputs": {
-                    "telemetry": heartbeat_service.read(),
+                    "telemetry": TelemetryService.read().as_dict(),
                 },
             }
         except Exception:
