@@ -5,13 +5,22 @@ than storing them -- the caller (HomeCapability) owns credential lifecycle.
 """
 
 import logging
-from typing import cast
+from typing import Mapping, Sequence, TypeAlias, Union, cast
 
 import requests
 
 logger = logging.getLogger(__name__)
 
 _TIMEOUT = 15
+
+# Recursive JSON value type, mirroring requests' ``JsonType``: the payload a
+# ``requests.post(json=...)`` call must carry. Local alias keeps it portable
+# across requests versions (``_types`` arrived only in 2.34, and its aliases
+# exist only under TYPE_CHECKING).
+_Json: TypeAlias = Union[
+    None, bool, int, float, str,
+    Sequence["_Json"], Mapping[str, "_Json"],
+]
 
 
 def _headers(token: str) -> dict[str, str]:
@@ -39,7 +48,7 @@ def _post(
     resp = requests.post(
         f"{url.rstrip('/')}{path}",
         headers=_headers(token),
-        json=body or {},
+        json=cast("_Json", body or {}),
         verify=verify_ssl,
         timeout=_TIMEOUT,
     )

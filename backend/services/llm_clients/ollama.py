@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 import re
 import time
-from typing import ClassVar, Optional, cast
+from typing import ClassVar, Mapping, Optional, Sequence, TypeAlias, Union, cast
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -49,6 +49,15 @@ logger = logging.getLogger(__name__)
 # trip py/clear-text-logging-sensitive-data on the config-derived value.
 _MODEL_NAME_RE = re.compile(r"^[A-Za-z0-9._:\-/]+$")
 _ALLOWED_HOST_SCHEMES = frozenset({"http", "https"})
+
+# Recursive JSON value type mirroring requests' ``JsonType`` — the payload a
+# ``requests.post(json=...)`` call must carry. Local alias stays portable across
+# requests versions (``_types`` arrived only in 2.34, and its aliases exist only
+# under TYPE_CHECKING).
+_Json: TypeAlias = Union[
+    None, bool, int, float, str,
+    Sequence["_Json"], Mapping[str, "_Json"],
+]
 
 
 def _validate_model(raw_model: object) -> str:
@@ -267,7 +276,7 @@ class OllamaClient(ProviderClient):
         start = time.time()
         try:
             resp = requests.post(
-                url, json=payload,
+                url, json=cast("_Json", payload),
                 headers=self._user_agent(),
                 timeout=PROVIDER_CALL_TIMEOUT_S,
             )
