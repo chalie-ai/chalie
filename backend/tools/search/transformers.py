@@ -96,7 +96,26 @@ FIELD_MAPS = {
 }
 
 
-# ── Public API ───────────────────────────────────────────────────────────────
+# ── Output-field caps (result-shaping contract) ─────────────────────────────
+
+# Titles longer than this are clipped; the ellipsis counts toward the cap.
+_TITLE_CAP = 200
+
+# Summaries longer than this are clipped; the ellipsis counts toward the cap.
+_SUMMARY_CAP = 300
+
+
+def _cap_text(text: str, cap: int) -> str:
+    """Clip *text* so the final length equals *cap* chars, at most.
+
+    Text at or under the cap is returned byte-identical, unchanged.  Text
+    over the cap becomes ``text[:cap - 1] + "…"`` — the ellipsis character
+    itself is part of the final length, so the result is exactly *cap* chars.
+    """
+    if len(text) <= cap:
+        return text
+    return text[: cap - 1] + "…"
+
 
 def transform(provider_name: str, response_format: str, raw_data: object, limit: int = 5) -> list[dict[str, object]]:
     """
@@ -127,6 +146,36 @@ def transform(provider_name: str, response_format: str, raw_data: object, limit:
     except Exception as e:
         logger.warning(f'[SEARCH] transform failed for {provider_name}: {e}')
         return []
+
+
+# ── Result field caps (called by SearchAbility before rendering) ────────────
+
+def cap_result_fields(
+    items: list[dict[str, object]],
+    title_cap: int = _TITLE_CAP,
+    summary_cap: int = _SUMMARY_CAP,
+) -> list[dict[str, object]]:
+    """Clip each item's ``title`` to *title_cap* chars and ``summary`` to
+    *summary_cap* chars (output contract).
+
+    Clipped fields end with "…" such that the FINAL length including the
+    ellipsis equals the cap; text at or under the cap passes through
+    byte-identical with no ellipsis.  Non-string or absent fields and all
+    other keys (``url``, ``date``, …) are carried over unchanged, and item
+    order is preserved.  A new list of shallow-copied dicts is returned; the
+    input dicts are not mutated.
+    """
+    capped_items: list[dict[str, object]] = []
+    for item in items:
+        capped = dict(item)
+        title = item.get("title")
+        if isinstance(title, str):
+            capped["title"] = _cap_text(title, title_cap)
+        summary = item.get("summary")
+        if isinstance(summary, str):
+            capped["summary"] = _cap_text(summary, summary_cap)
+        capped_items.append(capped)
+    return capped_items
 
 
 # ── JSON transform ───────────────────────────────────────────────────────────

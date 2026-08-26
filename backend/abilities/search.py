@@ -1,19 +1,23 @@
 """
-SearchAbility — Multi-provider search with semantic routing and relevance ranking.
+SearchAbility — Multi-provider search with semantic routing.
 
-Routes queries to best provider(s) via embedding similarity.  Falls back to
+Routes queries to the best provider(s) via embedding similarity.  Embeddings
+are used ONLY to route providers — never to rank results.  Falls back to
 DuckDuckGo (DDG) — but ONLY when a real provider was attempted and came back
 empty, never to silently mask a routing miss.
 
 Result contract:
   ``run()`` returns a :class:`ToolResult` built only via ``ok`` / ``err``. The
-  success body is an XML-like string of ``<result index= score= [date=]>`` blocks
-  rendered by ``tools/search/render.py``.  Results are relevance-ranked via
-  embedding cosine similarity (``tools/search/router.rank_results``) and capped
-  to the global top-5 most query-relevant hits across all providers.  Summaries
-  for results with blank snippets are best-effort enriched from page meta tags
-  (``tools/search/enrich.enrich_missing_summaries``).  A ``count`` meta accompanies
-  every success; ``fallback=ddg`` meta is set when DDG supplied any results.
+  success body is an XML-like string of ``<result index=`` blocks rendered by
+  ``tools/search/render.py``.  Each block carries exactly three fields —
+  ``title``, ``url``, ``summary``; a blank/absent field renders as an empty
+  string after its label (no enrichment, no score, no date).  Results keep
+  the provider-merge order (the order the providers' result sets were merged)
+  and are capped to the global top 20 (``_MAX_RESULTS``).  Titles are capped
+  at 200 chars and summaries at 300 chars, with an ellipsis appended only when
+  clipping happened (``tools/search/transformers.cap_result_fields``).  A
+  ``count`` meta accompanies every success; ``fallback=ddg`` meta is set when
+  DDG supplied any results.
 
 The search assets (search_tool_providers.sqlite, fetcher, router) stay in
 tools/search/ until Phase 4 — this ability imports them from there.
@@ -38,11 +42,11 @@ logger = logging.getLogger(__name__)
 # DDG is a universal web fallback, not a row in the provider registry.
 _DDG = "ddg"
 
-# Per-provider fetch depth feeding the ranker.
-_PER_PROVIDER = 5
+# Per-provider fetch depth (top-N most relevant hits each provider returns).
+_PER_PROVIDER = 10
 
-# Global cap: keep only the top-N most query-relevant hits after ranking.
-_MAX_RESULTS = 5
+# Global cap on the merged provider results, returned in provider-merge order.
+_MAX_RESULTS = 20
 
 
 class SearchAbility(Ability[SearchParamsBag]):
@@ -140,18 +144,14 @@ class SearchAbility(Ability[SearchParamsBag]):
                 "title": r.get("title", ""),
                 "url": r.get("url", ""),
                 "summary": r.get("snippet", "") or "",
-                "date": r.get("date"),
             }
             for r in results
         ]
 
-        from tools.search.router import rank_results
-        items = rank_results(query, items)
-
         items = items[:_MAX_RESULTS]
 
-        from tools.search.enrich import enrich_missing_summaries
-        items = enrich_missing_summaries(items)
+        from tools.search.transformers import cap_result_fields
+        items = cap_result_fields(items)
 
         from tools.search.render import render_records
         body = render_records(items)

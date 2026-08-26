@@ -9,17 +9,24 @@ This is the ONE permitted deterministic pure-function test in the search
 redesign suite: ``render_records`` has no collaborators, no IO, and no state.
 All other search tests go through the real production entry point.
 
-Baseline-fail proof: ``tools/search/render.py`` does not exist yet.
-Every test in this file will error with ``ModuleNotFoundError`` until the
-coder creates the file with the correct implementation.
+Post ruling (summary enrichment deleted; format reduced): each rendered
+block is EXACTLY
+
+    <result index="N">
+    title: <title>
+    url: <url>
+    summary: <summary>
+    </result>
+
+with no ``score=`` / ``date=`` attributes, 1-based sequential indexes in
+caller-supplied (provider-merge) order, and a blank/absent field rendered as
+an empty string after its label.
 """
 
 import pytest
 
 pytestmark = pytest.mark.unit
 
-# Import of the not-yet-existing module is intentionally at module scope so
-# that pytest reports a collection error (baseline-fail) on every test here.
 from tools.search.render import render_records  # noqa: E402
 
 
@@ -28,9 +35,9 @@ from tools.search.render import render_records  # noqa: E402
 
 def test_render_multi_result_indexes_are_1_based_and_sequential() -> None:
     results: list[dict[str, object]] = [
-        {"title": "Alpha", "url": "https://a.example.com", "summary": "First.", "score": 0.9, "date": "2026-01-01"},
-        {"title": "Beta",  "url": "https://b.example.com", "summary": "Second.", "score": 0.8, "date": None},
-        {"title": "Gamma", "url": "https://c.example.com", "summary": "Third.", "score": None, "date": None},
+        {"title": "Alpha", "url": "https://a.example.com", "summary": "First."},
+        {"title": "Beta",  "url": "https://b.example.com", "summary": "Second."},
+        {"title": "Gamma", "url": "https://c.example.com", "summary": "Third."},
     ]
     rendered = render_records(results)
 
@@ -43,13 +50,13 @@ def test_render_multi_result_indexes_are_1_based_and_sequential() -> None:
     assert 'index="4"' not in rendered
 
 
-# ── Best-first order is preserved as-supplied ─────────────────────────────────
+# ── Provider-merge order is preserved as-supplied ─────────────────────────────
 
 
 def test_render_preserves_list_order_first_result_is_index_1() -> None:
     results: list[dict[str, object]] = [
-        {"title": "Winner",   "url": "https://win.example.com", "summary": "Top result.", "score": 0.95, "date": None},
-        {"title": "Runner-up", "url": "https://run.example.com", "summary": "Second.",    "score": 0.70, "date": None},
+        {"title": "Winner",    "url": "https://win.example.com", "summary": "Top result."},
+        {"title": "Runner-up", "url": "https://run.example.com", "summary": "Second."},
     ]
     rendered = render_records(results)
 
@@ -65,78 +72,59 @@ def test_render_preserves_list_order_first_result_is_index_1() -> None:
     assert "Winner" in rendered.split('index="1"')[1].split("</result>")[0]
 
 
-# ── Score rendered to 2 decimal places ───────────────────────────────────────
+# ── Exact block shape: opener + title/url/summary lines + closer ─────────────
 
 
-def test_render_score_attribute_is_2_decimal_places() -> None:
+def test_render_block_is_exactly_indexed_title_url_summary_lines() -> None:
+    """A single result renders as exactly the 5-line block — nothing more,
+    nothing less (no score=, no date=, no extra fields)."""
+    rendered = render_records([
+        {"title": "T", "url": "https://u.example.com", "summary": "S"},
+    ])
+
+    assert rendered == (
+        '<result index="1">\n'
+        "title: T\n"
+        "url: https://u.example.com\n"
+        "summary: S\n"
+        "</result>"
+    )
+
+
+# ── score= / date= are gone from the format ───────────────────────────────────
+
+
+def test_render_never_emits_score_or_date_attributes_even_when_in_input() -> None:
+    """The format is exactly title/url/summary: ``score=`` and ``date=`` must
+    never appear in the output — and neither may their values leak — even
+    when the input dicts still carry those keys."""
     results: list[dict[str, object]] = [
-        {"title": "A", "url": "https://a.com", "summary": "Summary.", "score": 0.87654, "date": None},
-        {"title": "B", "url": "https://b.com", "summary": "Summary.", "score": 1.0,     "date": None},
-        {"title": "C", "url": "https://c.com", "summary": "Summary.", "score": 0.5,     "date": None},
+        {"title": "A", "url": "https://a.com", "summary": "S.",
+         "score": 0.87654, "date": "2026-06-17"},
     ]
     rendered = render_records(results)
 
-    assert 'score="0.88"' in rendered
-    assert 'score="1.00"' in rendered
-    assert 'score="0.50"' in rendered
-
-    # Raw unformatted value must not appear
-    assert "0.87654" not in rendered
-
-
-# ── score= attribute omitted when score is None ───────────────────────────────
-
-
-def test_render_score_attribute_omitted_when_score_is_none() -> None:
-    results: list[dict[str, object]] = [
-        {"title": "No score", "url": "https://example.com", "summary": "Body.", "score": None, "date": None},
-    ]
-    rendered = render_records(results)
-
-    assert "<result " in rendered
     assert "score=" not in rendered
-
-
-# ── date= attribute omitted when date is None or empty ───────────────────────
-
-
-def test_render_date_attribute_omitted_when_date_is_none() -> None:
-    results: list[dict[str, object]] = [
-        {"title": "No date", "url": "https://example.com", "summary": "Body.", "score": 0.5, "date": None},
-    ]
-    rendered = render_records(results)
-
     assert "date=" not in rendered
+    # The values must not leak into the output either
+    assert "0.87654" not in rendered
+    assert "2026-06-17" not in rendered
+    # The opener carries only the 1-based index
+    assert rendered.splitlines()[0] == '<result index="1">'
 
 
-def test_render_date_attribute_omitted_when_date_is_empty_string() -> None:
-    results: list[dict[str, object]] = [
-        {"title": "No date", "url": "https://example.com", "summary": "Body.", "score": 0.5, "date": ""},
-    ]
-    rendered = render_records(results)
-
-    assert "date=" not in rendered
-
-
-# ── date= attribute present when date is set ─────────────────────────────────
-
-
-def test_render_date_attribute_present_when_date_is_set() -> None:
-    results: list[dict[str, object]] = [
-        {"title": "Dated", "url": "https://example.com", "summary": "Body.", "score": 0.7, "date": "2026-06-17"},
-    ]
-    rendered = render_records(results)
-
-    assert 'date="2026-06-17"' in rendered
-
-
-# ── Long summary is NOT truncated ─────────────────────────────────────────────
+# ── Long summary is NOT truncated at THIS layer ───────────────────────────────
 
 
 def test_render_very_long_summary_survives_in_full() -> None:
+    """render_records renders exactly what it is given — it adds no
+    truncation of its own: a 2000-char summary in is a 2000-char summary out
+    at THIS layer.  (The 300-char summary cap is enforced UPSTREAM by
+    transformers.cap_result_fields before render is ever called, so it is not
+    tested here.)"""
     long_summary = "x" * 2000
     results: list[dict[str, object]] = [
-        {"title": "Long", "url": "https://example.com", "summary": long_summary, "score": 0.8, "date": None},
+        {"title": "Long", "url": "https://example.com", "summary": long_summary},
     ]
     rendered = render_records(results)
 
@@ -145,6 +133,31 @@ def test_render_very_long_summary_survives_in_full() -> None:
 
     # No truncation sentinel (ellipsis)
     assert "..." not in rendered
+
+
+# ── Blank/absent fields render as an empty string after the label ────────────
+
+
+def test_render_blank_or_absent_fields_render_as_empty_string_after_label() -> None:
+    """A blank/absent title or summary renders as an empty string after its
+    label — the label line is always present (e.g. ``title: `` /
+    ``summary: ``), never omitted, never a placeholder, never ``None``."""
+    results: list[dict[str, object]] = [
+        {"url": "https://example.com"},  # title and summary absent
+        {"title": "", "url": "https://example.com", "summary": None},
+    ]
+    rendered = render_records(results)
+    lines = rendered.splitlines()
+
+    # Item 1: absent title and absent summary
+    assert lines[1] == "title: "
+    assert lines[3] == "summary: "
+    # Item 2: empty-string title and None summary
+    assert lines[6] == "title: "
+    assert lines[8] == "summary: "
+
+    # No placeholder text for the blank values
+    assert "None" not in rendered
 
 
 # ── Empty list produces a sentinel without <result index= ────────────────────
@@ -170,8 +183,6 @@ def test_render_neutralizes_result_tokens_in_content() -> None:
             "title": "Parsing <result index=2> blocks",
             "url": "https://example.com/xml",
             "summary": "To close a record emit </result>; a new one opens with <result index=...>.",
-            "score": 0.9,
-            "date": None,
         },
     ]
     rendered = render_records(results)
@@ -186,7 +197,7 @@ def test_render_preserves_non_result_angle_brackets() -> None:
     record-boundary tokens are escaped."""
     results: list[dict[str, object]] = [
         {"title": "Generics in C++", "url": "https://example.com",
-         "summary": "Use std::vector<int> and assert a < b.", "score": 0.5, "date": None},
+         "summary": "Use std::vector<int> and assert a < b."},
     ]
     rendered = render_records(results)
 
