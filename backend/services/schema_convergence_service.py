@@ -135,9 +135,14 @@ class SchemaConvergenceService:
                 desired_tables, live_tables
             )
             if _destructive_allowed() and destructive_safe:
-                # Order: virtual tables first (cascades shadow tables) → indexes
-                # (some auto-drop with their owning table) → columns within
-                # surviving tables → stale regular tables last.
+                # Order: triggers first — SQLite re-parses every trigger body
+                # when a table is rewritten, so a stale trigger left behind
+                # (e.g. one feeding an already-dropped virtual table) fails
+                # every later ALTER TABLE in this pass → virtual tables (cascade
+                # shadow tables) → indexes (some auto-drop with their owning
+                # table) → columns within surviving tables → stale regular
+                # tables last.
+                triggers_dropped = self._drop_stale_triggers(desired_triggers, live_triggers, conn)
                 virtual_tables_dropped = self._drop_stale_virtual_tables(
                     desired_virtual, live_virtual, conn
                 )
@@ -150,7 +155,6 @@ class SchemaConvergenceService:
                 tables_dropped = self._drop_stale_tables(
                     desired_tables, live_tables, live_virtual, conn
                 )
-                triggers_dropped = self._drop_stale_triggers(desired_triggers, live_triggers, conn)
             else:
                 virtual_tables_dropped = indexes_dropped = columns_dropped = tables_dropped = 0
                 triggers_dropped = 0
