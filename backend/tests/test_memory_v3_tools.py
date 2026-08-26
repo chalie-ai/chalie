@@ -214,3 +214,32 @@ def test_recall_never_shows_the_model_its_own_cues(db: sqlite3.Connection) -> No
     assert "marmalade" not in rendered
     assert "aubergine" not in rendered
     assert "cues" not in rendered
+
+
+def test_recall_rejects_an_oversized_query_as_invalid_param(
+    db: sqlite3.Connection
+) -> None:
+    """Loud rejection, never a silent trim: the service raises and the ability
+    surfaces it as the save_map-shaped invalid-param error, verbatim."""
+    query = " ".join(["zebra"] * 100)  # 599 scrubbed chars
+    res = Recall().run(_bag(RecallParamsBag, {"query": query}))
+    assert res.status == "error"
+    assert res.code == "invalid-param"
+    assert res.body == (
+        "Recall query is too long, maximum of 500 characters allowed. "
+        "Use more fine-grained queries to load relevent memories"
+    )
+
+
+def test_recall_stopword_padding_does_not_count_toward_the_cap(
+    db: sqlite3.Connection
+) -> None:
+    """The gate measures the stop-word-scrubbed query: a raw query over 500
+    chars, padded with stop-words, scrubs well under the cap and proceeds to
+    a normal recall — not rejected, not trimmed."""
+    core = " ".join(["apple"] * 40)  # 239 scrubbed chars
+    query = core + " " + " ".join(["the", "of", "to", "and"] * 20)  # +279 stop-word chars
+    assert len(query) > 500
+    res = Recall().run(_bag(RecallParamsBag, {"query": query}))
+    assert res.status == "success"
+    assert res.body == "No existing memory found."

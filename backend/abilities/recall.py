@@ -7,7 +7,9 @@ source is its subject and an episode's is the origin it was distilled from.
 ``cues`` are the search key only: they are never fetched into this render path,
 so no model ever reads back the tags it wrote. The one memory surface the
 in-conversation model may use, and the memory step's recall-first step. Never
-writes.
+writes. A query longer than 500 characters after stop-word removal is refused
+with an ``invalid-param`` error — a loud rejection, never a silent trim — so
+the model asks a more fine-grained question.
 """
 
 from __future__ import annotations
@@ -35,7 +37,9 @@ class Recall(Ability[RecallParamsBag]):
             "forget. Returns a list of {\"source\", \"memory\"} — the origin of "
             "each memory and the memory itself. Episodes are matched on the "
             "SITUATION they are about, so describe the situation, not the wording "
-            "you expect. Always recall first; never store blindly."
+            "you expect. Always recall first; never store blindly. The query is "
+            "capped at 500 characters after stop-word removal — a longer query "
+            "is rejected, so ask a more fine-grained question."
         )
 
     def get_examples(self) -> list[str]:
@@ -55,7 +59,12 @@ class Recall(Ability[RecallParamsBag]):
 
     def run(self, params: RecallParamsBag) -> ToolResult:
         k = self.mp.config.recall_k if self.mp is not None else 3
-        result = MemoryRecallService().recall(params.query, k_graph=k, k_map=k)
+        try:
+            result = MemoryRecallService().recall(params.query, k_graph=k, k_map=k)
+        except ValueError as exc:
+            # An oversized query is a bad parameter, not a data problem: refuse
+            # loudly (save_map's >5-cues precedent) instead of silently trimming.
+            return ToolResult.err(str(exc), code="invalid-param")
         hits: list[dict[str, object]] = [
             {"source": hit.get("subject"), "memory": hit.get("contents")}
             for hit in result.get("graph", [])

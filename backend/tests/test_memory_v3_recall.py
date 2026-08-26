@@ -26,7 +26,7 @@ import pytest
 from contracts.search_config import config_for_table
 from models.memory_graph import MemoryGraphRow
 from models.memory_map import MemoryMapRow
-from services.memory_recall_service import MemoryRecallService
+from services.memory_recall_service import MemoryRecallService, scrubbed_query
 from services.search_expander_service import SearchExpanderService
 
 # No module-level embedder: each test names the one whose distances it relies on,
@@ -168,4 +168,31 @@ def test_recall_returns_empty_on_miss_without_raising(
     db: sqlite3.Connection, fixed_embedder: None
 ) -> None:
     result = MemoryRecallService().recall("nothing matches this query")
+    assert result == {"graph": [], "map": []}
+
+
+def test_recall_rejects_an_oversized_query_with_the_exact_message(
+    db: sqlite3.Connection, fixed_embedder: None
+) -> None:
+    """The gate measures the query AFTER stop-word removal: 100 identical
+    non-stopword tokens scrub to 599 chars and the recall is refused
+    verbatim — never trimmed."""
+    query = " ".join(["zebra"] * 100)  # 599 scrubbed chars
+    assert len(scrubbed_query(query)) > 500
+    with pytest.raises(ValueError) as excinfo:
+        MemoryRecallService().recall(query)
+    assert str(excinfo.value) == (
+        "Recall query is too long, maximum of 500 characters allowed. "
+        "Use more fine-grained queries to load relevent memories"
+    )
+
+
+def test_recall_accepts_a_query_at_exactly_the_cap(
+    db: sqlite3.Connection, fixed_embedder: None
+) -> None:
+    """The cap is inclusive: a stop-word-scrubbed form of exactly 500 chars
+    is not an error — it recalls normally (a miss here, nothing is stored)."""
+    query = " ".join(["ab"] * 167)  # 500 scrubbed chars
+    assert len(scrubbed_query(query)) == 500
+    result = MemoryRecallService().recall(query)
     assert result == {"graph": [], "map": []}
