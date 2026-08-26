@@ -119,7 +119,10 @@ class WriteFileAbility(Ability[WriteFileParamsBag]):
 
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
-            with open(target, "w", encoding="utf-8") as f:
+            # newline="": the model owns the whole content — write the bytes as
+            # sent, not the host OS's os.linesep (the default open() rewrites
+            # every \n to the local convention, silently changing the file).
+            with open(target, "w", encoding="utf-8", newline="") as f:
                 f.write(contents)
             bytes_written = target.stat().st_size
         except PermissionError as exc:
