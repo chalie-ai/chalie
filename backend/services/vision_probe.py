@@ -6,7 +6,8 @@ the platform, model, host or api key change); its verdict becomes
 ``supports_vision``. The image (``backend/vision/vision-test.png``) shows two
 red circles, one green circle and one blue square above the black caption
 "Count the blue as red". Each question is sent as its own image+text request,
-so no answer can lean on an earlier one, and each demands a bare answer — one
+so no answer can lean on an earlier one; the five go out concurrently, so the
+probe costs one round-trip instead of five. Each demands a bare answer — one
 word, one digit, or the caption verbatim — so scoring is whole-answer equality
 after normalisation, never a search through prose.
 
@@ -18,11 +19,14 @@ least ``PASS_MINIMUM`` correct answers; fewer means the model is not seeing the
 picture, however fluently it talks about it.
 
 Fail-closed: an empty reply, or one that is not an accepted answer, is wrong;
-any exception inside the probe is a fail. The caller writes the verdict
-straight into the provider row.
+any exception inside the probe is a fail. Each answer is logged the moment it
+arrives, so an interrupted probe still leaves evidence of what the model
+answered. The caller writes the verdict straight into the provider row.
 """
 
 import logging
+import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, FrozenSet, List, Optional, Sequence, Tuple
 
 from services.log_utils import safe
@@ -34,14 +38,19 @@ PASS_MINIMUM = 3
 
 
 def normalise_answer(reply: str) -> str:
-    """The comparison form of an answer: lower case, every non-alphanumeric
-    character turned into a space, whitespace collapsed and stripped.
+    """The comparison form of an answer: lower case, integer-valued decimals
+    folded to their integer, every non-alphanumeric character turned into a
+    space, whitespace collapsed and stripped.
 
     ``No.``, ``"no"`` and ``**No**`` all become ``no``; the caption wrapped in
-    quotes or ended with a full stop still equals the caption. Words are never
-    dropped or reordered, so prose around an answer still fails it.
+    quotes or ended with a full stop still equals the caption. ``4.0`` and
+    ``10.00`` are numeric figures, so they fold to ``4`` and ``10``; a genuine
+    fraction like ``4.5`` is a different answer and is left as is, so it still
+    fails a whole-answer comparison. Words are never dropped or reordered, so
+    prose around an answer still fails it.
     """
-    return ' '.join(''.join(ch if ch.isalnum() else ' ' for ch in reply.lower()).split())
+    text = re.sub(r'\b(\d+)\.0+\b', r'\1', reply.lower())
+    return ' '.join(''.join(ch if ch.isalnum() else ' ' for ch in text).split())
 
 
 def _accepted(*answers: str) -> FrozenSet[str]:
@@ -79,24 +88,35 @@ PROBE_QUESTIONS: Tuple[Tuple[str, FrozenSet[str]], ...] = (
 )
 
 
+def _is_correct(index: int, reply: Optional[str]) -> bool:
+    """Whether one reply passes its question: the reply's comparison form is in
+    the accepted set of the question at ``index``. A missing or empty reply is
+    a wrong answer, not an error — the probe scores what came back, however
+    thin, and only the transport layer decides what is a failure."""
+    _, accepted = PROBE_QUESTIONS[index]
+    return normalise_answer(reply or '') in accepted
+
+
 def score_answers(replies: Sequence[Optional[str]]) -> List[bool]:
     """One verdict per question, in question order: whether the reply's
     comparison form is an accepted answer. A missing or empty reply is wrong."""
     if len(replies) != len(PROBE_QUESTIONS):
         raise ValueError(f'expected {len(PROBE_QUESTIONS)} replies, got {len(replies)}')
-    return [
-        normalise_answer(reply or '') in accepted
-        for reply, (_, accepted) in zip(replies, PROBE_QUESTIONS)
-    ]
+    return [_is_correct(index, reply) for index, reply in enumerate(replies)]
 
 
 def probe_provider(provider: Dict[str, object]) -> bool:
     """Ask the provider every probe question about the probe image; True when
     at least ``PASS_MINIMUM`` answers are correct.
 
-    Every answer is logged so an operator can see exactly which question a
-    provider failed. Any exception is a fail, never a raise: the caller is a
-    provider save, and an unprobeable provider is a provider without vision.
+    The five questions go out on a function-scoped pool, so the probe costs
+    one round-trip instead of five, and every answer is logged the moment it
+    arrives: an operator sees exactly which question a provider failed, and an
+    interrupted probe still leaves evidence of what the model answered. Any
+    exception is a fail, never a raise: the caller is a provider save, and an
+    unprobeable provider is a provider without vision. A send that raises is
+    logged against its question and the remaining answers are still collected
+    and logged before the fail, so one bad question never hides the others.
     """
     try:
         from services.file_mapper_service import FileMapperService
@@ -106,17 +126,34 @@ def probe_provider(provider: Dict[str, object]) -> bool:
         with open(asset_path, 'rb') as fh:
             image_bytes = fh.read()
         config = vision_service.build_vision_config(provider)
-        replies = [
-            vision_service.send_image_with_config(config, image_bytes, prompt, mime_type='image/png')
-            for prompt, _ in PROBE_QUESTIONS
-        ]
-        verdicts = score_answers(replies)
         name = safe(provider.get('name'))
-        for number, (reply, correct) in enumerate(zip(replies, verdicts), start=1):
-            logger.info(
-                "[VisionProbe] name=%s q%d correct=%s answer=%r",
-                name, number, correct, safe((reply or '')[:80]),
-            )
+        replies: List[Optional[str]] = [None] * len(PROBE_QUESTIONS)
+        raised = False
+        with ThreadPoolExecutor(max_workers=len(PROBE_QUESTIONS)) as pool:
+            futures = {
+                pool.submit(
+                    vision_service.send_image_with_config,
+                    config, image_bytes, prompt, mime_type='image/png',
+                ): index
+                for index, (prompt, _) in enumerate(PROBE_QUESTIONS)
+            }
+            for future in as_completed(futures):
+                index = futures[future]
+                try:
+                    reply = future.result()
+                except Exception as exc:
+                    raised = True
+                    logger.warning("[VisionProbe] name=%s q%d raised: %s", name, index + 1, safe(str(exc)))
+                    continue
+                replies[index] = reply
+                logger.info(
+                    "[VisionProbe] name=%s q%d correct=%s answer=%r",
+                    name, index + 1, _is_correct(index, reply), safe((reply or '')[:80]),
+                )
+        if raised:
+            logger.warning("[VisionProbe] name=%s probe failed: a question raised", name)
+            return False
+        verdicts = score_answers(replies)
         correct_count = sum(verdicts)
         passed = correct_count >= PASS_MINIMUM
         logger.info(

@@ -45,6 +45,10 @@ def send_image_with_config(config: Dict[str, object], image_bytes: bytes,
     window to size against: a candidate has no ``providers.context_window`` to
     pin, and the reply being asked for is one bare answer either way. Every
     other send derives its budget from that column via ``ProviderService.send``.
+
+    ``thinking_mode`` is ``NONE``: every probe prompt demands a bare answer,
+    so thinking is switched off. Left at LOW, a one-word reply arrived behind
+    73-121 tokens of reasoning; off, it is the word alone.
     """
     try:
         from services.provider_api import ProviderApiRequest  # noqa: PLC0415
@@ -60,7 +64,7 @@ def send_image_with_config(config: Dict[str, object], image_bytes: bytes,
             system=_VISION_SYSTEM,
             messages=[cast(dict[str, object], message)],
             type=ProviderType.VISION,
-            thinking_mode=ThinkingLevel.LOW,
+            thinking_mode=ThinkingLevel.NONE,
             cache_prefix=False,
             max_tokens=_PROBE_MAX_TOKENS,
         )
