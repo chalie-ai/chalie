@@ -5,8 +5,8 @@ tags: partnerships, channel partners, joint GTM, revshare, OEM, reseller, strate
 version: 1
 ---
 
-1. Use `memory` to recall any existing partnership agreements or prior partner evaluations.
-2. Use `memory` to gather any previously stored partner intake details, then ask the user to confirm or supply: partner name, type, evidence of independent demand (named accounts sourced, sales team size), strategic value, and commitments offered.
+1. Use `recall` to surface any existing partnership agreements or prior partner evaluations.
+2. Use `recall` to gather any previously stored partner intake details, then ask the user to confirm or supply: partner name, type, evidence of independent demand (named accounts sourced, sales team size), strategic value, and commitments offered.
 3. Use `write_file` to classify the partner tier based on evidence of independent demand and commitments: REFERRAL (introductions only), RESELLER (owns quota), OEM (embeds product), SI-CONSULTING (services revshare), or STRATEGIC (named accounts + multi-year + dedicated resources).
 4. Use `search` to research the prospective partner's market presence, customer base, and reputation.
 5. Use `write_file` to design a 90-day joint GTM plan with: pre-launch milestones (training, certification, materials), launch motion (target accounts, MDF allocation), mid-quarter checkpoint, and explicit 90-day success criteria.

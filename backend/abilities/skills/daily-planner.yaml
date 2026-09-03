@@ -6,7 +6,7 @@ version: 1
 ---
 
 1. Use `calendar` to pull today's events and any fixed commitments — note their times and durations.
-2. Use `memory` to recall any running priorities, active projects, or tasks the user was working on recently.
+2. Use `recall` to surface any running priorities, active projects, or tasks the user was working on recently.
 3. Use `list` to check active to-do items for anything due today, then ask the user if there is anything new to add or any tasks they must complete today.
 4. Use `calendar` to identify conflicts or tight windows and flag them.
 5. Use `list` to pull any active to-do items and sort them by: urgency (deadline today), importance (impact), and effort (quick wins first).

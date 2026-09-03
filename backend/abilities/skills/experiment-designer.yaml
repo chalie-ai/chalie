@@ -5,7 +5,7 @@ tags: A/B testing, experiment design, hypothesis, sample size, statistical signi
 version: 1
 ---
 
-1. Use `memory` to recall any prior experiments or hypotheses on this topic, then write the hypothesis in If/Then/Because format: if we change [intervention], then [metric] will change by [expected direction/magnitude], because [behavioral mechanism].
+1. Use `recall` to surface any prior experiments or hypotheses on this topic, then write the hypothesis in If/Then/Because format: if we change [intervention], then [metric] will change by [expected direction/magnitude], because [behavioral mechanism].
 2. Use `write_file` to define and record metrics before running the test: one primary decision metric, guardrail metrics for quality protection, and secondary diagnostic metrics.
 3. Use `code_agent` to estimate the required sample size given baseline conversion rate, minimum detectable effect, significance level (alpha), and statistical power.
 4. Use `code_agent` to score the experiment using ICE: Impact (potential upside), Confidence (evidence quality), Ease (cost and speed) — ICE Score = (Impact × Confidence × Ease) / 10.

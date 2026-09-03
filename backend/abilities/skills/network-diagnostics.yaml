@@ -5,7 +5,7 @@ tags: network, connectivity, ping, dns, dig, interface, ip, troubleshoot, reacha
 version: 1
 ---
 
-1. Use `memory` to recall any prior network issues or known infrastructure details (DNS servers, expected IPs).
+1. Use `recall` to surface any prior network issues or known infrastructure details (DNS servers, expected IPs).
 2. Ask the user what they need to diagnose: can they reach a specific host, is DNS resolving correctly, or do they need a general network status check.
 3. For **connectivity check**: use `bash` with action read to run `ping -c 4 <host>` to test reachability and measure round-trip latency — report packet loss and average latency.
 4. For **DNS resolution**: use `bash` with action read to run `dig <domain> +short` to resolve the domain and report the IP addresses returned.

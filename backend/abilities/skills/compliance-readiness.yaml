@@ -5,8 +5,8 @@ tags: compliance, SOC2, ISO27001, GDPR, audit prep, compliance readiness, certif
 version: 1
 ---
 
-1. Use `memory` to recall any prior compliance assessments, known gaps, or active certifications already documented.
-2. Use `memory` to surface any stored framework selections, then identify all applicable compliance frameworks by asking about industry, customer requirements, and geography — flag any commonly missed overlays (NYDFS for financial services, HIPAA for healthcare, ISO 42001 for AI systems).
+1. Use `recall` to surface any prior compliance assessments, known gaps, or active certifications already documented.
+2. Use `recall` to surface any stored framework selections, then identify all applicable compliance frameworks by asking about industry, customer requirements, and geography — flag any commonly missed overlays (NYDFS for financial services, HIPAA for healthcare, ISO 42001 for AI systems).
 3. Use `write_file` to map overlaps between the identified frameworks — record where a single evidence artifact satisfies controls in multiple frameworks to reduce audit effort.
 4. Use `write_file` to verify and record that every evidence artifact has a single accountable owner with a documented refresh cadence — shared ownership without accountability is the most common cause of stale evidence.
 5. Use `calendar` to check the audit calendar: confirm surveillance audits are not stacking in the same window, auditor independence is maintained, and small teams have a rotation plan.

@@ -5,11 +5,11 @@ tags: product, ux, audit, review, messaging, information-architecture, feedback
 version: 1
 ---
 
-1. Use `memory` to recall any prior audit context, then ask the user for the product URL and audit scope: messaging clarity, UX flow, information architecture, conversion copy, or a full review.
+1. Use `recall` to surface any prior audit context, then ask the user for the product URL and audit scope: messaging clarity, UX flow, information architecture, conversion copy, or a full review.
 2. Use `web_fetch` to extract the homepage and 2–3 key landing pages, noting headlines, CTAs, navigation structure, and key value propositions.
 3. If `web_fetch` returns incomplete content (JS-heavy pages), use `browser` to render and extract the full page content.
-4. Use `memory` to recall any prior product context, positioning, or ICP notes that should inform the evaluation.
+4. Use `recall` to surface any prior product context, positioning, or ICP notes that should inform the evaluation.
 5. Use `search` to benchmark the product's positioning and messaging against 2–3 direct competitors' homepages.
-6. Use `memory` to evaluate each in-scope dimension against best practices: clarity of the core value proposition, evidence of user benefit (vs. features), navigation findability, and CTA prominence.
+6. Evaluate each in-scope dimension against best practices, using `recall` for prior context: clarity of the core value proposition, evidence of user benefit (vs. features), navigation findability, and CTA prominence.
 7. Use `write_file` to produce a structured audit report: one section per dimension with a score (1–5), what works, what is broken or unclear, and a specific recommended fix with an example.
 8. Use `write_file` to save the full audit report with prioritised recommendations ranked by expected impact.

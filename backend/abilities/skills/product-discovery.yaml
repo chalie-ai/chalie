@@ -5,11 +5,11 @@ tags: product discovery, opportunity solution tree, assumption mapping, problem 
 version: 1
 ---
 
-1. Use `memory` to recall any prior discovery work, user research findings, or stated product outcomes.
+1. Use `recall` to surface any prior discovery work, user research findings, or stated product outcomes.
 2. Use `write_file` to define the desired outcome: one measurable metric to improve, with a baseline value and target horizon.
 3. Use `write_file` to build an Opportunity Solution Tree: map from the outcome to user opportunities (unmet needs/pains grounded in evidence) to solution ideas to experiments — require at least 3 distinct opportunities before converging.
 4. Use `write_file` to map assumptions across four categories: desirability (users want this), viability (business value exists), feasibility (team can build it), and usability (users can successfully use it) — score each by risk and certainty.
 5. Use `code_agent` to prioritize assumptions by risk score: high-risk and low-certainty assumptions are tested first.
 6. Use `search` to find analogous solutions, prior user research, and behavioral evidence that either validates or challenges the top assumptions.
 7. Use `write_file` to plan a 1 to 2 week discovery sprint with explicit hypotheses, daily evidence review checkpoints, and an end-state decision: proceed, pivot, or stop.
-8. Use `write_file` to save the OST, assumption map, and sprint plan — then use `memory` to store key findings for the next planning cycle.
+8. Use `write_file` to save the OST, assumption map, and sprint plan — then close with the key findings so they are remembered for the next planning cycle.

@@ -5,11 +5,11 @@ tags: research, trends, sentiment, social, news, current events
 version: 1
 ---
 
-1. Use `memory` to recall any previously tracked topics, then ask the user to specify the topic precisely (push back if too vague, e.g. "AI" — ask for a narrower angle).
-2. Use `memory` to check for a stored angle preference, then ask which angle matters most: trend, sentiment, problems, opportunities, or comparison (default: trend).
-3. Use `memory` to check for a stored time window preference, then ask: 7, 14, 30, 60, or 90 days (default: 30 days).
+1. Use `recall` to surface any previously tracked topics, then ask the user to specify the topic precisely (push back if too vague, e.g. "AI" — ask for a narrower angle).
+2. Use `recall` to check for a stored angle preference, then ask which angle matters most: trend, sentiment, problems, opportunities, or comparison (default: trend).
+3. Use `recall` to check for a stored time window preference, then ask: 7, 14, 30, 60, or 90 days (default: 30 days).
 4. Use the `search` tool to find recent web coverage and discussion for the topic within the time window.
 5. Use the `news` tool to find recent news articles about the topic within the time window.
 6. Use the `search` tool again with a more specific query targeting pain points or complaints about the topic.
 7. Use `write_file` to synthesize findings into a briefing with: TL;DR (2–3 sentences), key signals from search/news, notable pain points or enthusiasm, and cross-source patterns.
-8. Store the summary in `memory` if the user wants to track this topic over time.
+8. If the user wants to track this topic over time, close with the summary so it is remembered.

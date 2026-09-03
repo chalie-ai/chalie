@@ -5,8 +5,8 @@ tags: financial analysis, DCF, budget variance, financial ratios, forecast, valu
 version: 1
 ---
 
-1. Use `memory` to recall any prior financial data, benchmarks, or analysis context already discussed.
-2. Ask the user for the analysis objective: ratio analysis, DCF valuation, budget variance, or rolling forecast — and use `memory` to recall any financial data or assumptions already on record.
+1. Use `recall` to surface any prior financial data, benchmarks, or analysis context already discussed.
+2. Ask the user for the analysis objective: ratio analysis, DCF valuation, budget variance, or rolling forecast — and use `recall` to surface any financial data or assumptions already on record.
 3. Use `code_agent` to validate input data completeness before running calculations — flag any missing fields, implausible values, or gaps.
 4. Use `code_agent` to calculate the requested metrics: financial ratios (profitability, liquidity, leverage, efficiency, valuation), DCF with WACC and terminal value, or budget variances with favorable/unfavorable classification.
 5. Use `search` to benchmark calculated ratios against industry standards and flag any metric significantly outside the normal range.

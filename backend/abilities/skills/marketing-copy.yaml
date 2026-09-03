@@ -5,7 +5,7 @@ tags: marketing, copywriting, landing-page, ads, conversion, writing, product
 version: 1
 ---
 
-1. Use `memory` to recall any existing brand voice, prior copy, or ICP notes on file before gathering requirements.
+1. Use `recall` to surface any existing brand voice, prior copy, or ICP notes on file before gathering requirements.
 2. Ask what the copy is for (landing page hero, ad copy, product description, email subject lines, or taglines), who the target audience is, their primary pain point, and the single most important outcome the product delivers — then record via `write_file`.
 3. Use `search` to study 3–5 competitors' landing pages or ads for the same category — note the hooks, benefit statements, and CTAs they lead with.
 4. Use `write_file` to identify the primary message hierarchy: headline claim → key benefit → social proof hook → CTA — based on the pain point and product outcome.

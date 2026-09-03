@@ -5,7 +5,7 @@ tags: business, legal, contract, proposal, NDA, SOW, freelance, agreement
 version: 1
 ---
 
-1. Use `memory` to recall any standard terms, rate cards, or client preferences stored from prior sessions before gathering requirements.
+1. Use `recall` to surface any standard terms, rate cards, or client preferences stored from prior sessions before gathering requirements.
 2. Ask what document type is needed, the jurisdiction, engagement type (fixed-price, hourly, or retainer), party details, contract value, dates, and any special requirements — then record via `write_file`.
 3. Use `search` to verify jurisdiction-specific legal standards or required clause structures (e.g. GDPR DPA for EU, BGB considerations for Germany) if any are uncertain.
 4. Use `write_file` to draft the complete contract in structured markdown with all required clauses: services, payment terms, IP ownership, confidentiality, warranties, liability cap, termination conditions, and dispute resolution.

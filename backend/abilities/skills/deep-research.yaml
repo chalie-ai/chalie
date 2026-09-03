@@ -5,11 +5,11 @@ tags: research, report, analysis, synthesis, evidence, citations, literature-rev
 version: 1
 ---
 
-1. Use `memory` to recall any prior research, related findings, or user preferences — then ask for the specific question, scope (company vs. industry vs. policy/tech), and preferred output length.
-2. Break the topic into 3–6 parallel sub-questions (what, why, how, who, trends, counter-claims) and fire each as a background research thread using `search` and `news` with `async: true`, keeping raw search context out of the main thread.
-3. Each thread uses `search` and `news` to gather sources and `web_fetch` to extract content from the most authoritative URLs, then returns distilled notes — never raw results.
+1. Use `recall` to surface any prior research, related findings, or user preferences — then ask for the specific question, scope (company vs. industry vs. policy/tech), and preferred output length.
+2. Break the topic into 3–6 sub-questions (what, why, how, who, trends, counter-claims) and delegate each to `web_search`, keeping raw search context out of the main thread.
+3. Each `web_search` call gathers sources, extracts content from the most authoritative URLs, and returns distilled notes — never raw results.
 4. Use `write_file` to build a citation registry from the distilled notes: record source URL, type (news/official/academic/industry), recency date, and authority level for every claim.
 5. Use `write_file` to construct an evidence-mapped outline, flagging claims lacking two independent sources and any counter-claims or competing perspectives.
 6. Use `write_file` to draft the report from the outline and citation registry, embedding confidence markers (confirmed / likely / contested / unverified) per major claim.
 7. Use `write_file` to run a counter-review pass: for each key finding, state the strongest plausible objection or alternative interpretation and address it inline.
-8. Present the final report with executive summary, section findings with inline citations, counter-claims addressed, and a confidence summary — then use `memory` to store key findings.
+8. Present the final report with executive summary, section findings with inline citations, counter-claims addressed, and a confidence summary, closing with the key findings so they are remembered.

@@ -5,7 +5,7 @@ tags: management, team, feedback, evaluation, work
 version: 1
 ---
 
-1. Use the `memory` tool to recall any stored information about the team member — role, past feedback, goals set in prior reviews.
+1. Use the `recall` tool to surface any stored information about the team member — role, past feedback, goals set in prior reviews.
 2. Ask the user for the review period, the team member's role expectations, and 2-3 key projects to evaluate.
 3. Use the `calendar` tool to check meeting frequency and 1:1 history with the team member during the review period.
 4. Use the `email` tool to search for relevant feedback threads, project updates, or recognition mentioning the team member.

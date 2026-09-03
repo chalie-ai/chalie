@@ -5,11 +5,11 @@ tags: productivity, organization, tasks, ideas, planning, capture
 version: 1
 ---
 
-1. Check `memory` for any prior brain dumps or recurring themes, then accept the user's brain dump immediately — do not ask questions upfront; start organizing right away.
-2. Ask at most one clarifying question mid-organization only if a single item is genuinely ambiguous between task and project — use `memory` to resolve ambiguity silently if prior context covers it.
+1. Use `recall` to check for any prior brain dumps or recurring themes, then accept the user's brain dump immediately — do not ask questions upfront; start organizing right away.
+2. Ask at most one clarifying question mid-organization only if a single item is genuinely ambiguous between task and project — use `recall` to resolve ambiguity silently if prior context covers it.
 3. Use `write_file` to group items into: Projects/Ideas (with sub-components and open questions embedded), Tasks (flat action list in imperative voice), and Connections (how items relate to each other).
 4. For 5 or fewer unrelated items, skip the full structure and use `list` for a simple "What I heard" list instead.
-5. Save recurring projects or ideas to `memory` so they persist across sessions.
+5. Call out recurring projects or ideas explicitly so they are remembered across sessions.
 6. Add any time-sensitive tasks as reminders using the `schedule` tool if the user has mentioned deadlines.
 7. Add any todo/shopping items to `list` if they fit an existing list.
 8. Present concrete next-step offers (each specifying what would be produced and where it would go) and ask the user which to tackle first.

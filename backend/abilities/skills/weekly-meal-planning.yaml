@@ -5,7 +5,7 @@ tags: food, nutrition, cooking, health, scheduling
 version: 1
 ---
 
-1. Use the `memory` tool to recall any stored dietary preferences, allergies, restrictions, or cooking skill level.
+1. Use the `recall` tool to surface any stored dietary preferences, allergies, restrictions, or cooking skill level.
 2. Ask the user for the number of people eating, meals per day, budget constraints, and any cuisine preferences for the week.
 3. Use the `search` tool to find seasonal ingredients and recipe ideas matching the user's constraints and preferences.
 4. Build a 7-day meal plan balancing nutrition, variety, and prep time. Reuse ingredients across meals to minimise waste.

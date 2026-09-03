@@ -5,7 +5,7 @@ tags: fishbone, Ishikawa, root cause, problem analysis, structured thinking
 version: 1
 ---
 
-1. Use `memory` to recall any relevant context or prior analysis on this problem.
+1. Use `recall` to surface any relevant context or prior analysis on this problem.
 2. State the problem clearly as the central issue and use `write_file` to capture the Fishbone structure.
 3. For the People and Process categories, brainstorm potential causes related to skills, communication, workflows, and standards — use `search` to validate any factual claims.
 4. For the Environment and Methods categories, consider external factors, situational conditions, approaches, and practices that may contribute — record each via `write_file`.

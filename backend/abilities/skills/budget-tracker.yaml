@@ -5,11 +5,11 @@ tags: budget, finance, spending, personal-finance, tracking, expenses, planning
 version: 1
 ---
 
-1. Use `memory` to recall any prior budget structure, then ask whether they are starting a new budget or updating an existing one — collect income, fixed costs, and variable budget targets per category.
-2. Use `memory` to recall any previously stored budget structure, categories, or running totals.
+1. Use `recall` to surface any prior budget structure, then ask whether they are starting a new budget or updating an existing one — collect income, fixed costs, and variable budget targets per category.
+2. Use `recall` to surface any previously stored budget structure, categories, or running totals.
 3. Ask the user to paste or describe their transactions for the period to be analysed — use `read` for a file path or `web_fetch` for a URL.
 4. Use `code_agent` to parse the transactions, categorise them (groceries, dining, transport, utilities, entertainment, etc.), and total each category.
 5. Use `code_agent` to compare actual spending per category against the budget targets — calculate variance (amount and percentage) and flag categories more than 10% over budget.
 6. Use `write_file` to produce a budget summary: income, total spend, net balance, and a table of actuals vs. budget per category with variance column — highlight overspent categories.
 7. Use `code_agent` to rank categories by overspend magnitude, then identify the top 1–3 drivers and suggest one specific, actionable change for each.
-8. Use `write_file` to save the updated budget report, use `memory` to store the new running totals, and use `schedule` to set a reminder for the next budget review.
+8. Use `write_file` to save the updated budget report, state the new running totals in the reply so they are remembered, and use `schedule` to set a reminder for the next budget review.

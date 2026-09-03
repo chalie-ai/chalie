@@ -5,8 +5,8 @@ tags: EU AI Act, AI compliance, high-risk AI, GPAI, conformity assessment, regul
 version: 1
 ---
 
-1. Use `memory` to recall any prior AI Act assessments or compliance decisions for the system in scope.
-2. Confirm the AI system's description using `memory` to surface any stored context: what it does, who uses it, where it is deployed, and the organization's role (provider, deployer, importer, or distributor).
+1. Use `recall` to surface any prior AI Act assessments or compliance decisions for the system in scope.
+2. Confirm the AI system's description using `recall` to surface any stored context: what it does, who uses it, where it is deployed, and the organization's role (provider, deployer, importer, or distributor).
 3. Screen for Article 5 prohibited practices — use `write_file` to record findings as you go; if any of the 8 prohibited categories apply, stop and note that the system cannot be placed on the EU market.
 4. Classify the system's risk tier under Article 6 and Annex III using `search` to confirm current Annex III category boundaries: minimal risk, limited risk, high-risk, or GPAI — note that the Annex III carve-out does not apply if the system profiles natural persons.
 5. For high-risk systems, use `write_file` to determine and record whether conformity assessment requires Module A (internal control with harmonized standards) or Module H (full QMS with notified body, required for biometrics).
