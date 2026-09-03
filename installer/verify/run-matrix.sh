@@ -40,18 +40,15 @@ mkdir -p "$RESULTS"
 command -v docker >/dev/null 2>&1 || { echo "docker not found" >&2; exit 1; }
 
 run_row() {
-  local name="$1" image="$2" plat="$3" expect="$4" do_boot="$5"
+  local name="$1" image="$2" plat="$3" expect="$4"
   local log="$RESULTS/$name.log"
-  echo ">>> $name  ($image  $plat  expect=$expect  boot=$do_boot)"
-  # If bash is absent the installer (bash shebang + bashisms) cannot run at all —
-  # record that as a confirmed gap rather than a container-exec error.
+  echo ">>> $name  ($image  $plat  expect=$expect)"
   docker run --rm --platform "$plat" \
     -v "$INSTALLER:/verify/install.sh:ro" \
     -v "$HERE/verify-inside.sh:/verify/verify-inside.sh:ro" \
     -e CHALIE_BRANCH="$BRANCH" -e ROW_NAME="$name" \
-    -e ROW_EXPECT="$expect" -e DO_BOOT="$do_boot" \
-    "$image" \
-    sh -c 'if command -v bash >/dev/null 2>&1; then exec bash /verify/verify-inside.sh; else printf "RESULT installer_rc=n/a\nRESULT reason=bash-absent(installer requires bash)\nVERDICT=GAP-CONFIRMED %s\n" "$ROW_NAME"; fi' \
+    -e ROW_EXPECT="$expect" \
+    "$image" bash /verify/verify-inside.sh \
     >"$log" 2>&1
   local verdict
   verdict="$(grep -oE 'VERDICT=[A-Z-]+' "$log" | tail -1 | cut -d= -f2)"
@@ -64,10 +61,10 @@ selected() {
   printf '%s\n' "${rows[@]}" | grep -qx "$1"
 }
 
-while IFS=$'\t' read -r name image plat expect do_boot; do
+while IFS=$'\t' read -r name image plat expect; do
   case "$name" in ''|\#*) continue ;; esac
   selected "$name" || continue
-  run_row "$name" "$image" "$plat" "$expect" "$do_boot"
+  run_row "$name" "$image" "$plat" "$expect"
 done < "$MATRIX"
 
 echo
@@ -77,12 +74,11 @@ for v in "$RESULTS"/*.verdict; do
   [ -f "$v" ] || continue
   verdict="$(cat "$v")"
   printf '  %-22s %s\n' "$(basename "$v" .verdict)" "$verdict"
-  # PASS / REFUSED / GAP-CONFIRMED / UNEXPECTED-PASS are all as-expected-or-better.
-  # INCONCLUSIVE means the environment (not the installer) could not be established
-  # — e.g. a package manager that will not run under CPU emulation — so it is
-  # surfaced but never gates; a native-arch CI runner turns it into a real verdict.
-  # FAIL (install broke where it should have worked) and NO-VERDICT (the run never
-  # produced a verdict) are the only real problems — fail the driver so CI gates.
-  case "$verdict" in FAIL|NO-VERDICT|'') bad=1 ;; esac
+  # Only PASS (everything installed, booted and every runtime probe green) and
+  # REFUSED (a row whose whole claim is that the installer refuses old Python)
+  # are acceptable. Anything else gates, a missing verdict included: a row that
+  # produced no result has proved nothing, and a silent non-result is exactly
+  # how a broken install reaches a user.
+  case "$verdict" in PASS|REFUSED) ;; *) bad=1 ;; esac
 done
 exit "$bad"

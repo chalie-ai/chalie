@@ -112,14 +112,14 @@ def test_seed_recall_renders_as_background_memory_block(db: sqlite3.Connection) 
 
     uid = _input_row(ch, turn, "what's on today?")
     step = _assistant_row(ch, turn, "checking")
-    seed_env = '[memory(status=success, query=x, results=1)]\n{"results":[{"id":"residence"}]}\n[end:memory]'
+    seed_env = '[recall(status=success, query=x, results=1)]\n{"results":[{"id":"residence"}]}\n[end:recall]'
     _tool_call(
-        step, "memory",
-        {"action": "recall", "query": "what's on today?", "_auto": True},
+        step, "recall",
+        {"query": "what's on today?", "_auto": True},
         seed_env,
     )
-    explicit_env = "[memory(status=error, code=no-results)]\nNo results found.\n[end:memory]"
-    _tool_call(step, "memory", {"action": "recall", "query": "wifi password"}, explicit_env)
+    explicit_env = "[recall(status=error, code=no-results)]\nNo results found.\n[end:recall]"
+    _tool_call(step, "recall", {"query": "wifi password"}, explicit_env)
 
     from services.prompt_service import PromptService
 
@@ -129,7 +129,7 @@ def test_seed_recall_renders_as_background_memory_block(db: sqlite3.Connection) 
     assert "[end:background_memory]" in rendered
     assert '{"results":[{"id":"residence"}]}' in rendered
     assert '"_auto"' not in rendered, "the seed rendered as a tool-call row (params leaked)"
-    assert '[memory] {"action": "recall", "query": "wifi password"}' in rendered, (
+    assert '[recall] {"query": "wifi password"}' in rendered, (
         "the explicit recall no longer renders as a normal tool-call row"
     )
 

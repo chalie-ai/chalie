@@ -2,10 +2,9 @@
  * MCP API — endpoints derived from frontend/brain/mcp.js.
  *
  * Inbound (server side — Chalie as MCP server) — Endpoint-contract routes in
- * backend/api/endpoints/mcp_settings.py + backend/api/actions/mcp_server/*:
- *   GET  /api/mcp-server/all                      one-item listing → config DTO.
- *   POST /api/mcp-server/-1                       partial update → 204 empty body.
- *   POST /api/mcp-server/regenerate-token         → 201, result DTO.
+ * backend/api/endpoints/mcp_settings.py:
+ *   GET  /api/mcp-server/all                      one-item listing → settings + live listener state.
+ *   POST /api/mcp-server/-1                       partial update → 204 empty body, applied live.
  *
  * Outbound (client side — Chalie connecting to external MCP servers) — thin
  * wrapper over the Endpoint-contract routes in
@@ -24,7 +23,9 @@ import { fetchAllPages, type ListingEnvelope } from './paginate';
 export interface McpServerConfig {
   enabled?: boolean;
   port?: number;
-  token?: string | null;
+  listening?: boolean;
+  listening_port?: number | null;
+  error?: string | null;
   [key: string]: unknown;
 }
 
@@ -32,7 +33,7 @@ export interface McpClient {
   id: string | number;
   name: string;
   host: string;
-  status?: string;
+  connected?: boolean;
   enabled?: boolean;
   headers?: Record<string, string>;
   [key: string]: unknown;
@@ -61,14 +62,6 @@ export const mcp = {
     return api.post('/api/mcp-server/-1', body);
   },
 
-  async regenerateToken(): Promise<{ token: string }> {
-    const res = await api.post<SingleEnvelope<{ token: string; wrapper_id: string }>>(
-      '/api/mcp-server/regenerate-token',
-      {},
-    );
-    return res.result;
-  },
-
   listClients(): Promise<McpClient[]> {
     return fetchAllPages<McpClient>('/api/mcp-clients/all');
   },
@@ -87,8 +80,8 @@ export const mcp = {
     return api.del(`/api/mcp-clients/${id}`);
   },
 
-  async testClient(id: string | number): Promise<{ reachable: boolean; tool_count?: number; status?: string }> {
-    const res = await api.post<SingleEnvelope<{ reachable: boolean; tool_count?: number; status?: string }>>(
+  async testClient(id: string | number): Promise<{ connected: boolean; tool_count?: number; error?: string | null }> {
+    const res = await api.post<SingleEnvelope<{ connected: boolean; tool_count?: number; error?: string | null }>>(
       `/api/mcp-clients/test/${id}`,
       {},
     );

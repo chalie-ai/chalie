@@ -24,7 +24,6 @@ import { showToast } from './toast';
 import { clearLiveTurn, finishLiveTool, startLiveTool } from './liveActTrail';
 import { reconcileCancelledTurn } from './cancelReconcile';
 import { findTurnType, setTurnDone, setTurnWorking, upsertTurnToSurfaces } from './turnDom';
-import { useTasksStore } from '../stores/tasks';
 import { usePermissionsStore } from '../stores/permissions';
 import { useContextUsageStore } from '../stores/contextUsage';
 import { useVoiceTranscriptsStore } from '../stores/voiceTranscripts';
@@ -212,7 +211,7 @@ function _dispatchTurnSignal(data: WsPushEvent): boolean {
       // The release must wait for the refetch to SETTLE, not fire alongside
       // it — releasing synchronously reopens the spine's busy gate while this
       // refetch is still in flight, letting a second queued send slip through
-      // against stale (pre-refetch) state (TKT-1516). `.finally` (not `.then`)
+      // against stale (pre-refetch) state. `.finally` (not `.then`)
       // so a REJECTED refetch still releases the hold rather than stranding
       // the gate closed forever.
       void _refetchAndUpsert(turnId, type).finally(() => hooks().releasePendingSend(turnId, type));
@@ -290,7 +289,7 @@ function _dispatchTurnExecution(data: WsPushEvent): boolean {
     // release must wait for the refetch to SETTLE rather than fire alongside
     // it — releasing synchronously reopens the spine's busy gate while this
     // refetch is still in flight, letting a second queued send slip through
-    // against stale (pre-refetch) state (TKT-1516). `.finally` (not `.then`)
+    // against stale (pre-refetch) state. `.finally` (not `.then`)
     // so a REJECTED refetch still releases the hold rather than stranding the
     // gate closed forever.
     void _refetchAndUpsert(exec.turn_id, type).finally(() => h.releasePendingSend(exec.turn_id, type));
@@ -377,15 +376,19 @@ function _dispatchCancelled(turnId: number, type: string): void {
  *  handled. Verbatim relocation of session.ts's former `_routeSimpleEvent`. */
 function _dispatchSimpleEvent(data: WsPushEvent): boolean {
   switch (data.type as string) {
-    case 'subagent_start':
-    case 'subagent_end':
-      useTasksStore().applyDriftEvent(data);
-      return true;
     case 'capability_alert':
       return true;
     case 'permission_request':
       usePermissionsStore().enqueue(data);
       return true;
+    case 'permission_resolved': {
+      // The gate ended elsewhere — answered in another tab, cancelled with its
+      // turn, or failed on the backend — so the card must not wait for an
+      // answer nobody can deliver.
+      const requestId = (data as { request_id?: unknown }).request_id;
+      if (typeof requestId === 'string') usePermissionsStore().remove(requestId);
+      return true;
+    }
     default:
       return false;
   }

@@ -15,7 +15,6 @@ import { api } from '@chalie/shared';
 export interface MemoryRecord {
   created: string | null;
   last_accessed: string | null;
-  location?: string | null;
   key?: string | null;
   value: string | null;
 }

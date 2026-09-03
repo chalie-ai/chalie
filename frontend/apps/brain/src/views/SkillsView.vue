@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import type { Association, Skill } from '../api/skills';
+import type { Skill } from '../api/skills';
 import { skills as skillsApi } from '../api/skills';
-import { formatDate } from '../utils/format';
 import { useToast } from '../composables/useToast';
 import { useBrainAction } from '../composables/useBrainAction';
 import { useConfirm } from '../composables/useConfirm';
@@ -22,25 +21,14 @@ const { show: showToast } = useToast();
 const { run } = useBrainAction();
 const { confirm } = useConfirm();
 
-interface SkillsPayload {
-  skills: Skill[];
-  associations: Association[];
-}
-
 const {
-  data: skillsPayload,
+  data: skills,
   loading,
   reload: load,
-} = useBrainResource(
-  async () => {
-    const d = await skillsApi.list();
-    return { skills: d.skills ?? [], associations: d.associations ?? [] } satisfies SkillsPayload;
-  },
-  { initial: { skills: [], associations: [] } as SkillsPayload, failMsg: 'Failed to load skills' },
-);
-
-const skills = computed(() => skillsPayload.value.skills);
-const associations = computed(() => skillsPayload.value.associations);
+} = useBrainResource(() => skillsApi.list(), {
+  initial: [] as Skill[],
+  failMsg: 'Failed to load skills',
+});
 
 const expandedId = ref<string | number | null>(null);
 const editingId = ref<string | number | null>(null);
@@ -78,9 +66,7 @@ async function saveEdit(skill: Skill): Promise<void> {
     { success: 'Skill updated', failMsg: 'Failed to update skill' },
   );
   if (ok) {
-    skillsPayload.value.skills = skillsPayload.value.skills.map((s) =>
-      s.id === skill.id ? updated : s,
-    );
+    skills.value = skills.value.map((s) => (s.id === skill.id ? updated : s));
     editingId.value = null;
   }
 }
@@ -90,9 +76,7 @@ async function toggleSkill(skill: Skill): Promise<void> {
     failMsg: 'Failed to toggle skill',
   });
   if (ok) {
-    skillsPayload.value.skills = skillsPayload.value.skills.map((s) =>
-      s.id === skill.id ? { ...s, enabled: t.enabled } : s,
-    );
+    skills.value = skills.value.map((s) => (s.id === skill.id ? { ...s, enabled: t.enabled } : s));
     showToast(t.enabled ? 'Skill enabled' : 'Skill disabled', 'success');
   }
 }
@@ -110,8 +94,10 @@ async function deleteSkill(skill: Skill): Promise<void> {
     failMsg: 'Failed to delete skill',
   });
   if (done) {
-    skillsPayload.value.skills = skillsPayload.value.skills.filter((s) => s.id !== skill.id);
     editingId.value = null;
+    // Reload rather than splice: deleting a copy re-enables the curated
+    // original, and only the server knows which card that is.
+    await load();
   }
 }
 
@@ -150,7 +136,7 @@ async function submitCreate(): Promise<void> {
     { success: `Skill "${title}" created`, failMsg: 'Failed to create skill' },
   );
   if (ok) {
-    skillsPayload.value.skills = [...skillsPayload.value.skills, newSkill];
+    skills.value = [...skills.value, newSkill];
     editingId.value = null;
     viewMode.value = 'list';
   }
@@ -404,30 +390,5 @@ async function submitCreate(): Promise<void> {
         </div>
       </div>
     </div>
-
-    <template v-if="associations.length > 0">
-      <h4 class="section-head mt-lg">Skill Associations</h4>
-      <p class="panel-desc">Patterns discovered from your behaviour, linked to skills.</p>
-      <table class="records-table">
-        <thead>
-          <tr>
-            <th>Pattern</th>
-            <th>Skill</th>
-            <th>Rule</th>
-            <th>Since</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="(a, idx) in associations" :key="idx">
-            <td>
-              <span class="badge badge-violet">{{ a.pattern_name }}</span>
-            </td>
-            <td>{{ a.skill_title }}</td>
-            <td class="text-xs text-secondary">{{ a.rule }}</td>
-            <td class="text-xs text-tertiary">{{ formatDate(a.created_at) }}</td>
-          </tr>
-        </tbody>
-      </table>
-    </template>
   </template>
 </template>

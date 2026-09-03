@@ -15,7 +15,7 @@ never start ``skill:memory:store:``, so the predicate moves ONLY machine rows an
 leaves the memory-tool ``system`` memories in place. No sidecar cleanup is
 needed — these operational rows were never FTS/vec-indexed (the ``machine_state``
 vertical declares no search config, the ``Searchable`` trait off), so they hold
-no ``data_graph_fts``/``*_vec`` postings and their ``search_queries`` is NULL.
+no ``data_graph_fts``/``*_vec`` postings and their ``indexed_at`` is NULL.
 
 Idempotent: re-running matches nothing (the moved rows are no longer ``system``).
 The run-once ledger gate lives in ``migrations/runner.py``, not here.

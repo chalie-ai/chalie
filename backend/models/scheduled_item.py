@@ -19,10 +19,9 @@ live schedule until it is hard-deleted, and a poller elsewhere matches
 from __future__ import annotations
 
 import sqlite3
-from typing import ClassVar, cast
+from typing import ClassVar
 
 from models.model import Model
-from models.thread_gist import ThreadGist
 from services._vec_upsert import vec0_upsert
 from services.database import Database
 
@@ -145,14 +144,6 @@ class ScheduledItem(Model):
             (embedding_blob, limit),
         )
         return cursor.fetchall()
-
-    def get_gist(self) -> ThreadGist | None:
-        """This schedule's thread label — the :class:`ThreadGist` keyed by
-        ``(SCHEDULE_CHANNEL, id)``, generated on the first fire by
-        ``MessageProcessor._maybe_fire_gist``. ``None`` until then, so readers
-        fall back to the prompt; no join, a single-row read on ThreadGist's own
-        table (``turn_id == id`` on the schedule channel)."""
-        return ThreadGist.for_turn(self.SCHEDULE_CHANNEL, cast(int, self.id))
 
     # ── Writes ──────────────────────────────────────────────────────────────
 

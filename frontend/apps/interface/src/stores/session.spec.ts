@@ -71,6 +71,16 @@ vi.mock('../api/conversation', () => ({
   },
 }));
 
+// The pending permission-gate listing `refreshPending()` re-reads on every
+// connect (`api/policies.ts`) — the same network edge, mocked the same way.
+const pendingMock = vi.fn();
+vi.mock('../api/policies', () => ({
+  policies: {
+    pending: () => pendingMock(),
+    respond: vi.fn(),
+  },
+}));
+
 import { ConfigType } from '@chalie/shared';
 
 /** A minimal but well-formed ConversationTurnBlock for the mocked thread() calls. */
@@ -124,6 +134,8 @@ async function freshSession() {
 beforeEach(() => {
   sendMock.mockReset();
   threadMock.mockReset();
+  pendingMock.mockReset();
+  pendingMock.mockResolvedValue([]);
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true } as Response));
   document.body.innerHTML = '';
 });
@@ -389,6 +401,41 @@ describe('requestStop — DELETE only fires for a confirmed in-flight turn', () 
 });
 
 describe('reconnect reconcile', () => {
+  it('onConnect re-reads the pending permission gates, so a gate still open across a reload or a dropped socket gets its card back', async () => {
+    const { session } = await freshSession();
+    const { usePermissionsStore } = await import('./permissions');
+    const permissions = usePermissionsStore();
+    pendingMock.mockResolvedValue([
+      {
+        request_id: 'gate-1',
+        action_id: 'pim',
+        summary: 'Read the inbox',
+        origin: { type: ConfigType.USER, turn_id: 7, forked: true },
+      },
+    ]);
+
+    session.init();
+    expect(permissions.queue).toEqual([]);
+    wsCallbacks.onConnect();
+    await new Promise((resolve) => setTimeout(resolve, 0)); // flush pending() -> enqueue
+
+    expect(pendingMock).toHaveBeenCalledTimes(1);
+    expect(permissions.queue).toEqual([
+      {
+        request_id: 'gate-1',
+        action_id: 'pim',
+        summary: 'Read the inbox',
+        origin: { type: 'user', turn_id: 7, forked: true },
+      },
+    ]);
+
+    // A second connect (reconnect) re-reads and dedupes — the same gate is not queued twice.
+    wsCallbacks.onConnect();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(pendingMock).toHaveBeenCalledTimes(2);
+    expect(permissions.queue.map((r) => r.request_id)).toEqual(['gate-1']);
+  });
+
   it('onDisconnect snapshots every in-flight turn (rendered AND live-only) into _offlineWorking, then clears all visual working state', async () => {
     const { session, turnDom } = await freshSession();
     session.init();

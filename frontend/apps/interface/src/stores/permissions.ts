@@ -1,24 +1,43 @@
 /**
- * Permissions store — permission_request WS push events → user-review queue.
+ * Permissions store — the user-review queue of pending permission gates.
  *
- * The session store routes every WS `permission_request` frame here via
- * `enqueue(data)`. PermissionStack.vue renders the queue and calls `respond()`
- * when the user taps Allow or Deny.
+ * Two feeds, one queue: the drift dispatcher routes every WS
+ * `permission_request` frame here via `enqueue(data)` and every
+ * `permission_resolved` frame via `remove(id)`; the session store calls
+ * `refreshPending()` on every WS connect so a reload or a dropped socket
+ * restores the cards the frames would have painted and drops the ones whose
+ * resolution was missed (the backend thread keeps waiting on the gate
+ * regardless — the frame is only the visual trigger).
+ * `enqueue` dedupes on `request_id`, so the live frame and the REST listing
+ * overlapping is harmless. PermissionStack.vue renders the queue and calls
+ * `respond()` when the user taps Allow or Deny.
  */
 import { defineStore } from 'pinia';
 import type { WsPushEvent } from '@chalie/shared';
 import { policies } from '../api';
+import type { PendingPermission, PermissionOrigin } from '../api/policies';
 
-/** Shape of a single permission_request WS frame. */
+export type { PermissionOrigin } from '../api/policies';
+
+/** One queued card — the `permission_request` frame / pending listing item as kept here. */
 export interface PermissionRequest {
   /** Opaque ID; resolves the gate on /api/policies/respond. */
   request_id: string;
-  /** Action/capability key, e.g. "email.send". */
+  /** Permission key the policy gated, e.g. "pim" or "email.send". */
   action_id: string;
-  description?: string;
-  skill?: string;
-  /** Channel context (e.g. "scheduled", "user"). */
-  channel?: string;
+  /** The model's one-line summary of the gated action; empty when the backend sent none. */
+  summary: string;
+  /** The turn the gate belongs to — decides the lane the card renders in. Null
+   *  only for a frame that arrived without one (routed to the spine stack). */
+  origin: PermissionOrigin | null;
+}
+
+/** The `origin` object as sent, or null when absent/malformed — never a guessed one. */
+function readOrigin(raw: unknown): PermissionOrigin | null {
+  if (raw == null || typeof raw !== 'object') return null;
+  const o = raw as Partial<PermissionOrigin>;
+  if (typeof o.type !== 'string' || typeof o.turn_id !== 'number') return null;
+  return { type: o.type, turn_id: o.turn_id, forked: o.forked === true };
 }
 
 export const usePermissionsStore = defineStore('permissions', {
@@ -28,11 +47,12 @@ export const usePermissionsStore = defineStore('permissions', {
 
   actions: {
     /**
-     * Enqueue a `permission_request` for user review. Silently drops frames
-     * missing `request_id`/`action_id` or already queued.
+     * Enqueue a pending gate for user review — from a live `permission_request`
+     * frame or a `GET /api/policies/pending` item (same fields). Silently drops
+     * entries missing `request_id`/`action_id` or already queued.
      */
-    enqueue(data: WsPushEvent): void {
-      const payload = data as unknown as PermissionRequest;
+    enqueue(data: WsPushEvent | PendingPermission): void {
+      const payload = data as Partial<PendingPermission>;
       if (!payload.request_id || !payload.action_id) return;
 
       if (this.queue.some((r) => r.request_id === payload.request_id)) return;
@@ -40,22 +60,57 @@ export const usePermissionsStore = defineStore('permissions', {
       this.queue.push({
         request_id: payload.request_id,
         action_id: payload.action_id,
-        description: payload.description,
-        skill: payload.skill,
-        channel: payload.channel,
+        summary: typeof payload.summary === 'string' ? payload.summary : '',
+        origin: readOrigin(payload.origin),
       });
     },
 
-    /** Optimistic removal: dismiss the card before the network round-trip. */
-    async respond(requestId: string, approved: boolean): Promise<void> {
+    /** Drop a card — the gate was answered, cancelled, or failed elsewhere (a
+     *  `permission_resolved` frame, or another tab's answer). No-op if absent. */
+    remove(requestId: string): void {
       this.queue = this.queue.filter((r) => r.request_id !== requestId);
+    },
+
+    /**
+     * Reconcile the queue with the pending gates over REST — called on every
+     * WS connect (initial load and reconnect) and after a failed `respond`.
+     * A card queued before the fetch that the listing no longer has is dropped
+     * (its `permission_resolved` frame was missed while the socket was down);
+     * a frame that arrives while the fetch is in flight is not in that
+     * snapshot, so it is never pruned; the listing's gates are enqueued.
+     * Best-effort: a failed fetch leaves the queue as it is; the next connect
+     * retries.
+     */
+    async refreshPending(): Promise<void> {
+      const queuedBefore = new Set(this.queue.map((r) => r.request_id));
+      let pending: PendingPermission[];
+      try {
+        pending = await policies.pending();
+      } catch (err) {
+        console.warn('[permissions] pending gates fetch failed:', err);
+        return;
+      }
+      const listed = new Set(pending.map((item) => item.request_id));
+      this.queue = this.queue.filter(
+        (r) => listed.has(r.request_id) || !queuedBefore.has(r.request_id),
+      );
+      for (const item of pending) this.enqueue(item);
+    },
+
+    /**
+     * Optimistic removal: dismiss the card before the network round-trip. If
+     * the POST fails the gate is still parked on the backend, so the listing is
+     * re-read to bring the card back — it only returns gates that are still
+     * open, so one answered elsewhere in the meantime stays gone.
+     */
+    async respond(requestId: string, approved: boolean): Promise<void> {
+      this.remove(requestId);
 
       try {
         await policies.respond({ request_id: requestId, approved });
       } catch (err) {
-        // Don't re-surface the card — backend has a 1-hour safety net and the
-        // user already decided.
         console.warn('[permissions] respond failed:', err);
+        void this.refreshPending();
       }
     },
   },

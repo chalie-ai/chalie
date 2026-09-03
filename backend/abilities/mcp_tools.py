@@ -106,11 +106,11 @@ class McpToolsAbility(Ability):
             for server in servers:
                 server_info: dict[str, object] = {
                     "name": server["name"],
-                    "status": server["status"],
+                    "connected": server["connected"],
                 }
 
-                # Only include tools for enabled + online servers
-                if server.get("enabled") and server["status"] == "online":
+                # Only include tools for enabled + connected servers
+                if server.get("enabled") and server["connected"]:
                     server_id = cast(str, server["id"])
                     tools = mcp_service.get_server_tools(server_id)
                     tool_rows = [
@@ -147,11 +147,11 @@ class McpToolsAbility(Ability):
             activated = []
             not_found = []
 
-            # Get all online MCP tool names for validation
-            online_tools = mcp_service.get_online_mcp_tool_names()
+            # Get all connected MCP tool names for validation
+            connected_tools = mcp_service.get_connected_mcp_tool_names()
 
             for tool_name in tool_names:
-                if tool_name in online_tools:
+                if tool_name in connected_tools:
                     # Append to active_tools
                     self._append_active([tool_name])
 
@@ -162,7 +162,7 @@ class McpToolsAbility(Ability):
                     activated.append({"name": tool_name, "summary": summary})
                 else:
                     not_found.append(
-                        f"'{tool_name}' is not an online MCP tool. "
+                        f"'{tool_name}' is not a connected MCP tool. "
                         "Use action 'list' to see the exact tool names."
                     )
 

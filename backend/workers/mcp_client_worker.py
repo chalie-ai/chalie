@@ -7,7 +7,8 @@ Registered in run.py via:
 
 On each cycle, McpClientService.run_heartbeat() iterates every enabled server,
 connects via the MCP streamable-HTTP transport, syncs the tool list into
-data/mcp_tools.sqlite, and flips the server's status to online/offline.
+data/mcp_tools.sqlite, and records each server's connected flag in process
+memory.
 
 Errors are caught per-server inside run_heartbeat() — one bad server never
 blocks the others.

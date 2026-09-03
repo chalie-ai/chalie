@@ -18,13 +18,11 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, cast
 
-from configs.enums.channels import Channel
 from models.transcript import Transcript
+from models.turn_execution import TurnExecution
 from models.turn_signal import TurnSignal
 
 if TYPE_CHECKING:
-    from configs.channels.geo_pattern import GeoConfig
-    from configs.channels.pattern import PatternConfig
     from controllers.message_processor import MessageProcessor
 
 logger = logging.getLogger(__name__)
@@ -55,35 +53,74 @@ class TranscriptService:
         ``settle0`` lookup can flip under a MAIN turn that settles more than
         one row before its terminal step; the fixed flag can't). Feeds
         ``PromptService``'s history assembly. ``[]`` when the config
-        suppresses history."""
+        suppresses history. BOTH views exclude ``role='memory'`` rows
+        (memory-step inputs — turn plumbing, not conversation) by name. A
+        PRIOR turn that never settled is NOT dropped: a crash leaves its input
+        row behind and the rendered thread still shows it, so dropping it here
+        would hide from the model a message the user is looking at — the
+        silent context hole this used to open. It has no settle0 to floor on
+        and so reads whole, minus whatever
+        :meth:`TurnExecution.cancelled_orphan_cutoff` trims, which is the same
+        rule the rendered thread trims itself with: the two views agree by
+        construction rather than by coincidence. Only the turn IN FLIGHT is
+        skipped while unsettled, and it is named by its own id rather than
+        inferred from a missing settle0 — the conflation that used to swallow
+        crashed turns with it. A FORK always
+        reads ``self.mp.channel`` — a fork IS the thread, its view is its own
+        turn's rows; the split-channel read (``read_channel``, e.g.
+        DiscoveryConfig) applies to the MAIN cross-turn view only. Turn ids
+        are per-channel, so resolving ``read_channel`` on a FORK would cross
+        namespaces and return another channel's unrelated turn.
+
+        Finally, a config declaring ``history_limit`` keeps only the newest N
+        rows of whichever view it is on (the memory step pins 10); ``None``
+        leaves the view uncapped, which is every conversation channel."""
         if self.mp.config.suppress_history:
             return []
-        channel = self.mp.config.read_channel or self.mp.channel
         watermark = self.mp.compaction_service.watermark()
+        rows: list[Transcript] = []
         if self.mp._forked:
             ceiling = self.mp.uid if self.mp.uid is not None else _NO_CEILING
-            return (
-                Transcript.filter("channel", channel)
+            rows = (
+                Transcript.filter("channel", self.mp.channel)
                 .filter("turn_id", self.mp.turn_id)
                 .filter("id", watermark, ">")
                 .filter("id", ceiling, "<")
+                .filter("role", "memory", "!=")
                 .order_by("id ASC")
                 .get()
             )
-        by_turn: dict[int, list[Transcript]] = {}
-        for row in (
-            Transcript.filter("channel", channel)
-            .filter("turn_id", watermark, ">")
-            .order_by("id ASC")
-            .get()
-        ):
-            by_turn.setdefault(cast("int", row.to_dict()["turn_id"]), []).append(row)
-        rows: list[Transcript] = []
-        for tid, turn_rows in by_turn.items():
-            floor = Transcript.settle0(channel, tid)
-            if floor is not None:
-                rows.extend(r for r in turn_rows if cast("int", r.id) <= floor)
-        return rows
+        else:
+            channel = self.mp.config.read_channel or self.mp.channel
+            # The turn in flight, named by identity rather than inferred from a
+            # missing settle0. Only when this view reads the channel the turn
+            # actually writes to: turn ids are per-channel, so on a split read
+            # (``read_channel``) the same number is a stranger's turn — and the
+            # current turn writes no rows there to exclude anyway.
+            in_flight = self.mp.turn_id if channel == self.mp.channel else None
+            by_turn: dict[int, list[Transcript]] = {}
+            for row in (
+                Transcript.filter("channel", channel)
+                .filter("turn_id", watermark, ">")
+                .filter("role", "memory", "!=")
+                .order_by("id ASC")
+                .get()
+            ):
+                by_turn.setdefault(cast("int", row.to_dict()["turn_id"]), []).append(row)
+            for tid, turn_rows in by_turn.items():
+                floor = Transcript.settle0(channel, tid)
+                if floor is not None:
+                    rows.extend(r for r in turn_rows if cast("int", r.id) <= floor)
+                elif tid != in_flight:
+                    # Never settled and not the turn in flight: a real exchange
+                    # the user can still see, so it reads whole — minus the
+                    # trailing input rows a cancel discarded, on the same rule
+                    # the rendered thread trims itself with.
+                    rows.extend(turn_rows[:TurnExecution.cancelled_orphan_cutoff(
+                        [r.role for r in turn_rows], TurnExecution.latest(channel, tid),
+                    )])
+        limit = self.mp.config.history_limit
+        return rows[-limit:] if limit is not None and limit > 0 else rows
 
     def turn_rows(self) -> list[Transcript]:
         """Every row of this turn, oldest-first, unfloored — the FORK/act-
@@ -113,46 +150,6 @@ class TranscriptService:
         if self.mp.uid is not None:
             q = q.filter("id", self.mp.uid, ">")
         return q.get()
-
-    def window(self) -> list[Transcript]:
-        """The pattern channel's id-bounded window over the ``user`` channel's
-        content rows (ported from ``Transcript.window(["user"], after_id,
-        before_id, require_content=True)`` — the pre-rewrite pattern-recognition
-        read). Bounds come off this turn's ``PatternConfig`` (``_window_start``
-        exclusive, ``_window_end`` inclusive); empty-content rows are excluded so
-        the model only ever sees real utterances. Zero-param (§2.4): the id
-        bounds are config fields, reachable off ``self.mp.config``."""
-        config = cast("PatternConfig", self.mp.config)
-        return (
-            Transcript.filter("channel", Channel.USER.value)
-            .filter("id", config._window_start, ">")
-            .filter("id", config._window_end, "<=")
-            .filter("content", None, "IS NOT")
-            .filter("content", "", "!=")
-            .order_by("id ASC")
-            .get()
-        )
-
-    def location_window(self) -> list[Transcript]:
-        """The geo-pattern channel's id-bounded window over the ``user``
-        channel's location-tagged content rows (ported from
-        ``Transcript.window(["user"], after_id, before_id, require_location=True,
-        require_content=True)`` — the pre-rewrite geo read). Bounds come off this
-        turn's ``GeoConfig`` (``_window_start`` exclusive, ``_window_end``
-        inclusive), same semantics as :meth:`window`; only rows carrying a
-        latitude/longitude and real content survive. Zero-param (§2.4)."""
-        config = cast("GeoConfig", self.mp.config)
-        return (
-            Transcript.filter("channel", Channel.USER.value)
-            .filter("id", config._window_start, ">")
-            .filter("id", config._window_end, "<=")
-            .filter("location_lat", None, "IS NOT")
-            .filter("location_lon", None, "IS NOT")
-            .filter("content", None, "IS NOT")
-            .filter("content", "", "!=")
-            .order_by("id ASC")
-            .get()
-        )
 
     def deliberation_score(self) -> float:
         """This turn's persisted deliberation score (§6.12) off its anchoring
@@ -201,6 +198,17 @@ class TranscriptService:
         self.mp.push_websocket(TurnSignal.updated(self.mp))
         return row_id
 
+    def append_handover(self, content: str) -> int:
+        """Write the pre-compaction hand-over row (role="compaction", settled=0).
+
+        ``role="compaction"`` is deliberate: it matches no ``role='user'`` query —
+        ``Transcript.last_user_message_at()`` gates idle cognition with
+        ``SELECT MAX(created_at) FROM transcript WHERE role = 'user'``
+        (no channel filter), and a hand-over written under an input role would
+        fool it.
+        """
+        return self._append(content, role="compaction", settled=0)
+
     def set_deliberation_score(self, score: float) -> None:
         """Persist ``score`` on this turn's anchoring input row — the value
         that drives thinking-level selection (§6.12). A no-op before that row
@@ -247,12 +255,11 @@ class TranscriptService:
         return cast("int", row.id)
 
     def _location(self) -> dict[str, object]:
-        """Live location for a new row, gated to channels whose source profile
-        permits backfill (user-activity channels) — muted/background channels
-        store NULL so their rows never corrupt the geo signal. ``{}`` when
-        gated off or when the lookup fails."""
-        from services.source_profiles import profile_for  # noqa: PLC0415
-        if not profile_for(self.mp.channel).location_backfill:
+        """Live location for a new row — user-channel turns only. Background
+        channels store NULL so their rows never corrupt the geo signal. ``{}``
+        when gated off or when the lookup fails."""
+        from configs.enums.channels import Channel  # noqa: PLC0415
+        if self.mp.channel != Channel.USER.value:
             return {}
         from services.locale_service import get_location  # noqa: PLC0415
         try:

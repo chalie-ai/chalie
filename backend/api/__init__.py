@@ -112,7 +112,7 @@ def _configure_app(app: Flask) -> None:
     """Apply Flask config, proxy middleware, CORS, and baseline security headers to a new app instance."""
     app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
     # Emit every registered DTO in the OpenAPI definitions; nested-envelope
-    # shapes (a list of associations inside a result DTO) otherwise dangle.
+    # shapes (a list DTO nested inside a result DTO) otherwise dangle.
     app.config['RESTX_INCLUDE_ALL_MODELS'] = True
 
     from werkzeug.middleware.proxy_fix import ProxyFix

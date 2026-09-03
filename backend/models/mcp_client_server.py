@@ -25,8 +25,8 @@ class McpClientServer(Model):
     relationship."""
 
     __columns__: ClassVar[tuple[str, ...]] = (
-        "id", "name", "host", "headers", "enabled", "status",
-        "last_pinged_at", "created_at", "updated_at",
+        "id", "name", "host", "headers", "enabled",
+        "created_at", "updated_at",
     )
 
     @classmethod
@@ -40,8 +40,6 @@ class McpClientServer(Model):
     host: str
     headers: str
     enabled: int
-    status: str
-    last_pinged_at: str | None
     created_at: str
     updated_at: str
 

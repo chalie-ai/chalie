@@ -31,7 +31,6 @@ class StubProcessorConfig(ProcessorConfig):
         skip_transcript: bool,
         skip_input_row: bool,
         suppress_history: bool,
-        broadcast_to: str | None,
         memory_seed: bool,
     ) -> None:
         super().__init__(
@@ -42,7 +41,6 @@ class StubProcessorConfig(ProcessorConfig):
             skip_transcript=skip_transcript,
             skip_input_row=skip_input_row,
             suppress_history=suppress_history,
-            broadcast_to=broadcast_to,
             memory_seed=memory_seed,
         )
 
@@ -62,7 +60,6 @@ def make_stub_config(
         skip_transcript=False,
         skip_input_row=False,
         suppress_history=False,
-        broadcast_to=None,
         memory_seed=False,
     )
 
@@ -188,24 +185,3 @@ def force_vision_provider(db: sqlite3.Connection, host: str = "http://127.0.0.1:
     db.commit()
     svc.set_vision_provider(pid)
     return pid
-
-
-# ─── providers ───────────────────────────────────────────────────────
-# Column order matches: SELECT id, name, platform, model, host, api_key,
-#   dimensions, timeout, supports_vision
-
-def make_provider_row(
-    provider_id: int = 1,
-    name: str = "test-provider",
-    platform: str = "ollama",
-    model: str = "gemma4:31b",
-    host: str = "http://localhost:11434",
-    api_key: str | None = None,
-    dimensions: int = 768,
-    timeout: int = 30,
-    supports_vision: int = 0,
-) -> tuple[object, ...]:
-    return (
-        provider_id, name, platform, model, host,
-        api_key, dimensions, timeout, supports_vision,
-    )

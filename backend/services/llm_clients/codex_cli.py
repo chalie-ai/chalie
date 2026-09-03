@@ -16,7 +16,7 @@ fall back to matching the message prose (``is_token_limit_message``) to raise
 propagates as a normal provider error and the MessageProcessor retries.
 Confirmed against codex-cli 0.143.0 (JSONL stdout, ``-o`` output file).
 
-Depends on: services.provider_api (contract), services.llm_service (estimate_tokens).
+Depends on: services.provider_api (contract).
 Consumed by: services.llm_clients.factory (platform dispatch).
 """
 
@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import ClassVar, Optional, cast
 
 from contracts.provider_client import ProviderClient
-from services.llm_clients.context_window import default_window_for_model
+from services.llm_clients.context_window import DEFAULT_WINDOW
 from services.llm_clients.thinking_map import CODEX_REASONING_EFFORTS
 from exceptions import (
     ContextLimit,
@@ -158,14 +158,16 @@ def _flatten_prompt(system: str, messages: list[dict[str, object]]) -> str:
 # ── JSONL parser ─────────────────────────────────────────────────────────────
 
 
-def _parse_jsonl(stdout: str) -> tuple[str, dict[str, Optional[int]], list[str]]:
+def _parse_jsonl(stdout: str) -> tuple[str, dict[str, Optional[int]], list[str], Optional[str]]:
     """Parse codex JSONL stdout.
 
-    Returns (agent_text, usage, errors) where:
+    Returns (agent_text, usage, errors, thinking_block) where:
       - agent_text: concatenated agent_message text (or empty string)
       - usage: dict with keys tokens_input, tokens_output, tokens_thinking,
         tokens_cache_read (values may be None)
       - errors: list of error messages found (type==error or turn.failed)
+      - thinking_block: concatenated reasoning text from reasoning items
+        (or None when absent/empty)
     """
     agent_text = ""
     usage: dict[str, Optional[int]] = {
@@ -175,6 +177,7 @@ def _parse_jsonl(stdout: str) -> tuple[str, dict[str, Optional[int]], list[str]]
         "tokens_cache_read": None,
     }
     errors: list[str] = []
+    thinking_parts: list[str] = []
 
     for line in stdout.splitlines():
         line = line.strip()
@@ -197,6 +200,10 @@ def _parse_jsonl(stdout: str) -> tuple[str, dict[str, Optional[int]], list[str]]
                 text = item.get("text", "")
                 if isinstance(text, str) and text:
                     agent_text += text
+            elif isinstance(item, dict) and item.get("type") == "reasoning":
+                text = item.get("text", "")
+                if isinstance(text, str) and text:
+                    thinking_parts.append(text)
 
         # Turn completion → token usage (usage sits at the top level of the event)
         elif obj_type == "turn.completed":
@@ -219,7 +226,8 @@ def _parse_jsonl(stdout: str) -> tuple[str, dict[str, Optional[int]], list[str]]
                 if isinstance(msg, str) and msg:
                     errors.append(msg)
 
-    return agent_text, usage, errors
+    thinking_block = '\n'.join(thinking_parts) or None
+    return agent_text, usage, errors, thinking_block
 
 
 # ── Client ───────────────────────────────────────────────────────────────────
@@ -227,6 +235,21 @@ def _parse_jsonl(stdout: str) -> tuple[str, dict[str, Optional[int]], list[str]]
 
 class CodexCliClient(ProviderClient):
     CONTENT_FIELD_LABEL: ClassVar[str] = "item.completed.text"
+
+    PLATFORM: ClassVar[str] = 'codex_cli'
+    LABEL: ClassVar[str] = 'Codex CLI (OpenAI)'
+    # A local binary, already signed in: nothing for the user to supply.
+    DEFAULT_BASE_URL: ClassVar[str] = ''
+    REQUIRES_KEY: ClassVar[bool] = False
+    REQUIRES_HOST: ClassVar[bool] = False
+
+    @classmethod
+    def fetch_models(
+        cls, host: str, api_key: str,
+    ) -> tuple[list[dict[str, str | None]] | None, str | None]:
+        """Asks the local binary — no network call, no credential."""
+        from services.provider_probe import fetch_codex_models  # noqa: PLC0415
+        return fetch_codex_models()
 
     def __init__(self, config: dict[str, object]) -> None:
         self._config = config
@@ -309,7 +332,7 @@ class CodexCliClient(ProviderClient):
             )
 
         # Always parse the JSONL stream for token usage (j) and upstream errors (i).
-        jsonl_text, usage, errors = _parse_jsonl(stdout or "")
+        jsonl_text, usage, errors, thinking_block = _parse_jsonl(stdout or "")
 
         # (h) Prefer the -o output file for the agent text; fall back to JSONL.
         agent_text = ""
@@ -362,6 +385,7 @@ class CodexCliClient(ProviderClient):
             tool_calls=None,
             stop_reason='stop',
             latency_ms=latency_ms,
+            thinking_block=thinking_block,
             response_code=200,
         )
 
@@ -376,24 +400,9 @@ class CodexCliClient(ProviderClient):
         cached = codex_model_context_window(self.model)
         if cached is not None:
             return cached
-        window = default_window_for_model(self.model)
+        window = DEFAULT_WINDOW
         logger.info(
             "[CodexCliClient] No cached context window for model=%s — using the "
-            "family default %d", self.model, window,
+            "DEFAULT_WINDOW %d", self.model, window,
         )
         return window
-
-    def estimate_request_tokens(self, dto: ProviderApiRequest) -> int:
-        """Estimate token cost using the same heuristic as OpenAIClient.
-
-        Adds +8000 to account for codex's large injected base-instruction
-        overhead (measured ~8.7k for a trivial prompt).
-        """
-        from services.llm_service import estimate_tokens  # noqa: PLC0415
-        parts: list[str] = []
-        if dto.system:
-            parts.append(dto.system)
-        for msg in dto.messages:
-            parts.append(_extract_text(msg.get('content', '') or ''))
-        text = ' '.join(parts)
-        return estimate_tokens(text) + 8000

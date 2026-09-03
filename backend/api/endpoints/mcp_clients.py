@@ -130,8 +130,7 @@ class McpClients(Endpoint):
             name=cast(str, row["name"]),
             host=cast(str, row["host"]),
             enabled=cast(bool, row["enabled"]),
-            status=cast(str, row["status"]),
-            last_pinged_at=cast("datetime | None", row["last_pinged_at"]),
+            connected=cast(bool, row["connected"]),
             created_at=cast(datetime, row["created_at"]),
             updated_at=cast(datetime, row["updated_at"]),
         )

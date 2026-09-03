@@ -8,7 +8,7 @@
  * Boundaries mocked (network + DOM-effect modules, per the project's
  * established convention — see stores/session.spec.ts's "only WS/network is
  * mocked" note): api/conversation, utils/toast, utils/liveActTrail,
- * utils/turnDom, and the four Pinia stores the router touches. Because
+ * utils/turnDom, and the three Pinia stores the router touches. Because
  * `utils/cancelReconcile.ts` imports the SAME `./liveActTrail` and
  * `./turnDom` modules (vi.mock is keyed by resolved path, not import
  * specifier), the cancelled branch's real `reconcileCancelledTurn` runs
@@ -66,14 +66,9 @@ vi.mock('./turnDom', () => ({
   findTurnType: findTurnTypeMock,
 }));
 
-const { applyDriftEventMock } = vi.hoisted(() => ({ applyDriftEventMock: vi.fn() }));
-vi.mock('../stores/tasks', () => ({
-  useTasksStore: () => ({ applyDriftEvent: applyDriftEventMock }),
-}));
-
-const { enqueueMock } = vi.hoisted(() => ({ enqueueMock: vi.fn() }));
+const { enqueueMock, removeMock } = vi.hoisted(() => ({ enqueueMock: vi.fn(), removeMock: vi.fn() }));
 vi.mock('../stores/permissions', () => ({
-  usePermissionsStore: () => ({ enqueue: enqueueMock }),
+  usePermissionsStore: () => ({ enqueue: enqueueMock, remove: removeMock }),
 }));
 
 const { recordVoiceMock } = vi.hoisted(() => ({ recordVoiceMock: vi.fn() }));
@@ -194,7 +189,7 @@ describe('dispatchDrift — turn_signal frame', () => {
   // frames alone. Without it, the SOLE releaser is the execution path and
   // `_reconcileWorking` never touches the hold, so the spine's `isSurfaceBusy`
   // gate strands forever and every later send silently queues.
-  it('status=updated releases the send\'s POST-scoped busy hold only AFTER the refetch settles — releasing sooner would let a second queued send slip through against stale state (TKT-1516)', async () => {
+  it('status=updated releases the send\'s POST-scoped busy hold only AFTER the refetch settles — releasing sooner would let a second queued send slip through against stale state', async () => {
     dispatchDrift(frame({ status: 'updated', turn_id: 11, type: 'user' }));
     expect(releasePendingSendMock).not.toHaveBeenCalled();
     await Promise.resolve();
@@ -415,7 +410,7 @@ describe('dispatchDrift — turn_execution frame', () => {
   // 'working' is the one state with an in-flight refetch — releasing the hold
   // synchronously here would reopen the spine's busy gate before that refetch
   // resolves, letting a second queued send slip through against stale
-  // (pre-refetch) state (TKT-1516). The release must wait for the refetch to
+  // (pre-refetch) state. The release must wait for the refetch to
   // settle.
   it('state=working releases the send\'s POST-scoped busy hold only AFTER the refetch settles', async () => {
     dispatchDrift(frame({ state: 'working', turn_id: 60, started_at: '2026-01-01T00:00:00Z', type: 'user' }));
@@ -440,14 +435,18 @@ describe('dispatchDrift — simple (content-free) events', () => {
     expect(enqueueMock).toHaveBeenCalled();
   });
 
-  it('subagent_start reaches the tasks store', () => {
-    dispatchDrift(frame({ type: 'subagent_start', sub_id: 's1' }));
-    expect(applyDriftEventMock).toHaveBeenCalled();
+  it('permission_resolved removes that gate\'s card from the permissions store', () => {
+    dispatchDrift(frame({ type: 'permission_resolved', request_id: 'r1' }));
+    expect(removeMock).toHaveBeenCalledWith('r1');
+  });
+
+  it('permission_resolved without a request_id touches nothing', () => {
+    dispatchDrift(frame({ type: 'permission_resolved' }));
+    expect(removeMock).not.toHaveBeenCalled();
   });
 
   it('an unknown type is a no-op — no throw, no store touched', () => {
     expect(() => dispatchDrift(frame({ type: 'something_nobody_emits' }))).not.toThrow();
     expect(enqueueMock).not.toHaveBeenCalled();
-    expect(applyDriftEventMock).not.toHaveBeenCalled();
   });
 });

@@ -39,7 +39,7 @@ import pytest
 from watchdog.observers import Observer
 from watchdog.observers.api import BaseObserver
 
-from services.file_index_service import FileIndexService
+from services.file_index_service import FileIndexService, _is_in_skip_subtree
 from services.file_mapper_service import FileMapperService
 from workers.file_index_worker import _FileIndexHandler
 
@@ -313,3 +313,50 @@ def test_reconcile_keeps_parser_owned_rows_until_the_file_is_gone(
     png.unlink()
     service.reconcile()
     assert service.search("invoice") == []
+
+
+def test_the_walk_never_descends_into_etc(scan_root: Path) -> None:
+    """/etc is pruned, so the walk never reaches the indexable files in it.
+
+    TextReader has always refused /etc, but _SKIP_SUBTREES did not list it, so
+    every reconcile walked in, offered each .txt/.py it found to the reader and
+    took a raise back — a verdict that can never change, re-earned hourly.
+
+    Asserted through _is_in_skip_subtree, which is what reconcile()'s
+    directory-pruning filter calls, rather than through should_index:
+    should_index bottoms out in os.path.getsize, so on any host lacking those
+    exact /etc files it returns False for "does not exist" and proves nothing.
+    """
+    assert _is_in_skip_subtree("/etc")
+    assert _is_in_skip_subtree("/etc/python3.13/sitecustomize.py")
+    assert _is_in_skip_subtree("/etc/X11/rgb.txt")
+    assert not _is_in_skip_subtree(str(scan_root / "notes.md"))
+
+
+def test_should_index_refuses_a_symlink_resolving_onto_a_refused_prefix(
+    scan_root: Path, index_db_path: str
+) -> None:
+    """A link sitting outside every skipped subtree, pointing into one, is refused.
+
+    /usr/lib/python3.13/sitecustomize.py is an ordinary path that no prefix
+    rule rejects, yet it points into /etc — and TextReader tests the resolved
+    path, so it refused the read while the walk kept queueing it. Pruning /etc
+    alone does not close this leg; the walk has to resolve too.
+
+    The target is /dev/null: it exists (so os.path.getsize succeeds and the
+    assertion is not vacuously true for "missing file"), it sits on a refused
+    prefix, and unlike /etc it resolves to itself on macOS as well as Linux.
+    """
+    service = FileIndexService(scan_root=str(scan_root), db_path=index_db_path)
+
+    link = scan_root / "probe.txt"
+    link.symlink_to("/dev/null")
+    assert not service.should_index(str(link))
+
+    # Targeted, not a blanket refusal of symlinks: one pointing at ordinary
+    # content is still indexed.
+    real = scan_root / "real_notes.md"
+    real.write_text("quarterly figures")
+    alias = scan_root / "alias_notes.md"
+    alias.symlink_to(real)
+    assert service.should_index(str(alias))

@@ -89,9 +89,7 @@ export type WsPushType =
   | 'task'
   | 'permission_request'
   | 'intent'
-  | 'capability_alert'
-  | 'subagent_start'
-  | 'subagent_end';
+  | 'capability_alert';
 export interface WsPushEvent {
   type: WsPushType;
   [k: string]: unknown;

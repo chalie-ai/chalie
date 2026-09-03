@@ -44,9 +44,15 @@ class FilesPreview(Action):
         mime = mimetypes.guess_type(full_path)[0] or "application/octet-stream"
         basename = os.path.basename(full_path)
 
-        return send_file(
+        # An SVG opened directly in a tab is a same-origin DOCUMENT, and its
+        # script runs. The sandbox drops it into an opaque origin, so a preview
+        # can never reach the session it is served from. Set on the Response —
+        # RESTx discards the third element of a (dict, status, headers) tuple.
+        response = send_file(
             full_path,
             mimetype=mime,
             as_attachment=False,
             download_name=basename,
         )
+        response.headers["Content-Security-Policy"] = "sandbox"
+        return response

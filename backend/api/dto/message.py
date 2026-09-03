@@ -8,6 +8,19 @@ from .chip import Chip
 from .segment import Segment
 
 
+class Thinking(DTO):
+    """Chain-of-thought traces stored for a transcript row.
+
+    Present only when the row has one or more ``transcript_thinking`` rows;
+    absent / ``None`` otherwise. Traces are in row order; ``duration_ms`` and
+    ``tokens`` are the sums across all traces anchored to that row.
+    """
+
+    traces: list[str]
+    duration_ms: int
+    tokens: int
+
+
 class Message(DTO):
     """One transcript row.
 
@@ -27,7 +40,10 @@ class Message(DTO):
     else. ``voice_state`` carries that row's speech pre-synthesis outcome
     (``ready`` once the audio is stored, ``failed`` once the pipeline gave up);
     ``None`` on a settled row means no outcome is recorded yet, so the first
-    speaker press starts the pipeline through the playback route.
+    speaker press starts the pipeline through the playback route. ``thinking``
+    carries that row's stored chain-of-thought traces (traces in row order,
+    summed ``duration_ms`` and ``tokens``); absent on rows with no thinking
+    rows.
     """
 
     id: str
@@ -42,3 +58,4 @@ class Message(DTO):
     thread_message: bool | None = None
     settled: bool | None = None
     voice_state: str | None = None
+    thinking: Thinking | None = None

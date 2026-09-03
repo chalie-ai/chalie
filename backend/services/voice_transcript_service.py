@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import io
 import logging
-import os
 import re
 import threading
 from typing import TYPE_CHECKING, cast
@@ -63,6 +62,9 @@ class VoiceTranscriptService:
 
     MAX_SYNTHESIS_ATTEMPTS = 3
     SILENCE_PEAK_THRESHOLD = 0.001
+    # An encode that drops more than a tenth of the speech is a truncation,
+    # not a rounding difference: MP3 pads frames, it does not shorten them.
+    MIN_ENCODED_DURATION_RATIO = 0.9
 
     # Kokoro ONNX hard limit is 510 phonemes (~1.5 chars/phoneme → 340 chars).
     # 320 gives headroom for phoneme-heavy words.
@@ -150,22 +152,16 @@ class VoiceTranscriptService:
         the longest reply ever spoken — and holds it for the process lifetime.
         Measured over an alternating short/long synthesis workload: +816 MiB of
         held scratch with the arena on, and none with it off.
-
-        Provider selection mirrors ``kokoro_onnx``'s own (CPU unless
-        ``ONNX_PROVIDER`` overrides it) so this changes memory behaviour only,
-        never which execution provider runs.
         """
         import onnxruntime as ort
 
-        from services.onnx_session import CPU_PROVIDER, build_session
+        from services.onnx_session import build_session
 
         opts = ort.SessionOptions()
         opts.enable_cpu_mem_arena = False
-        provider = os.getenv("ONNX_PROVIDER")
         return build_session(
             cls.KOKORO_MODEL,
             sess_options=opts,
-            providers=[provider] if provider else [CPU_PROVIDER],
             log_prefix="[VoiceTranscript]",
         )
 
@@ -302,23 +298,62 @@ class VoiceTranscriptService:
     # ── Synthesis ────────────────────────────────────────────────────────────
 
     @staticmethod
-    def _audio_to_wav_bytes(samples: object, sample_rate: int) -> bytes:
-        """Encode a float32 sample array (or list thereof) to a WAV blob."""
+    def _audio_to_mp3_bytes(samples: object, sample_rate: int) -> bytes:
+        """Encode a float32 sample array (or list thereof) to an MP3 blob.
+
+        MP3 rather than PCM WAV because these files are kept for the life of
+        the transcript row: at Kokoro's 24 kHz mono, PCM_16 costs a flat
+        384 kbps where MP3 holds the same speech at roughly a sixth of that.
+        MPEG-2 Layer III is the widest-support codec available — every browser
+        that implements ``decodeAudioData`` decodes it, which Ogg/Opus cannot
+        claim.
+        """
         import soundfile as sf
 
         buf = io.BytesIO()
-        sf.write(buf, samples, sample_rate, format="WAV", subtype="PCM_16")
+        sf.write(buf, samples, sample_rate, format="MP3", subtype="MPEG_LAYER_III")
         buf.seek(0)
         return buf.read()
+
+    @classmethod
+    def _encoded_audio_survived(cls, audio_bytes: bytes, raw_duration: float) -> bool:
+        """Decode the encoded blob and confirm the speech is still in it.
+
+        The peak check upstream inspects the samples handed *to* the encoder;
+        this one inspects what came *out*. A lossy encoder can emit a blob no
+        decoder accepts, or one truncated to a fraction of its input, and
+        ``write_bytes`` reports success for both.
+
+        The frames are decoded rather than read off the header on purpose: an
+        MP3's Xing header goes on declaring the full duration after the stream
+        behind it has been cut off, so header metadata calls a truncated file
+        intact.
+        """
+        import soundfile as sf
+
+        try:
+            decoded, rate = sf.read(io.BytesIO(audio_bytes), dtype="float32")
+        except Exception:
+            logger.exception("[VoiceTranscript] encoded audio does not decode")
+            return False
+
+        encoded_duration = len(decoded) / rate if rate else 0.0
+        if encoded_duration < raw_duration * cls.MIN_ENCODED_DURATION_RATIO:
+            logger.error(
+                "[VoiceTranscript] encoded audio is truncated: %.2fs decoded from %.2fs of speech",
+                encoded_duration, raw_duration,
+            )
+            return False
+        return True
 
     def synthesize(self, text: str) -> tuple[object, int, bytes]:
         """Synthesize *text* into speech.
 
         Returns:
-            A ``(samples, sample_rate, wav_bytes)`` tuple:
+            A ``(samples, sample_rate, audio_bytes)`` tuple:
             * ``samples`` — raw float32 numpy array
             * ``sample_rate`` — Hz (typically 24000 for Kokoro)
-            * ``wav_bytes`` — PCM_16 WAV blob ready to stream
+            * ``audio_bytes`` — MP3 blob ready to stream
 
         Raises:
             ValueError: If *text* is empty after TTS preprocessing.
@@ -376,8 +411,8 @@ class VoiceTranscriptService:
                 raise RuntimeError("Kokoro returned no sample rate")
             sr = rate
 
-        wav_bytes = self._audio_to_wav_bytes(samples, sr)
-        return samples, sr, wav_bytes
+        audio_bytes = self._audio_to_mp3_bytes(samples, sr)
+        return samples, sr, audio_bytes
 
     def synthesize_settled(self, transcript_id: int) -> None:
         """Synthesize speech for one settled transcript row, exactly once to a
@@ -411,18 +446,21 @@ class VoiceTranscriptService:
                 return
             for attempt in range(1, cls.MAX_SYNTHESIS_ATTEMPTS + 1):
                 try:
-                    samples, _sr, wav_bytes = self.synthesize(text)
+                    samples, sample_rate, audio_bytes = self.synthesize(text)
                     samples_arr = cast(
                         "np.ndarray[tuple[int], np.dtype[np.float32]]", samples,
                     )
                     if (
                         len(samples_arr) > 0
                         and float(np.max(np.abs(samples_arr))) > cls.SILENCE_PEAK_THRESHOLD
+                        and self._encoded_audio_survived(
+                            audio_bytes, len(samples_arr) / sample_rate,
+                        )
                     ):
-                        file_name = f"{transcript_id}.wav"
+                        file_name = f"{transcript_id}.mp3"
                         path = FileMapperService.get_voice_path(file_name)
                         path.parent.mkdir(parents=True, exist_ok=True)
-                        path.write_bytes(wav_bytes)
+                        path.write_bytes(audio_bytes)
                         VoiceTranscript(
                             transcript_id=transcript_id, file_path=file_name,
                         ).record()

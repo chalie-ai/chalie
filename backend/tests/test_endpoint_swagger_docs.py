@@ -52,7 +52,6 @@ _MIGRATED_PREFIXES = (
     "/api/skills",
     "/api/policies",
     "/api/wrappers",
-    "/api/subagents",
     "/api/mcp-clients",
     "/api/providers",
     "/api/scheduler",
@@ -234,16 +233,6 @@ class TestDeclaredExtrasDocumentRealHandlerStatuses:
 
 
 class TestNeverEmitted404IsNotDocumented:
-    def test_subagents_ack_style_delete_documents_no_404(self, swagger_spec: dict[str, object]) -> None:
-        # SubagentsEndpoint.delete is an ack-style cancel: an unknown id is a
-        # benign race answered with a 200 result body, never 404 — so its
-        # DocumentedResponse(not_found=False) must drop the structural 404 doc
-        # while the real branches stay documented.
-        responses = _at(swagger_spec, "paths", "/api/subagents/{id}", "delete", "responses")
-        assert "404" not in responses
-        assert _ref(responses, "200", "schema") == "#/definitions/SubagentStopResultEnvelope"
-        assert _ref(responses, "401", "schema") == "#/definitions/AuthError"
-
     def test_providers_idempotent_delete_documents_no_404(self, swagger_spec: dict[str, object]) -> None:
         # Providers.delete is idempotent: 204 even when the row is already
         # gone; its only real error branch beyond the structural set is the
@@ -302,3 +291,30 @@ class TestEveryRefInMigratedNamespacesResolves:
                     unresolved.append(f"{path}: dangling ref {ref}")
 
         assert not unresolved, "\n".join(unresolved)
+
+
+class TestPendingPermissionRouteDocumentsListingEnvelope:
+    """``GET /api/policies/pending`` (parked ``ask`` gates) documents the listing
+    envelope of the permission-request DTO, with the nested origin model
+    registered as its own resolvable definition, and no 404 — an empty listing
+    is the normal answer, never a miss."""
+
+    def test_get_pending_documents_listing_envelope_with_nested_origin(
+        self, swagger_spec: dict[str, object]
+    ) -> None:
+        get_op = _at(swagger_spec, "paths", "/api/policies/pending", "get")
+        assert _ref(get_op, "responses", "200", "schema") == (
+            "#/definitions/PermissionRequestResponseListingEnvelope"
+        )
+        assert "404" not in _at(get_op, "responses")
+
+        envelope = _at(swagger_spec, "definitions", "PermissionRequestResponseListingEnvelope")
+        assert set(_strs(envelope, "required")) == {"success", "result", "pagination"}
+        assert _ref(envelope, "properties", "result", "items") == "#/definitions/PermissionRequestResponse"
+
+        item = _at(swagger_spec, "definitions", "PermissionRequestResponse")
+        assert set(_strs(item, "required")) == {"request_id", "action_id", "summary", "origin"}
+        assert _ref(item, "properties", "origin") == "#/definitions/PermissionOriginResponse"
+
+        origin = _at(swagger_spec, "definitions", "PermissionOriginResponse")
+        assert set(_strs(origin, "required")) == {"type", "turn_id", "forked"}

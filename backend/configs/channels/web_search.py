@@ -13,8 +13,9 @@ channel so the delegate can render its own act-trail across ACT iterations.
 Without that row the turn uid is never assigned and ``_render_act_trail``
 returns "" — the loop would re-search blind to its own results with no way to
 converge. ``skip_input_row`` (HiddenInput) is
-deliberately *not* set: it is the async-return mechanism
-(``AsyncDelegateRunner._deliver`` / ``with_hidden_input``), not a delegate property.
+deliberately *not* set: it is the hidden-input re-entry mechanism
+(``with_hidden_input``, e.g. the scheduler's pre-written rows), not a delegate
+property.
 Paired with ``WebSearchAbility`` (abilities/web_search.py).
 """
 
@@ -22,11 +23,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, ClassVar
 
-from abilities.memory import MemoryAbility
+from abilities.recall import Recall
 from abilities.news import NewsAbility
 from abilities.read import ReadAbility
 from abilities.search import SearchAbility
-from abilities.web_download import WebDownloadAbility
+from abilities.web_fetch import WebFetchAbility
 
 from configs.enums.channels import Channel
 from services.processor_config import ProcessorConfig
@@ -34,7 +35,12 @@ from services.processor_config import ProcessorConfig
 if TYPE_CHECKING:
     from configs.enums.policy_channel import PolicyChannel
 
-_WEB_SEARCH_TOOLS: tuple[str, ...] = (SearchAbility.NAME, NewsAbility.NAME, ReadAbility.NAME, WebDownloadAbility.NAME)
+_WEB_SEARCH_TOOLS: tuple[str, ...] = (
+    SearchAbility.NAME,
+    NewsAbility.NAME,
+    WebFetchAbility.NAME,
+    ReadAbility.NAME,
+)
 
 
 class WebSearchConfig(ProcessorConfig):
@@ -55,11 +61,10 @@ class WebSearchConfig(ProcessorConfig):
             channel=Channel.DELEGATE_WEB_SEARCH.value,
             role="web_search",
             policy_channel=policy_channel,
-            always_available=[*tools, MemoryAbility.NAME],
+            always_available=[*tools, Recall.NAME],
             skip_transcript=False,  # write a delegate-channel transcript row so
             skip_input_row=False,   # _setup assigns the uid the act-trail needs
             suppress_history=True,
-            broadcast_to=None,
             memory_seed=False,
         )
 

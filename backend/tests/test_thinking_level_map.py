@@ -1,155 +1,14 @@
-# Feature tests for ThinkingLevel.NONE across all thin clients.
-# Real-stack — no mocks of production code.
+# Unit tests for ThinkingLevel mapping — local, deterministic logic only.
+#
+# Scope rule: what lives here builds or classifies a payload IN PROCESS. Nothing
+# here contacts a provider, and nothing here asserts what a provider does with
+# what it is sent — that can only be established by firing at the real thing,
+# never by scripting a stand-in whose replies we wrote ourselves.
 
-import json
-import stat
-import threading
-from collections import deque
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
-from typing import TYPE_CHECKING, cast
-
-import google.genai as _genai_mod
 import pytest
 
 from configs.channels.thread_gist import ThreadGistConfig
-from configs.enums.provider_type import ProviderType
 from configs.enums.thinking_level import ThinkingLevel
-
-if TYPE_CHECKING:
-    from services.llm_clients.gemini import GeminiClient, _GenaiClient, _GenCfg, _Genai
-    from services.provider_api import ProviderApiResponse
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-class _ScriptedHandler(BaseHTTPRequestHandler):
-    """HTTP handler that records requests and pops scripted responses."""
-
-    def log_message(self, format: str, *args: object) -> None:
-        """Suppress default logging to keep test output clean."""
-        pass
-
-    def do_POST(self) -> None:
-        server = cast("_ScriptedServer", self.server)
-
-        content_length = int(self.headers.get("Content-Length", 0))
-        raw = self.rfile.read(content_length) if content_length else b""
-        try:
-            parsed = json.loads(raw) if raw else {}
-        except json.JSONDecodeError:
-            parsed = {}
-        server.recorded.append(parsed)
-
-        status, resp_body = server.responses.popleft()
-        body_bytes = json.dumps(resp_body).encode("utf-8")
-
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body_bytes)))
-        self.end_headers()
-        self.wfile.write(body_bytes)
-
-
-class _ScriptedServer(ThreadingHTTPServer):
-    """ThreadingHTTPServer carrying the recorded-request list and scripted responses."""
-
-    def __init__(self, recorded: "list[dict[str, object]]",
-                 responses: "deque[tuple[int, dict[str, object]]]") -> None:
-        super().__init__(("127.0.0.1", 0), _ScriptedHandler)
-        self.recorded = recorded
-        self.responses = responses
-
-
-def _openai_error(message: str) -> tuple[int, dict[str, object]]:
-    """Return a scripted (status, body) 400 rejection in OpenAI's error shape."""
-    return (400, {
-        "error": {
-            "message": message,
-            "type": "invalid_request_error",
-            "param": None,
-            "code": None,
-        },
-    })
-
-
-_OPENAI_SUCCESS_BODY: dict[str, object] = {
-    "id": "c1",
-    "object": "chat.completion",
-    "created": 1,
-    "model": "m",
-    "choices": [
-        {
-            "index": 0,
-            "message": {"role": "assistant", "content": "ok"},
-            "finish_reason": "stop",
-        }
-    ],
-    "usage": {"prompt_tokens": 1, "completion_tokens": 1},
-}
-
-
-# A stub that impersonates `codex`. Echoes argv as the agent message text,
-# writes the same text to the -o outfile, and emits minimal JSONL events.
-_STUB_CODEX_ECHO = """#!/usr/bin/env python3
-import sys, os, json
-
-args = sys.argv[1:]
-if args and args[0] == "--version":
-    print("codex-cli 0.143.0-stub")
-    sys.exit(0)
-
-outfile = None
-for i, a in enumerate(args):
-    if a == "-o":
-        outfile = args[i + 1]
-
-prompt = sys.stdin.read()
-text = " ".join(sys.argv[1:])
-
-if outfile:
-    with open(outfile, "w") as f:
-        f.write(text)
-
-print(json.dumps({"type": "thread.started", "thread_id": "t1"}))
-print(json.dumps({"type": "turn.started"}))
-print(json.dumps({"type": "item.completed",
-                  "item": {"id": "item_0", "type": "agent_message", "text": text}}))
-print(json.dumps({"type": "turn.completed",
-                  "usage": {"input_tokens": 0, "cached_input_tokens": 0,
-                            "output_tokens": 0, "reasoning_output_tokens": 0}}))
-sys.exit(0)
-"""
-
-
-_MODELS_CACHE: dict[str, object] = {
-    "fetched_at": "2026-07-09T00:00:00Z",
-    "models": [
-        {"slug": "gpt-5.5", "display_name": "GPT-5.5", "context_window": 272000},
-    ],
-}
-
-
-def _install_stub_codex(tmp_path: Path) -> str:
-    """Write the stub codex binary and return its path (executable)."""
-    binary = tmp_path / "codex-stub"
-    binary.write_text(_STUB_CODEX_ECHO)
-    binary.chmod(binary.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
-    return str(binary)
-
-
-def _install_codex_home(tmp_path: Path) -> Path:
-    """Create a fake ~/.codex with a models cache."""
-    home = tmp_path / "codex-home"
-    home.mkdir()
-    (home / "models_cache.json").write_text(json.dumps(_MODELS_CACHE))
-    return home
-
-
-# Sentinel used by the Gemini fake-SDK tests.
-_SENTINEL = object()
 
 
 # ---------------------------------------------------------------------------
@@ -200,213 +59,114 @@ class TestOpenAIThinkingNative:
 
 
 # ---------------------------------------------------------------------------
-# 3. OpenAI ladder retry over real HTTP
+# 2b. A platform states its own scale rather than inheriting OpenAI's
+#
+# Most clients subclass OpenAICompatibleClient, so an absent map is not an
+# absent behaviour — it is OpenAI's vocabulary, silently. vLLM's scale has no
+# 'high' in it at all, which is why the inherited row cost a 400 on every HIGH
+# and MAX request. What the server accepts was established by firing at it;
+# what the client *sends* is what these assert.
 # ---------------------------------------------------------------------------
 
 @pytest.mark.unit
-class TestOpenAILadderRealHttp:
-    """Drive OpenAIClient.send() against a scripted local HTTP server.
+class TestPerPlatformReasoningScale:
 
-    The real openai SDK issues real HTTP requests; assertions run against
-    the recorded wire bodies, proving extra_body actually merges into the
-    request JSON. The SDK does not retry 400s, so scripted rejections
-    drive the ladder deterministically.
-    """
+    def test_vllm_never_sends_a_value_its_scale_lacks(self) -> None:
+        from services.llm_clients.vllm import VllmClient
 
-    def _send_scripted(
-        self,
-        platform: str,
-        level: "ThinkingLevel",
-        responses: "deque[tuple[int, dict[str, object]]]",
-    ) -> "tuple[list[dict[str, object]], ProviderApiResponse]":
-        from services.llm_clients.openai import OpenAIClient
-        from services.provider_api import ProviderApiRequest
+        client = VllmClient({"platform": "vllm", "model": "m", "host": "http://127.0.0.1:1/v1"})
+        sent = {level: client._thinking_native(level) for level in ThinkingLevel}
 
-        recorded: list[dict[str, object]] = []
-        server = _ScriptedServer(recorded, responses)
-        threading.Thread(target=server.serve_forever, daemon=True).start()
-        port = server.server_address[1]
-        try:
-            client = OpenAIClient({
-                "platform": platform,
-                "model": "m",
-                "api_key": "test-key",
-                "host": f"http://127.0.0.1:{port}/v1",
-            })
-            dto = ProviderApiRequest(
-                system="s",
-                messages=[{"role": "user", "content": "hi"}],
-                type=ProviderType.CHAT,
-                thinking_mode=level,
-                cache_prefix=False,
-                max_tokens=32,
-            )
-            return recorded, client.send(dto)
-        finally:
-            server.shutdown()
-            server.server_close()
+        assert sent[ThinkingLevel.HIGH] == "xhigh"
+        assert sent[ThinkingLevel.MAX] == "xhigh"
+        assert "high" not in [v for v in sent.values() if v is not None]
 
-    def test_none_sends_effort_and_extra_body(self) -> None:
-        responses: "deque[tuple[int, dict[str, object]]]" = deque([(200, _OPENAI_SUCCESS_BODY)])
-        recorded, resp = self._send_scripted("openai_compatible", ThinkingLevel.NONE, responses)
+    def test_vllm_spells_low_out_because_its_default_is_the_ceiling(self) -> None:
+        """Sending no flag to vLLM buys 'xhigh' — its default. LOW must be said."""
+        from services.llm_clients.vllm import VllmClient
 
-        assert len(recorded) == 1
-        assert recorded[0].get("reasoning_effort") == "none"
-        # extra_body merges into the top level of the wire JSON.
-        assert recorded[0].get("thinking") == {"type": "disabled"}
-        assert resp.text == "ok"
+        client = VllmClient({"platform": "vllm", "model": "m", "host": "http://127.0.0.1:1/v1"})
+        assert client._thinking_native(ThinkingLevel.LOW) == "low"
 
-    def test_full_ladder_none_to_minimal_to_bare(self) -> None:
-        responses: "deque[tuple[int, dict[str, object]]]" = deque([
-            _openai_error("Extra inputs are not permitted: extra_forbidden thinking"),
-            _openai_error("unsupported value for reasoning_effort"),
-            (200, _OPENAI_SUCCESS_BODY),
-        ])
-        recorded, resp = self._send_scripted("openai_compatible", ThinkingLevel.NONE, responses)
+    def test_base_client_still_answers_openai_vocabulary(self) -> None:
+        """The escape hatch serves uncharacterised hosts, so it keeps the
+        protocol originator's spelling — and LOW stays absent there."""
+        from services.llm_clients.openai_compatible import OpenAICompatibleClient
 
-        assert len(recorded) == 3
-        assert recorded[0].get("reasoning_effort") == "none"
-        assert recorded[0].get("thinking") == {"type": "disabled"}
-        assert recorded[1].get("reasoning_effort") == "minimal"
-        assert "thinking" not in recorded[1]
-        assert "reasoning_effort" not in recorded[2]
-        assert "thinking" not in recorded[2]
-        assert resp.text == "ok"
+        client = OpenAICompatibleClient(
+            {"platform": "openai_compatible", "model": "m", "host": "http://127.0.0.1:1/v1", "api_key": "k"},
+        )
+        assert client._thinking_native(ThinkingLevel.HIGH) == "high"
+        assert client._thinking_native(ThinkingLevel.LOW) is None
 
-    def test_platform_openai_never_sends_extra_body(self) -> None:
-        responses: "deque[tuple[int, dict[str, object]]]" = deque([(200, _OPENAI_SUCCESS_BODY)])
-        recorded, resp = self._send_scripted("openai", ThinkingLevel.NONE, responses)
+    def test_every_declared_scale_is_reachable_from_its_platform(self) -> None:
+        """A map declared but never wired to a class is the same as no map."""
+        from services.llm_clients import thinking_map
+        from services.llm_clients.openai_compatible import OpenAICompatibleClient
+        from services.llm_clients.registry import PROVIDERS_BY_PLATFORM
 
-        assert len(recorded) == 1
-        assert recorded[0].get("reasoning_effort") == "none"
-        assert "thinking" not in recorded[0]
-        assert resp.text == "ok"
+        declared = {
+            name for name in dir(thinking_map) if name.endswith("_REASONING_EFFORTS")
+        }
+        wired = set()
+        for cls in PROVIDERS_BY_PLATFORM.values():
+            if not issubclass(cls, OpenAICompatibleClient):
+                continue
+            row = cls.REASONING_EFFORTS
+            for name in declared:
+                if getattr(thinking_map, name) is row:
+                    wired.add(name)
 
-    def test_low_sends_no_flags(self) -> None:
-        responses: "deque[tuple[int, dict[str, object]]]" = deque([(200, _OPENAI_SUCCESS_BODY)])
-        recorded, resp = self._send_scripted("openai_compatible", ThinkingLevel.LOW, responses)
-
-        assert len(recorded) == 1
-        assert "reasoning_effort" not in recorded[0]
-        assert "thinking" not in recorded[0]
-        assert resp.text == "ok"
-
-
-# ---------------------------------------------------------------------------
-# 4. Gemini ladder retry (real genai types, fake SDK client)
-# ---------------------------------------------------------------------------
-
-class _FakeGenaiModels:
-    """Records config kwargs per call and dispatches to a scripted sequence."""
-
-    def __init__(self, parent: "_FakeGenaiClient") -> None:
-        self._parent = parent
-
-    def generate_content(self, **kwargs: object) -> object:
-        self._parent.calls.append(kwargs)
-        item = next(self._parent.script_iter)
-        if isinstance(item, Exception):
-            raise item
-        return item
-
-
-class _FakeGenaiClient:
-    """Boundary double for google.genai.Client — records calls, scripts responses."""
-
-    def __init__(self, script: "list[object]") -> None:
-        self.calls: list[dict[str, object]] = []
-        self.script_iter = iter(script)
-        self.models = _FakeGenaiModels(self)
-
-
-@pytest.mark.unit
-class TestGeminiLadder:
-
-    def _build_client(self) -> "GeminiClient":
-        from services.llm_clients.gemini import GeminiClient
-        return GeminiClient({"platform": "gemini", "model": "gemini-2.5-flash", "api_key": "k"})
-
-    def _run(self, client: "GeminiClient", fake: "_FakeGenaiClient", gen_cfg: "_GenCfg") -> object:
-        contents: object = [{"role": "user", "parts": [{"text": "hi"}]}]
-        return client._generate_with_fallback(
-            cast("_GenaiClient", fake), cast("_Genai", _genai_mod), contents, gen_cfg,
+        # CODEX_REASONING_EFFORTS belongs to a non-OpenAI-protocol client and is
+        # read by CodexCliClient directly, so it is not reachable through this
+        # class attribute. Everything else here must be.
+        assert declared - wired == {"CODEX_REASONING_EFFORTS"}, (
+            f"declared but wired to no platform: {sorted(declared - wired)}"
         )
 
-    def test_none_budget_zero_then_floor_128(self) -> None:
-        client = self._build_client()
+    # Five vendors default their reasoning effort to the TOP of their own
+    # scale. On those, this module's usual "LOW = send no flag, take the
+    # default" convention hands the *most* thinking to the level named least —
+    # silently, with no error to notice. Every one of them must spell LOW out.
+    TOP_DEFAULT_PLATFORMS = ("vllm", "xai", "deepseek", "zhipu", "moonshot")
 
-        gen_cfg = cast("_GenCfg", {
-            "system_instruction": "s",
-            "thinking_config": _genai_mod.types.ThinkingConfig(thinking_budget=0),
+    @pytest.mark.parametrize("platform", TOP_DEFAULT_PLATFORMS)
+    def test_low_is_spelled_out_where_the_vendor_default_is_the_ceiling(
+        self, platform: str,
+    ) -> None:
+        from services.llm_clients.openai_compatible import OpenAICompatibleClient
+        from services.llm_clients.registry import PROVIDERS_BY_PLATFORM
+
+        cls = PROVIDERS_BY_PLATFORM[platform]
+        assert issubclass(cls, OpenAICompatibleClient)
+        client = cls({
+            "platform": platform, "model": "m",
+            "host": "http://127.0.0.1:1/v1", "api_key": "k",
         })
-        fake = _FakeGenaiClient([
-            Exception("thinking is not supported"),
-            _SENTINEL,
-        ])
+        sent = client._thinking_native(ThinkingLevel.LOW)
 
-        result = self._run(client, fake, gen_cfg)
+        assert sent is not None, (
+            f"{platform} sends no flag at LOW, so it takes the vendor default — "
+            "which on this vendor is the top of the scale."
+        )
+        assert sent != client._thinking_native(ThinkingLevel.MAX), (
+            f"{platform} sends the same value at LOW and MAX"
+        )
 
-        assert result is _SENTINEL
-        assert len(fake.calls) == 2
-        retry_thinking = getattr(fake.calls[1]["config"], "thinking_config", None)
-        assert retry_thinking is not None
-        assert getattr(retry_thinking, "thinking_budget", None) == 128
+    def test_xai_never_sends_a_disable_value(self) -> None:
+        """xAI documents that reasoning cannot be disabled, so 'none' — which
+        the inherited OpenAI row sent at NONE — is not a value it accepts."""
+        from services.llm_clients.xai import XaiClient
 
-    def test_none_floor_also_rejected_strips(self) -> None:
-        client = self._build_client()
+        client = XaiClient({"platform": "xai", "model": "m", "api_key": "k"})
+        sent = {client._thinking_native(level) for level in ThinkingLevel}
 
-        gen_cfg = cast("_GenCfg", {
-            "system_instruction": "s",
-            "thinking_config": _genai_mod.types.ThinkingConfig(thinking_budget=0),
-        })
-        fake = _FakeGenaiClient([
-            Exception("thinking not supported"),
-            Exception("thinking not supported"),
-            _SENTINEL,
-        ])
-
-        result = self._run(client, fake, gen_cfg)
-
-        assert result is _SENTINEL
-        assert len(fake.calls) == 3
-        # After stripping thinking_config, the attribute should be absent/None.
-        assert getattr(fake.calls[2]["config"], "thinking_config", None) is None
-
-    def test_medium_rejection_strips_directly(self) -> None:
-        client = self._build_client()
-
-        gen_cfg = cast("_GenCfg", {
-            "system_instruction": "s",
-            "thinking_config": _genai_mod.types.ThinkingConfig(thinking_budget=4096),
-        })
-        fake = _FakeGenaiClient([
-            Exception("unsupported"),
-            _SENTINEL,
-        ])
-
-        result = self._run(client, fake, gen_cfg)
-
-        assert result is _SENTINEL
-        assert len(fake.calls) == 2
-        assert getattr(fake.calls[1]["config"], "thinking_config", None) is None
-
-    def test_non_thinking_error_propagates(self) -> None:
-        client = self._build_client()
-
-        # gen_cfg WITHOUT thinking_config
-        gen_cfg = cast("_GenCfg", {"system_instruction": "s"})
-        fake = _FakeGenaiClient([
-            Exception("boom"),
-        ])
-
-        with pytest.raises(Exception, match="boom"):
-            self._run(client, fake, gen_cfg)
-
-        assert len(fake.calls) == 1
+        assert not sent & {"none", "minimal"}
+        assert client._thinking_native(ThinkingLevel.NONE) == "low"
 
 
 # ---------------------------------------------------------------------------
-# 5. Ollama think payload
+# 3. Ollama think payload
 # ---------------------------------------------------------------------------
 
 @pytest.mark.unit
@@ -415,8 +175,9 @@ class TestOllamaThinkPayload:
     def test_think_flag_per_level_when_supported(self) -> None:
         from services.llm_clients.ollama import OllamaClient
 
+        # The host is never dialled — _build_payload assembles a dict in process.
         client = OllamaClient({"host": "http://127.0.0.1:1", "model": "m"})
-        client._thinking_supported = True
+        client._show_payload = {"capabilities": ["thinking"]}
 
         none_payload = client._build_payload("s", [], None, ThinkingLevel.NONE)
         assert none_payload.get("think") is False
@@ -432,7 +193,7 @@ class TestOllamaThinkPayload:
         from services.llm_clients.ollama import OllamaClient
 
         client = OllamaClient({"host": "http://127.0.0.1:1", "model": "m"})
-        client._thinking_supported = False
+        client._show_payload = {}
 
         for level in (ThinkingLevel.NONE, ThinkingLevel.LOW,
                       ThinkingLevel.MEDIUM, ThinkingLevel.HIGH, ThinkingLevel.MAX):
@@ -441,54 +202,7 @@ class TestOllamaThinkPayload:
 
 
 # ---------------------------------------------------------------------------
-# 6. Codex CLI effort flag via stub binary
-# ---------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestCodexCliEffortFlag:
-
-    def _send(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-              level: "ThinkingLevel") -> "ProviderApiResponse":
-        from services.llm_clients.codex_cli import CodexCliClient
-        from services.provider_api import ProviderApiRequest
-
-        monkeypatch.setenv("CODEX_BIN", _install_stub_codex(tmp_path))
-        monkeypatch.setenv("CODEX_HOME", str(_install_codex_home(tmp_path)))
-
-        client = CodexCliClient({"platform": "codex_cli", "model": "gpt-5.5"})
-        dto = ProviderApiRequest(
-            system="You are helpful.",
-            messages=[{"role": "user", "content": "hello"}],
-            type=ProviderType.CHAT,
-            thinking_mode=level,
-            cache_prefix=False,
-            max_tokens=64,
-        )
-        return client.send(dto)
-
-    def test_none_includes_minimal_effort_flag(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        resp = self._send(tmp_path, monkeypatch, ThinkingLevel.NONE)
-        assert "-c model_reasoning_effort=minimal" in resp.text
-
-    def test_low_omits_effort_flag(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        resp = self._send(tmp_path, monkeypatch, ThinkingLevel.LOW)
-        assert "model_reasoning_effort" not in resp.text
-
-    def test_medium_includes_medium_effort_flag(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        resp = self._send(tmp_path, monkeypatch, ThinkingLevel.MEDIUM)
-        assert "=medium" in resp.text
-
-    def test_high_includes_high_effort_flag(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        resp = self._send(tmp_path, monkeypatch, ThinkingLevel.HIGH)
-        assert "=high" in resp.text
-
-    def test_max_includes_high_effort_flag(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        resp = self._send(tmp_path, monkeypatch, ThinkingLevel.MAX)
-        assert "=high" in resp.text
-
-
-# ---------------------------------------------------------------------------
-# 7. ThreadGist pins thinking_mode to 'none'
+# 4. ThreadGist pins thinking_mode to 'none'
 # ---------------------------------------------------------------------------
 
 @pytest.mark.unit
@@ -500,39 +214,80 @@ class TestThreadGistPinsNone:
 
 
 # ---------------------------------------------------------------------------
-# 8. _is_thinking_rejection recognition
+# 5. _is_thinking_rejection recognition
+#
+# A pure predicate over an exception and the kwargs that produced it. What is
+# proven here is the classifier's own logic — that it keys off the thinking
+# param having been SENT and the provider answering 400 — never that a given
+# provider emits a given string. The errors are the openai client's real
+# exception classes, not a stand-in: that the status is readable off what the
+# ladder actually catches is the whole assumption the classifier rests on.
 # ---------------------------------------------------------------------------
+
+def _api_error(message: str, status: int) -> Exception:
+    """The openai client's own error for *status*, carrying *message*.
+
+    ``httpx2`` is deliberate, not a typo: the installed openai SDK imports that
+    name, and an error built on the other httpx is a different class to the one
+    the ladder catches — which would make this whole section prove nothing.
+    """
+    import httpx2
+    from openai import APIStatusError
+
+    request = httpx2.Request("POST", "http://provider.invalid/v1/chat/completions")
+    return APIStatusError(message, response=httpx2.Response(status, request=request), body=None)
+
 
 @pytest.mark.unit
 class TestIsThinkingRejection:
 
-    def test_reasoning_effort_rejection_with_kwarg(self) -> None:
+    def test_reasoning_effort_rejected_with_kwarg(self) -> None:
         from services.llm_service import _is_thinking_rejection
-        exc = Exception("unsupported value for reasoning_effort")
+        exc = _api_error("unsupported value for reasoning_effort", 400)
         assert _is_thinking_rejection(exc, {"reasoning_effort": "none"}) is True
+
+    def test_rejection_wording_the_classifier_must_not_depend_on(self) -> None:
+        """The refusal that used to kill the turn: the parameter is spelled with
+        a space and the prose says "Unexpected"/"Supported", so a substring match
+        on 'reasoning_effort' or 'unsupported' finds neither and the recovery
+        ladder never runs."""
+        from services.llm_service import _is_thinking_rejection
+        exc = _api_error(
+            "Unexpected reasoning effort high. "
+            "Supported types are xhigh (default), medium, and low.",
+            400,
+        )
+        assert _is_thinking_rejection(exc, {"reasoning_effort": "high"}) is True
 
     def test_reasoning_effort_error_without_kwarg(self) -> None:
         from services.llm_service import _is_thinking_rejection
-        exc = Exception("unsupported value for reasoning_effort")
+        exc = _api_error("unsupported value for reasoning_effort", 400)
         assert _is_thinking_rejection(exc, {}) is False
 
     def test_extra_body_thinking_rejection(self) -> None:
         from services.llm_service import _is_thinking_rejection
-        exc = Exception("Extra inputs are not permitted extra_forbidden")
+        exc = _api_error("Extra inputs are not permitted extra_forbidden", 400)
         kwargs: dict[str, object] = {"extra_body": {"thinking": {"type": "disabled"}}}
         assert _is_thinking_rejection(exc, kwargs) is True
 
-    def test_unrelated_error_with_both_kwargs(self) -> None:
+    def test_server_fault_is_not_a_thinking_rejection(self) -> None:
+        """Only a 400 says the request's shape was refused. Stripping the
+        thinking params off a 500 would retry into the same server fault."""
         from services.llm_service import _is_thinking_rejection
-        exc = Exception("boom")
+        exc = _api_error("internal server error", 500)
         kwargs: dict[str, object] = {
             "reasoning_effort": "none",
             "extra_body": {"thinking": {"type": "disabled"}},
         }
         assert _is_thinking_rejection(exc, kwargs) is False
 
+    def test_transport_failure_carries_no_status(self) -> None:
+        """A connection error never reached the provider, so nothing was refused."""
+        from services.llm_service import _is_thinking_rejection
+        assert _is_thinking_rejection(Exception("connection reset"), {"reasoning_effort": "high"}) is False
+
     def test_extra_body_without_thinking_key(self) -> None:
         from services.llm_service import _is_thinking_rejection
-        exc = Exception("Extra inputs are not permitted extra_forbidden")
+        exc = _api_error("Extra inputs are not permitted extra_forbidden", 400)
         kwargs: dict[str, object] = {"extra_body": {"something_else": "value"}}
         assert _is_thinking_rejection(exc, kwargs) is False

@@ -6,10 +6,8 @@ gone (or mismatched) the index strands stale postings and can corrupt.
 The correct removal is the FTS5 ``'delete'`` command, which is told the
 indexed values explicitly so it never touches the source table.
 
-Consumed by the data_graph verticals' purge paths (data_graph_fts) and
-``DecayEngineService._hard_delete_episode`` (episodes_fts). Keep both call
-sites pointed here so the production-safe path can never drift between
-memory tables.
+Consumed by the data_graph verticals' purge paths (data_graph_fts). Keep
+every call site pointed here so the production-safe path can never drift.
 """
 
 import logging

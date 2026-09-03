@@ -35,12 +35,14 @@ _BLOCK_BOUNDARY_RE = re.compile(r"</?(?:p|li|ul|h1|br|tr|td|th)\b[^>]*>", re.IGN
 
 # ── Tag allowlist ───────────────────────────────────────────────────────────
 
-LLM_TAGS = frozenset({
-    "b", "i", "u", "h1", "code", "p", "ul", "li", "span",
-    "table", "thead", "tbody", "tfoot", "tr", "td", "th",
-})
-PROGRAMMATIC_TAGS = frozenset({"img"})
-ALLOWED_TAGS = LLM_TAGS | PROGRAMMATIC_TAGS
+# The single authority for Chalie's HTML contract: the tags the model is told to
+# emit, in the order the system prompt lists them. ``PromptService`` renders the
+# instruction from this tuple and ``sanitize`` enforces it, so widening or
+# narrowing the contract is one edit and the two cannot drift apart.
+PROMPT_TAGS = (
+    "p", "h1", "b", "i", "u", "code", "ul", "li",
+    "table", "thead", "tbody", "tfoot", "tr", "th", "td",
+)
 
 # Programmatic-only attributes. ``<img>`` carries src/alt; ``<span>`` carries only
 # ``id`` — the rich-media pairing key.
@@ -91,7 +93,10 @@ def sanitize(html: str | None) -> str:
     bounded = html if len(html) <= _MAX_CONTENT_LEN else html[:_MAX_CONTENT_LEN]
     return nh3.clean(
         bounded,
-        tags=set(ALLOWED_TAGS),
+        # The model is only ever told about PROMPT_TAGS. Two more survive because
+        # Chalie injects them itself, never the LLM: <span id> pairs rich media at
+        # the WS-send boundary, and <img src> is gate-checked by _safe_img_src.
+        tags=set(PROMPT_TAGS) | {"span", "img"},
         attributes=_ATTRIBUTES,
         url_schemes=_URL_SCHEMES,
         attribute_filter=_safe_img_src,  # drops scheme-less / non-http(s) img src

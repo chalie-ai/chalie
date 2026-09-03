@@ -97,6 +97,9 @@ let _fetchAbort: AbortController | null = null;
 // AudioContext — created lazily on first open, reused thereafter.
 let _audioCtx: AudioContext | null = null;
 
+// Removal closure for the statechange listener on _audioCtx.
+let _ctxStateUnbind: (() => void) | null = null;
+
 let _buffer: AudioBuffer | null = null;
 let _currentSource: AudioBufferSourceNode | null = null;
 let _sourceStartCtxTime = 0;
@@ -120,8 +123,66 @@ onMounted(() => {
 onBeforeUnmount(() => {
   _unsubSpeak?.();
   _close();
+  _ctxStateUnbind?.();
+  _ctxStateUnbind = null;
   _unbindKeyboard();
 });
+
+/**
+ * Returns the shared AudioContext, creating it when missing. On creation a
+ * 'statechange' listener is attached (removal closure stored in
+ * _ctxStateUnbind) so an OS audio-session loss mid-playback — e.g. the screen
+ * locking — is noticed and can be recovered from.
+ */
+function _ensureContext(): AudioContext {
+  if (_audioCtx) return _audioCtx;
+  const ctx = webPlatformAdapter.createAudioContext();
+  _audioCtx = ctx;
+  const listener = (): void => _onCtxStateChange();
+  ctx.addEventListener('statechange', listener);
+  _ctxStateUnbind = () => ctx.removeEventListener('statechange', listener);
+  return ctx;
+}
+
+/** Resume a context in any non-running state ('suspended', 'interrupted', …). */
+async function _resumeContext(ctx: AudioContext): Promise<boolean> {
+  if ((ctx.state as string) === 'running') return true;
+  try {
+    await ctx.resume();
+  } catch (err) {
+    console.debug('[VoicePlayer] resume failed:', err);
+  }
+  return (ctx.state as string) === 'running';
+}
+
+/**
+ * Return a playable (running) context. When the current session is
+ * unrecoverable (e.g. the OS took it while the screen was locked), tear it
+ * down and build a fresh one; otherwise return null.
+ */
+async function _revivedContext(): Promise<AudioContext | null> {
+  const ctx = _ensureContext();
+  if (await _resumeContext(ctx)) return ctx;
+  // Session is unrecoverable — tear it down and build a fresh one.
+  _ctxStateUnbind?.();
+  _ctxStateUnbind = null;
+  void ctx.close().catch(() => {});
+  _audioCtx = null;
+  const fresh = _ensureContext();
+  return (await _resumeContext(fresh)) ? fresh : null;
+}
+
+/** The OS took the audio session mid-playback (e.g. the screen locked). */
+function _onCtxStateChange(): void {
+  if (_audioCtx && (_audioCtx.state as string) !== 'running' && isPlaying.value) {
+    // Park playback honestly so the next tap resumes from where it stopped.
+    _pausedOffset = _currentPosition();
+    _stopCurrentSource();
+    _paused = true;
+    isPlaying.value = false;
+    _stopProgressTimer();
+  }
+}
 
 async function _open(transcriptId: number): Promise<void> {
   _openGeneration += 1;
@@ -133,12 +194,10 @@ async function _open(transcriptId: number): Promise<void> {
 
   _resetPlayback();
 
-  if (!_audioCtx) {
-    _audioCtx = webPlatformAdapter.createAudioContext();
-  }
-  if (_audioCtx.state === 'suspended') {
-    void _audioCtx.resume();
-  }
+  // The resume call must be reached synchronously from the click so the
+  // user gesture is preserved (mobile browsers gate audio on gestures).
+  _ensureContext();
+  void _revivedContext();
 
   _showDialog();
   uiState.value = 'loading';
@@ -160,7 +219,7 @@ async function _open(transcriptId: number): Promise<void> {
     uiState.value = 'idle';
     duration.value = buffer.duration || 0;
     progressValue.value = 0;
-    _playBufferFrom(buffer, 0);
+    void _playBufferFrom(buffer, 0);
   } catch (err: unknown) {
     if ((err as { name?: string }).name === 'AbortError') return;
     if (gen !== _openGeneration) return;
@@ -206,17 +265,20 @@ function _resetPlayback(): void {
   void _wakeLock?.release();
 }
 
-function _playBufferFrom(buffer: AudioBuffer, offset: number): void {
-  if (!_audioCtx) return;
-
-  // Browsers may auto-suspend the AudioContext after a period of inactivity.
-  if (_audioCtx.state === 'suspended') {
-    void _audioCtx.resume();
+async function _playBufferFrom(buffer: AudioBuffer, offset: number): Promise<void> {
+  const ctx = await _revivedContext();
+  if (!ctx) {
+    isPlaying.value = false;
+    _stopProgressTimer();
+    // Showing an error hides the controls, so point at the speaker button on
+    // the message rather than the play button the user can no longer see.
+    errorMsg.value = 'Audio is blocked — tap the speaker again';
+    return;
   }
 
-  const source = _audioCtx.createBufferSource();
+  const source = ctx.createBufferSource();
   source.buffer = buffer;
-  source.connect(_audioCtx.destination);
+  source.connect(ctx.destination);
 
   source.onended = () => {
     if (source !== _currentSource) return;
@@ -239,7 +301,7 @@ function _playBufferFrom(buffer: AudioBuffer, offset: number): void {
   }
 
   _currentSource = source;
-  _sourceStartCtxTime = _audioCtx.currentTime;
+  _sourceStartCtxTime = ctx.currentTime;
   _sourceStartOffset = offset;
   _paused = false;
   isPlaying.value = true;
@@ -274,12 +336,12 @@ function _currentPosition(): number {
 function _togglePlayPause(): void {
   if (!_audioCtx || !_buffer) return;
   if (_paused) {
-    _playBufferFrom(_buffer, _pausedOffset);
+    void _playBufferFrom(_buffer, _pausedOffset);
     return;
   }
   if (!_currentSource) {
     // Finished — clicking play restarts from the beginning.
-    _playBufferFrom(_buffer, 0);
+    void _playBufferFrom(_buffer, 0);
     return;
   }
   _pausedOffset = _currentPosition();
@@ -294,7 +356,7 @@ function _onScrub(e: Event): void {
   if (!_buffer) return;
   const offset = Number.parseFloat((e.target as HTMLInputElement).value) || 0;
   _stopCurrentSource();
-  _playBufferFrom(_buffer, offset);
+  void _playBufferFrom(_buffer, offset);
 }
 
 function _startProgressTimer(): void {

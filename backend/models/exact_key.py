@@ -1,10 +1,10 @@
-"""``ExactKeyRow`` — the shared exact-key upsert base for the two ``data_graph``
-verticals that address rows by an exact ``key`` rather than by semantic search:
-:class:`~models.system_memory.SystemMemoryRow` (searchable knowledge memories)
-and :class:`~models.machine_state.MachineStateRow` (operational cursors/clocks/
-summary). Abstract — it leaves :attr:`KIND` unset (each subclass declares it) and
-adds only the exact-key store/forget/supersede lifecycle on top of the shared
-:class:`~models.data_graph.DataGraphRow` shell. Sole home of this lane's SQL (I6).
+"""``ExactKeyRow`` — the shared exact-key upsert base for ``data_graph``
+verticals that address rows by an exact ``key`` rather than by semantic search
+(e.g. :class:`~models.machine_state.MachineStateRow` — operational cursors/
+clocks/summary). Abstract — it leaves :attr:`KIND` unset (each subclass declares
+it) and adds only the exact-key store/forget/supersede lifecycle on top of the
+shared :class:`~models.data_graph.DataGraphRow` shell. Sole home of this lane's
+SQL (I6).
 """
 
 from __future__ import annotations
@@ -25,9 +25,8 @@ class ExactKeyRow(DataGraphRow):
 
     @classmethod
     def active_by_key(cls, key: str) -> Self | None:
-        """The single active row for this kind's exact ``key`` — the store lookup
-        (mirrors ``_SELECT_ACTIVE_BY_KIND_KEY_SQL``: ``active = 1`` only, NOT
-        ``deleted_at``-filtered)."""
+        """The single active row for this kind's exact ``key`` — the store
+        lookup. ``active = 1`` only, deliberately NOT ``deleted_at``-filtered."""
         return (cls.filter("kind", cls.KIND).filter("key", key)
                    .filter("active", 1).first())
 
@@ -59,20 +58,3 @@ class ExactKeyRow(DataGraphRow):
         self.valid_to = utc_now().isoformat()
         return self.save()
 
-    @classmethod
-    def forget(cls, key: str, value: str | None = None) -> int:
-        """Bi-temporally invalidate every live row for this kind's exact ``key``
-        (optionally only the row whose value matches, case-folded/trimmed):
-        ``active = 0``, ``valid_to = now``, ``retrieval_weight`` halved. Matches
-        VERBATIM (no canonicalisation). Returns the number of rows closed."""
-        now = utc_now().isoformat()
-        closed = 0
-        for row in cls.live().filter("key", key).get():
-            if value is not None and (row.value or "").lower().strip() != value.lower().strip():
-                continue
-            row.active = 0
-            row.valid_to = now
-            row.retrieval_weight *= cls._SUPERSEDE_RW_FACTOR
-            row.save()
-            closed += 1
-        return closed

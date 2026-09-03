@@ -58,8 +58,6 @@ class _ScriptedProvider:
     def get_context_limit(self) -> int:
         return 120_000
 
-    def estimate_request_tokens(self, _dto: object) -> int:
-        return 1
 
     def send(self, _dto: object) -> ProviderResponse:
         self.sends += 1

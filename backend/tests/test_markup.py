@@ -72,7 +72,7 @@ class TestExtractPlaintext:
 
 @pytest.mark.unit
 class TestFormatSanitizesXss:
-    """TKT-1492: _format must sanitize HTML at the persist-time boundary so that
+    """_format must sanitize HTML at the persist-time boundary so that
     any dangerous markup the LLM emits (or that was in raw text) is stripped
     before it reaches the frontend's v-html renderer."""
 

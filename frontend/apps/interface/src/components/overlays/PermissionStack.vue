@@ -1,43 +1,79 @@
 <script setup lang="ts">
 /**
- * PermissionStack — slide-up card stack for backend `permission_request` events.
+ * PermissionStack — the pending permission cards, each in the lane its turn
+ * renders in: a gate bubbles up to the channel the request came from, for
+ * every tool.
  *
- * Renders into the `#permStack` teleport target. Cards stack newest-on-top
- * (column-reverse in the parent); no auto-deny — each waits indefinitely for input.
+ * One store queue, two lanes, decided per card by `resolvePermissionLane`:
+ *   - spine → the `#permStack` target above the main dock (App.vue): main-
+ *             spine turns, plus thread/scheduled turns whose panel is not
+ *             open on them — those carry a "Thread · <heading>" /
+ *             "Scheduled task · <heading>" label and an Open button.
+ *   - panel → the `#permStackPanel` target ThreadPanel.vue renders above its
+ *             own dock, for the turn the panel is open on.
+ * The lane is a reactive decision (panel identity × origin), so opening the
+ * panel on a card's turn moves the card in and closing it moves the card back
+ * out — never a duplicate: the store holds one entry per request.
+ *
+ * The panel Teleport is `v-if`-gated on the panel being open AND deferred: a
+ * Teleport whose target is missing when it mounts never re-resolves it, and
+ * ThreadPanel renders its target only while open.
  */
-import { Info } from '@lucide/vue';
-import { usePermissionsStore } from '../../stores/permissions';
+import { computed } from 'vue';
+import { useSessionStore } from '../../stores/session';
+import { usePermissionsStore, type PermissionRequest } from '../../stores/permissions';
+import { resolvePermissionLane } from '../../utils/permissionLane';
+import { getTurnEl } from '../../utils/turnDom';
+import PermissionCard from './PermissionCard.vue';
 
+const session = useSessionStore();
 const permissions = usePermissionsStore();
 
-const ACTION_LABELS: Record<string, string> = {
-  // email/calendar/contacts gate at the OUTER `pim` permission only — the inner
-  // tools are INTERNAL on the backend and can never raise a permission_request.
-  pim: 'Access Email, Calendar & Contacts',
-  code_agent: 'Coding Agent',
-  'browser.render': 'Read Webpage',
-  'browser.interact': 'Interact with Webpage',
-  'browser.screenshot': 'Screenshot Webpage',
-  'browser.monitor': 'Monitor Webpage',
-  'list.delete': 'Delete List',
-  'memory.store': 'Store Memory',
-  'memory.recall': 'Recall Memory',
-  'memory.forget': 'Forget Memory',
-  'memory.reflect': 'Reflect on Memory',
-  'schedule.create': 'Create Schedule',
-  'schedule.cancel': 'Cancel Schedule',
-  'schedule.list': 'List Schedules',
-  'schedule.search': 'Search Schedules',
-  news: 'Fetch News',
-  search: 'Web Search',
-  weather: 'Check Weather',
-  timer: 'Set Timer',
-};
+interface LaneCard {
+  req: PermissionRequest;
+  label: string | null;
+}
 
-/** Readable label for an action_id; falls back to formatting the id (dots/underscores → spaces, title case). */
-function actionLabel(actionId: string): string {
-  if (ACTION_LABELS[actionId]) return ACTION_LABELS[actionId];
-  return actionId.replace(/[._]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+const resolved = computed(() =>
+  permissions.queue.map((req) => ({
+    req,
+    ...resolvePermissionLane(req.origin, {
+      panelThreadId: session.panelThreadId,
+      panelType: session.panelType,
+    }),
+  })),
+);
+
+const spineCards = computed<LaneCard[]>(() =>
+  resolved.value
+    .filter((c) => c.lane === 'spine')
+    .map((c) => ({
+      req: c.req,
+      label: c.label == null ? null : `${c.label} · ${turnHeading(c.req)}`,
+    })),
+);
+
+const panelCards = computed(() =>
+  resolved.value.filter((c) => c.lane === 'panel').map((c) => c.req),
+);
+
+const panelOpen = computed(() => session.panelThreadId != null);
+
+/**
+ * The turn's heading as the spine already shows it (the TurnView host's
+ * data-gist / data-preview); "#<turn_id>" when the turn is not rendered on the
+ * spine — scheduled turns never are.
+ */
+function turnHeading(req: PermissionRequest): string {
+  if (req.origin == null) return '';
+  const el = getTurnEl(req.origin.turn_id, req.origin.type);
+  return el?.dataset.gist || el?.dataset.preview || `#${req.origin.turn_id}`;
+}
+
+/** Open the panel on the card's turn — the card then re-resolves into the panel lane. */
+function open(req: PermissionRequest): void {
+  if (req.origin == null) return;
+  session.openThreadPanel(req.origin.turn_id, req.origin.type);
 }
 </script>
 
@@ -50,176 +86,42 @@ function actionLabel(actionId: string): string {
       aria-live="assertive"
       aria-label="Permission requests"
     >
-      <div
-        v-for="req in permissions.queue"
+      <PermissionCard
+        v-for="card in spineCards"
+        :key="card.req.request_id"
+        :req="card.req"
+        :label="card.label"
+        @open="open"
+      />
+    </TransitionGroup>
+  </Teleport>
+
+  <Teleport v-if="panelOpen" to="#permStackPanel" defer>
+    <TransitionGroup
+      tag="div"
+      name="perm-card"
+      class="perm-stack-inner"
+      aria-live="assertive"
+      aria-label="Permission requests for this thread"
+    >
+      <PermissionCard
+        v-for="req in panelCards"
         :key="req.request_id"
-        class="perm-card"
-        role="dialog"
-        aria-label="Permission request"
-        :data-request-id="req.request_id"
-      >
-        <div class="perm-card__body">
-          <div class="perm-card__header">
-            <span class="perm-card__icon" aria-hidden="true">
-              <Info :size="14" />
-            </span>
-            <p class="perm-card__title">{{ actionLabel(req.action_id) }}</p>
-          </div>
-
-          <p v-if="req.description" class="perm-card__desc">{{ req.description }}</p>
-
-          <div class="perm-card__actions">
-            <button
-              class="perm-card__btn perm-card__btn--deny"
-              @click="permissions.respond(req.request_id, false)"
-            >
-              Deny
-            </button>
-            <button
-              class="perm-card__btn perm-card__btn--allow"
-              @click="permissions.respond(req.request_id, true)"
-            >
-              Allow
-            </button>
-          </div>
-        </div>
-      </div>
+        :req="req"
+        :label="null"
+        @open="open"
+      />
     </TransitionGroup>
   </Teleport>
 </template>
 
 <style scoped lang="scss">
 // The inner wrapper carries the TransitionGroup tag so enter/leave transforms
-// apply directly to .perm-card elements (outer #permStack is in App.vue).
+// apply directly to the cards (the outer targets are in App.vue / ThreadPanel.vue).
 
 .perm-stack-inner {
   display: flex;
   flex-direction: column-reverse;
   gap: var(--space-sm);
-}
-
-.perm-card {
-  // The #permStack teleport target is pointer-events:none (so its empty area
-  // doesn't block the chat behind it); re-enable here or the Allow/Deny clicks
-  // fall through to the turn underneath. The transition states below re-disable
-  // it mid enter/leave, which is intentional.
-  pointer-events: auto;
-  background: color-mix(in oklab, var(--surface, var(--bg-chalie)) 95%, transparent);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  box-shadow:
-    0 8px 32px rgba(0, 0, 0, 0.35),
-    0 2px 8px rgba(0, 0, 0, 0.2);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  overflow: hidden;
-
-  // Light theme: soften the lift so it reads as depth, not a dark halo.
-  // Plain `[data-theme] &` — :global() drops the `&` and leaks this onto <html>.
-  [data-theme='light'] & {
-    box-shadow:
-      0 2px 8px rgba(0, 0, 0, 0.08),
-      0 8px 32px rgba(0, 0, 0, 0.12);
-  }
-}
-
-.perm-card-enter-from,
-.perm-card-leave-to {
-  opacity: 0;
-  transform: translateY(20px);
-}
-
-.perm-card-leave-to {
-  transform: translateY(-20px);
-}
-
-.perm-card-enter-active,
-.perm-card-leave-active {
-  transition:
-    transform var(--duration-normal) ease,
-    opacity var(--duration-normal) ease;
-  pointer-events: none;
-}
-
-.perm-card-enter-to {
-  opacity: 1;
-  transform: none;
-}
-
-.perm-card__body {
-  padding: var(--space-md);
-}
-
-.perm-card__header {
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-  margin-bottom: var(--space-xs);
-}
-
-.perm-card__icon {
-  color: var(--accent-primary);
-  flex-shrink: 0;
-  line-height: 1;
-}
-
-.perm-card__title {
-  font-size: var(--font-size-sm);
-  font-weight: 600;
-  color: var(--text-primary);
-  margin: 0;
-}
-
-.perm-card__desc {
-  font-size: var(--font-size-sm);
-  color: var(--text-secondary);
-  margin: 0 0 var(--space-sm);
-  line-height: 1.45;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.perm-card__actions {
-  display: flex;
-  gap: var(--space-xs);
-  justify-content: flex-end;
-}
-
-.perm-card__btn {
-  padding: 5px var(--space-sm);
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-  border-radius: var(--radius-sm);
-  border: 1px solid transparent;
-  cursor: pointer;
-  transition:
-    background var(--duration-fast),
-    border-color var(--duration-fast),
-    color var(--duration-fast);
-  line-height: 1.4;
-
-  &--allow {
-    background: color-mix(in oklab, var(--success) 15%, transparent);
-    border-color: color-mix(in oklab, var(--success) 35%, transparent);
-    color: var(--success);
-
-    &:hover {
-      background: color-mix(in oklab, var(--success) 25%, transparent);
-      border-color: color-mix(in oklab, var(--success) 55%, transparent);
-    }
-  }
-
-  &--deny {
-    background: color-mix(in oklab, var(--text) 5%, transparent);
-    border-color: var(--border-subtle);
-    color: var(--text-secondary);
-
-    &:hover {
-      background: color-mix(in oklab, var(--text) 9%, transparent);
-      border-color: color-mix(in oklab, var(--text) 15%, transparent);
-      color: var(--text-primary);
-    }
-  }
 }
 </style>

@@ -25,7 +25,6 @@ No mocks: a real inert ``MessageProcessor`` appends real rows to the real,
 fully-migrated SQLite database, exactly as production does.
 """
 
-import json
 import re
 import sqlite3
 from typing import cast
@@ -54,17 +53,15 @@ def _messages(turn_id: int) -> list[dict[str, object]]:
 
 
 def _seed_timezone(db: sqlite3.Connection, tz_name: str) -> None:
-    """Put a real timezone in the real telemetry table, the way a heartbeat does.
+    """Put a real timezone in the telemetry JSON snapshot, the way a heartbeat does.
 
-    Without this the table is empty, ``get_timezone()`` falls back to UTC
+    Without this the snapshot is empty, ``get_timezone()`` falls back to UTC
     (``locale_service.py``), and every assertion below would hold just as well
-    if the timezone conversion were removed entirely.
+    if the timezone conversion were removed entirely. The ``db`` fixture stays
+    a parameter: it redirects the snapshot path into this test's tmp dir.
     """
-    from services.heartbeat_service import heartbeat_service
-    heartbeat_service._ctx = None
-    db.execute("DELETE FROM telemetry")
-    db.execute("INSERT INTO telemetry (key, value) VALUES (?, ?)", ("timezone", json.dumps(tz_name)))
-    db.commit()
+    from services.telemetry_service import TelemetryService
+    TelemetryService.write({"timezone": tz_name})
 
 
 def test_every_projected_message_carries_a_full_calendar_day(db: sqlite3.Connection) -> None:

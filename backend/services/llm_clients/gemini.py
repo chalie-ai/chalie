@@ -32,14 +32,13 @@ Native size-rejection signal — VERIFIED (google-genai 1.65.0):
   for rate limits, but the SDK raises ``ClientError`` (not a class named
   ``ResourceExhausted``); ``'429' in str(exc)`` is the reliable catch and is kept.
 
-Depends on: services.provider_api (contract), services.llm_service (estimate_tokens,
-_app_user_agent, _resolve_api_key).
+Depends on: services.provider_api (contract), services.llm_service
+(_app_user_agent, _resolve_api_key).
 Consumed by: services.llm_clients.factory (platform dispatch).
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from typing import TYPE_CHECKING, ClassVar, Optional, cast
@@ -90,6 +89,7 @@ if TYPE_CHECKING:
     class _Part(Protocol):
         text: str
         function_call: "_FunctionCall | None"
+        thought: bool
 
     class _Content(Protocol):
         parts: "list[_Part] | None"
@@ -102,7 +102,7 @@ from exceptions import (
     ProviderTimeoutError,
     RateLimitError,
 )
-from services.llm_clients.context_window import default_window_for_model
+from services.llm_clients.context_window import DEFAULT_WINDOW
 from services.llm_clients.thinking_map import GEMINI_NONE_FALLBACK_BUDGET, GEMINI_THINKING_BUDGETS
 from services.provider_api import (
     ProviderApiRequest,
@@ -160,8 +160,17 @@ def _gemini_convert_messages(messages: list[dict[str, object]]) -> list[dict[str
     return result
 
 
-def _accumulate_part(part: object, text_parts: list[str], tool_calls: list[dict[str, object]]) -> None:
-    """Append text or a tool-call dict from a single Gemini response part."""
+def _accumulate_part(part: object, text_parts: list[str], tool_calls: list[dict[str, object]], thinking_parts: list[str]) -> None:
+    """Append text or a tool-call dict from a single Gemini response part.
+
+    Parts flagged thought=True are collected into thinking_parts and do NOT
+    leak into the visible text or get treated as function calls.
+    """
+    if getattr(part, 'thought', False):
+        text = getattr(part, 'text', None)
+        if text:
+            thinking_parts.append(text)
+        return
     if getattr(part, 'text', None):
         text_parts.append(cast("_Part", part).text)
     fc = getattr(part, 'function_call', None)
@@ -177,6 +186,20 @@ class GeminiClient(ProviderClient):
     """Google Gemini API thin client."""
 
     CONTENT_FIELD_LABEL: ClassVar[str] = "candidates[].content.parts[].text"
+
+    PLATFORM: ClassVar[str] = 'gemini'
+    LABEL: ClassVar[str] = 'Google Gemini'
+    DEFAULT_BASE_URL: ClassVar[str] = ''   # the SDK already points at Google
+    REQUIRES_KEY: ClassVar[bool] = True
+    REQUIRES_HOST: ClassVar[bool] = False
+
+    @classmethod
+    def fetch_models(
+        cls, host: str, api_key: str,
+    ) -> tuple[list[dict[str, str | None]] | None, str | None]:
+        """Google publishes the list against the key; there is no host to give."""
+        from services.provider_probe import fetch_gemini_models  # noqa: PLC0415
+        return fetch_gemini_models(api_key)
 
     def __init__(self, config: dict[str, object]) -> None:
         self._config = config
@@ -205,12 +228,28 @@ class GeminiClient(ProviderClient):
         )
 
     def _thinking_native(self, genai: "_Genai", level: ThinkingLevel, cfg: "_GenCfg") -> None:
-        """Inject thinking_config into cfg for NONE/MEDIUM/HIGH/MAX; LOW falls through."""
+        """Inject thinking_config into cfg.
+
+        LOW sends a ThinkingConfig with include_thoughts=True (no budget),
+        so the provider returns thought-summary parts we can capture.
+        NONE/MEDIUM/HIGH/MAX send a ThinkingConfig with a thinking_budget;
+        every level that actually thinks (budget > 0) also requests the
+        thought summaries.
+        """
         if level == ThinkingLevel.LOW:
+            cfg['thinking_config'] = genai.types.ThinkingConfig(include_thoughts=True)
+            logger.info(
+                "[THINKING] native flag passed: provider=gemini mode=%s model=%s include_thoughts=true",
+                level.value, self.model,
+            )
             return
         budget = GEMINI_THINKING_BUDGETS.get(level)
         if budget is not None:
-            cfg['thinking_config'] = genai.types.ThinkingConfig(thinking_budget=budget)
+            cfg['thinking_config'] = (
+                genai.types.ThinkingConfig(thinking_budget=budget, include_thoughts=True)
+                if budget > 0
+                else genai.types.ThinkingConfig(thinking_budget=budget)
+            )
             logger.info(
                 "[THINKING] native flag passed: provider=gemini mode=%s model=%s budget=%d",
                 level.value, self.model, budget,
@@ -235,15 +274,17 @@ class GeminiClient(ProviderClient):
         self._thinking_native(genai, thinking_mode, cfg)
         return cfg
 
-    def _parse_response(self, response: "_GenResponse") -> tuple[str, Optional[list[dict[str, object]]], Optional[str]]:
+    def _parse_response(self, response: "_GenResponse") -> tuple[str, Optional[list[dict[str, object]]], Optional[str], Optional[str]]:
         text_parts: list[str] = []
         tool_calls: list[dict[str, object]] = []
+        thinking_parts: list[str] = []
         candidate = response.candidates[0] if response.candidates else None
         if candidate is not None:
             for part in (cast("_Content", candidate.content).parts or []):
-                _accumulate_part(part, text_parts, tool_calls)
+                _accumulate_part(part, text_parts, tool_calls, thinking_parts)
         finish_reason = str(candidate.finish_reason) if candidate and candidate.finish_reason else None
-        return '\n'.join(text_parts), tool_calls or None, finish_reason
+        thinking_block = '\n'.join(thinking_parts) or None
+        return '\n'.join(text_parts), tool_calls or None, finish_reason, thinking_block
 
     def _classify_and_raise(self, exc: Exception, gen_cfg: "_GenCfg") -> tuple[bool, Optional[int]]:
         """Map a google-genai exception to a provider error, or signal thinking-fallback.
@@ -333,7 +374,9 @@ class GeminiClient(ProviderClient):
                 raise
             if retry_budget is not None:
                 retry_cfg = dict(gen_cfg)
-                retry_cfg['thinking_config'] = genai.types.ThinkingConfig(thinking_budget=retry_budget)
+                retry_cfg['thinking_config'] = genai.types.ThinkingConfig(
+                    thinking_budget=retry_budget, include_thoughts=True,
+                )
                 logger.info(
                     "[THINKING] provider=gemini model=%s — retried with budget=%d",
                     self.model, retry_budget,
@@ -370,7 +413,7 @@ class GeminiClient(ProviderClient):
 
         response = self._generate_with_fallback(client, genai, contents, gen_cfg)
         latency_ms = int((time.time() - start) * 1000)
-        text, tool_calls, finish_reason = self._parse_response(cast("_GenResponse", response))
+        text, tool_calls, finish_reason, thinking_block = self._parse_response(cast("_GenResponse", response))
 
         if not text and not tool_calls:
             raise ProviderResponseError(
@@ -403,6 +446,7 @@ class GeminiClient(ProviderClient):
             latency_ms=latency_ms,
             tool_calls=tool_calls,
             stop_reason=finish_reason,
+            thinking_block=thinking_block,
             response_code=200,
         )
 
@@ -435,34 +479,9 @@ class GeminiClient(ProviderClient):
         if isinstance(reported, int) and reported > 0:
             self._cached_context_limit = reported
         else:
-            self._cached_context_limit = default_window_for_model(self.model)
+            self._cached_context_limit = DEFAULT_WINDOW
             logger.info(
                 "[GeminiClient] No input_token_limit reported for model=%s — "
-                "using the family default %d", self.model, self._cached_context_limit,
+                "using DEFAULT_WINDOW %d", self.model, self._cached_context_limit,
             )
         return self._cached_context_limit
-
-    def estimate_request_tokens(self, dto: ProviderApiRequest) -> int:
-        """Estimate using build_request_body + heuristic estimate_tokens."""
-        from services.llm_service import estimate_tokens  # noqa: PLC0415
-        contents = _gemini_convert_messages(dto.messages)
-        config_dict: dict[str, object] = {'system_instruction': dto.system}
-        if dto.tools:
-            config_dict['tools'] = [
-                {
-                    'function_declarations': [
-                        {
-                            'name': t['name'],
-                            'description': t.get('description', ''),
-                            'parameters': t.get('input_schema'),
-                        }
-                        for t in dto.tools
-                    ]
-                }
-            ]
-        body = json.dumps({
-            'model': self.model,
-            'contents': contents,
-            'config': config_dict,
-        }, default=str)
-        return estimate_tokens(body)

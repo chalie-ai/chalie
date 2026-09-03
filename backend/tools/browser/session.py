@@ -31,8 +31,6 @@ import logging
 import re
 from typing import TYPE_CHECKING, cast
 
-from tools.browser.security import DnsCache, setup_page_security
-
 if TYPE_CHECKING:
     from typing import Protocol
 
@@ -62,7 +60,6 @@ if TYPE_CHECKING:
         def get_by_label(self, text: str) -> _Locator: ...
         def get_by_placeholder(self, text: str) -> _Locator: ...
         def get_by_text(self, text: str) -> _Locator: ...
-        def route(self, pattern: str, handler: object) -> None: ...
 
     class _Context(Protocol):
         def new_page(self) -> _Page: ...
@@ -81,6 +78,9 @@ if TYPE_CHECKING:
     class _Popup(Protocol):
         url: str
         def close(self) -> None: ...
+
+    class _Download(Protocol):
+        def cancel(self) -> None: ...
 
     class _Response(Protocol):
         status: int
@@ -175,13 +175,13 @@ class PageSession:
             ignore_https_errors=True,
         )
         self.page = self._context.new_page()
-        setup_page_security(self.page, DnsCache())
         self.page.set_default_navigation_timeout(_NAV_TIMEOUT_MS)
         self.page.set_default_timeout(_ACTION_TIMEOUT_MS)
         self._dialog: str | None = None
         self._popup: str | None = None
         self.page.on("dialog", self._on_dialog)
         self.page.on("popup", self._on_popup)
+        self.page.on("download", self._on_download)
 
     def alive(self) -> bool:
         try:
@@ -323,6 +323,13 @@ class PageSession:
         try:
             self._popup = cast("_Popup", popup).url
             cast("_Popup", popup).close()
+        except Exception:
+            pass
+
+    def _on_download(self, download: object) -> None:
+        """The browser never writes to disk — ``web_fetch`` owns saving files."""
+        try:
+            cast("_Download", download).cancel()
         except Exception:
             pass
 

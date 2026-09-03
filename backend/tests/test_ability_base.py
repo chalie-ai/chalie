@@ -6,10 +6,7 @@ The remaining metadata is carried by four zero-arg ``@abstractmethod`` getters
 (``get_summary`` / ``get_examples`` / ``get_search_tooltip`` /
 ``get_parameters``), and ``get_input_schema()`` is a ``@typing.final`` template
 method — the SINGLE place a tool descriptor is built and the SINGLE injection
-site for the framework field ``act_summary`` (always, required). The ``async``
-backgrounding flag is NOT a base-``Ability`` field: it is a delegate-only
-primitive added by ``DelegateAbility._inject_framework_fields`` (iff the bound
-processor's config sets ``SUPPORTS_ASYNC``), so plain tools never carry it.
+site for the framework field ``act_summary`` (always, required).
 The MessageProcessor is constructor-injected (``Ability(mp=...)`` → ``self.mp``).
 
 A subclass that omits a getter is *abstract* — it cannot be instantiated and so
@@ -29,11 +26,9 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 from abilities._ability import Ability
-from abilities._delegate import DelegateAbility
-from configs.channels import DmnConfig, UserConfig
 
 if TYPE_CHECKING:
-    from controllers.message_processor import MessageProcessor
+    pass
 
 pytestmark = pytest.mark.unit
 
@@ -41,10 +36,8 @@ _VALID_EXAMPLES = ["ex one", "ex two", "ex three", "ex four", "ex five", "ex six
 
 
 class _Mp:
-    """Minimal real MP-shaped context — ``_inject_framework_fields`` reads only
-    ``self.mp.config.SUPPORTS_ASYNC`` off it, carrying a REAL channel config
-    (UserConfig backgrounds, DmnConfig does not). Not a mock — the real config
-    object decides the gate."""
+    """Minimal real MP-shaped context carrying a REAL channel config — not a
+    mock, the real config object decides any gate that reads it."""
 
     def __init__(self, config: object) -> None:
         self.config = config
@@ -151,48 +144,5 @@ def test_act_summary_always_injected_and_required() -> None:
     assert "act_summary" in cast("dict[str, object]", schema["properties"])
     assert cast("dict[str, object]", cast("dict[str, object]", schema["properties"])["act_summary"])["type"] == "string"
     assert "act_summary" in cast("list[str]", schema["required"])
-    del cls
-    gc.collect()
-
-
-def test_async_is_delegate_only_never_on_a_plain_tool() -> None:
-    """async is a DELEGATE-ONLY primitive: a plain Ability NEVER exposes it, even
-    on a SUPPORTS_ASYNC channel — that is the structural bound against a plain
-    `read`/`shell` being backgrounded."""
-    cls = _make_subclass("_PlainAsyncProbe")
-
-    # Even on the SUPPORTS_ASYNC user channel, a plain tool has no async flag.
-    user_props = cast("dict[str, object]", cast("dict[str, object]", cls(mp=cast("MessageProcessor", _Mp(UserConfig({})))).get_input_schema()["input_schema"])["properties"])
-    assert "async" not in user_props
-    assert "act_summary" in user_props  # the base framework field is still injected
-
-    del cls
-    gc.collect()
-
-
-def test_async_injected_only_under_supports_async_config_for_delegates() -> None:
-    """On a DelegateAbility, async appears ONLY when the bound mp's config sets
-    SUPPORTS_ASYNC. It is a per-call deepcopy — never mutates get_parameters()."""
-    shared_params: dict[str, object] = {"type": "object", "properties": {}, "required": []}
-    cls = _make_subclass("_DelegateAsyncProbe", base=cast("type[Ability]", DelegateAbility), get_parameters=lambda self: shared_params)
-
-    # SUPPORTS_ASYNC channel (UserConfig) → async exposed.
-    user_props = cast("dict[str, object]", cast("dict[str, object]", cls(mp=cast("MessageProcessor", _Mp(UserConfig({})))).get_input_schema()["input_schema"])["properties"])
-    assert "async" in user_props
-    assert cast("dict[str, object]", user_props["async"])["type"] == "boolean"
-    assert cast("dict[str, object]", user_props["async"])["default"] is False
-
-    # Non-async channel (DmnConfig) → never exposed.
-    dmn_props = cast("dict[str, object]", cast("dict[str, object]", cls(mp=cast("MessageProcessor", _Mp(DmnConfig()))).get_input_schema()["input_schema"])["properties"])
-    assert "async" not in dmn_props
-
-    # No live processor (mp=None — build/introspection) → never exposed.
-    none_props = cast("dict[str, object]", cast("dict[str, object]", cls().get_input_schema()["input_schema"])["properties"])
-    assert "async" not in none_props
-
-    # The declared params dict was never mutated by any of the above.
-    assert "async" not in cast("dict[str, object]", shared_params["properties"])
-    assert "act_summary" not in cast("dict[str, object]", shared_params["properties"])
-
     del cls
     gc.collect()

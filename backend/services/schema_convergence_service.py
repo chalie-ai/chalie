@@ -135,9 +135,14 @@ class SchemaConvergenceService:
                 desired_tables, live_tables
             )
             if _destructive_allowed() and destructive_safe:
-                # Order: virtual tables first (cascades shadow tables) → indexes
-                # (some auto-drop with their owning table) → columns within
-                # surviving tables → stale regular tables last.
+                # Order: triggers first — SQLite re-parses every trigger body
+                # when a table is rewritten, so a stale trigger left behind
+                # (e.g. one feeding an already-dropped virtual table) fails
+                # every later ALTER TABLE in this pass → virtual tables (cascade
+                # shadow tables) → indexes (some auto-drop with their owning
+                # table) → columns within surviving tables → stale regular
+                # tables last.
+                triggers_dropped = self._drop_stale_triggers(desired_triggers, live_triggers, conn)
                 virtual_tables_dropped = self._drop_stale_virtual_tables(
                     desired_virtual, live_virtual, conn
                 )
@@ -150,7 +155,6 @@ class SchemaConvergenceService:
                 tables_dropped = self._drop_stale_tables(
                     desired_tables, live_tables, live_virtual, conn
                 )
-                triggers_dropped = self._drop_stale_triggers(desired_triggers, live_triggers, conn)
             else:
                 virtual_tables_dropped = indexes_dropped = columns_dropped = tables_dropped = 0
                 triggers_dropped = 0
@@ -173,7 +177,6 @@ class SchemaConvergenceService:
 
     def backfill_redesign_columns(self) -> None:
         with Database.transaction() as conn:
-            self._backfill_episode_columns(conn)
             self._backfill_data_graph_columns(conn)
             self._backfill_tool_call_columns(conn)
         logger.info("[convergence] Redesign-column backfill complete")
@@ -198,12 +201,6 @@ class SchemaConvergenceService:
         conn.execute(
             "UPDATE tool_calls SET state = 'done', ended_at = COALESCE(ended_at, created_at) "
             "WHERE state = 'started' AND ended_at IS NULL"
-        )
-
-    def _backfill_episode_columns(self, conn: sqlite3.Connection) -> None:
-        conn.execute(
-            "UPDATE episodes SET last_relevant_at = COALESCE(last_accessed_at, created_at) "
-            "WHERE last_relevant_at IS NULL"
         )
 
     def _backfill_data_graph_columns(self, conn: sqlite3.Connection) -> None:
@@ -781,8 +778,9 @@ class SchemaConvergenceService:
     def _strip_data_graph_check_constraint(self, live_conn: sqlite3.Connection) -> None:
         """Strip CHECK constraint from data_graph.kind on existing databases.
 
-        Python validates kind via VALID_KINDS in contracts/constants/data_graph.py.
-        To be removed when SchemaConvergence handles constraint changes fully.
+        Python validates kind via the vertical models' KIND ClassVars
+        (models/data_graph.py). To be removed when SchemaConvergence handles
+        constraint changes fully.
 
         The embedded ``data_graph_new`` DDL below must stay in lockstep with the
         ``data_graph`` table in schema.sql. The copy matches columns BY NAME
@@ -814,7 +812,7 @@ class SchemaConvergenceService:
                     source            TEXT,
                     deleted_at        TEXT,
                     active            INTEGER NOT NULL DEFAULT 1,
-                    search_queries    TEXT DEFAULT NULL,
+                    indexed_at        TEXT DEFAULT NULL,
                     valid_from        TEXT,
                     valid_to          TEXT
                 )

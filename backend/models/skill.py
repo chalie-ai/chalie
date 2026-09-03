@@ -9,8 +9,7 @@ Active-record row-model (Rule 5 / §4.1), bound to the dedicated
 per-thread getter :meth:`~models.model.Model.bind` installs onto the base at
 boot (owner ruling: skills.sqlite is a separate db file the base's
 chalie.db-bound getter can never resolve). ``Database``/``FileMapperService``
-are the ONE sanctioned service import on this model and its sibling
-:class:`~models.skill_association.SkillAssociation` — every other model
+are the ONE sanctioned service import on this model — every other model
 reaches the DB purely through the bound getter.
 
 Holds no ``mp``, calls no other service. The ``skill_search_entries`` /

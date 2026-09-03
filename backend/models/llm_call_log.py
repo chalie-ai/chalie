@@ -20,6 +20,7 @@ class LlmCallLog(Model):
         "type",
         "provider",
         "model",
+        "channel",
         "tokens_input",
         "tokens_output",
         "tokens_cache_read",

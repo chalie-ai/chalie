@@ -61,11 +61,13 @@ _STEPS: tuple[tuple[str, str], ...] = (
     ("scheduled-items-cron-wipe-v1", "migrations.migration_007_scheduler_cron"),
     ("scheduled-items-prompt-only-v2", "migrations.migration_008_scheduler_prompt_only"),
     ("system-kind-split-migration-v1", "migrations.migration_009_system_kind_split"),
-    ("episode-search-queries-migration-v1", "migrations.migration_010_episode_search_queries"),
+    ("search-indexed-at-backfill-v1", "migrations.migration_019_search_indexed_at_backfill"),
     ("data-graph-document-purge-v1", "migrations.migration_015_purge_document_data_graph_rows"),
     ("providers-context-window-v1", "migrations.migration_016_providers_context_window"),
     ("llm-call-log-timings-v1", "migrations.migration_017_llm_call_log_timings"),
     ("usage-type-foreground-background-v1", "migrations.migration_018_usage_type_foreground_background"),
+    ("user-synthesis-seed-v1", "migrations.migration_020_seed_user_synthesis"),
+    ("mcp-server-token-removal-v1", "migrations.migration_021_drop_mcp_server_token"),
 )
 
 # Extra wrapper-era sentinel stems a step's resolution must also satisfy:

@@ -8,6 +8,8 @@ from flask.testing import FlaskClient
 from api.system import health_ns, system_ns
 from configs.enums.channels import Channel
 from models.compaction import Compaction
+from models.memory_graph import MemoryGraphRow
+from models.memory_map import MemoryMapRow
 from services.memory_store import MemoryStore
 from tests.restx_test_app import mount_namespace
 
@@ -42,12 +44,11 @@ class TestSystemAPI:
     def test_system_status_returns_expected_keys(self, client: FlaskClient, db: sqlite3.Connection) -> None:
         """GET /system/status returns status, memory, storage top-level keys."""
         store = MemoryStore()
-        # Seed 2 keys for each memory namespace so counts == 2.
-        for ns in ('working_memory', 'gist_index', 'fact_index'):
-            store.set(f'{ns}:a', 'x')
-            store.set(f'{ns}:b', 'x')
-        # Seed DMN delivery ZSET with a recent entry.
-        store.zadd('dmn:deliveries', {'test-delivery': 1711500000.0})
+        # Seed 2 working-memory keys so the count == 2.
+        store.set('working_memory:a', 'x')
+        store.set('working_memory:b', 'x')
+        # One graph fact; the map stays empty.
+        MemoryGraphRow(subject='favorite_color', contents='blue').save()
 
         with patch('services.memory_client.MemoryClientService.create_connection', return_value=store):
             resp = client.get('/api/system/status')
@@ -57,10 +58,9 @@ class TestSystemAPI:
         assert data['status'] == 'ok'
         assert 'memory' in data
         assert 'storage' in data
-        # Memory keys should reflect store.keys() calls (3 calls: working_memory, gist, fact)
         assert data['memory']['working_memory_keys'] == 2
-        assert data['memory']['gist_keys'] == 2
-        assert data['memory']['fact_keys'] == 2
+        assert data['storage']['graph'] == 1
+        assert data['storage']['map'] == 0
 
     def test_system_status_degraded_when_store_fails(self, client: FlaskClient, db: sqlite3.Connection) -> None:
         """GET /system/status reports 'degraded' when MemoryStore ping raises."""
@@ -80,102 +80,48 @@ class TestSystemAPI:
 
     # GET /system/observability/records
 
-    def test_records_episodes_source_returns_gist_and_location(self, client: FlaskClient, db: sqlite3.Connection) -> None:
-        """Episodes source returns value=gist + location, ordered by COALESCE(last_relevant_at, created_at) DESC.
-
-        : last_accessed_at is write-dead; the endpoint now projects and orders by
-        COALESCE(last_relevant_at, created_at). A row with NULL last_relevant_at sorts by
-        its created_at — there is no NULLs-last behaviour anymore.
-
-        Seed:
-          ep-a: created=Jan-01, last_relevant_at=Jan-03  → sort key Jan-03 (third)
-          ep-b: created=Jan-02, last_relevant_at=Jan-04  → sort key Jan-04 (first)
-          ep-c: created=Jan-05, last_relevant_at=NULL     → sort key Jan-05 via COALESCE (second)
-        """
-        db.execute(
-            "INSERT INTO episodes (id, gist, salience, channel, created_at, last_relevant_at, location_name) "
-            "VALUES ('ep-a', 'first gist', 5, 'user', '2026-01-01T00:00:00', '2026-01-03T00:00:00', 'Valletta, Malta')"
-        )
-        db.execute(
-            "INSERT INTO episodes (id, gist, salience, channel, created_at, last_relevant_at, location_name) "
-            "VALUES ('ep-b', 'second gist', 5, 'user', '2026-01-02T00:00:00', '2026-01-04T00:00:00', NULL)"
-        )
-        db.execute(
-            "INSERT INTO episodes (id, gist, salience, channel, created_at) "
-            "VALUES ('ep-c', 'null relevant', 5, 'user', '2026-01-05T00:00:00')"
-        )
-        db.commit()
-
-        resp = client.get('/api/system/observability/records?source=episodes')
-
-        assert resp.status_code == 200
-        data = resp.get_json()
-        assert data['source'] == 'episodes'
-        assert data['returned'] == 3
-        values = [r['value'] for r in data['rows']]
-        # ep-c (sort key Jan-05 via COALESCE) first; ep-b (sort key Jan-04) second; ep-a (Jan-03) third
-        assert values[0] == 'null relevant'
-        assert values[1] == 'second gist'
-        assert values[2] == 'first gist'
-        # NULL last_relevant_at row sorts by its created_at (Jan-05) — ends up FIRST, not last
-        assert values.index('null relevant') == 0
-        # location passthrough
-        row = next(r for r in data['rows'] if r['value'] == 'first gist')
-        assert row['location'] == 'Valletta, Malta'
-        assert 'key' not in row
-        row_null_loc = next(r for r in data['rows'] if r['value'] == 'second gist')
-        assert row_null_loc['location'] == ''
-
     def test_records_search_filters_by_like(self, client: FlaskClient, db: sqlite3.Connection) -> None:
-        """Search param filters gist (episodes) and key/value (data_graph)."""
-        now_iso = '2026-01-01T00:00:00+00:00'
+        """q substring-filters graph rows (subject/contents); map rows serialise
+        source-as-key with contents as value."""
+        MemoryGraphRow(subject='favorite_color', contents='blue').save()
+        MemoryGraphRow(subject='pet_name', contents='Rex').save()
+        map_row = MemoryMapRow(
+            contents='Went hiking in the Alps',
+            source='Alpine holiday in July 2026',
+            cues='hiking, mountains',
+            iteration=2,
+        ).save()
+        # save() stamps generated_at itself — pin it so the wire mapping
+        # (last_accessed ← generated_at) is assertable deterministically.
         db.execute(
-            "INSERT INTO data_graph (kind, key, value, first_seen_at, last_confirmed_at) "
-            "VALUES ('user_specific', 'favorite_color', 'blue', ?, ?)",
-            (now_iso, now_iso),
-        )
-        db.execute(
-            "INSERT INTO data_graph (kind, key, value, first_seen_at, last_confirmed_at) "
-            "VALUES ('user_specific', 'pet_name', 'Rex', ?, ?)",
-            (now_iso, now_iso),
+            "UPDATE memory_map SET generated_at = '2026-01-01T00:00:00+00:00' WHERE id = ?",
+            (map_row.id,),
         )
         db.commit()
 
-        resp = client.get('/api/system/observability/records?source=user&q=blue')
-
+        resp = client.get('/api/system/observability/records?source=graph&q=blue')
         assert resp.status_code == 200
         data = resp.get_json()
         assert data['returned'] == 1
         assert data['rows'][0]['key'] == 'favorite_color'
+        assert data['rows'][0]['value'] == 'blue'
 
-    def test_records_pagination_offset_works(self, client: FlaskClient, db: sqlite3.Connection) -> None:
-        """First page returns 250 rows with has_more=true; offset=250 returns remainder."""
-        now_iso = '2026-01-01T00:00:00+00:00'
-        for i in range(260):
-            db.execute(
-                "INSERT INTO episodes (id, gist, salience, channel, created_at) "
-                "VALUES (?, ?, 5, 'user', ?)",
-                (f'ep-{i:04d}', f'gist {i}', now_iso),
-            )
-        db.commit()
-
-        resp1 = client.get('/api/system/observability/records?source=episodes')
-        assert resp1.status_code == 200
-        data1 = resp1.get_json()
-        assert data1['returned'] == 250
-        assert data1['has_more'] is True
-
-        resp2 = client.get('/api/system/observability/records?source=episodes&offset=250')
-        assert resp2.status_code == 200
-        data2 = resp2.get_json()
-        assert data2['returned'] == 10
-        assert data2['has_more'] is False
+        resp = client.get('/api/system/observability/records?source=map')
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data['returned'] == 1
+        assert data['rows'][0]['key'] == 'Alpine holiday in July 2026'
+        assert data['rows'][0]['value'] == 'Went hiking in the Alps'
+        assert data['rows'][0]['last_accessed'] == '2026-01-01T00:00:00+00:00'
+        # The tags a memory is found by are not part of what it is.
+        assert 'hiking, mountains' not in resp.get_data(as_text=True)
 
     def test_records_invalid_source_400(self, client: FlaskClient, db: sqlite3.Connection) -> None:
-        """Unknown source returns 400 with error payload."""
-        resp = client.get('/api/system/observability/records?source=bogus')
-        assert resp.status_code == 400
-        assert resp.get_json()['error'] == 'invalid source'
+        """Unknown source returns 400 — including the retired user/system sources."""
+        for source in ('bogus', 'user', 'system'):
+            resp = client.get(f'/api/system/observability/records?source={source}')
+            assert resp.status_code == 400
+            assert resp.get_json()['error'] == 'invalid source'
 
     # GET /system/observability/tools
 

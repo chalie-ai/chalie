@@ -66,11 +66,34 @@ _install -e "$SCRIPT_DIR/backend"
 # Loop: Python exits with code 42 to request a restart (e.g. to apply a staged
 # snapshot restore or new network settings).
 # Any other exit code passes through normally.
+#
+# Python runs as a background job so this wrapper stays responsive to signals.
+# CHALIE_PID_FILE (set by the `chalie` CLI) receives Python's OWN pid: stopping
+# Chalie means interrupting Python, and signalling this wrapper instead would
+# leave Python running with the listen socket still bound.
+_PY_PID=""
+_forward_signal() {
+  if [[ -n "$_PY_PID" ]]; then
+    kill -INT "$_PY_PID" 2>/dev/null || true
+  fi
+}
+trap _forward_signal INT TERM
+
 while true; do
+  "$PYTHON" "$SCRIPT_DIR/backend/run.py" --port="$_PORT" --host="$_HOST" &
+  _PY_PID=$!
+  if [[ -n "${CHALIE_PID_FILE:-}" ]]; then
+    printf '%s\n' "$_PY_PID" > "$CHALIE_PID_FILE"
+  fi
   # set -e would kill the script on run.py's non-zero exit before we could
   # read it, defeating the restart loop. Capture via `||` (exempt from errexit).
   _EXIT=0
-  "$PYTHON" "$SCRIPT_DIR/backend/run.py" --port="$_PORT" --host="$_HOST" || _EXIT=$?
+  wait "$_PY_PID" || _EXIT=$?
+  # A trapped signal makes `wait` return before the child is reaped — wait again.
+  while kill -0 "$_PY_PID" 2>/dev/null; do
+    _EXIT=0
+    wait "$_PY_PID" || _EXIT=$?
+  done
   if [[ "$_EXIT" -ne 42 ]]; then
     exit $_EXIT
   fi

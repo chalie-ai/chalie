@@ -122,7 +122,7 @@ def test_raw_personal_info_tools_never_surface(db: object, query: list[str]) -> 
 
 
 def test_default_roster_does_not_expose_personal_info() -> None:
-    """The shared default roster (carried by the user, DMN, external-agent and
+    """The shared default roster (carried by the user, external-agent and
     scheduled channels) must not pin any personal-info tool — otherwise the split
     would leak to every channel that inherits it."""
     assert _RAW_SET.isdisjoint(DEFAULT_ALWAYS_AVAILABLE), (
@@ -194,8 +194,8 @@ def test_pim_delegate_pins_exactly_its_toolset() -> None:
     """The delegate is pinned exactly to its four tools — the three personal-info
     tools it owns plus memory — no more, no less."""
     always_available = PimConfig(PolicyChannel.CHAT).always_available
-    assert set(always_available) == {"email", "calendar", "contacts", "memory"}, (
-        f"pim delegate must pin exactly email/calendar/contacts/memory. "
+    assert set(always_available) == {"email", "calendar", "contacts", "recall"}, (
+        f"pim delegate must pin exactly email/calendar/contacts/recall. "
         f"always_available={always_available!r}"
     )
 

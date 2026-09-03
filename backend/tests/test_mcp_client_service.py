@@ -82,13 +82,13 @@ def test_resolve_tool_routes_to_longest_prefix_server(db: sqlite3.Connection) ->
 
 
 # ---------------------------------------------------------------------------
-# Test 4 — get_online_mcp_tool_names gates on enabled=1 AND status=online
+# Test 4 — get_connected_mcp_tool_names gates on enabled=1 AND connected
 # ---------------------------------------------------------------------------
 
 
-def test_get_online_mcp_tool_names_excludes_disabled_and_offline(db: sqlite3.Connection, tmp_path: object, monkeypatch: pytest.MonkeyPatch) -> None:
-    """get_online_mcp_tool_names returns tool names only for servers that are
-    both enabled=1 AND status='online' - the gate mcp_tools uses to control
+def test_get_connected_mcp_tool_names_excludes_disabled_and_not_connected(db: sqlite3.Connection, tmp_path: object, monkeypatch: pytest.MonkeyPatch) -> None:
+    """get_connected_mcp_tool_names returns tool names only for servers that
+    are both enabled=1 AND connected - the gate mcp_tools uses to control
     LLM visibility.
 
     _DATA_DIR is redirected to tmp_path so mcp_tools.sqlite lands in a fresh
@@ -102,38 +102,30 @@ def test_get_online_mcp_tool_names_excludes_disabled_and_offline(db: sqlite3.Con
 
     svc = McpClientService()
 
-    # Server A: enabled=1, status='online' → should appear.
-    server_a = svc.add_server(name="online_svc", host="http://a:1", headers={}, enabled=True)
-    # Server B: enabled=0, status='online' (disabled) → must NOT appear.
+    # Server A: enabled=1, connected → should appear.
+    server_a = svc.add_server(name="connected_svc", host="http://a:1", headers={}, enabled=True)
+    # Server B: enabled=0, connected (disabled) → must NOT appear.
     server_b = svc.add_server(name="disabled_svc", host="http://b:1", headers={}, enabled=False)
-    # Server C: enabled=1, status='offline' → must NOT appear.
-    server_c = svc.add_server(name="offline_svc", host="http://c:1", headers={}, enabled=True)
+    # Server C: enabled=1, not connected → must NOT appear.
+    server_c = svc.add_server(name="unconnected_svc", host="http://c:1", headers={}, enabled=True)
 
-    # Manually write status values to the DB (bypassing ping_and_sync which needs network).
-    # mcp_client_servers lives in chalie.db — the connection the db fixture yields is the
-    # same handle the service reaches via Database.conn().
-    db.execute(
-        "UPDATE mcp_client_servers SET status='online' WHERE id=?", (server_a["id"],)
-    )
-    db.execute(
-        "UPDATE mcp_client_servers SET status='online' WHERE id=?", (server_b["id"],)
-    )
-    db.execute(
-        "UPDATE mcp_client_servers SET status='offline' WHERE id=?", (server_c["id"],)
-    )
-    db.commit()
+    # Mark A and B connected straight in the process-memory map (bypassing
+    # ping_and_sync, which needs network); C stays absent = not connected.
+    McpClientService._connected[cast(str, server_a["id"])] = True
+    McpClientService._connected[cast(str, server_b["id"])] = True
 
     # Seed fake tool rows directly into mcp_tools.sqlite via the real production writer.
-    from services.mcp_client_service import _open_tools_db
+    from services.mcp_tools_db import get_tools_connection
 
-    # _open_tools_db() hands back the Database gateway's cached mcp_tools.sqlite
-    # connection; the db fixture's Database.close() teardown owns its lifecycle,
-    # so callers never close it (closing would poison the per-thread registry).
-    conn_tools = _open_tools_db()
+    # get_tools_connection() hands back the Database gateway's cached
+    # mcp_tools.sqlite connection; the db fixture's Database.close() teardown
+    # owns its lifecycle, so callers never close it (closing would poison the
+    # per-thread registry).
+    conn_tools = get_tools_connection()
     for srv_id, srv_name in [
-        (server_a["id"], "online_svc"),
+        (server_a["id"], "connected_svc"),
         (server_b["id"], "disabled_svc"),
-        (server_c["id"], "offline_svc"),
+        (server_c["id"], "unconnected_svc"),
     ]:
         tool_name = f"_mcp_{_sanitize_name(srv_name)}_fetch"
         conn_tools.execute(
@@ -143,16 +135,16 @@ def test_get_online_mcp_tool_names_excludes_disabled_and_offline(db: sqlite3.Con
         )
     conn_tools.commit()
 
-    online_names = svc.get_online_mcp_tool_names()
+    connected_names = svc.get_connected_mcp_tool_names()
 
-    assert "_mcp_online_svc_fetch" in online_names, (
-        "Enabled+online server's tool must be discoverable"
+    assert "_mcp_connected_svc_fetch" in connected_names, (
+        "Enabled+connected server's tool must be discoverable"
     )
-    assert "_mcp_disabled_svc_fetch" not in online_names, (
-        "Disabled server's tool must NOT be discoverable (even if status=online)"
+    assert "_mcp_disabled_svc_fetch" not in connected_names, (
+        "Disabled server's tool must NOT be discoverable (even if connected)"
     )
-    assert "_mcp_offline_svc_fetch" not in online_names, (
-        "Offline server's tool must NOT be discoverable (even if enabled)"
+    assert "_mcp_unconnected_svc_fetch" not in connected_names, (
+        "Not-connected server's tool must NOT be discoverable (even if enabled)"
     )
 
 
@@ -162,8 +154,9 @@ def test_get_online_mcp_tool_names_excludes_disabled_and_offline(db: sqlite3.Con
 
 
 def test_add_server_persists_row_with_correct_defaults(db: sqlite3.Connection) -> None:
-    """add_server persists to mcp_client_servers with status='unknown' and
-    JSON-serialized headers; verifies the row is actually in the DB.
+    """add_server persists to mcp_client_servers with JSON-serialized headers
+    and reports the new row as not connected; verifies the row is actually in
+    the DB.
     """
     svc = McpClientService()
     server = svc.add_server(
@@ -173,9 +166,9 @@ def test_add_server_persists_row_with_correct_defaults(db: sqlite3.Connection) -
         enabled=True,
     )
 
-    assert server["status"] == "unknown", (
-        "New server status must start as 'unknown' — "
-        "not 'online' (which requires a successful ping)"
+    assert server["connected"] is False, (
+        "A new server must start not connected — "
+        "only a successful ping flips the flag"
     )
     assert server["enabled"] is True
     assert server["name"] == "my-server"
@@ -186,14 +179,13 @@ def test_add_server_persists_row_with_correct_defaults(db: sqlite3.Connection) -
 
     # Row is actually in the DB — not just in the returned dict.
     row = db.execute(
-        "SELECT id, name, status, enabled FROM mcp_client_servers WHERE id = ?",
+        "SELECT id, name, enabled FROM mcp_client_servers WHERE id = ?",
         (server["id"],),
     ).fetchone()
 
     assert row is not None
     assert row[1] == "my-server"
-    assert row[2] == "unknown"
-    assert row[3] == 1  # enabled=True → INTEGER 1
+    assert row[2] == 1  # enabled=True → INTEGER 1
 
 
 # ---------------------------------------------------------------------------
@@ -255,7 +247,8 @@ def test_get_tool_schema_round_trips_stored_input_schema(db: sqlite3.Connection,
 # Dedup / idempotent upsert on add
 # ---------------------------------------------------------------------------
 
-from services.mcp_client_service import _normalize_host, _open_tools_db  # noqa: E402
+from services.mcp_client_service import _normalize_host  # noqa: E402
+from services.mcp_tools_db import get_tools_connection  # noqa: E402
 
 
 @pytest.mark.parametrize("a,b", [
@@ -322,7 +315,7 @@ def test_add_server_upsert_name_change_purges_old_prefix_rows(db: sqlite3.Connec
                        headers={}, enabled=True)
     old_tool = _tool_name("tasker", "create_document")
 
-    conn = _open_tools_db()
+    conn = get_tools_connection()
     conn.execute(
         "INSERT INTO mcp_tools (server_id, tool_name, summary, raw_schema) "
         "VALUES (?, ?, ?, ?)",
@@ -340,7 +333,7 @@ def test_add_server_upsert_name_change_purges_old_prefix_rows(db: sqlite3.Connec
     svc.add_server(name="tasker2", host="https://mcp.example.com/mcp",
                    headers={}, enabled=True)
 
-    tool_count = _open_tools_db().execute(
+    tool_count = get_tools_connection().execute(
         "SELECT COUNT(*) FROM mcp_tools WHERE tool_name = ?", (old_tool,)
     ).fetchone()[0]
     policy_count = db.execute(
@@ -352,3 +345,53 @@ def test_add_server_upsert_name_change_purges_old_prefix_rows(db: sqlite3.Connec
     servers = svc.list_servers()
     assert len(servers) == 1
     assert servers[0]["name"] == "tasker2"
+
+
+# ---------------------------------------------------------------------------
+# Fresh-DB read paths — the bug that crashed mcp_manager list on a new install
+# ---------------------------------------------------------------------------
+
+
+def test_read_paths_succeed_on_a_fresh_mcp_tools_db(
+    db: sqlite3.Connection, tmp_path: object, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every read path into mcp_tools.sqlite must work when the file exists
+    but has never had its schema created — a fresh install where a server is
+    registered but has never successfully pinged and synced.
+
+    Before the fix this raised ``sqlite3.OperationalError: no such table:
+    mcp_tools`` because ``McpTool._bound_connection`` opened the DB without
+    running ``_open_tools_db``'s schema-ensuring script.  The fix routes
+    every open through ``get_tools_connection`` which runs the idempotent
+    ``CREATE TABLE IF NOT EXISTS`` on every access.
+
+    We prove the three read methods that feed mcp_manager list return their
+    normal empty-value results instead of crashing.
+    """
+    monkeypatch.setattr(FileMapperService, "_DATA_DIR", tmp_path)
+
+    svc = McpClientService()
+
+    # Register a server so mcp_manager list has a row to report — but never
+    # sync it, so mcp_tools.sqlite is created (by the first read) without
+    # any schema and no tool rows.
+    server = svc.add_server(
+        name="fresh-server", host="https://mcp.example.com/mcp",
+        headers={}, enabled=True,
+    )
+    server_id = cast(str, server["id"])
+
+    # These three calls are the exact read paths that used to crash.
+    tool_rows = svc.get_server_tools(server_id)
+    connected_names = svc.get_connected_mcp_tool_names()
+    tool_schema = svc.get_tool_schema("_mcp_fresh_server_some_tool")
+
+    assert tool_rows == [], (
+        f"get_server_tools must return [] on a fresh DB, got {tool_rows!r}"
+    )
+    assert connected_names == [], (
+        f"get_connected_mcp_tool_names must return [] on a fresh DB, got {connected_names!r}"
+    )
+    assert tool_schema is None, (
+        f"get_tool_schema must return None for an unknown tool on a fresh DB, got {tool_schema!r}"
+    )

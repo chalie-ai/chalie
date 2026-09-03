@@ -47,9 +47,9 @@ decides normally.
 over-cap) → store any prose → dispatch tool calls → recurse; it bottoms out when
 the model returns a turn with no tool calls. The first ``_step()`` is isolated onto
 the daemon thread by ``begin()``; every recursive call is synchronous within that
-thread. Synchronous text-consumers (delegate abilities, mcp_server,
-skill_association) call ``process()`` then ``result()`` to join the thread and
-read the final text.
+thread. Synchronous text-consumers (delegate abilities, mcp_server, the
+user-synthesis generator) call ``process()`` then ``result()`` to join the
+thread and read the final text.
 """
 
 from __future__ import annotations
@@ -57,7 +57,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-import shutil
 from collections import Counter
 from threading import Thread
 from typing import TYPE_CHECKING, Protocol, cast
@@ -76,7 +75,7 @@ from exceptions import (
 from models.provider_request import ProviderRequest
 from models.turn_execution import TurnExecution
 from models.transcript import Transcript
-from services.behavioral_pattern_service import BehavioralPatternService
+from models.transcript_thinking import TranscriptThinking
 from services.compaction_service import CompactionService
 from services.database import Database
 from services.dispatch_service import DispatchService
@@ -87,7 +86,6 @@ from services.provider_service import ProviderService
 from services.tool_call_service import ToolCallService
 from services.transcript_service import TranscriptService
 from services.turn_execution_service import TurnExecutionService
-from services.user_synthesis import UserSynthesis
 from services.websocket import Websocket
 
 if TYPE_CHECKING:
@@ -172,12 +170,17 @@ class MessageProcessor:
         self.active_tools: list[str] = []
         self.thinking_level: str = "low"
         self.thinking_override: str | None = None
-        self.post_compaction_continuation: bool = False
+        self.turn_handover: str = ""
         self.seeding_turn_zero: bool = False
+        self._placed_attachments: list[str] = []
         self._trigger_channel: str | None = cast("str | None", self.metadata.get("trigger_channel"))
         self._trigger_turn_id: int | None = cast("int | None", self.metadata.get("trigger_turn_id"))
         self._thread: Thread | None = None
         self._result_text: str = ""
+        # Stashes the caught exception (if any) so callers can isinstance-check
+        # the crash's exception class — the stop_reason string loses that. None
+        # on clean turns.
+        self.crash_exception: Exception | None = None
 
         # Runaway-loop guard tallies — scoped to this turn_execution (this
         # instance persists across the whole recursive _step chain). Keyed by
@@ -210,7 +213,6 @@ class MessageProcessor:
         self.turn_execution_service = TurnExecutionService(self)
         self.provider_service = ProviderService(self)
         self.compaction_service = CompactionService(self)
-        self.behavioral_pattern_service = BehavioralPatternService(self)
         self.dispatch_service = DispatchService(self)
         self.llm_log_service = LlmLogService(self)
         self.prompt_service = PromptService(self)
@@ -232,6 +234,23 @@ class MessageProcessor:
 
     # ── entrypoint ─────────────────────────────────────────────────────────────
 
+    @property
+    def origin(self) -> dict[str, object] | None:
+        """The interactive turn a policy prompt raised by this turn belongs to,
+        or ``None`` when nobody could answer one.
+
+        A turn has a surface iff its config streams live state
+        (``BROADCASTS_STATE``) and it owns a real turn id — exactly the turns
+        the interface can render and reply to. A nested delegate inherits its
+        caller's origin through ``metadata["origin"]``, so the prompt lands where
+        the user is rather than on the delegate's own hidden turn."""
+        inherited = self.metadata.get("origin")
+        if inherited is not None:
+            return cast("dict[str, object]", inherited)
+        if self.config.BROADCASTS_STATE and self.turn_id != -1:
+            return {"type": self.config.type_value(), "turn_id": self.turn_id, "forked": self._forked}
+        return None
+
     @classmethod
     def process(
         cls,
@@ -251,9 +270,16 @@ class MessageProcessor:
     def begin(self) -> None:
         """Synchronous turn setup, then hand off to the drive thread. The
         turn-id allocation, fork guard and input row land in one single-writer
-        transaction (§6.8); the execution row opens right after so
-        ``mp.execution`` is set before the thread starts. ``begin()`` never
-        joins — it returns the instant the daemon is running."""
+        transaction (§6.8). Attachments land *after* that transaction commits
+        and *before* the execution row opens: after, because copying a file of
+        arbitrary size inside ``BEGIN IMMEDIATE`` would hold SQLite's write
+        lock for the length of the copy; before, because the ``working`` frame
+        ``open()`` emits is the cue clients refetch on — a turn announced
+        before its ``transcript_files`` rows exist renders without its
+        attachments and nothing signals them again (turn-zero seeding is WS-
+        silent). Then the execution row opens so ``mp.execution`` is set before
+        the thread starts. ``begin()`` never joins — it returns the instant the
+        daemon is running."""
         with self.db.transaction():
             self.turn_id = self.transcript_service.allocate_turn()
             if self.config.external_turn_id:
@@ -265,6 +291,7 @@ class MessageProcessor:
                 raise ValueError("Invalid turn_id specified")
             self.uid = self._open_input_row()
             self.current_transcript_id = self.uid
+        self._land_attachments()
         self.turn_execution_service.open()
         self.metadata["turn_id"] = self.turn_id
         self._thread = Thread(target=self._drive, daemon=True, name=f"turn-{self.turn_id}")
@@ -282,8 +309,8 @@ class MessageProcessor:
 
     def result(self) -> str:
         """Join the drive thread and return the turn's final text — the
-        synchronous read for text-consuming callers (delegate abilities,
-        skill-association). Fire-and-forget callers simply ignore it."""
+        synchronous read for text-consuming callers (delegate abilities, the
+        user-synthesis generator). Fire-and-forget callers simply ignore it."""
         if self._thread is not None:
             self._thread.join()
         return self._result_text
@@ -305,6 +332,7 @@ class MessageProcessor:
             self.turn_execution_service.finish(TurnExecution.CANCELLED)
         except Exception as exc:  # noqa: BLE001 — the drive thread is the last line of defence
             logger.exception("[MessageProcessor] turn %s crashed", self.turn_id)
+            self.crash_exception = exc
             self.turn_execution_service.finish(TurnExecution.CRASHED, str(exc))
 
     def _step(self) -> str:
@@ -338,7 +366,6 @@ class MessageProcessor:
             limit.recover()
             return self._step()
         self._context_limit_hits = 0
-        self.post_compaction_continuation = False
         if self.turn_execution_service.should_stop():
             raise _TurnCancelled()
         tool_calls = response.tool_calls
@@ -350,6 +377,10 @@ class MessageProcessor:
                 # an empty assistant row and render silence as an answered
                 # turn. A turn that DID run tools may still finish silently —
                 # background channels end that way by design.
+                # A thinking-only response still carries evidence: persist its
+                # trace (before the loop guard can raise) so the steered retry
+                # re-reads it via the act trail instead of re-deriving blind.
+                self._capture_thinking_trace(response)
                 self._empty_completions += 1
                 if self._empty_completions > _EMPTY_COMPLETION_STEER_LIMIT:
                     raise EmptyCompletionLoop(
@@ -364,11 +395,13 @@ class MessageProcessor:
                 self._empty_completion_steer = True
                 return self._step()
             formatted = self._store(response.text)
+            self._capture_thinking_trace(response)
             self._end(response.text)
             return formatted
         self._guard_runaway(response.text, tool_calls)
         if response.text:
             self._store(response.text)
+        self._capture_thinking_trace(response)
         self._dispatch_tools(tool_calls)
         return self._step()
 
@@ -409,8 +442,7 @@ class MessageProcessor:
 
     def _build_request(self) -> ProviderRequest:
         """Assemble this step's provider-neutral request off the prompt and tool
-        services (§4). The system prompt already carries the async guidance the
-        config warrants — this controller does not append it."""
+        services (§4)."""
         from abilities._registry import AbilityRegistry  # noqa: PLC0415
         tools = AbilityRegistry.build_tools(self)
         thinking_str = self.provider_service.resolve_thinking_mode()
@@ -462,12 +494,38 @@ class MessageProcessor:
         self.current_transcript_id = self.transcript_service.append_assistant(formatted)
         return formatted
 
+    def _capture_thinking_trace(self, response: "ProviderResponse") -> None:
+        """Persist one ``transcript_thinking`` row when the provider returned a
+        non-empty ``thinking_block``. Skips entirely when ``skip_transcript`` is
+        set (same gate as ``_store`` — those channels have no transcript anchor).
+        The trace is captured after the cancel checkpoint and after any prose
+        storage for this response, so the anchor is fresh:
+        ``current_transcript_id if set else uid`` — exactly the rule
+        ``ToolCallService._transcript_id`` uses. A settled response anchors to
+        its own stored row; a tool-calls-only response (no prose) anchors to the
+        prior anchor, same as its tool calls."""
+        if self.config.skip_transcript:
+            return
+        trace = response.thinking_block
+        if not trace:
+            return
+        transcript_id = (
+            self.current_transcript_id
+            if self.current_transcript_id is not None
+            else self.uid
+        )
+        if transcript_id is None:
+            return
+        duration_ms = response.latency_ms or 0
+        tokens = response.tokens_thinking or 0
+        TranscriptThinking.insert(transcript_id, trace, duration_ms, tokens)
+
     def _format(self, text: str) -> str:
         """Render markdown to HTML for surface-broadcasting channels; pass raw
-        text through for background/silent channels (``broadcast_to`` is None).
+        text through for background/silent channels (``RENDERS_HTML`` False).
         HTML branch is sanitized at the persist-time boundary so both the live
         WS send and the GET/refresh read paths inherit it."""
-        if self.config.broadcast_to is not None:
+        if self.config.RENDERS_HTML:
             from services.markup import markdown_to_html, sanitize  # noqa: PLC0415
             return sanitize(markdown_to_html(text))
         return text or ""
@@ -494,7 +552,7 @@ class MessageProcessor:
         to steer the model from the second identical call. The count was tallied
         by :meth:`_guard_runaway` BEFORE dispatch, so a call that has not yet
         dispatched has not yet been counted. Dispatches bypassing ``_step``
-        (compactor, document upload, async delegate's dedicated mp) have zero
+        (compactor, document upload) have zero
         tally and never steer here."""
         return self._tool_invocations[self._invocation_key(tool_name, canonical_params)]
 
@@ -553,8 +611,6 @@ class MessageProcessor:
         if self.turn_execution_service.should_stop():
             raise _TurnCancelled()
         self._post_turn(response_text)
-        from services.episodic_service import EpisodicService  # noqa: PLC0415
-        EpisodicService().check_and_store(self.config)
         return response_text
 
     def _post_turn(self, response_text: str) -> None:
@@ -563,24 +619,28 @@ class MessageProcessor:
         requires the genuine ``user`` channel: DiscoveryConfig and
         ScheduledConfig also carry ``role='user'`` but write to their own
         channels, and neither takes the proactive-suggestion path (discovery is
-        a silent loop — ``broadcast_to`` is ``None``, so a suggestion would have
+        a silent loop — ``RENDERS_HTML`` is False, so a suggestion would have
         nowhere to surface; scheduled self-surfaces in its own thread and the
         scheduler dock, with no user-channel relay, §13.9). Every handler is
         isolated — a failure is logged, never propagated, so post-turn work can
-        never fail an otherwise-complete turn."""
+        never fail an otherwise-complete turn. After the role dispatch, every
+        settle is offered to the memory-step service, which owns the scope/role
+        gates — a separate isolated block so a role-handler failure cannot
+        starve the memory step."""
         role = self.config.role
         try:
             if role == "user" and self.channel == Channel.USER:
                 self._voice_presynthesis()
                 self._proactive_suggestion()
-            elif role == "user_summary":
-                UserSynthesis.persist_user_summary(response_text)
-            elif role == "pattern_match":
-                self._pattern_skill_sync()
             elif role == "external_agent":
                 self._disclose_to_human(response_text)
         except Exception as exc:  # noqa: BLE001 — post-turn work must never fail the turn
             logger.warning("[post_turn] %s handler failed (isolated): %s", role, exc)
+        try:
+            from services.memory_step_service import MemoryStepService  # noqa: PLC0415
+            MemoryStepService.instance().on_settle(self)
+        except Exception as exc:  # noqa: BLE001 — post-turn work must never fail the turn
+            logger.warning("[post_turn] memory step trigger failed (isolated): %s", exc)
 
     def _voice_presynthesis(self) -> None:
         """Kick background speech pre-synthesis for this turn's settled row on a
@@ -607,33 +667,6 @@ class MessageProcessor:
         act_trail = rendered.split("\n") if rendered else []
         from services.skill_suggestion_message_processor import maybe_suggest_skill  # noqa: PLC0415
         maybe_suggest_skill(act_trail, self.raw_input, self.channel, self.turn_id)
-
-    def _pattern_skill_sync(self) -> None:
-        """Decay untouched patterns, then run the skill-association pass over the
-        patterns written this turn. An empty touched set is NOT a no-op for the
-        decay half: nothing is exempt, so every live pattern row decays — the
-        intended sweep for a turn that wrote no patterns, not an edge case. The
-        association pass does skip on empty."""
-        touched = self._touched_pattern_names()
-        self.behavioral_pattern_service.decay_untouched(touched)
-        from services.skill_association_service import SkillAssociationService  # noqa: PLC0415
-        SkillAssociationService().run_pass(self.behavioral_pattern_service.ids_for_touched(touched))
-
-    def _touched_pattern_names(self) -> set[str]:
-        """Names of the patterns saved this turn — the ``save_pattern`` calls'
-        ``name`` params, skipping any malformed row."""
-        names: set[str] = set()
-        for call in self.tool_call_service.by_turn():
-            if call.tool_name != "save_pattern":
-                continue
-            try:
-                params = json.loads(call.params)
-            except (json.JSONDecodeError, TypeError):
-                continue
-            name = params.get("name") if isinstance(params, dict) else None
-            if isinstance(name, str) and name:
-                names.add(name)
-        return names
 
     def _disclose_to_human(self, response_text: str) -> None:
         """When an external-agent config opts into looping in the human, open a
@@ -709,9 +742,9 @@ class MessageProcessor:
         try:
             if self.config.memory_seed:
                 self.dispatch_service.dispatch(
-                    "memory", {"action": "recall", "query": self.raw_input, "_auto": True}
+                    "recall", {"query": self.raw_input, "_auto": True}
                 )
-            attachments = list(cast("list[str]", self.metadata.get("attachments") or []))
+            attachments = list(self._placed_attachments)
             if attachments:
                 from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
                 with ThreadPoolExecutor(max_workers=min(len(attachments), 8)) as pool:
@@ -719,27 +752,23 @@ class MessageProcessor:
         finally:
             self.seeding_turn_zero = False
 
-    def _seed_upload_attachment(self, path: str) -> None:
-        """Ingest an attachment via FileParserService and dispatch by type.
+    def _land_attachments(self) -> None:
+        """For each pending attachment: copy into uploads/, write the
+        transcript_files link row, and remove the tmp staging file.
 
-        Only files inside the tmp-upload sandbox are accepted; anything else is
-        refused loudly. The file is ingested (extracted, copied flat to
-        data/documents/uploads/, indexed), so its content appears on the
-        turn-zero act trail as a ``read`` or ``vision`` tool call — the model
-        sees exactly what it would if a human had handed it the file.
+        Runs synchronously inside ``begin`` — after its write transaction has
+        committed (a file copy must never hold ``BEGIN IMMEDIATE``'s write
+        lock) and before ``turn_execution_service.open()`` emits ``working``,
+        so a client refetching on that cue already sees the linked rows. Each
+        ``link()`` commits on its own; the connection autocommits outside a
+        transaction. Extraction and the MIME dispatch stay on the drive thread
+        via ``_seed_upload_attachment`` — a per-image vision call would
+        otherwise block the request for seconds.
 
-        On ingest ValueError (extraction failure), falls back to the manual
-        move into uploads/ with a warning, then still dispatches ``read`` so
-        the failure surfaces loudly on the act trail.
-
-        Records the transcript link (transcript_files row) keyed on the
-        transcript row id (self.uid) and the stored path relative to the
-        documents root. Skipped for skip_input_row configs (uid is None).
-
-        Dispatches ``vision`` for image MIME, ``read`` for everything else,
-        both on the SAVED absolute path.
+        Sandbox-checked: only real paths inside ``TMP_PATH_PREFIX`` that
+        exist on disk are accepted; everything else is refused with a warn.
+        Links are skipped for ``skip_input_row`` configs (uid is None).
         """
-        import mimetypes
         import os
 
         from services.tmp_storage import TMP_PATH_PREFIX
@@ -747,43 +776,54 @@ class MessageProcessor:
         from services.file_parser_service import FileParserService
         from models.transcript_file import TranscriptFile
 
-        real = os.path.realpath(path)
-        if not real.startswith(TMP_PATH_PREFIX) or not os.path.isfile(real):
-            logger.warning("[MessageProcessor] refusing attachment outside tmp sandbox: %s", path)
-            return
-
-        basename = re.sub(r"^chalie_([0-9a-f]{8}_)?", "", os.path.basename(real)) or os.path.basename(real)
-
-        try:
-            saved_path, _text = FileParserService().ingest(real, name=basename, subdir="uploads")
-            # Ingest succeeded: file is now flat in data/documents/uploads/<basename>.
-            # Delete the tmp file (it was copied, not moved, by FileParserService).
+        raw_paths = cast("list[str]", self.metadata.get("attachments") or [])
+        for path in raw_paths:
+            real = os.path.realpath(path)
+            if not real.startswith(TMP_PATH_PREFIX) or not os.path.isfile(real):
+                logger.warning("[MessageProcessor] refusing attachment outside tmp sandbox: %s", path)
+                continue
+            basename = re.sub(r"^chalie_([0-9a-f]{8}_)?", "", os.path.basename(real)) or os.path.basename(real)
+            saved_path = FileParserService().place(real, name=basename, subdir="uploads")
+            # Copy succeeded (FileParserService.place copies the file, never moves it).
+            # Remove the tmp staging file.
             try:
                 os.unlink(real)
             except OSError:
                 logger.warning("[MessageProcessor] staged attachment not cleaned up: %s", real)
-        except ValueError as exc:
-            # Extraction failed: fall back to manual move into uploads/ so the
-            # dispatched read still lands (it will surface the error loudly).
-            logger.warning(
-                "[MessageProcessor] ingest failed for %s — falling back to manual move: %s",
-                path, exc,
-            )
-            uploads_dir = FileMapperService.get_documents_path("uploads")
-            uploads_dir.mkdir(parents=True, exist_ok=True)
-            stem, ext = os.path.splitext(basename)
-            dest = uploads_dir / basename
-            counter = 1
-            while dest.exists():
-                dest = uploads_dir / f"{stem}_{counter}{ext}"
-                counter += 1
-            shutil.move(real, dest)
-            saved_path = str(dest)
+            self._placed_attachments.append(saved_path)
+            if self.uid is not None:
+                relpath = os.path.relpath(saved_path, FileMapperService.get_documents_path())
+                TranscriptFile(transcript_id=self.uid, path=relpath).link()
 
-        # Record the transcript link (if uid is set — skip for skip_input_row configs).
-        if self.uid is not None:
-            relpath = os.path.relpath(saved_path, FileMapperService.get_documents_path())
-            TranscriptFile(transcript_id=self.uid, path=relpath).link()
+    def _seed_upload_attachment(self, saved_path: str) -> None:
+        """Index the previously-placed attachment and dispatch by MIME.
+
+        The file is assumed to already live in the documents store and the
+        transcript_files link row is already written (performed synchronously
+        in ``_land_attachments`` before the execution row opens). This method
+        only extracts content and dispatches ``vision`` (images) or ``read``
+        (anything else) on the SAVED absolute path.
+
+        Indexing is a derived search artifact, so no failure of it may take the
+        turn down with it — the dispatch below still runs and surfaces the file
+        loudly on the act trail. The catch is deliberately not narrowed to the
+        ``ValueError`` extraction raises: ``index`` also opens and writes the
+        file-index database, so it can raise ``sqlite3`` errors (a failing disk
+        surfaced as ``OperationalError: disk I/O error``), and a narrower catch
+        let those escape the pool, escape ``_seed_turn_zero`` and kill the whole
+        turn — attaching an image was enough to lose everything the user typed
+        with it. Logged with its traceback, never silent.
+        """
+        import mimetypes
+
+        from services.file_parser_service import FileParserService
+
+        try:
+            FileParserService().index(saved_path)
+        except Exception:  # noqa: BLE001 — indexing is derived; the turn outlives it
+            logger.exception(
+                "[MessageProcessor] indexing %s failed for turn-zero dispatch", saved_path,
+            )
 
         mime = mimetypes.guess_type(saved_path)[0] or ""
         if mime.startswith("image/"):

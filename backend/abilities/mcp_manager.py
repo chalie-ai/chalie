@@ -156,7 +156,7 @@ class McpManagerAbility(Ability[McpManagerParamsBag]):
         from abilities.mcp_tools import McpToolsAbility  # noqa: PLC0415
 
         body = tr.body if isinstance(tr.body, dict) else {}
-        if body.get("status") != "online":
+        if not body.get("connected"):
             return ""
         name = body.get("name")
         return (
@@ -171,7 +171,7 @@ class McpManagerAbility(Ability[McpManagerParamsBag]):
                 "type": "string",
                 "enum": ["list", "add", "enable", "disable"],
                 "description": (
-                    "list: show all configured MCP servers and their status. "
+                    "list: show all configured MCP servers and whether each is connected. "
                     "add: register a new remote MCP server (requires name + host). "
                     "enable: re-enable a previously disabled server (by name or "
                     "server_id). "
@@ -281,9 +281,9 @@ class McpManagerAbility(Ability[McpManagerParamsBag]):
 
         # Trigger an immediate sync so tools are discoverable in this turn.
         sync = svc.ping_and_sync(server_id)
-        if sync["reachable"]:
+        if sync["connected"]:
             logger.info(
-                "%s Added server %r — online, %d tools",
+                "%s Added server %r — connected, %d tools",
                 _LOG_PREFIX, name, sync["tool_count"],
             )
             return ToolResult.ok(
@@ -291,7 +291,7 @@ class McpManagerAbility(Ability[McpManagerParamsBag]):
                     "id": server_id,
                     "name": name,
                     "url": host,
-                    "status": "online",
+                    "connected": True,
                     "tool_count": sync["tool_count"],
                 },
                 count=sync["tool_count"],
@@ -317,13 +317,13 @@ class McpManagerAbility(Ability[McpManagerParamsBag]):
 
         svc.update_server(server_id, {"enabled": True})
         sync = svc.ping_and_sync(server_id)
-        if sync["reachable"]:
-            logger.info("%s Enabled server %r — online, %d tools",
+        if sync["connected"]:
+            logger.info("%s Enabled server %r — connected, %d tools",
                         _LOG_PREFIX, name, sync["tool_count"])
             return ToolResult.ok({
                 "id": server_id,
                 "name": name,
-                "status": "online",
+                "connected": True,
                 "tool_count": sync["tool_count"],
             })
 
@@ -353,7 +353,7 @@ class McpManagerAbility(Ability[McpManagerParamsBag]):
             "id": server_id,
             "name": server["name"],
             "url": server["host"],
-            "status": server["status"],
+            "connected": server["connected"],
             "enabled": server["enabled"],
             "tool_count": len(svc.get_server_tools(server_id)),
         }

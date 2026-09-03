@@ -1,27 +1,27 @@
 """Feature tests for the shared outbound fetch stack (services/web_fetch.py).
 
-Two tiers, kept strictly separate (mirrors test_web_download.py):
+Two tiers, kept strictly separate:
 
-* ``@pytest.mark.unit`` — SSRF gate and named-profile contract. Never touch
-   the network: a private/internal URL is blocked BEFORE any socket opens.
+* ``@pytest.mark.unit`` — a host on the local network is reachable. Chalie is a
+  local-first assistant, so internal sites are ordinary targets: the stack
+  carries no private-address blocklist and refuses no URL by policy.
 
-* ``@pytest.mark.integration`` — real fetch + streamed download against httpbin.org,
-   skipped when unreachable.
+* ``@pytest.mark.integration`` — real fetch + streamed download against
+  httpbin.org, skipped when unreachable.
 
-No mocks anywhere. The SSRF guard under test is production's own
-``services.ssrf.is_private_url``, reached the way the abilities reach it.
+No mocks anywhere — every tier runs a real socket against a real server.
 """
 
+import http.server
 import os
 import socket
 import tempfile
-from pathlib import Path
+import threading
 
 import pytest
 import requests
 
 from services import web_fetch
-from exceptions import FetchBlocked
 
 _HTTPBIN_HOST = "httpbin.org"
 
@@ -40,23 +40,35 @@ def httpbin() -> None:
         pytest.skip(f"{_HTTPBIN_HOST} unreachable — skip network-dependent fetch tests.")
 
 
-# ── Unit tier: profiles + SSRF gate, no network ─────────────────────────────
+# ── Unit tier: the local network is reachable ───────────────────────────────
 
 
 @pytest.mark.unit
-def test_fetch_text_refuses_private_host_before_socket() -> None:
-    """A loopback URL is blocked by the guard, raising FetchBlocked (no network)."""
-    with pytest.raises(FetchBlocked):
-        web_fetch.fetch_text("http://127.0.0.1/secret", profile=web_fetch.API)
+def test_fetch_text_reaches_a_host_on_the_local_network() -> None:
+    """A real server on loopback is fetched, not refused.
 
+    The stack used to resolve every destination against a private-IP blocklist,
+    which put the user's own LAN out of reach. A live server proves the whole
+    path — socket included — now reaches it.
+    """
 
-@pytest.mark.unit
-def test_stream_to_file_refuses_private_host_and_writes_nothing(tmp_path: Path) -> None:
-    """A blocked host raises before any file is created."""
-    dest = os.path.join(str(tmp_path), "should_not_exist", "f.bin")
-    with pytest.raises(FetchBlocked):
-        web_fetch.stream_to_file("http://169.254.169.254/latest/meta-data/", dest)
-    assert not os.path.exists(dest)
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802 — http.server contract
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(b"<h1>internal site</h1>")
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    port = int(server.server_address[1])
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        body = web_fetch.fetch_text(f"http://127.0.0.1:{port}/")
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert "<h1>internal site</h1>" in body
 
 
 # ── Integration tier: real fetch + streamed download ────────────────────────

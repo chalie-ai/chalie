@@ -44,7 +44,8 @@ export const voice = {
   /**
    * GET /voice/transcript/<id> — the speech already synthesized for one
    * settled reply. Returns the raw Response so the player can decode the body
-   * itself: 200 carries the audio/wav, 202 means synthesis is running (this
+   * itself: 200 carries the audio (audio/mpeg, or audio/wav for replies
+   * synthesized before the move to MP3), 202 means synthesis is running (this
    * request started it, for history that predates pre-synthesis), 409 means it
    * failed for good, 404 means the row can never speak.
    */

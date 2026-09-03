@@ -174,18 +174,12 @@ class DispatchService:
 
     def canonical_params(self, tool_name: str, params: dict[str, object]) -> dict[str, object]:
         """The params ``run()`` will actually receive for *tool_name* — sanitised,
-        ``act_summary``- and ``async``-stripped, and key-healed — computed WITHOUT
-        executing or recording anything. The runaway guard keys its per-tool tally
-        on this, so neither cycling synonym keys (``city``/``loc``/``place``/
-        ``region`` → ``location``) NOR toggling the framework ``async`` flag around
-        otherwise-identical params — both of which collapse to one executed call —
-        can evade the loop backstop."""
+        ``act_summary``-stripped, and key-healed — computed WITHOUT executing or
+        recording anything. The runaway guard keys its per-tool tally on this, so
+        cycling synonym keys (``city``/``loc``/``place``/``region`` →
+        ``location``) — which collapses to one executed call — cannot evade the
+        loop backstop."""
         params, _act_summary, _ability = self._prepare(tool_name, params)
-        # ``async`` is a framework control flag ``_execute`` pops before run() (like
-        # ``act_summary``, already lifted by ``_prepare``): it decides sync-vs-async
-        # dispatch, never what the tool does, so it is not part of the executed
-        # identity the guard tallies on.
-        params.pop("async", None)
         return params
 
     def _dispatch_bound(
@@ -221,10 +215,19 @@ class DispatchService:
 
         def _run_gated() -> str:
             nonlocal call_id, state
-            text, call_id, state = self._execute(ability, params, act_summary)
+            # The SAME resolved action feeds the permission and the
+            # untrusted-content steer: one non-injectable classification, two
+            # consumers. Keying the steer off the raw 'action' param instead
+            # would let a crafted call pick which warning it gets. Narrowed to
+            # str HERE, not at the resolution above — a non-str action must keep
+            # forming the permission exactly as before (a bogus '<tool>.<junk>'
+            # ask row is the pre-gate's problem, not something to widen away).
+            text, call_id, state = self._execute(
+                ability, params, act_summary, action if isinstance(action, str) else None,
+            )
             return text
 
-        result_text = self._authorize(permission, _run_gated)
+        result_text = self._authorize(permission, _run_gated, act_summary)
         return result_text, call_id, state
 
     def _repeat_error_steer(self, tool_name: str, result_text: str) -> str:
@@ -258,33 +261,33 @@ class DispatchService:
         before the hard kill threshold at ``_RUNAWAY_TOOL_CALL_LIMIT``.
 
         ``params`` is the post-``_prepare`` identity (sanitised + act_summary-
-        lifted + key-healed) — only ``async`` remains to be stripped to byte-
-        match the guard's key. A copy is taken and ``async`` popped on the copy
-        so the live ``params`` dict is never mutated.
+        lifted + key-healed) — the same bytes the guard's key tallies on.
 
-        Dispatches that bypass ``_step`` (the compactor, document upload, or
-        the async delegate's dedicated mp) have zero tally on this mp and so
-        never steer here."""
-        identity = dict(params)
-        identity.pop("async", None)
-        if self.mp.repeat_call_count(tool_name, identity) >= _REPEAT_CALL_STEER_THRESHOLD:
+        Dispatches that bypass ``_step`` (the compactor, document upload) have
+        zero tally on this mp and so never steer here."""
+        if self.mp.repeat_call_count(tool_name, params) >= _REPEAT_CALL_STEER_THRESHOLD:
             return _REPEAT_CALL_STEER
         return ""
 
     # ── Policy gate ─────────────────────────────────────────────────────────────
 
-    def _authorize(self, permission: str, callback: "Callable[[], str]") -> str:
+    def _authorize(self, permission: str, callback: "Callable[[], str]", summary: str | None = None) -> str:
         """Gate *callback* for this turn's (channel, permission) — the spine's
-        replacement for the static ``PolicyManager.wrap`` entry point: the
-        instance method (``authorize``) is invoked directly, with the channel and
-        the cooperative ``should_stop`` sourced off the typed ``self.mp`` instead
-        of the old getattr wedges. ``should_stop`` lets a parked ask-prompt unwind
-        when the turn is cancelled instead of pinning the per-channel lock."""
+        gate for every tool call: the
+        instance method (``authorize``) is invoked directly, with the channel,
+        the cooperative ``should_stop`` and the turn's ``origin`` sourced off the
+        typed ``self.mp`` instead of the old getattr wedges. ``should_stop`` lets
+        a parked ask-prompt unwind when the turn is cancelled instead of pinning
+        the per-channel lock; ``origin`` tells the gate which interactive turn a
+        prompt belongs to (none → an ``ask`` denies at once); ``summary`` is the
+        model's one-line account of the call, shown on the prompt."""
         return PolicyManager().authorize(
             channel=self.mp.config.policy_channel,
             permission=permission,
             callback=callback,
             should_stop=self.mp.turn_execution_service.should_stop,
+            origin=self.mp.origin,
+            summary=summary or "",
         )
 
     # ── Resolution ─────────────────────────────────────────────────────────────
@@ -311,13 +314,11 @@ class DispatchService:
 
     def _execute(
         self, ability: "Ability", params: dict[str, object], act_summary: "str | None" = None,
+        action: "str | None" = None,
     ) -> tuple[str, "int | None", str]:
         """Open row (via ``tool_call_service.start`` — emits ``started``) →
-        (async-decision) → run → resolve terminal state → render. Called ONLY on
-        the allow path (``_dispatch_bound`` passes this as the gate's callback).
-        The per-call ``async`` flag — popped here, a framework key never passed
-        to run() — decides whether the real work blocks this ACT iteration or
-        runs on a background thread; run() is identical either way. Returns the
+        run → resolve terminal state → render. Called ONLY on the allow path
+        (``_dispatch_bound`` passes this as the gate's callback). Returns the
         rendered envelope STRING plus the opened row id and its resolved terminal
         state, so ``_dispatch_bound`` can finish that same row instead of opening
         a second one.
@@ -325,41 +326,41 @@ class DispatchService:
         Reads the bound parent off ``ability.mp`` (set by ``_bind()``).
         act_summary (popped from params by ``dispatch()``) is the live summary;
         it is NOT a run() argument."""
-        run_async = bool(params.pop("async", False))
         tool_name = ability.NAME
 
         call_id = self.mp.tool_call_service.start(
             tool_name=tool_name, params=params, summary=act_summary,
         )
 
-        if run_async:
-            # AsyncDelegateRunner owns the daemon-thread lifecycle + the captured
-            # mp it delivers through; it returns the placeholder immediately so
-            # this ACT iteration is never blocked. The placeholder is prose the
-            # model reads while the real work runs.
-            from services.async_delegate_runner import async_delegate_runner  # noqa: PLC0415
-            placeholder = async_delegate_runner.spawn(ability, params, self.mp, act_summary)
-            tr = ToolResult.ok(str(placeholder))
-        else:
-            tr = self._run(ability, params)
+        tr = self._run(ability, params)
 
         state = ToolCall.ERROR if tr.status == "error" else ToolCall.DONE
 
         # Rich-media ordinal is assigned ONLY when the owning mp broadcasts to a
-        # live surface (``broadcast_to`` set — the user spine or a schedule
-        # thread). Subagents / background channels never get a card: their
+        # live surface (``RENDERS_HTML`` — the user spine or a schedule
+        # thread). Background channels never get a card: their
         # natural-language synthesis is consumed by the parent, so a span emitted
         # at that hop has no tool_calls row paired to it. This is the single
         # physical chokepoint that gates the entire card path.
         ordinal = None
-        if tr.rich is not None and self.mp.config.broadcast_to is not None:
+        if tr.rich is not None and self.mp.config.RENDERS_HTML:
             ordinal = self._next_ordinal(tool_name)
 
-        # The follow-up nudge fires only on a real synchronous SUCCESS: never on
-        # an error result, never on the async placeholder (the nudge would fire
-        # before the real work ran). Empty default => nothing appended, so
-        # non-overriding abilities render byte-identical to before.
-        follow_up = ability.get_follow_up(tr) if (not run_async and tr.status == "success") else ""
+        # The follow-up block fires only on a real SUCCESS: never on an error
+        # result. Empty => nothing appended, so a tool with neither a nudge nor
+        # untrusted output renders byte-identical to before.
+        #
+        # An action that brings outside content in adds ITS OWN steer to the same
+        # block, LAST — the closest instruction to the point of generation, and
+        # pressed against the payload it describes instead of sitting in a system
+        # prompt that a long result has buried. The steer is per action because
+        # `email.read` and `browser.scroll` are not the same warning, and a tool
+        # whose current action isn't in the map gets none.
+        follow_up = ""
+        if tr.status == "success":
+            follow_up = ability.get_follow_up(tr)
+            steer = ability.UNTRUSTED_CONTENT.get(action or "", "")
+            follow_up = f"{follow_up}\n\n{steer}".strip() if steer else follow_up
         return self._render(tool_name, tr, ordinal, follow_up=follow_up), call_id, state
 
     # ── Action pre-validation (ACTION_REQUIRED) ────────────────────────────────
@@ -406,7 +407,7 @@ class DispatchService:
             )
         return None
 
-    # ── Synchronous run primitive (shared by inline dispatch + AsyncDelegateRunner) ──
+    # ── The synchronous run primitive ─────────────────────────────────────────────
 
     def _run(self, ability: "Ability", params: dict[str, object]) -> ToolResult:
         """Execute ability.run() synchronously and enforce the ToolResult contract.

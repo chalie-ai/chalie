@@ -13,9 +13,7 @@ import asyncio
 import json
 import logging
 import re
-import sqlite3
-from pathlib import Path
-from typing import cast
+from typing import ClassVar, cast
 from urllib.parse import urlsplit, urlunsplit
 
 from exceptions import McpServerUnreachable, McpToolUnknown
@@ -23,16 +21,12 @@ from models.mcp_client_server import McpClientServer
 from models.mcp_tool import McpTool
 from services.database import Database
 from services.file_mapper_service import FileMapperService
+from services.mcp_tools_db import get_tools_connection
 from services.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
 _LOG_PREFIX = "[MCP CLIENT]"
-
-# Status strings — these exact values are part of the public status contract.
-_STATUS_UNKNOWN = "unknown"
-_STATUS_ONLINE = "online"
-_STATUS_OFFLINE = "offline"
 
 # Name-sanitization pattern: keep lowercase alpha, digits, underscore.
 _SANITIZE_RE = re.compile(r"[^a-z0-9_]")
@@ -51,7 +45,7 @@ def _tool_name(server_name: str, remote_tool: str) -> str:
     """Build the prefixed tool name for a remote MCP tool.
 
     Format: _mcp_<sanitized_server_name>_<remote_tool_name>
-    Example: server='taskie', tool='create_document' → '_mcp_taskie_create_document'
+    Example: server='weather', tool='get_forecast' → '_mcp_weather_get_forecast'
     """
     return f"_mcp_{_sanitize_name(server_name)}_{remote_tool}"
 
@@ -107,30 +101,6 @@ def _normalize_host(host: str) -> str:
         netloc = f"{userinfo}@{netloc}"
     path = parts.path.rstrip("/")
     return urlunsplit((scheme, netloc, path, parts.query, ""))
-
-
-# ── mcp_tools.sqlite schema helpers ─────────────────────────────────────────
-
-_TOOLS_SCHEMA = """
-CREATE TABLE IF NOT EXISTS mcp_tools (
-    id          INTEGER PRIMARY KEY,
-    server_id   TEXT NOT NULL,
-    tool_name   TEXT NOT NULL UNIQUE,
-    summary     TEXT NOT NULL DEFAULT '',
-    raw_schema  TEXT NOT NULL DEFAULT '{}'
-);
-CREATE INDEX IF NOT EXISTS idx_mcp_tools_server
-    ON mcp_tools(server_id);
-"""
-
-
-def _open_tools_db() -> sqlite3.Connection:
-    """Open (and initialize if necessary) the mcp_tools.sqlite runtime DB."""
-    db_path: Path = FileMapperService.get_mcp_tools_db_path()
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = Database.conn(str(db_path))
-    conn.executescript(_TOOLS_SCHEMA)
-    return conn
 
 
 # ── Async MCP helpers ────────────────────────────────────────────────────────
@@ -197,6 +167,11 @@ class McpClientService:
     threads never carry a running event loop.
     """
 
+    # Process-memory connection map: server id → last heartbeat/ping outcome.
+    # Absent = not connected; resets on restart and the heartbeat worker
+    # re-establishes it within its first cycle.
+    _connected: ClassVar[dict[str, bool]] = {}
+
     # ── CRUD ──────────────────────────────────────────────────────────────────
 
     def list_servers(self) -> list[dict[str, object]]:
@@ -211,7 +186,7 @@ class McpClientService:
         ``_normalize_host``), this is an idempotent upsert: the existing row's
         name/host/headers are updated and it is re-enabled — no duplicate is
         created.  Otherwise a new row is inserted.  Succeeds even if the host
-        is unreachable (new rows start with status 'unknown').
+        is unreachable (new rows start not connected).
         """
         existing = self._find_by_normalized_host(host)
         if existing is not None:
@@ -222,20 +197,13 @@ class McpClientService:
             host=host,
             headers=json.dumps(headers or {}),
             enabled=1 if enabled else 0,
-            status=_STATUS_UNKNOWN,
             created_at=utc_now().isoformat(),
             updated_at=utc_now().isoformat(),
         )
         server.save()
         server_id = cast(str, server.id)
         logger.info("%s Added server %r (id=%s)", _LOG_PREFIX, name, server_id)
-        # Re-read the row: columns left unset so their SQL defaults fire
-        # (last_pinged_at) exist only on a hydrated instance, and
-        # _server_to_dict projects every column.
-        saved = McpClientServer.get(server_id)
-        if saved is None:
-            raise RuntimeError(f"mcp server row vanished after insert: {server_id}")
-        return self._server_to_dict(saved)
+        return self._server_to_dict(server)
 
     def _find_by_normalized_host(self, host: str) -> dict[str, object] | None:
         """Return an existing server resolving to the same endpoint, else None."""
@@ -310,15 +278,17 @@ class McpClientService:
         self._delete_policy_rows(server_id)
         self._delete_tools_for_server(server_id)
         server.delete()
+        self._connected.pop(server_id, None)
         logger.info("%s Deleted server %r (id=%s)", _LOG_PREFIX, server.name, server_id)
 
     # ── Ping + sync ───────────────────────────────────────────────────────────
 
     def ping_and_sync(self, server_id: str) -> dict[str, object]:
-        """Connect to the server, sync its tool list, and update status.
+        """Connect to the server, sync its tool list, and record the connected
+        flag in process memory.
 
-        Returns ``{status, tool_count, reachable, error}``.  Never raises —
-        connect/transport failures are caught and reflected as status='offline'.
+        Returns ``{connected, tool_count, error}``.  Never raises —
+        connect/transport failures are caught and reflected as connected=False.
         ``error`` is ``None`` on success and the stringified exception on failure,
         so callers can classify the failure (e.g. a 401/403 auth rejection vs a
         plain unreachable host) instead of losing the detail.
@@ -326,9 +296,8 @@ class McpClientService:
         server = self.get_server(server_id)
         if server is None:
             return {
-                "status": _STATUS_OFFLINE,
+                "connected": False,
                 "tool_count": 0,
-                "reachable": False,
                 "error": "server not found",
             }
 
@@ -340,26 +309,24 @@ class McpClientService:
         try:
             tools = asyncio.run(_async_list_tools(host, cast(dict[str, str], headers)))
             self._write_tools(server_id, cast(str, server["name"]), tools)
-            self._update_status(server_id, _STATUS_ONLINE)
+            self._connected[server_id] = True
             logger.info(
-                "%s Server %r online — %d tools synced",
+                "%s Server %r connected — %d tools synced",
                 _LOG_PREFIX, server["name"], len(tools),
             )
             return {
-                "status": _STATUS_ONLINE,
+                "connected": True,
                 "tool_count": len(tools),
-                "reachable": True,
                 "error": None,
             }
         except Exception as exc:
             logger.warning(
                 "%s Server %r unreachable: %s", _LOG_PREFIX, server["name"], exc
             )
-            self._update_status(server_id, _STATUS_OFFLINE)
+            self._connected[server_id] = False
             return {
-                "status": _STATUS_OFFLINE,
+                "connected": False,
                 "tool_count": 0,
-                "reachable": False,
                 "error": str(exc),
             }
 
@@ -398,23 +365,20 @@ class McpClientService:
             "input_schema": input_schema,
         }
 
-    def get_online_mcp_tool_names(self) -> list[str]:
-        """Return _mcp_* tool names for servers that are enabled AND online.
+    def get_connected_mcp_tool_names(self) -> list[str]:
+        """Return _mcp_* tool names for servers that are enabled AND connected.
 
         Used by mcp_tools to validate activation and by the /discoverable
-        API endpoint.  Disabled or offline servers' tools never appear.
+        API endpoint.  Disabled or not-connected servers' tools never appear.
         """
-        online_ids = cast(
-            "list[str]",
-            [
-                s.id
-                for s in McpClientServer.filter("enabled", 1).filter("status", _STATUS_ONLINE).get()
-                if s.id is not None
-            ],
-        )
-        if not online_ids:
+        connected_ids = [
+            s.id
+            for s in McpClientServer.filter("enabled", 1).get()
+            if s.id is not None and self._connected.get(s.id, False)
+        ]
+        if not connected_ids:
             return []
-        return cast("list[str]", McpTool.filter_in("server_id", online_ids).pluck("tool_name"))
+        return cast("list[str]", McpTool.filter_in("server_id", connected_ids).pluck("tool_name"))
 
     def label_mcp_permissions(self, permissions: list[str]) -> dict[str, dict[str, str]]:
         """Map ``_mcp_*`` policy permissions to display ``{group, label}``.
@@ -424,8 +388,8 @@ class McpClientService:
         -> ``Add Comment to Pending Review``).  Non-MCP permissions and orphan rows
         (no matching server) are omitted, so callers fall back to the raw string.
 
-        Disabled/offline servers ARE included — the Brain policies UI must group
-        their rows too — unlike ``_resolve_tool`` which gates on enabled status.
+        Disabled/not-connected servers ARE included — the Brain policies UI must
+        group their rows too — unlike ``_resolve_tool`` which gates on enabled.
         One ``list_servers`` read serves the whole batch.
         """
         servers = sorted(
@@ -498,7 +462,8 @@ class McpClientService:
     # ── Heartbeat ─────────────────────────────────────────────────────────────
 
     def run_heartbeat(self) -> None:
-        """Ping every enabled server and update status + tool index.
+        """Ping every enabled server, recording its connected flag in process
+        memory (no DB write) + refreshing its tool index.
 
         Called by mcp_client_worker on a 15-minute loop.  Errors per server
         are caught and logged; the loop continues to the next server.
@@ -534,24 +499,14 @@ class McpClientService:
             "host": server.host,
             "headers": headers,
             "enabled": bool(server.enabled),
-            "status": server.status,
-            "last_pinged_at": server.last_pinged_at,
+            "connected": bool(server.enabled) and self._connected.get(cast(str, server.id), False),
             "created_at": server.created_at,
             "updated_at": server.updated_at,
         }
 
-    def _update_status(self, server_id: str, status: str) -> None:
-        """Write the new status and last_pinged_at timestamp."""
-        now = utc_now().isoformat()
-        McpClientServer.filter("id", server_id).update(
-            status=status,
-            last_pinged_at=now,
-            updated_at=now,
-        )
-
     def _write_tools(self, server_id: str, server_name: str, tools: list[dict[str, object]]) -> None:
         """Replace the tool index for one server in mcp_tools.sqlite."""
-        _open_tools_db()
+        get_tools_connection()
         with Database.transaction(str(FileMapperService.get_mcp_tools_db_path())):
             McpTool.filter("server_id", server_id).delete()
             for t in tools:
@@ -573,7 +528,7 @@ class McpClientService:
         _upsert_existing name-change path — neither needs to repeat the purge
         logic.
         """
-        _open_tools_db()
+        get_tools_connection()
         with Database.transaction(str(FileMapperService.get_mcp_tools_db_path())):
             McpTool.filter("server_id", server_id).delete()
 

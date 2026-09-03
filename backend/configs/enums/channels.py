@@ -30,19 +30,11 @@ class Channel(str, Enum):
     SCHEDULE      = "schedule"
 
     # ── Reflection / subconscious ────────────────────────────────────────────
-    DMN               = "dmn"
-    USER_SUMMARY      = "user_summary"
-    PATTERN_MATCH     = "pattern_match"
-    GEO_PATTERN       = "geo_pattern"
-    SKILLS_BUILDING   = "skills_building"
-    SKILL_ASSOCIATION = "skill_association"
+    SKILLS_BUILDING = "skills_building"
+    MEMORY_HYGIENE  = "memory_hygiene"
+    USER_SYNTHESIS  = "user_synthesis"
 
-    # ── Episodic memory ──────────────────────────────────────────────────────
-    EPISODE_ENCODER       = "episode_encoder"
-    SUPER_EPISODE_ENCODER = "super_episode_encoder"
-
-    # ── Fact extraction / compaction ─────────────────────────────────────────
-    FACT_EXTRACTION = "fact_extraction"
+    # ── Compaction ───────────────────────────────────────────────────────────
     COMPACTION      = "compaction"
 
     # ── Delegates (tool-driven sub-loops) ────────────────────────────────────

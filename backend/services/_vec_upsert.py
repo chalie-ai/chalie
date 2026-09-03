@@ -7,10 +7,9 @@ a "REPLACE" write never updates anything and the table silently keeps the
 previous vector once the caller's warning-net absorbs the error. The
 correct upsert is DELETE then INSERT, which vec0 supports natively.
 
-Consumed by every ``*_vec`` shadow-table writer (``episodes_vec``,
-``lists_vec``, ``scheduled_items_vec``). Keep all call
-sites pointed here so the production-safe path can never drift between
-memory tables.
+Consumed by every ``*_vec`` shadow-table writer (``lists_vec``,
+``scheduled_items_vec``). Keep all call sites pointed here so the
+production-safe path can never drift between memory tables.
 """
 
 import sqlite3

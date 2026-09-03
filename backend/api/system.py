@@ -1,11 +1,11 @@
 """System namespace — /health, /ready, /metrics (probes) and /api/system/status, /api/system/observability/* (admin).
 
-Read-only observability + diagnostics (not CRUD): 17 of 18 routes are GETs
+Read-only observability + diagnostics (not CRUD): 16 of 17 routes are GETs
 returning a status/diagnostic DTO or an opaque service-owned shape. The one
 mutating-ish route (``POST /health`` heartbeat ingest) is an action endpoint
 kept at 200 (it returns status/result, not a created resource). Datetimes serialize as ISO-8601 UTC via the foundation serializer — the
 local ``_now_iso()`` helper is deleted. Where a protected test pins an exact shape
-(records 400, degraded-200, non-ISO ``compacted_at``, raw telemetry/metrics),
+(records 400, degraded-200, non-ISO ``compacted_at``, raw metrics),
 current behavior is preserved.
 """
 
@@ -21,8 +21,8 @@ from flask_restx import Namespace, Resource
 
 from configs.enums.channels import Channel
 from models.compaction import Compaction
-from models.data_graph import DataGraphRow
-from models.episode import Episode
+from models.memory_graph import MemoryGraphRow
+from models.memory_map import MemoryMapRow
 from models.tool_call import ToolCall
 from services.file_mapper_service import FileMapperService
 from services.llm_log_service import LlmLogService, VALID_WINDOWS
@@ -46,7 +46,6 @@ from .dto.write_queue import WriteQueueStats
 if TYPE_CHECKING:
     from pathlib import Path
     from werkzeug.datastructures import FileStorage
-    from services.client_context_service import ClientContextService
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +57,7 @@ _SIGNAL_SOURCE_HEALTH = "/health"
 
 # Records browser bounds + valid sources (invalid source is a preserved 400, not 422).
 _RECORDS_LIMIT = 250
-_VALID_SOURCES = {"episodes", "user", "system"}
+_VALID_SOURCES = {"graph", "map"}
 # Infra tool names the usage view hides — compaction/thinking families are
 # housekeeping calls, not user-facing tool usage.
 _USAGE_EXCLUDED_TOOLS = ("compaction", "tool_compaction", "trail_compaction", "chat_history_compactor", "thinking")
@@ -105,10 +104,12 @@ def _health() -> Health:
     return Health(status="ok", version=APP_VERSION)
 
 
-def _mirror_telemetry_to_world_state(svc: "ClientContextService", data: dict[str, object]) -> None:
-    """Mirror persisted client telemetry into WorldState as Signals."""
+def _absorb_heartbeat_signals(data: dict[str, object]) -> None:
+    """Absorb the heartbeat into WorldState as Signals (heartbeat / device /
+    local_time). The old telemetry mirror is gone: nothing reads the
+    world-state ``"telemetry"`` key — WorldState renders telemetry straight
+    from ``TelemetryService``."""
     from services.world_state import world_state, Signal
-    world_state.set("telemetry", svc.get() or data)
     world_state.absorb(Signal(source=_SIGNAL_SOURCE_HEALTH, kind="heartbeat", payload=data))
     device_class = data.get("device_class") or cast(dict[str, object], data.get("device") or {}).get("class")
     if device_class:
@@ -119,14 +120,13 @@ def _mirror_telemetry_to_world_state(svc: "ClientContextService", data: dict[str
 
 
 def _persist_heartbeat(data: dict[str, object]) -> None:
-    """Persist client context + mirror to WorldState. Each step is independently logged on failure."""
+    """Persist client context + absorb heartbeat signals into WorldState. Each step is independently logged on failure."""
     from services.client_context_service import ClientContextService
-    svc = ClientContextService()
-    svc.save(data)
+    ClientContextService().save(data)
     try:
-        _mirror_telemetry_to_world_state(svc, data)
+        _absorb_heartbeat_signals(data)
     except Exception as ws_err:
-        logger.warning(f"[HEALTH] Failed to mirror telemetry to WorldState: {ws_err}")
+        logger.warning(f"[HEALTH] Failed to absorb heartbeat signals into WorldState: {ws_err}")
 
 
 # ---------------------------------------------------------------------------
@@ -220,36 +220,24 @@ class SystemStatusResource(Resource):
             try:
                 store.ping()
                 memory["working_memory_keys"] = len(store.keys("working_memory:*"))
-                memory["gist_keys"] = len(store.keys("gist_index:*"))
-                memory["fact_keys"] = len(store.keys("fact_index:*"))
             except Exception as e:
                 status = "degraded"
                 memory_store_error = str(e)
 
             # SQLite counts
-            try:
+            for model_cls, key in (
+                (MemoryGraphRow, "graph"),
+                (MemoryMapRow, "map"),
+            ):
                 try:
-                    storage["episodes"] = Episode.all().count()
+                    storage[key] = model_cls.count()
                 except sqlite3.OperationalError as e:
-                    logger.warning(f"[SYSTEM] Count query failed for 'episodes': {e}")
-                    storage["episodes"] = -1
+                    logger.warning(f"[SYSTEM] Count query failed for '{key}': {e}")
+                    storage[key] = -1
                     status = "degraded"
                 except Exception as e:
-                    logger.warning(f"[SYSTEM] Count query failed for 'episodes': {e}")
-                    storage["episodes"] = -1
-
-                try:
-                    storage["concepts"] = DataGraphRow.live("user_specific").count()
-                except sqlite3.OperationalError as e:
-                    logger.warning(f"[SYSTEM] Count query failed for 'concepts': {e}")
-                    storage["concepts"] = -1
-                    status = "degraded"
-                except Exception as e:
-                    logger.warning(f"[SYSTEM] Count query failed for 'concepts': {e}")
-                    storage["concepts"] = -1
-            except Exception as e:
-                status = "degraded"
-                database_error = str(e)
+                    logger.warning(f"[SYSTEM] Count query failed for '{key}': {e}")
+                    storage[key] = -1
 
             return SystemStatus(
                 status=status,
@@ -270,7 +258,7 @@ class SystemStatusResource(Resource):
 @system_ns.route("/observability/records")
 class ObservabilityRecordsResource(Resource):
     @require_session
-    @system_ns.param("source", "episodes | user | system", _in="query", required=True)
+    @system_ns.param("source", "graph | map", _in="query", required=True)
     @system_ns.param("offset", "Rows to skip (>=0)", _in="query")
     @system_ns.param("q", "Substring filter", _in="query")
     @system_ns.response(200, "Records page", model=_S["RecordsPage"])
@@ -278,7 +266,7 @@ class ObservabilityRecordsResource(Resource):
     @system_ns.response(500, "Failed to retrieve records", model=_S["Error"])
     @responds(RecordsPage, code=200)
     def get(self) -> RecordsPage | ResponseReturnValue:
-        """Paginated record browser for episodes, user, and system memory sources."""
+        """Paginated record browser for graph and map memory sources."""
         try:
             source = request.args.get("source", "")
             if source not in _VALID_SOURCES:
@@ -294,33 +282,30 @@ class ObservabilityRecordsResource(Resource):
 
             q = (request.args.get("q", "") or "")[:200]
 
-            if source == "episodes":
-                rows = [
+            rows: list[dict[str, object]] = []
+            serialised: list[dict[str, object]] = []
+            if source == "graph":
+                rows = MemoryGraphRow.records_page(q, _RECORDS_LIMIT, offset)
+                serialised = [
                     {
                         "created": r["created_at"],
-                        "last_accessed": r["last_relevant_at"] or r["created_at"],
-                        "value": r["gist"],
-                        "location_name": r["location_name"],
+                        "last_accessed": r["last_updated_at"],
+                        "key": r["subject"],
+                        "value": r["contents"],
                     }
-                    for r in Episode.records_page(q, _RECORDS_LIMIT, offset)
+                    for r in (rows or [])
                 ]
-            else:
-                kind = "user_specific" if source == "user" else "system"
-                rows = DataGraphRow.records_page(kind, q, _RECORDS_LIMIT, offset)
-
-            rows = rows or []
-            serialised: list[dict[str, object]] = []
-            for r in rows:
-                row: dict[str, object] = {
-                    "created": r["created"],
-                    "last_accessed": r["last_accessed"],
-                    "value": r["value"],
-                }
-                if source == "episodes":
-                    row["location"] = r.get("location_name") or ""
-                else:
-                    row["key"] = r["key"]
-                serialised.append(row)
+            elif source == "map":
+                rows = MemoryMapRow.records_page(q, _RECORDS_LIMIT, offset)
+                serialised = [
+                    {
+                        "created": r["created_at"],
+                        "last_accessed": r["generated_at"],
+                        "key": r["source"],
+                        "value": r["contents"],
+                    }
+                    for r in (rows or [])
+                ]
 
             return RecordsPage(
                 generated_at=utc_now(),
@@ -394,12 +379,12 @@ class ObservabilityWorldStateResource(Resource):
         """World state as seen by the ACT loop — rendered block + raw inputs (raw passthrough)."""
         try:
             from services.world_state import world_state
-            from services.heartbeat_service import heartbeat_service
+            from services.telemetry_service import TelemetryService
 
             return {
                 "rendered": world_state.render(),
                 "inputs": {
-                    "telemetry": heartbeat_service.read(),
+                    "telemetry": TelemetryService.read().as_dict(),
                 },
             }
         except Exception:
@@ -452,23 +437,6 @@ class ObservabilityWriteQueueResource(Resource):
         except Exception as e:
             logger.exception(f"[REST API] observability/write-queue error: {e}")
             return error("Failed to retrieve write queue stats", 500)
-
-
-@system_ns.route("/observability/telemetry")
-class ObservabilityTelemetryResource(Resource):
-    @require_session
-    @system_ns.response(200, "Telemetry summary (opaque, dynamic event-type keys)")
-    @system_ns.response(500, "Failed to retrieve telemetry summary", model=_S["Error"])
-    @responds(code=200)
-    def get(self) -> ResponseReturnValue:
-        """Telemetry event summary across all tracked event types (raw passthrough)."""
-        try:
-            from services.telemetry_service import get_telemetry_collector
-            summary = get_telemetry_collector().get_summary()
-            return {"generated_at": utc_now().isoformat(), **summary}
-        except Exception as e:
-            logger.exception(f"[REST API] observability/telemetry error: {e}")
-            return error("Failed to retrieve telemetry summary", 500)
 
 
 def _tail_error_lines() -> list[dict[str, object]]:

@@ -11,17 +11,20 @@ const props = withDefaults(defineProps<{
   message: ConversationMessage;
   canReply?: boolean;
   toolCalls?: NonNullable<ConversationMessage['tool_calls']>;
+  thinking?: { traces: string[]; duration_ms: number; tokens: number };
   threadPill?: { status: 'working' | 'done' | 'thread' | 'idle'; label: string } | null;
 }>(), {
   canReply: false,
   toolCalls: () => [],
   threadPill: null,
+  thinking: undefined,
 });
 
 const emit = defineEmits<{ reply: []; openThread: [] }>();
 
 const rootRef = ref<HTMLElement | null>(null);
 const expanded = ref(false);
+const thinkingExpanded = ref(false);
 
 const voiceStore = useVoiceTranscriptsStore();
 
@@ -29,6 +32,16 @@ const voiceStore = useVoiceTranscriptsStore();
 // mid-turn "let me check…" rows have no audio and never will.
 const transcriptId = computed(() => Number(props.message.id));
 const canSpeak = computed(() => !!props.message.settled && Number.isFinite(transcriptId.value));
+
+// Format the thinking duration as "thought for {S}s" or "thought for {M}m {S}s".
+const thinkingLabel = computed(() => {
+  if (!props.thinking) return '';
+  const seconds = Math.round(props.thinking.duration_ms / 1000);
+  const mins = Math.floor(seconds / 60);
+  const rem = seconds % 60;
+  if (mins === 0) return `thought for ${seconds}s`;
+  return `thought for ${mins}m ${rem}s`;
+});
 
 // Live state wins over the snapshot this message was fetched with; null means
 // nothing has been attempted, which is normal for history that predates
@@ -101,6 +114,18 @@ function onCopy(): void {
         {{ toolCalls.length }} tool{{ toolCalls.length === 1 ? '' : 's' }} used
       </button>
 
+      <a
+        v-if="thinking"
+        class="thinking-link"
+        :class="{ 'thinking-link--open': thinkingExpanded }"
+        href="#"
+        role="button"
+        :aria-expanded="thinkingExpanded"
+        @click.prevent="thinkingExpanded = !thinkingExpanded"
+      >
+        {{ thinkingLabel }}
+      </a>
+
       <button
         v-if="threadPill"
         class="thread-pill"
@@ -166,6 +191,23 @@ function onCopy(): void {
           >
             <span class="call__fn">{{ c.tool_name }}</span>
             <span class="call__summary">{{ c.summary }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div
+      v-if="thinking"
+      class="trace-body"
+      :class="{ 'trace-body--open': thinkingExpanded }"
+    >
+      <div class="trace-body__inner">
+        <div class="thinking-traces">
+          <div
+            v-for="(trace, i) in thinking.traces"
+            :key="i"
+            class="thinking-trace"
+          >
+            <pre>{{ trace }}</pre>
           </div>
         </div>
       </div>

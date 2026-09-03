@@ -25,7 +25,6 @@ dispatcher binds in production (construction is side-effect-free, §6.13/I2).
 collaborator is possible.
 """
 
-import json
 import sqlite3
 from datetime import datetime, timedelta
 from typing import cast
@@ -45,18 +44,13 @@ _TZ = "Europe/Malta"
 
 
 def _seed_timezone(db: sqlite3.Connection, tz_name: str = _TZ) -> None:
-    """Write a real heartbeat timezone into the telemetry table — the same
-    store the production ``locale_service.get_timezone()`` reads."""
-    from services.heartbeat_service import heartbeat_service
+    """Persist a heartbeat timezone into the telemetry JSON snapshot — the same
+    store the production ``locale_service.get_timezone()`` reads. The ``db``
+    fixture stays a parameter: it is what redirects the snapshot path into this
+    test's tmp dir."""
+    from services.telemetry_service import TelemetryService
 
-    heartbeat_service._ctx = None
-    db.execute("DELETE FROM telemetry")
-    db.execute(
-        "INSERT INTO telemetry (key, value) VALUES (?, ?)",
-        ("timezone", json.dumps(tz_name)),
-    )
-    db.commit()
-    heartbeat_service._ctx = None
+    TelemetryService.write({"timezone": tz_name})
 
 
 def _row(db: sqlite3.Connection, item_id: object) -> "dict[str, object] | None":

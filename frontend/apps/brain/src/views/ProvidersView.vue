@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import type { CatalogEntry, Provider } from '../api/providers';
 import { providers } from '../api/providers';
 import { system } from '../api';
@@ -8,7 +8,7 @@ import { useToast } from '../composables/useToast';
 import { useBrainAction } from '../composables/useBrainAction';
 import { useConfirm } from '../composables/useConfirm';
 import { useShellStore } from '../stores/shell';
-import { ChevronLeft, LayoutGrid, Plus } from '@lucide/vue';
+import { ChevronLeft, LayoutGrid, Plus, RefreshCw } from '@lucide/vue';
 
 const { show: showToast } = useToast();
 const { run } = useBrainAction();
@@ -30,14 +30,6 @@ const catalogLoaded = ref(false);
 
 const mode = ref<'list' | 'picker' | 'form'>('list');
 
-const CUSTOM_PRESET: CatalogEntry = {
-  id: 'custom',
-  name: 'Custom (OpenAI-compatible)',
-  platform: 'openai_compatible',
-  host: '',
-  needs_key: true,
-};
-
 const preset = ref<CatalogEntry | null>(null);
 const editingId = ref<number | null>(null);
 const editModel = ref('');
@@ -48,26 +40,38 @@ const formKey = ref('');
 const formModel = ref('');
 const formContextWindow = ref<number | null>(null);
 
+// An edit opens with the stored key untouched and unread: the field is replaced
+// by a "Change API key" button, and saving without pressing it omits `api_key`
+// from the body entirely, which is what makes the backend keep what it has.
+// Pressing it fetches the real key and swaps the button for a filled-in field.
+const keyRevealed = ref(false);
+const revealingKey = ref(false);
+
 const models = ref<string[]>([]);
 const modelsFetchInFlight = ref(false);
 const modelStatus = ref('');
 const modelStatusClass = ref('');
-const lastFetchKey = ref('');
 let modelFetchTimer: ReturnType<typeof setTimeout> | null = null;
+
+// The one and only model-refresh implementation lives in this button's click
+// handler; every other trigger clicks the button rather than calling it.
+const reloadModelsBtn = ref<HTMLButtonElement | null>(null);
 
 const MODEL_FETCH_DEBOUNCE_MS = 600;
 
 const testing = ref(false);
 
-const needsHost = computed(
-  () => preset.value?.platform === 'ollama' || preset.value?.platform === 'openai_compatible',
-);
+const needsHost = computed(() => !!preset.value?.needs_host);
 
 const needsKey = computed(() => !!preset.value?.needs_key);
 
 const hostReady = computed(() => !needsHost.value || formHost.value.trim() !== '');
 
-const keyReady = computed(() => !needsKey.value || formKey.value.trim() !== '');
+// An edit is key-ready without a typed key: the stored one is still there, and
+// the backend reads it from the row when the request carries `provider_id`.
+const keyReady = computed(
+  () => !needsKey.value || formKey.value.trim() !== '' || editingId.value !== null,
+);
 
 const canFetch = computed(() => hostReady.value && keyReady.value);
 
@@ -79,7 +83,7 @@ const saveDisabled = computed(() => !formModel.value);
 
 const isEditing = computed(() => editingId.value !== null);
 
-const catalogTiles = computed(() => [...catalog.value, CUSTOM_PRESET]);
+const catalogTiles = computed(() => catalog.value);
 
 function avatar(name: string): string {
   const s = (name || '').trim();
@@ -87,9 +91,7 @@ function avatar(name: string): string {
 }
 
 function platformLabel(platform: string): string {
-  if (platform === 'openai_compatible') return 'OpenAI-compatible';
-  if (platform === 'codex_cli') return 'Codex CLI';
-  return platform;
+  return catalog.value.find((c) => c.platform === platform)?.name || platform;
 }
 
 onMounted(async () => {
@@ -212,7 +214,6 @@ async function openWizard(id: number | null): Promise<void> {
   editingId.value = id;
   editModel.value = '';
   models.value = [];
-  lastFetchKey.value = '';
   modelStatus.value = '';
   modelStatusClass.value = '';
   if (modelFetchTimer !== null) {
@@ -234,34 +235,52 @@ async function openWizard(id: number | null): Promise<void> {
     formName.value = p.name;
     formHost.value = p.host || '';
     formKey.value = '';
+    keyRevealed.value = false;
     formModel.value = editModel.value;
     formContextWindow.value = p.context_window;
     mode.value = 'form';
-    if (canFetch.value) {
-      void fetchModels();
-    }
+    // Opening the edit page refreshes the list on its own — the whole point is
+    // that nobody should have to retype a key to see current models.
+    await clickReloadModels();
   } else {
     preset.value = null;
     formName.value = '';
     formHost.value = '';
     formKey.value = '';
+    keyRevealed.value = true; // nothing stored yet, so nothing to protect
     formModel.value = '';
     formContextWindow.value = null;
     mode.value = 'picker';
   }
 }
 
+// Pull the stored key on demand and swap the button for a filled-in field.
+async function revealApiKey(): Promise<void> {
+  const id = editingId.value;
+  if (id === null || revealingKey.value) return;
+  revealingKey.value = true;
+  try {
+    formKey.value = await providers.getApiKey(id);
+    keyRevealed.value = true;
+  } catch (e: unknown) {
+    showToast(apiErrorMessage(e, 'Could not load the API key'), 'error');
+  } finally {
+    revealingKey.value = false;
+  }
+}
+
 function presetFor(provider: Provider): CatalogEntry {
-  const match = catalog.value.find(
-    (c) => c.platform === provider.platform && (c.host || '') === (provider.host || ''),
-  );
+  const match = catalog.value.find((c) => c.platform === provider.platform);
   if (match) return match;
+  // A row whose platform the running build no longer offers: keep it editable,
+  // and ask for whatever it already carries rather than guessing its rules.
   return {
     id: 'edit',
     name: provider.name,
     platform: provider.platform,
     host: provider.host || '',
-    needs_key: provider.platform !== 'ollama' && provider.platform !== 'codex_cli',
+    needs_key: true,
+    needs_host: !!provider.host,
   };
 }
 
@@ -281,17 +300,15 @@ function selectTile(p: CatalogEntry): void {
   preset.value = { ...p };
   editModel.value = '';
   models.value = [];
-  lastFetchKey.value = '';
   modelStatus.value = '';
   modelStatusClass.value = '';
   formName.value = p.name;
   formHost.value = p.host || '';
   formKey.value = '';
+  keyRevealed.value = true;
   formModel.value = '';
   mode.value = 'form';
-  if (canFetch.value) {
-    void fetchModels();
-  }
+  void clickReloadModels();
 }
 
 function backFromPicker(): void {
@@ -306,32 +323,44 @@ function cancelForm(): void {
   mode.value = 'list';
 }
 
-watch([() => formHost.value, () => formKey.value], () => {
-  if (mode.value !== 'form') return;
-  // Any change to host/key refetches; redundant fetches are deduped downstream by
-  // modelsFetchInFlight + lastFetchKey, so no suppression flag is needed here.
-  debouncedFetchModels();
-});
+// Typing a key is the create-flow's "I'm ready" signal; debounced so a paste
+// does not fire mid-keystroke. Host has its own on-blur trigger in the template.
+watch(
+  () => formKey.value,
+  () => {
+    if (mode.value !== 'form') return;
+    if (modelFetchTimer !== null) {
+      clearTimeout(modelFetchTimer);
+    }
+    modelFetchTimer = setTimeout(() => {
+      void clickReloadModels();
+    }, MODEL_FETCH_DEBOUNCE_MS);
+  },
+);
 
-function debouncedFetchModels(): void {
-  if (modelFetchTimer !== null) {
-    clearTimeout(modelFetchTimer);
-  }
-  modelFetchTimer = setTimeout(() => {
-    if (canFetch.value) void fetchModels();
-  }, MODEL_FETCH_DEBOUNCE_MS);
+/**
+ * Fire the reload button. Every model-list refresh in this view goes through
+ * here — opening the edit page, blurring the host field, typing a key — so the
+ * fetch itself is written once, in that button's click handler, and no trigger
+ * can drift from the others. `nextTick` covers the triggers that switch into
+ * form mode: the button does not exist until that render lands.
+ */
+async function clickReloadModels(): Promise<void> {
+  await nextTick();
+  reloadModelsBtn.value?.click();
 }
 
+// THE model-refresh function. Bound to the reload button's @click and reached
+// no other way — see clickReloadModels().
 async function fetchModels(): Promise<void> {
-  if (modelsFetchInFlight.value || !preset.value) return;
+  if (modelsFetchInFlight.value || !preset.value || !canFetch.value) return;
 
-  const creds: { host?: string; api_key?: string } = {};
+  const creds: { host?: string; api_key?: string; provider_id?: number } = {};
   if (needsHost.value) creds.host = formHost.value.trim();
-  if (needsKey.value) creds.api_key = formKey.value.trim();
-
-  const fetchKey = `${preset.value.platform}|${creds.host || ''}|${creds.api_key ? 'k' : ''}`;
-  if (fetchKey === lastFetchKey.value && models.value.length > 0) return;
-  lastFetchKey.value = fetchKey;
+  if (needsKey.value && formKey.value.trim()) creds.api_key = formKey.value.trim();
+  // No typed key on an edit means "use the one you already have" — the backend
+  // reads it off the row rather than the browser holding it to list models.
+  if (editingId.value !== null) creds.provider_id = editingId.value;
 
   modelsFetchInFlight.value = true;
   modelStatus.value = 'Loading models…';
@@ -361,7 +390,6 @@ async function fetchModels(): Promise<void> {
   } catch (e: unknown) {
     modelStatus.value = apiErrorMessage(e, 'Failed to fetch models');
     modelStatusClass.value = 'model-status err';
-    lastFetchKey.value = ''; // allow retry
   } finally {
     modelsFetchInFlight.value = false;
   }
@@ -381,7 +409,9 @@ async function testConnection(): Promise<void> {
     model: formModel.value,
   };
   if (needsHost.value) body.host = formHost.value.trim();
-  if (needsKey.value) body.api_key = formKey.value.trim();
+  // Omitted rather than blank on an unrevealed edit: the backend then falls
+  // back to the stored credential instead of testing with an empty one.
+  if (needsKey.value && formKey.value.trim()) body.api_key = formKey.value.trim();
   if (editingId.value !== null) body.provider_id = editingId.value;
 
   const { ok, data } = await run(() => providers.test(body), {
@@ -419,7 +449,11 @@ async function saveProvider(): Promise<void> {
     context_window: formContextWindow.value || null,
   };
   if (needsHost.value) body.host = formHost.value.trim();
-  if (needsKey.value) {
+  // The retain path: an edit that never opened the key field sends no `api_key`
+  // key at all, so the backend's exclude_unset leaves the stored one alone. A
+  // masked placeholder is never sent — there is nothing that could be written
+  // over the real credential by mistake.
+  if (needsKey.value && keyRevealed.value) {
     const k = formKey.value.trim();
     if (k) body.api_key = k;
   }
@@ -615,22 +649,59 @@ async function saveProvider(): Promise<void> {
 
         <div id="hostGroup" class="form-group wizard-step" :hidden="!needsHost">
           <label for="pHost">Host / Base URL</label>
-          <input id="pHost" v-model="formHost" type="text" placeholder="https://…" />
+          <input
+            id="pHost"
+            v-model="formHost"
+            type="text"
+            placeholder="https://…"
+            @blur="clickReloadModels"
+          />
         </div>
 
         <div id="keyGroup" class="form-group wizard-step" :hidden="!showKeyGroup">
           <label for="pKey">API Key</label>
+          <button
+            v-if="!keyRevealed"
+            id="pKeyReveal"
+            type="button"
+            class="btn btn-secondary"
+            :disabled="revealingKey"
+            @click="revealApiKey"
+          >
+            {{ revealingKey ? 'Loading…' : 'Change API key' }}
+          </button>
+          <!--
+            Revealed on an edit means "show me what is stored", so the field is
+            plain text. Creating shows nothing worth hiding yet but the operator
+            is about to paste a live secret, so it stays masked as it always was.
+          -->
           <input
+            v-else
             id="pKey"
             v-model="formKey"
-            type="password"
-            autocomplete="new-password"
+            :type="isEditing ? 'text' : 'password'"
+            :autocomplete="isEditing ? 'off' : 'new-password'"
+            spellcheck="false"
             :placeholder="isEditing ? 'Leave blank to keep existing' : 'Paste your API key'"
           />
         </div>
 
         <div id="modelGroup" class="form-group wizard-step" :hidden="!showModelGroup">
-          <label for="pModel">Model</label>
+          <div class="label-row">
+            <label for="pModel">Model</label>
+            <button
+              id="reloadModelListBtn"
+              ref="reloadModelsBtn"
+              type="button"
+              class="icon-btn model-reload-btn"
+              title="Refresh model list"
+              aria-label="Refresh model list"
+              :disabled="modelsFetchInFlight"
+              @click="fetchModels"
+            >
+              <RefreshCw :size="14" :class="{ spinning: modelsFetchInFlight }" />
+            </button>
+          </div>
           <select id="pModel" v-model="formModel">
             <option value="">Select model…</option>
             <option v-for="m in models" :key="m" :value="m">{{ m }}</option>

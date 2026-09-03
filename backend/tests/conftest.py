@@ -1,8 +1,11 @@
 # Baseline: 2249 passed, 65 failed, 499 errors (2026-03-27)
 # Errors are pre-existing: 15 files excluded (numpy import failure in this env),
 # and 499 test-setup errors caused by missing sqlite-vec extension (vec0 module).
+import math
+import re
 import shutil
 import sqlite3
+import zlib
 from collections.abc import Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -45,8 +48,8 @@ def _db_template(tmp_path_factory: pytest.TempPathFactory) -> str:
         # Mirror production boot (run.py / consumer.py): converge() applies only
         # static column DEFAULTs, never value backfills, so the deterministic
         # redesign-column backfill runs as a separate step right after it. Without
-        # this the template diverges from a real boot — last_relevant_at / valid_from
-        # / valid_to stay NULL where production would have populated them.
+        # this the template diverges from a real boot — valid_from / valid_to stay
+        # NULL where production would have populated them.
         convergence.backfill_redesign_columns()
 
         # Mirror boot: seed the flat policy table so gated tool calls on non-chat
@@ -89,6 +92,10 @@ def db(_db_template: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> It
     # through FileMapperService) so every Database.conn() call lands on it, then
     # drop any stale thread connection bound to another path.
     monkeypatch.setattr(FileMapperService, 'get_db_path', lambda *_: Path(test_db_path))
+    # Redirect the telemetry snapshot to this test's tmp dir, next to the DB
+    # patch above, so a heartbeat in a test never touches the real
+    # data/telemetry.json.
+    monkeypatch.setattr(FileMapperService, 'get_telemetry_json_path', lambda *_: tmp_path / 'telemetry.json')
     _newdb.Database.close()
     # Bind the connection getter onto Model — the boot step run.py runs once at
     # startup (``Database().bind()``). Repeated per test because each Database()
@@ -96,16 +103,22 @@ def db(_db_template: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> It
     # test's file, not a prior test's or the real chalie.db.
     _newdb.Database().bind()
 
-    # Invalidate heartbeat cache so it reads from this test's DB.
-    from services.heartbeat_service import heartbeat_service
-    heartbeat_service._ctx = None
+    # Invalidate the telemetry cache so the next read re-loads this test's
+    # JSON file (the write path persists to the patched tmp location above).
+    from services.telemetry_service import TelemetryService
+    TelemetryService._cache = None
+    # Clear the MCP connection map too — it is process-memory, not per-DB, so
+    # one test's pings must never leak into the next.
+    from services.mcp_client_service import McpClientService
+    McpClientService._connected = {}
 
     conn = _newdb.Database.conn()
     try:
         yield conn
     finally:
         _newdb.Database.close()
-        heartbeat_service._ctx = None
+        TelemetryService._cache = None
+        McpClientService._connected = {}
 
 
 #: Deliberately below MAX_CONTEXT_WINDOW (200_000) so a test asserting this
@@ -155,6 +168,97 @@ def chat_provider(db: sqlite3.Connection) -> sqlite3.Connection:
 def _isolate_vault_backups(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from services.file_mapper_service import FileMapperService
     monkeypatch.setattr(FileMapperService, "_SECURE_DIR", tmp_path / "secure")
+
+
+# Every settled turn on an in-scope channel offers itself to the memory-step
+# service, which spawns a live background MessageProcessor. In the unit suite
+# that thread outlives its test — consuming scripted provider responses,
+# writing rows mid-teardown, and mutating per-channel gate state. The patch is
+# session-scoped because fire-and-forget MP drive threads outlive their test:
+# a per-test patch leaves teardown/setup gaps where a late settle would hit
+# the real trigger against a torn-down DB. Feature tests re-arm the real
+# trigger with the ``real_memory_step`` fixture.
+
+_REAL_ON_SETTLE = None
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _quiesce_memory_step() -> "Iterator[None]":
+    global _REAL_ON_SETTLE
+    from services.memory_step_service import MemoryStepService
+    _REAL_ON_SETTLE = MemoryStepService.on_settle
+    patch_ = pytest.MonkeyPatch()
+    patch_.setattr(MemoryStepService, "on_settle", lambda self, mp: None)
+    yield
+    patch_.undo()
+
+
+@pytest.fixture
+def real_memory_step(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Re-arm the real settle trigger for memory-step feature tests."""
+    from services.memory_step_service import MemoryStepService
+    monkeypatch.setattr(MemoryStepService, "on_settle", _REAL_ON_SETTLE)
+
+
+# The chat-history compactor hands every folded USER window to the
+# user-synthesis generator, which spawns a live background MessageProcessor —
+# the same leak shape as the memory step above, quiesced session-scoped for
+# the same reason: no teardown/setup gap where a late real compaction could
+# hit the real trigger. Feature tests re-arm with ``real_user_synthesis``.
+
+_REAL_ON_COMPACTION = None
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _quiesce_user_synthesis() -> "Iterator[None]":
+    global _REAL_ON_COMPACTION
+    from services.user_synthesis_generator import UserSynthesisGenerator
+    _REAL_ON_COMPACTION = UserSynthesisGenerator.on_compaction
+    patch_ = pytest.MonkeyPatch()
+    patch_.setattr(
+        UserSynthesisGenerator, "on_compaction", lambda self, channel, folded_block: None
+    )
+    yield
+    patch_.undo()
+
+
+@pytest.fixture
+def real_user_synthesis(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Re-arm the real compaction trigger for generator feature tests."""
+    from services.user_synthesis_generator import UserSynthesisGenerator
+    monkeypatch.setattr(UserSynthesisGenerator, "on_compaction", _REAL_ON_COMPACTION)
+
+
+# Every settled turn kicks background speech pre-synthesis on a fire-and-forget
+# daemon thread — the third instance of the leak shape above, and the one that
+# corrupts rather than merely races: the thread records against
+# ``voice_transcript.transcript_id``, a foreign key onto ``transcript(id)``, so
+# a turn settled by one test writes after that test's rows are gone and SQLite
+# raises IntegrityError inside a thread nobody joins. Session-scoped for the
+# same reason as the two above. Pre-synthesis tests re-arm the real hook with
+# ``real_voice_presynthesis``.
+
+_REAL_VOICE_PRESYNTHESIS = None
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _quiesce_voice_presynthesis() -> "Iterator[None]":
+    global _REAL_VOICE_PRESYNTHESIS
+    from controllers.message_processor import MessageProcessor
+    _REAL_VOICE_PRESYNTHESIS = MessageProcessor._voice_presynthesis
+    patch_ = pytest.MonkeyPatch()
+    patch_.setattr(MessageProcessor, "_voice_presynthesis", lambda self: None)
+    yield
+    patch_.undo()
+
+
+@pytest.fixture
+def real_voice_presynthesis(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Re-arm the real settle hook for pre-synthesis feature tests."""
+    from controllers.message_processor import MessageProcessor
+    monkeypatch.setattr(
+        MessageProcessor, "_voice_presynthesis", _REAL_VOICE_PRESYNTHESIS
+    )
 
 
 # ── Non-DB mock fixtures ──────────────────────────────────────────
@@ -213,8 +317,46 @@ def authed_client(db: sqlite3.Connection) -> Iterator[tuple[object, sqlite3.Conn
             yield (client, db, real_store)
 
 
+class _FixedEmbedder:
+    """Deterministic stand-in for the embedding model: every text maps to the
+    same 768-d unit vector, matching the vec-table dimension. Vector-lane hits
+    all end up equidistant from the query, so ranking is decided by secondary
+    keys (e.g. ``iteration``)."""
+
+    def generate_embedding(self, text: str, mp: object = None) -> list[float]:
+        return [1.0] + [0.0] * 767
+
+
 @pytest.fixture
-def tmp_state_file(tmp_path: Path) -> Path:
-    """Temporary state file path for tools using JSON state."""
-    state_file = tmp_path / "state.json"
-    return state_file
+def fixed_embedder(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin both embedding seams — indexing and recall — to one deterministic model."""
+    emb = _FixedEmbedder()
+    monkeypatch.setattr("services.embedding_service.get_embedding_service", lambda: emb)
+    monkeypatch.setattr("services.memory_recall_service.get_embedding_service", lambda: emb)
+
+
+class _LexicalEmbedder:
+    """Deterministic stand-in whose vectors actually MOVE with the words in the
+    text: each distinct token claims one of the 768 dimensions and the vector is
+    L2-normalised, so vec0 distance falls as word overlap rises.
+
+    Needed wherever a test must prove WHICH column the search key reads, or that
+    ranking follows distance — neither is observable under
+    :class:`_FixedEmbedder`, where every text is equidistant from every query.
+    """
+
+    def generate_embedding(self, text: str, mp: object = None) -> list[float]:
+        vec = [0.0] * 768
+        for token in re.findall(r"[a-z0-9]+", text.lower()):
+            vec[zlib.crc32(token.encode()) % 768] += 1.0
+        norm = math.sqrt(sum(v * v for v in vec))
+        return [v / norm for v in vec] if norm else vec
+
+
+@pytest.fixture
+def lexical_embedder(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin both embedding seams to a model whose distances discriminate by word
+    overlap — the only way a recall test can tell one candidate from another."""
+    emb = _LexicalEmbedder()
+    monkeypatch.setattr("services.embedding_service.get_embedding_service", lambda: emb)
+    monkeypatch.setattr("services.memory_recall_service.get_embedding_service", lambda: emb)

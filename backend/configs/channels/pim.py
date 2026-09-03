@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, ClassVar
 from abilities.calendar import CalendarAbility
 from abilities.contacts import ContactsAbility
 from abilities.email import EmailAbility
-from abilities.memory import MemoryAbility
+from abilities.recall import Recall
 
 from configs.enums.channels import Channel
 from services.processor_config import ProcessorConfig
@@ -46,11 +46,10 @@ class PimConfig(ProcessorConfig):
             channel=Channel.DELEGATE_PIM.value,
             role="pim",
             policy_channel=policy_channel,
-            always_available=[EmailAbility.NAME, CalendarAbility.NAME, ContactsAbility.NAME, MemoryAbility.NAME],
+            always_available=[EmailAbility.NAME, CalendarAbility.NAME, ContactsAbility.NAME, Recall.NAME],
             skip_transcript=False,  # write a delegate-channel transcript row so
             skip_input_row=False,   # _setup assigns the uid the act-trail needs
             suppress_history=True,
-            broadcast_to=None,
             memory_seed=False,
         )
 
@@ -59,7 +58,7 @@ class PimConfig(ProcessorConfig):
         return (
             "You are Chalie's Personal Information Manager. Execute the user's "
             "instruction using your tools: "
-            f"{EmailAbility.NAME}, {CalendarAbility.NAME}, {ContactsAbility.NAME}, {MemoryAbility.NAME}. Calendar "
+            f"{EmailAbility.NAME}, {CalendarAbility.NAME}, {ContactsAbility.NAME}, {Recall.NAME}. Calendar "
             "and email are always fetched live (never from a cache). Your final answer "
             "MUST list each tool you called and its result, and be terse. Explicitly "
             "state what succeeded and what failed — never blur a partial failure into a "

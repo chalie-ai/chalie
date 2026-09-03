@@ -18,7 +18,6 @@ import json
 from typing import ClassVar, Self, cast
 
 from models.model import Model
-from models.query import Query
 
 
 class Transcript(Model):
@@ -65,14 +64,6 @@ class Transcript(Model):
 
     _PREVIEW_CHARS: ClassVar[int] = 200
 
-    # ── query scopes ────────────────────────────────────────────────────────
-
-    @classmethod
-    def settled_assistants(cls) -> Query[Self]:
-        """Late-binding scope over the settle predicate — the settled-assistant
-        rows (turn settle0 candidates); compose channel/turn filters onto it."""
-        return cls.filter("role", "assistant").filter("settled", 1)
-
     # ── turn-id allocation (§6.8, atomic in a single-writer begin()) ─────────
 
     @classmethod
@@ -101,6 +92,17 @@ class Transcript(Model):
             (channel, turn_id),
         ).fetchone()
         return int(row[0]) if row and row[0] is not None else None
+
+    @classmethod
+    def ids_for_turn(cls, channel: str, turn_id: int) -> list[int]:
+        """Every transcript row id for ``(channel, turn_id)``, ordered by
+        ``id`` ascending — the act-trail anchor lookup. Empty list when the
+        turn has no rows yet (in-progress). Mirrors :meth:`settle0`'s style."""
+        rows = cls._bound_connection().execute(
+            "SELECT id FROM transcript WHERE channel = ? AND turn_id = ? ORDER BY id",
+            (channel, turn_id),
+        ).fetchall()
+        return [int(r[0]) for r in rows]
 
     @classmethod
     def latest_thinking_level(cls, channel: str, turn_id: int | None = None) -> str | None:
@@ -146,41 +148,6 @@ class Transcript(Model):
             "SELECT MAX(created_at) FROM transcript WHERE role = 'user'",
         ).fetchone()
         return cast("str | None", row[0]) if row else None
-
-    @classmethod
-    def latest_id(cls, channels: list[str], *, exclude_roles: tuple[str, ...] = (),
-                  require_location: bool = False) -> int | None:
-        """``MAX(id)`` over a channel allowlist (the subconscious cursor-delta
-        check), optionally floored to geolocated rows. None on an empty set."""
-        if not channels:
-            return None
-        where = [f"channel IN ({cls._placeholders(len(channels))})"]
-        params: list[object] = list(channels)
-        if require_location:
-            where.append("location_lat IS NOT NULL AND location_lon IS NOT NULL")
-        for role in exclude_roles:
-            where.append("role != ?")
-            params.append(role)
-        row = cls._bound_connection().execute(
-            f"SELECT MAX(id) FROM transcript WHERE {' AND '.join(where)}",
-            tuple(params),
-        ).fetchone()
-        return int(row[0]) if row and row[0] is not None else None
-
-    @classmethod
-    def channel_activity(cls, since_days: int) -> list[tuple[str, int, str]]:
-        """Per-channel user-message frequency over the last ``since_days`` (world
-        awareness's topic-interest signal): ``(channel, freq, last_seen)`` ordered
-        by frequency."""
-        rows = cls._bound_connection().execute(
-            "SELECT channel, COUNT(*) AS freq, MAX(created_at) AS last_seen "
-            "FROM transcript "
-            "WHERE created_at >= datetime('now', '-' || ? || ' days') "
-            "  AND role = 'user' AND channel IS NOT NULL AND channel != '' "
-            "GROUP BY channel ORDER BY freq DESC LIMIT 20",
-            (since_days,),
-        ).fetchall()
-        return [(cast("str", r[0]), int(r[1]), cast("str", r[2])) for r in rows]
 
     @classmethod
     def distinct_channels(cls) -> list[str]:
@@ -296,23 +263,6 @@ class Transcript(Model):
         ]
 
     @classmethod
-    def by_ids(cls, ids: list[int]) -> list[dict[str, object]]:
-        """Rows for an explicit ``id`` list, ordered by ``id`` ascending, as
-        plain column dicts — the memory-retrieval span fetch and the
-        super-episode transcript projection. Empty list → no query, empty
-        result; absent ids are simply omitted. Dict-shaped (like ``by_turn``)
-        because callers read ``r['id']``/``r['role']``/``r['content']``/
-        ``r['created_at']``/``r['tool_name']``."""
-        if not ids:
-            return []
-        return [
-            row.to_dict()
-            for row in cls.filter_in("id", ids)
-            .order_by("id ASC")
-            .get()
-        ]
-
-    @classmethod
     def turn_scope_ids(cls, ids: list[int]) -> list[int]:
         """Every transcript id that shares a turn with any of the given ids.
 
@@ -349,8 +299,8 @@ class Transcript(Model):
     # ── off-turn GC (unlinked-transcript sweep) ──────────────────────────────
 
     # Retention purges a transcript row once it ages past this window AND no
-    # live episode still cites it — the age floor that keeps a fresh,
-    # not-yet-consolidated turn from disappearing out from under an in-flight
+    # live episode still cites it — the age floor that keeps a fresh
+    # turn from disappearing out from under an in-flight
     # recall. Mirrors ``ToolCall.ORPHAN_GC_AFTER_DAYS`` in spirit (same window,
     # same "age + no live reference" shape) but is its own constant since the
     # two tables decay on independent conditions.

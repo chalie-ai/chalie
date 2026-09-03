@@ -30,6 +30,25 @@ _DISCOVERY_TIMESTAMP = DurableTimestamp(
     source="discovery_worker",
 )
 
+# The stable discovery turn_id is persisted here (one key per box). The first
+# research fire allocates a fresh MAIN turn and stores its id; every later fire
+# forks into that same turn (DiscoveryConfig.external_turn_id=True), so the
+# whole research log clusters as one thread.
+_DISCOVERY_TURN_ID_KEY = "discovery:turn_id"
+
+
+def _stable_turn_id() -> int | None:
+    """The persisted discovery turn_id, or ``None`` if no fire has landed yet."""
+    from models.machine_state import MachineStateRow  # noqa: PLC0415
+
+    row = MachineStateRow.newest_active_by_key(_DISCOVERY_TURN_ID_KEY)
+    if not row or not row.value:
+        return None
+    try:
+        return int(row.value)
+    except (TypeError, ValueError):
+        return None
+
 
 class DiscoveryJob(IdleGatedJob):
     """Idle-gated cron job for proactive autonomous research.
@@ -70,16 +89,32 @@ class DiscoveryJob(IdleGatedJob):
         return last is None or utc_now() - last >= _DISCOVERY_INTERVAL
 
     def _run(self) -> str:
-        """Fire the proactive research pass and stamp the discovery clock.
+        """Fire the proactive research pass into the stable discovery turn and
+        stamp the discovery clock.
 
-        Reached only when ``should_run`` has already cleared the 6-hour gate,
-        so this fires unconditionally. DiscoveryConfig reads the ``user``
-        channel's history directly (its grounding is the live user spine), so
-        no metadata is threaded in; the loop records anything worth keeping as
-        a discovery memory on its own.
+        Reached only when ``should_run`` has already cleared the 6-hour gate.
+        DiscoveryConfig reads the ``user`` channel's history directly (its
+        grounding is the live user spine). The discovery turn_id is a stable,
+        box-owned key: the first fire allocates a fresh MAIN turn and persists
+        its id; every later fire forks into that same turn, so the research log
+        is one coherent thread.
         """
         from controllers.message_processor import MessageProcessor  # noqa: PLC0415
+        from models.machine_state import MachineStateRow  # noqa: PLC0415
 
-        MessageProcessor.process(DiscoveryConfig(), DISCOVERY_PROMPT)
+        stable_id = _stable_turn_id()
+        mp = MessageProcessor.process(
+            DiscoveryConfig(),
+            DISCOVERY_PROMPT,
+            turn_id=stable_id if stable_id is not None else -1,
+        )
+        if stable_id is None:
+            # First-ever fire: persist the freshly-allocated turn_id so later
+            # fires reuse it. ``mp.turn_id`` is set synchronously in ``begin()``.
+            MachineStateRow.store(
+                key=_DISCOVERY_TURN_ID_KEY,
+                value=str(mp.turn_id),
+                source="discovery_worker",
+            )
         _DISCOVERY_TIMESTAMP.persist(utc_now())
         return "fired"

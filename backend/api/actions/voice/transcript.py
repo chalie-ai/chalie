@@ -40,7 +40,7 @@ class VoiceTranscriptAction(Action):
         "get": DocumentedResponse(
             VoiceStateResponse,
             extras=(
-                (200, "Pre-synthesized speech (audio/wav)"),
+                (200, "Pre-synthesized speech (audio/mpeg)"),
                 (202, "Synthesis started or still running"),
                 (409, "Synthesis failed for this transcript row"),
             ),
@@ -62,14 +62,17 @@ class VoiceTranscriptAction(Action):
                     transcript_id, path,
                 )
                 return VoiceStateResponse(state="failed").single(), 409
-            wav_bytes = path.read_bytes()
+            audio_bytes = path.read_bytes()
+            # Read the type off the stored name rather than assuming one: rows
+            # written before the move to MP3 still hold playable WAV files.
+            mimetype = "audio/mpeg" if path.suffix == ".mp3" else "audio/wav"
             # Audio is a non-JSON payload, so it leaves as a raw werkzeug
             # response rather than through an envelope builder.
             return FlaskResponse(
-                wav_bytes,
-                mimetype="audio/wav",
+                audio_bytes,
+                mimetype=mimetype,
                 headers={
-                    "Content-Length": str(len(wav_bytes)),
+                    "Content-Length": str(len(audio_bytes)),
                     # The audio for a transcript row never changes — the row is
                     # immutable once written, and a deleted row takes the file
                     # with it — so the browser may hold it indefinitely.

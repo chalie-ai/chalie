@@ -77,9 +77,6 @@ class _ScriptedProvider:
     def get_context_limit(self) -> int:
         return 200000
 
-    def estimate_request_tokens(self, _dto: object) -> int:
-        return 1
-
     def send(self, _dto: object) -> ProviderResponse:
         if self.sends >= len(self._responses):
             return self._TERMINAL
@@ -209,34 +206,6 @@ def test_synonym_keyed_calls_canonicalise_to_one_and_crash(db: sqlite3.Connectio
     # Guard trips before dispatch: no weather call executed (no network), no prose.
     assert [c for c in mp.tool_call_service.by_turn() if c.tool_name == "weather"] == []
     assert _assistant_rows(mp) == []
-
-
-def test_async_flag_toggle_canonicalises_to_one_and_crashes(db: sqlite3.Connection) -> None:
-    """``async`` is a framework control flag ``DispatchService`` strips before
-    ``run()`` — it picks sync-vs-async dispatch, never what the tool does. A model
-    toggling it around otherwise-identical params runs byte-identical calls, so the
-    guard (keyed on the executed identity) collapses them: ``_RUNAWAY_TOOL_CALL_LIMIT``
-    such calls trip ``RunAwayLoop``. Under a guard keyed on the raw args the
-    alternating flag would split the tally and never trip."""
-    assert db is not None
-    batch = [
-        _tool("noop_probe", **{"q": "loop", "async": bool(i % 2)})
-        for i in range(_RUNAWAY_TOOL_CALL_LIMIT)
-    ]
-    # The raw calls genuinely differ (async true and false both appear): only
-    # stripping the framework flag collapses them to one executed identity.
-    assert {cast("dict[str, object]", c["input"])["async"] for c in batch} == {True, False}
-    provider = _ScriptedProvider(ProviderResponse(text="", model="scripted", tool_calls=batch))
-
-    mp = _run(provider, "run the probe")
-
-    execution = mp.turn_execution_service.latest_for_turn()
-    assert execution is not None
-    assert execution.state == TurnExecution.CRASHED
-    assert execution.stop_reason is not None
-    assert "identical parameters" in execution.stop_reason
-    assert "noop_probe" in execution.stop_reason
-    assert [c for c in mp.tool_call_service.by_turn() if c.tool_name == "noop_probe"] == []
 
 
 # ── Measure 2: identical response text ────────────────────────────────────────

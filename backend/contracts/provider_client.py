@@ -40,6 +40,51 @@ class ProviderClient(Protocol):
     # Each concrete implementation MUST declare this as a ClassVar[str].
     CONTENT_FIELD_LABEL: ClassVar[str]
 
+    # ── Identity ────────────────────────────────────────────────────
+    # What this platform is and what creating one requires. Declared on the
+    # class rather than listed anywhere else so a new provider is a new module
+    # and nothing more: the registry reads these to dispatch, to validate a
+    # config, and to build the setup catalog, and none of those can drift from
+    # the client they describe.
+
+    #: Stable id stored in ``providers.platform``. Unique, and never reused —
+    #: rows in existing databases are matched by this string.
+    PLATFORM: ClassVar[str]
+
+    #: Vendor name as shown during provider setup.
+    LABEL: ClassVar[str]
+
+    #: Base URL pre-filled when a user picks this platform. Empty when the SDK
+    #: already knows the endpoint, or when only the user can know the host.
+    DEFAULT_BASE_URL: ClassVar[str]
+
+    #: Whether a config for this platform must carry an API key / a host.
+    REQUIRES_KEY: ClassVar[bool]
+    REQUIRES_HOST: ClassVar[bool]
+
+    def __init__(self, config: dict[str, object]) -> None:
+        """Build a client from a provider row (platform, model, host, api_key).
+
+        Part of the contract because the factory constructs clients generically
+        off the registry — it holds a class, not a name, so every platform must
+        take the same one argument or the dispatch cannot be uniform.
+        """
+        ...
+
+    @classmethod
+    def fetch_models(
+        cls, host: str, api_key: str,
+    ) -> tuple[list[dict[str, str | None]] | None, str | None]:
+        """List the models this platform offers, as ``(models, error)``.
+
+        A classmethod because the setup wizard calls it before a provider row
+        exists — there are credentials to try, but no configured provider yet.
+
+        Returns an error string rather than raising: an unreachable host or a
+        rejected key is an answer the wizard shows the user, not a fault.
+        """
+        ...
+
     def send(self, dto: ProviderApiRequest) -> ProviderApiResponse:
         """Transform the DTO to native, call the provider, parse back.
 
@@ -57,15 +102,5 @@ class ProviderClient(Protocol):
 
         Implementations MUST cache the result (including None) so a second call
         does not re-probe.
-        """
-        ...
-
-    def estimate_request_tokens(self, dto: ProviderApiRequest) -> int:
-        """Estimate the token cost of dto without sending.
-
-        Folds in the same serialisation as send() so the estimate and the
-        actual wire body use identical encoding. Used by ProviderService.send() for
-        the pre-flight over-cap check and by ProviderService.measure() for the
-        compactor's candidate-fit sizing.
         """
         ...

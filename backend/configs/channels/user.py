@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from typing import ClassVar
+
 from abilities.find_tools import FindToolsAbility
-from abilities.memory import MemoryAbility
+from abilities.image_preview import ImagePreviewAbility
+from abilities.recall import Recall
 from configs.channels._common import DEFAULT_ALWAYS_AVAILABLE
 from configs.enums.channels import Channel
 from configs.enums.config_type import ConfigTypeEnum
@@ -10,12 +13,13 @@ from services.processor_config import ProcessorConfig
 
 
 class UserConfig(ProcessorConfig):
-    """The user-chat channel. Attachments are ingested at turn zero: each
-    staged upload is saved through FileParserService, linked to the turn via
-    ``transcript_files``, and dispatched by MIME — ``vision`` for images,
-    ``read`` for everything else."""
+    """The user-chat channel. Attachment paths are copied into the documents
+    store and linked to the turn synchronously inside ``MessageProcessor.begin``
+    (before the ``working`` frame is emitted); then on turn zero each is
+    indexed and dispatched as ``vision`` (images) or ``read`` (everything
+    else) on the drive thread."""
 
-    SUPPORTS_ASYNC = True
+    RENDERS_HTML: ClassVar[bool] = True
     BROADCASTS_STATE = True
     USAGE_TYPE = "foreground"
 
@@ -29,7 +33,6 @@ class UserConfig(ProcessorConfig):
             skip_transcript=False,
             skip_input_row=bool(_metadata.get("hidden_input")),
             suppress_history=False,
-            broadcast_to="user",
             memory_seed=True,
         )
 
@@ -66,7 +69,7 @@ Guiding framework for all interactions (internalize, do not recite):
 
 ## Operational Principles
 
-1. **Never claim an action has been performed unless you can prove it.** `{MemoryAbility.NAME}` provides you context; tools via the `{FindToolsAbility.NAME}` library provide you ground truth.
+1. **Never claim an action has been performed unless you can prove it.** `{Recall.NAME}` provides you context; tools via the `{FindToolsAbility.NAME}` library provide you ground truth.
 2. **Never fabricate tool results.** If a tool was not called or returned an error, do not claim it succeeded.
 
 ────────────────────────────────
@@ -74,22 +77,11 @@ Guiding framework for all interactions (internalize, do not recite):
 ## Output
 
 `{FindToolsAbility.NAME}` provides you with a toolbox of different abilities, use these tools to ensure that your responses are accurate
+
+To show images to the user call `{FindToolsAbility.NAME}` and load the `{ImagePreviewAbility.NAME}` tool
 """
             """
 When all tool calls are complete, your final response must be a comprehensive factual synthesis of everything found. Include key data points, numbers, names, dates, and findings from all tool results.
 
-Example: "Web searches showed Midea founded 1968 by He Xiangjian in Shunde, born 1942, revenue $50B in 2023, ~190K employees."
-
-**Always close the loop on your tools.** Every tool you run this turn is recorded back in your context between the markers `[<tool>(status=…)]` and `[end:<tool>]`. `status=success` means the call worked; `status=error` means it failed — a failure also carries a `code=` and sometimes a `hint:` line. After your tool calls, your final response must always tell the user whether your actions succeeded or ran into problems. Do not quote the raw tool output; acknowledge the overall outcome in plain language.
-
-────────────────────────────────
-
-## Response format
-
-In the {{provider_content_field_name}} field (what the user sees) format your response as HTML.
-Specifically only use the following tags: <p>, <h1>, <b>, <i>, <u>, <code>, <ul>, <li>, <table>, <thead>, <tbody>, <tfoot>, <tr>, <th>, <td>
-NEVER use markdown syntax. Use <b> not **, use <i> not _, use <h1> not #, use <ul><li> not - or *. No backtick fences. HTML tags only.
-Avoid using table structures to represent data. If you do need to use tables, output in html only NEVER as markdown and keep column count under 4.
-
-────────────────────────────────"""
+**Always close the loop on your tools.** Every tool you run this turn is recorded back in your context between the markers `[<tool>(status=…)]` and `[end:<tool>]`. `status=success` means the call worked; `status=error` means it failed — a failure also carries a `code=` and sometimes a `hint:` line. After your tool calls, your final response must always tell the user whether your actions succeeded or ran into problems. Do not quote the raw tool output; acknowledge the overall outcome in plain language."""
         )

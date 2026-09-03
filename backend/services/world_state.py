@@ -38,9 +38,7 @@ _TELEMETRY_HIDDEN_KEYS = {"saved_at", "_location_name_stale", "connection"}
 # it stays out of the chat/system prompt. Backend consumers read the coordinates
 # directly (departure advisory, weather, locale_service); the chat LLM only ever
 # sees the resolved ``location_name`` scalar, which renders under the synthetic
-# ``user`` group. (The background geo-pattern pass — configs/channels/geo_pattern.py
-# — is the one model-facing consumer still given coordinates, to cluster
-# location-tagged transcripts into place-based habits.)
+# ``user`` group.
 _TELEMETRY_HIDDEN_GROUPS = {"behavioral", "location"}
 
 # Strftime format for the synthesised local_time field — "Sat 02 May 2026 11:35".
@@ -255,15 +253,16 @@ class WorldState:
     def _render_telemetry(self) -> list[str]:
         """Produce bullet lines for the [telemetry] section.
 
-        Reads the latest heartbeat from the ``telemetry`` table (populated by
-        ``ClientContextService.save()``) and surfaces every key the frontend
-        sent, grouped by top-level prefix.  Top-level scalar keys aggregate
-        under the synthetic ``user`` group; nested dicts (``device`` …) form
-        their own groups.  ``local_time`` is overwritten with a freshly-computed
-        value derived from the stored IANA timezone so it never goes stale.
+        Reads the latest heartbeat snapshot (``data/telemetry.json``,
+        populated by ``ClientContextService.save()`` → ``TelemetryService``)
+        and surfaces every key the frontend sent, grouped by top-level
+        prefix.  Top-level scalar keys aggregate under the synthetic ``user``
+        group; nested dicts (``device`` …) form their own groups.
+        ``local_time`` is overwritten with a freshly-computed value derived
+        from the stored IANA timezone so it never goes stale.
         """
-        from services.heartbeat_service import heartbeat_service
-        ctx = dict(heartbeat_service.read())  # shallow copy — _render mutates local_time
+        from services.telemetry_service import TelemetryService
+        ctx = dict(TelemetryService.read().as_dict())  # shallow copy — _render mutates local_time
         if not ctx:
             return []
 

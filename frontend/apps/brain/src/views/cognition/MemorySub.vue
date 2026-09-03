@@ -5,11 +5,11 @@ import { capitalize, formatDate } from '../../utils/format';
 import { useAsyncResource } from '@chalie/shared';
 import EmptyState from '../../ui/EmptyState.vue';
 
-type MemorySource = 'episodes' | 'user' | 'system';
+type MemorySource = 'graph' | 'map';
 
-const SOURCES: MemorySource[] = ['episodes', 'user', 'system'];
+const SOURCES: MemorySource[] = ['graph', 'map'];
 
-const source = ref<MemorySource>('episodes');
+const source = ref<MemorySource>('graph');
 const search = ref('');
 const offset = ref(0);
 
@@ -81,15 +81,15 @@ function loadMore(): void {
           <tr>
             <th>Created</th>
             <th>Last Accessed</th>
-            <th>{{ source === 'episodes' ? 'Location' : 'Key' }}</th>
+            <th>{{ source === 'graph' ? 'Subject' : 'Source' }}</th>
             <th>Value</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="r in records" :key="`${r.created}-${r.key ?? r.location ?? ''}`">
+          <tr v-for="r in records" :key="`${r.created}-${r.key ?? ''}`">
             <td>{{ formatDate(r.created) }}</td>
             <td>{{ formatDate(r.last_accessed) }}</td>
-            <td class="key-cell">{{ source === 'episodes' ? r.location || '' : r.key || '' }}</td>
+            <td class="key-cell">{{ r.key || '' }}</td>
             <td class="val-cell">{{ r.value || '' }}</td>
           </tr>
         </tbody>

@@ -151,8 +151,8 @@ class AbilityRegistry:
         ``find_tools``. Each name resolves to a FRESH per-turn Ability instance
         bound to *mp* (native → registry template copy; ``_mcp_*`` → synthetic
         ``_MCPAbility`` proxy) and its schema is assembled by the one ``final``
-        ``get_input_schema()`` — which injects ``act_summary`` (always) and
-        ``async`` (iff this channel backgrounds). Binding *mp* lets a getter
+        ``get_input_schema()`` — which injects ``act_summary`` (always).
+        Binding *mp* lets a getter
         enrich for the live request (e.g. bash's cwd, find_tools' index). First-
         seen wins on dupes; unknown names are logged and skipped. Returns ``[]``
         when no active_tools are bound (compaction / encoder paths, or pre-_setup).

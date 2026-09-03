@@ -186,7 +186,7 @@ def _init_database() -> None:
     convergence = SchemaConvergenceService()
     convergence.converge()
     # Separate deterministic value backfill — convergence applies only static
-    # column DEFAULTs, never derived values (last_relevant_at, valid_from, etc.).
+    # column DEFAULTs, never derived values (valid_from, valid_to, etc.).
     convergence.backfill_redesign_columns()
 
     # Policy: apply the declarative seed (idempotent) AFTER convergence has created
@@ -268,10 +268,6 @@ def _init_services() -> None:
     _get_write_queue()
     logger.info("[Startup] WriteQueueService started")
 
-    from services.telemetry_service import get_telemetry_collector as _get_telemetry_collector
-    _get_telemetry_collector()
-    logger.info("[Startup] TelemetryCollector initialized")
-
 
 def _register_workers(manager: "_WorkerManager", host: str, port: int) -> None:
     """Register all service workers with the WorkerManager.
@@ -280,7 +276,7 @@ def _register_workers(manager: "_WorkerManager", host: str, port: int) -> None:
     cognition loop (``subconscious_worker``) were unified into the ``cron``
     package: ``cron-runner`` fires every registered ``ScheduledJob`` on its own
     schedule (``ScheduledItemsDispatcherJob`` folds in the schedule poller; the
-    nine idle-gated cognition jobs fold in the subconscious tick).
+    two idle-gated cognition jobs fold in the subconscious tick).
     """
     from workers.tmp_cleanup_worker import tmp_cleanup_worker
     manager.register_service("tmp-cleanup-service", tmp_cleanup_worker)
@@ -367,22 +363,6 @@ def _check_asset_caches() -> None:
             logger.warning("[Startup] search_tool_providers.sqlite not found")
     except Exception as e:
         logger.warning(f"[Startup] Search cache check failed: {e}")
-
-    try:
-        _lut_db = FileMapperService.get_concept_lut_db_path()
-        if _lut_db.exists():
-            _c = _sql.connect(str(_lut_db))
-            _tables = [r[0] for r in _c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
-            _c.close()
-            if "lut_embeddings" in _tables:
-                logger.info("[Startup] Concept LUT ready: %s", _lut_db)
-            else:
-                logger.warning("[Startup] Concept LUT embeddings missing — run 'cd backend && python -m utils.generate_concept_lut'")
-        else:
-            logger.warning("[Startup] concept_lut.sqlite not found — run 'cd backend && python -m utils.generate_concept_lut'")
-    except Exception as e:
-        logger.warning(f"[Startup] Concept LUT check failed: {e}")
-
 
 def _warmup_models() -> None:
     """Warm up voice and embedding models in background daemon threads."""

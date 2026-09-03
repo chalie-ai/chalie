@@ -67,6 +67,7 @@ interface FooterRow {
   kind: 'footer';
   message: ConversationMessage;
   toolCalls: ToolSummary[];
+  thinking?: { traces: string[]; duration_ms: number; tokens: number };
 }
 
 type DisplayRow = MsgRow | LiveActRow | CollapsedGroupRow | FooterRow;
@@ -82,6 +83,7 @@ const displayRows = computed<DisplayRow[]>(() => {
   // has no footer yet; its already-finished calls fall back to a collapsed-group
   // row so they are never dropped while the reply streams.
   let pendingTools: ToolSummary[] = [];
+  let pendingThinking: { traces: string[]; duration_ms: number; tokens: number } | null = null;
   let exchangeLastAssistant: ConversationMessage | null = null;
 
   // The turn's still-streaming reply is its LAST message; that exchange has
@@ -101,7 +103,7 @@ const displayRows = computed<DisplayRow[]>(() => {
     // before this row.
     if (message.role === 'user') {
       if (exchangeLastAssistant) {
-        rows.push({ kind: 'footer', message: exchangeLastAssistant, toolCalls: pendingTools });
+        rows.push({ kind: 'footer', message: exchangeLastAssistant, toolCalls: pendingTools, thinking: pendingThinking ?? undefined });
         exchangeLastAssistant = null;
       } else if (pendingTools.length) {
         // Tool calls with no assistant reply to anchor a footer (rare) — keep
@@ -109,12 +111,18 @@ const displayRows = computed<DisplayRow[]>(() => {
         rows.push({ kind: 'collapsed-group', id: `pre-${message.id}`, summaries: pendingTools });
       }
       pendingTools = [];
+      pendingThinking = null;
     }
 
     rows.push({ kind: 'msg', message });
     if (message.role === 'assistant') exchangeLastAssistant = message;
 
     if (message.tool_calls?.length) pendingTools.push(...message.tool_calls);
+    if (message.thinking) {
+      pendingThinking = pendingThinking
+        ? { traces: [...pendingThinking.traces, ...message.thinking.traces], duration_ms: pendingThinking.duration_ms + message.thinking.duration_ms, tokens: pendingThinking.tokens + message.thinking.tokens }
+        : message.thinking;
+    }
   }
 
   // Tail — the last exchange. A settled one gets its footer (carrying its trace);
@@ -124,7 +132,7 @@ const displayRows = computed<DisplayRow[]>(() => {
   // exactly one footer per turn_id. The still-streaming exchange has no footer,
   // so its finished calls fall back to a collapsed-group row.
   if (exchangeLastAssistant && exchangeLastAssistant !== streamingReply) {
-    rows.push({ kind: 'footer', message: exchangeLastAssistant, toolCalls: pendingTools });
+    rows.push({ kind: 'footer', message: exchangeLastAssistant, toolCalls: pendingTools, thinking: pendingThinking ?? undefined });
   } else if (pendingTools.length) {
     rows.push({ kind: 'collapsed-group', id: 'streaming', summaries: pendingTools });
   }
@@ -244,6 +252,7 @@ function onOpenThread(): void {
         v-else-if="ar.row.kind === 'footer'"
         :message="(ar.row as FooterRow).message"
         :tool-calls="(ar.row as FooterRow).toolCalls"
+        :thinking="(ar.row as FooterRow).thinking"
         :can-reply="canReply"
         :thread-pill="ar.key === lastFooterKey ? threadPill : null"
         @reply="onReply"

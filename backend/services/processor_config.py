@@ -23,22 +23,32 @@ if TYPE_CHECKING:
 class ProcessorConfig(ABC):
     """Everything that varies between channels.  Immutable per-turn."""
 
-    # ── Async capability (ClassVar — not a dataclass field) ────────────────────
-    SUPPORTS_ASYNC: ClassVar[bool] = False
-    """True → the framework ``async`` boolean is exposed on every tool's schema
-    for this channel, letting the model run a call in the background and receive
-    the result as a later turn.  Only a push channel with a durable session can
-    honour a deferred result, so this is False everywhere except UserConfig.
-    It gates schema *exposure* only — never routing."""
+    RENDERS_HTML: ClassVar[bool] = False
+    """True → this channel's output is rendered to a human as HTML, which is one
+    fact with three consequences, all of which must move together:
+
+    * ``PromptService`` appends the response-format contract, so the model is
+      told to emit ``markup.PROMPT_TAGS`` instead of markdown;
+    * ``MessageProcessor._format`` converts and sanitises the reply at persist
+      time, so both the live send and the refresh read inherit the same markup;
+    * ``DispatchService`` assigns rich-media ordinals, whose ``<span id>`` pairing
+      only means anything on a rendered surface.
+
+    Splitting these was the old bug: a channel told to emit HTML but not
+    sanitised persists raw model markup, and a channel sanitised but not told
+    emits markdown that survives conversion — ``markdown_to_html`` is an
+    inline-only fallback and cannot rescue headings, lists, or tables.
+
+    Only UserConfig and ScheduledConfig set it. DiscoveryConfig deliberately does
+    not: it inherits UserConfig's *thinking*, never its user-facing identity."""
 
     BROADCASTS_STATE: ClassVar[bool] = False
     """True → this channel streams its live progress to its surface: the lean
     ``updated`` turn-state signal via ``mp.broadcast``, the turn-execution
     lifecycle frame via TurnExecutionService, and the single tool-call frame via
     ToolCallService. Only UserConfig sets it; every other channel stays silent (each
-    chokepoint no-ops). The single state-gate — replaces the scattered
-    ``broadcast_to == 'user'`` checks. Distinct from ``broadcast_to`` (message-
-    delivery target)."""
+    chokepoint no-ops). The single state-gate for live progress. Distinct from
+    ``RENDERS_HTML``, which is about the *markup* of the settled reply."""
 
     thinking_mode: ClassVar[str | None] = None
     """Fixed reasoning level for a background channel whose deliberation must not
@@ -75,12 +85,12 @@ class ProcessorConfig(ABC):
     # ── Identity ──────────────────────────────────────────────────────────────
 
     channel: str
-    """Transcript / telemetry channel.  E.g. 'user', 'dmn',
+    """Transcript / telemetry channel.  E.g. 'user', 'discovery',
     'external-agent:mybot', 'delegate:web_search'."""
 
     role: str
-    """Transcript role for the input row.  E.g. 'user', 'proactive_thought',
-    'external_agent', 'pattern_match'."""
+    """Transcript role for the input row.  E.g. 'user', 'external_agent',
+    'user_synthesis'."""
 
     policy_channel: "PolicyChannel"
     """Which policy channel this processor's tool calls are gated under."""
@@ -111,20 +121,14 @@ class ProcessorConfig(ABC):
     """True → get_previous_messages() returns '' (housekeeping loops).
     Set on all channels except UMP and ExternalAgent."""
 
-    # ── Live output (declarative, not a hook) ─────────────────────────────────
-
-    broadcast_to: str | None
-    """None = silent.  Non-None = stream live tool events to this channel and
-    deliver the turn's end message there.  Only UserConfig sets this ('user');
-    all others leave it None."""
-
     # ── Turn-0 auto-seed (declarative, not a hook) ────────────────────────────
 
     memory_seed: bool
     """True → fire the memory recall tool (action='recall') once on turn 0.
-    Attachments are NOT a flag: presence of metadata['attachments'] auto-ingests
-    each file on turn 0 (saved via FileParserService, linked in
-    ``transcript_files``, dispatched ``vision`` for images, ``read`` otherwise)."""
+    Attachments are saved and linked synchronously inside ``MessageProcessor.begin``
+    (before the turn opens, so the ``working`` frame lands on an attached row);
+    then on turn zero each is indexed and dispatched as ``vision`` (images)
+    or ``read`` (everything else)."""
 
     # ── Split-channel routing (cross-turn history read channel) ───────────────
 
@@ -132,9 +136,14 @@ class ProcessorConfig(ABC):
     """Cross-turn history read channel; ``None`` ⇒ read on ``channel`` (every
     existing config). Only split-channel configs set this — writes and
     current-turn identity stay on ``channel`` while the model's cross-turn
-    history is read from ``read_channel``. Today only DiscoveryConfig sets it
-    (``= "user"``), and it runs MAIN-only, so the split's FORK edge cases never
-    apply. Do not set ``read_channel != channel`` on a FORK/reply config."""
+    history is read from ``read_channel``. Applies to the MAIN view only: a
+    FORK is a reply into this config's OWN thread, so the FORK history read
+    and its compaction keying always use ``channel`` — turn ids are
+    per-channel, and resolving ``read_channel`` on a fork would cross
+    namespaces into another channel's unrelated turn. Today only
+    DiscoveryConfig sets it (``= "user"``); its fires ≥2 fork into the stable
+    research turn and read the research log, while fire 1 (MAIN) reads the
+    user spine."""
 
     # ── PromptService dispatch override ───────────────────────────────────────
 
@@ -153,6 +162,21 @@ class ProcessorConfig(ABC):
     turn_id that does not yet exist opens a new MAIN turn rather than being
     rejected as an invalid fork; forked-ness is derived from whether the turn
     already exists, not the -1 sentinel."""
+
+    recall_k: int = 3
+    """Recall depth per lane (Graph FTS + Map vec). Chat and most background
+    channels keep the default of 3; the memory step overrides to 10 so its
+    recall-first pass surfaces enough context for distillation without
+    duplicating the full turn history."""
+
+    history_limit: int | None = None
+    """Cap on the history view: keep only the newest N rows of what
+    ``TranscriptService.read()`` returns above the compaction watermark.
+    ``None`` ⇒ uncapped, which is every conversation channel — a turn must see
+    everything since its checkpoint or it answers from a hole. Only the memory
+    step pins a limit: it runs after every settle, so the rows it has not
+    recorded yet are always the newest ones, and an uncapped view would re-read
+    the whole post-checkpoint spine on every turn."""
 
     # ── Derived properties ────────────────────────────────────────────────────
 

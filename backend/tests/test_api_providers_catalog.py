@@ -1,13 +1,15 @@
 """Feature tests for the reactive provider-setup wizard's backend contract.
 
 Drives the real Flask app (``create_app`` via ``authed_client``) against a real
-SQLite database and the real curated catalog. No mocks.
+SQLite database and the real catalog. No mocks.
 
-The wizard's design: a curated preset maps a popular provider to one of Chalie's
-existing platforms plus a base URL, so the host is pre-filled and the live
-model-fetch path (``POST /providers/list-models``) is reused unchanged. A preset
-is NEVER a runtime platform of its own — the old catalog-id-as-platform branch is
-gone, and these tests pin both the new catalog shape and the removal of that branch.
+The wizard's design: every offered tile IS a platform, backed by its own client
+class, and the catalog is derived from the client registry rather than hand-kept
+beside it. So the tile carries the platform's own base URL and credential rules,
+and the live model-fetch path (``POST /providers/list-models``) dispatches on the
+same string the tile prefills. These tests pin that shape end to end — through
+the response DTO and the HTTP envelope, which is where a derived catalog can
+still lose a field or mangle a value.
 """
 
 import sqlite3
@@ -18,12 +20,12 @@ import pytest
 from flask.testing import FlaskClient
 
 import services.vault_service as _vault_mod
+from services.llm_clients.registry import PROVIDERS_BY_PLATFORM
 from services.vault_service import _vault_state, get_vault_service
 
-# The seven providers the product owner named explicitly. The curated list is
-# allowed to carry more, but never fewer than these, and never the 111-entry dump.
+# The seven providers the product owner named explicitly. The list is allowed to
+# carry more, but never fewer than these, and never the 111-entry dump.
 _NAMED_IDS = {"ollama", "anthropic", "gemini", "openai", "deepseek", "minimax", "nvidia"}
-_CHALIE_PLATFORMS = {"ollama", "openai", "anthropic", "gemini", "openai_compatible", "codex_cli"}
 
 
 def _unlock_vault(password: str = "test-password") -> None:
@@ -68,14 +70,17 @@ class TestProviderCatalog:
         catalog = _unwrap_listing(body)
         assert "pagination" in body
         assert isinstance(catalog, list), "catalog must be an ordered list of presets"
-        assert 10 <= len(catalog) <= 25, f"curated list expected, got {len(catalog)}"
+        assert 10 <= len(catalog) <= 40, f"curated list expected, got {len(catalog)}"
 
-        # Every preset carries the full wizard contract and resolves to a real
-        # Chalie platform (never a catalog-id-as-platform).
+        # Every tile carries the full wizard contract and names a platform the
+        # send path can actually dispatch. A tile whose platform the registry
+        # does not claim is a dead end: the wizard prefills it, the user fills in
+        # a key, and the create fails with "Unknown platform".
         for preset in catalog:
-            assert set(preset) >= {"id", "name", "platform", "host", "needs_key"}
-            assert preset['platform'] in _CHALIE_PLATFORMS
+            assert set(preset) >= {"id", "name", "platform", "host", "needs_key", "needs_host"}
+            assert preset['platform'] in PROVIDERS_BY_PLATFORM
             assert isinstance(preset['needs_key'], bool)
+            assert isinstance(preset['needs_host'], bool)
             assert isinstance(preset['host'], str)
 
         ids = {cast(str, p['id']) for p in catalog}
@@ -89,37 +94,48 @@ class TestProviderCatalog:
         catalog = _unwrap_listing(body)
         by_id = {cast(str, p['id']): p for p in catalog}
 
-        # MiniMax is the spec's worked example: OpenAI-compatible, host pre-filled.
-        assert by_id['minimax']['platform'] == 'openai_compatible'
+        # Every tile is its own platform — the id and the platform are the same
+        # string, because the tile IS the client class. A vendor is never filed
+        # under another vendor's platform.
+        for entry in catalog:
+            assert entry['platform'] == entry['id']
+
+        # MiniMax is the spec's worked example: hosted vendor, host pre-filled.
         assert by_id['minimax']['host'] == 'https://api.minimax.io/v1'
         assert by_id['minimax']['needs_key'] is True
+        assert by_id['minimax']['needs_host'] is True
 
-        # NVIDIA + DeepSeek are also OpenAI-compatible with a pre-filled base URL.
-        assert by_id['nvidia']['platform'] == 'openai_compatible'
+        # NVIDIA + DeepSeek are hosted too, each with its own pre-filled base URL.
         assert cast(str, by_id['nvidia']['host']).startswith('https://')
-        assert by_id['deepseek']['platform'] == 'openai_compatible'
         assert cast(str, by_id['deepseek']['host']).startswith('https://')
 
-        # Native API providers need a key but NO host field (host stays empty so
+        # Native SDK providers need a key but NO host field (host stays empty so
         # the wizard skips straight to the key step).
         for native in ('anthropic', 'openai', 'gemini'):
-            assert by_id[native]['platform'] == native
             assert by_id[native]['host'] == ''
+            assert by_id[native]['needs_host'] is False
             assert by_id[native]['needs_key'] is True
 
-        # Ollama is local: host pre-filled, no API key, so the wizard skips the
-        # key step and fetches models immediately.
-        assert by_id['ollama']['platform'] == 'ollama'
+        # Self-hosted servers are local: host pre-filled, no API key, so the
+        # wizard skips the key step and fetches models immediately.
         assert by_id['ollama']['host'] == 'http://localhost:11434'
-        assert by_id['ollama']['needs_key'] is False
+        for local in ('ollama', 'llama_cpp', 'vllm'):
+            assert by_id[local]['needs_key'] is False
+            assert by_id[local]['needs_host'] is True
+            assert cast(str, by_id[local]['host']).startswith('http://')
 
-    def test_preset_id_is_not_a_runtime_platform(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
-        """Pins removal of the catalog-id-as-platform branch: 'deepseek' was a
-        real id in the old dump and must be rejected as a platform, not resolved
-        to a static model list."""
+    def test_unregistered_platform_is_rejected(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
+        """A platform no client class claims is refused, not guessed at.
+
+        The listing endpoint dispatches on the registry, so an unknown string has
+        nowhere to go. It must say so rather than fall through to a generic
+        OpenAI-shaped attempt against a host nobody supplied.
+        """
         client, _db, _store = authed_client
 
-        resp = client.post('/api/providers/list-models', json={'platform': 'deepseek'})
+        resp = client.post(
+            '/api/providers/list-models', json={'platform': 'not-a-real-platform'},
+        )
 
         assert resp.status_code == 400
         body = cast("dict[str, object]", resp.get_json())
@@ -136,19 +152,20 @@ class TestProviderCatalog:
 
         create = client.post('/api/providers/-1', json={
             'name': 'My MiniMax',
-            'platform': preset['platform'],   # 'openai_compatible'
+            'platform': preset['platform'],   # 'minimax'
             'host': preset['host'],           # pre-filled base URL
             'api_key': 'sk-test-key-123',
             'model': 'MiniMax-M2',
         })
         assert create.status_code == 201, create.get_json()
 
-        # Cross-step proof: the host the preset pre-filled survived to the DB and
-        # is read back on the listing (api_key is write-only, never on the read shape).
+        # Cross-step proof: the platform and host the tile pre-filled survived to
+        # the DB and are read back on the listing (api_key is write-only, never
+        # on the read shape).
         listed_body = cast("dict[str, object]", client.get('/api/providers/all').get_json())
         listed = _unwrap_listing(listed_body)
         row = next(p for p in listed if p['name'] == 'My MiniMax')
-        assert row['platform'] == 'openai_compatible'
+        assert row['platform'] == 'minimax'
         assert row['host'] == 'https://api.minimax.io/v1'
         assert row['model'] == 'MiniMax-M2'
         assert 'api_key' not in row

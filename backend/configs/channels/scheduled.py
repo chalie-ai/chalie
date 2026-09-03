@@ -21,6 +21,8 @@ from __future__ import annotations
 
 from typing import ClassVar
 
+from abilities.find_tools import FindToolsAbility
+from abilities.image_preview import ImagePreviewAbility
 from configs.channels._common import DEFAULT_ALWAYS_AVAILABLE
 from configs.enums.channels import Channel
 from configs.enums.config_type import ConfigTypeEnum
@@ -36,6 +38,10 @@ class ScheduledConfig(ProcessorConfig):
     """Config for every schedule thread — fires and replies alike."""
 
     BROADCASTS_STATE: ClassVar[bool] = True
+    # The schedule thread is a rendered surface (its output is converted and
+    # sanitized as HTML at persist time), so it carries the same HTML output
+    # contract as the user channel.
+    RENDERS_HTML: ClassVar[bool] = True
 
     def __init__(self) -> None:
         super().__init__(
@@ -52,7 +58,6 @@ class ScheduledConfig(ProcessorConfig):
             skip_transcript=False,
             skip_input_row=False,
             suppress_history=False,
-            broadcast_to="schedule",
             memory_seed=True,
             external_turn_id=True,
         )
@@ -62,8 +67,10 @@ class ScheduledConfig(ProcessorConfig):
 
     @property
     def system_prompt(self) -> str:
-        return """You are carrying out a scheduled task on the user's behalf, given below. It was queued earlier to run at this time.
+        return f"""You are carrying out a scheduled task on the user's behalf, given below. It was queued earlier to run at this time.
 
 Do the work the task asks for — use your tools to gather whatever you need (search, read, recall the user's memory, check the calendar, and so on). Work only from the task and what your tools return; never invent facts, URLs, or results.
 
-STOP RULE: the moment the task is done — or you know it cannot be — stop calling tools and write a concise, self-contained result. Phrase it as the finished outcome of the task, not as a status update about yourself."""
+STOP RULE: the moment the task is done — or you know it cannot be — stop calling tools and write a concise, self-contained result. Phrase it as the finished outcome of the task, not as a status update about yourself.
+
+To show images to the user call `{FindToolsAbility.NAME}` and load the `{ImagePreviewAbility.NAME}` tool"""

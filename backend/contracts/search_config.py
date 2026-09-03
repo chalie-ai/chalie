@@ -1,14 +1,14 @@
 """The ``Searchable`` config-trait — a model's declared search-index footprint.
 
 A :class:`SearchConfig` names the sidecar tables (and the base-table source
-columns) a searchable model's rows populate: the FTS posting, the key/value
-vector lanes, and the doc2query-variant tables. It is *declared* on the model
-class (``DataGraphRow.__search__`` and its overrides), never inferred: the
-presence of a config IS the enablement signal — a model with ``__search__ =
-None`` earns no FTS/vec posting and is excluded from recall. There are no flags
-or policy tables; the single authority is the declaration.
+columns) a searchable model's rows populate: the FTS posting and the vector
+lanes. It is *declared* on the model class (``DataGraphRow.__search__`` and its
+overrides), never inferred: the presence of a config IS the enablement signal —
+a model with ``__search__ = None`` earns no FTS/vec posting and is excluded from
+recall. There are no flags or policy tables; the single authority is the
+declaration.
 
-Model-free by design (like ``contracts/constants/data_graph.py``): this module
+Model-free by design: this module
 imports nothing from ``models`` or ``services``, so both the model layer (which
 reads ``self.__search__`` on the save path) and the write-side engine
 (``services.search_expander_service``, which resolves a raw ``kind`` string to
@@ -41,17 +41,15 @@ class SearchConfig:
     implicit ``rowid``) — the order the external-content ``'delete'`` command
     must supply. ``vec_lanes`` are the embedding sidecars (empty when a model
     populates its own vectors synchronously). ``text_columns`` name the
-    base-table columns whose text seeds doc2query / the embedding, joined
+    base-table columns whose text seeds the embedding, joined
     ``"a: b"`` (the first column is always included; each later column is
-    appended only when non-empty). ``variant_table`` / ``variant_vec_table``
-    hold the doc2query expansions (``None`` when the model has no semantic
-    variant lane; kept out of teardown otherwise: an AFTER-DELETE trigger on the
-    base table cascades them). ``kind_column`` — when set — names a
+    appended only when non-empty). ``kind_column`` — when set — names a
     discriminator column the engine gates on via the kind→config registry (only
     ``data_graph``, whose one table holds many searchable and non-searchable
-    kinds). ``queries_column`` is the base-table column the generated variant
-    list is persisted into. ``heal_where`` is the self-heal liveness predicate
-    (the rows still eligible for a missing-index backfill).
+    kinds). ``indexed_column`` is the base-table column stamped with the
+    ``datetime('now')`` timestamp the async engine writes when it posts the row
+    into the FTS table (NULL = never indexed). ``heal_where`` is the self-heal
+    liveness predicate (the rows still eligible for a missing-index backfill).
     """
 
     base_table: str
@@ -59,10 +57,8 @@ class SearchConfig:
     fts_columns: tuple[str, ...]
     vec_lanes: tuple[VecLane, ...]
     text_columns: tuple[str, ...]
-    variant_table: str | None = None
-    variant_vec_table: str | None = None
     kind_column: str | None = None
-    queries_column: str = "search_queries"
+    indexed_column: str = "indexed_at"
     heal_where: str = "deleted_at IS NULL"
 
 
@@ -73,33 +69,14 @@ class SearchConfig:
 DATA_GRAPH_SEARCH = SearchConfig(
     base_table="data_graph",
     fts_table="data_graph_fts",
-    fts_columns=("key", "value", "kind", "search_queries"),
+    fts_columns=("key", "value", "kind"),
     vec_lanes=(
         VecLane("data_graph_key_vec", "key"),
         VecLane("data_graph_value_vec", "value"),
     ),
     text_columns=("key", "value"),
-    variant_table="expanded_semantic",
-    variant_vec_table="expanded_semantic_vec",
     kind_column="kind",
     heal_where="deleted_at IS NULL AND active = 1",
-)
-
-
-#: Episode search footprint. Episodes carry their vectors synchronously
-#: (``EpisodicService`` writes ``episodes_vec`` on the store path), so no vec
-#: lane is declared here — the async engine only owns the FTS posting and the
-#: doc2query keyword variants (persisted into the ``search_queries`` FTS column;
-#: an unfiltered ``episodes_fts MATCH`` spans every column, so variants widen
-#: recall with no change to the retrieval query). No semantic-variant lane:
-#: episodic recall never reads ``expanded_semantic``, so it would be dead.
-EPISODE_SEARCH = SearchConfig(
-    base_table="episodes",
-    fts_table="episodes_fts",
-    fts_columns=("gist", "search_queries"),
-    vec_lanes=(),
-    text_columns=("gist",),
-    heal_where="deleted_at IS NULL",
 )
 
 
@@ -116,13 +93,6 @@ _REGISTRY: dict[str, SearchConfig | None] = {}
 def register_kind(kind: str, config: SearchConfig | None) -> None:
     """Record a concrete kind's declared search config (may be ``None``)."""
     _REGISTRY[kind] = config
-
-
-def config_for_kind(kind: str) -> SearchConfig | None:
-    """The declared config for ``kind``, or ``None`` when the kind is
-    non-searchable OR not yet registered (its model not imported). Callers that
-    need to distinguish those two cases must ensure the model is imported."""
-    return _REGISTRY.get(kind)
 
 
 def is_searchable(kind: str) -> bool:
@@ -160,5 +130,34 @@ def searchable_tables() -> tuple[str, ...]:
     return tuple(_TABLE_REGISTRY)
 
 
+#: Memory graph search footprint. Graph rows are keyed by ``subject``
+#: (unique); FTS5 indexes the subject column so recall can do exact-key
+#: text lookups over living facts. No vector lane — graph rows are
+#: surfaced purely by subject-match.
+GRAPH_SEARCH = SearchConfig(
+    base_table="memory_graph",
+    fts_table="memory_graph_fts",
+    fts_columns=("subject",),
+    vec_lanes=(),
+    text_columns=("subject", "contents"),
+    heal_where="1=1",
+)
+
+#: Memory map search footprint. Map rows carry episodic lineage; only their
+#: ``cues`` — the situational tag set — are embedded. Neither the episode text
+#: nor its ``source`` is indexed: recall matches the situation the user is in
+#: against the situations a memory is about, not two narratives. No FTS.
+#: A row with empty cues is unreachable by design.
+MAP_SEARCH = SearchConfig(
+    base_table="memory_map",
+    fts_table="",
+    fts_columns=(),
+    vec_lanes=(VecLane("memory_map_cues_vec", "cues"),),
+    text_columns=("cues",),
+    heal_where="1=1",
+)
+
+
 register_table(DATA_GRAPH_SEARCH)
-register_table(EPISODE_SEARCH)
+register_table(GRAPH_SEARCH)
+register_table(MAP_SEARCH)

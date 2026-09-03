@@ -70,14 +70,14 @@ def apply(db_path: str) -> None:
         from models.data_graph import DataGraphRow
 
         rows = conn.execute(
-            "SELECT rowid, key, value, kind, search_queries "
+            "SELECT rowid, key, value, kind "
             "FROM data_graph WHERE kind = 'document'"
         ).fetchall()
 
-        for rowid, key, value, kind, search_queries in rows:
+        for rowid, key, value, kind in rows:
             DataGraphRow._purge_search_index(
                 conn, rowid,
-                {"key": key, "value": value, "kind": kind, "search_queries": search_queries},
+                {"key": key, "value": value, "kind": kind},
             )
             conn.execute("DELETE FROM data_graph WHERE rowid = ?", (rowid,))
 

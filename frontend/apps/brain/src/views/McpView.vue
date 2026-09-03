@@ -7,7 +7,6 @@ import { HttpError } from '@chalie/shared';
 import { useToast } from '../composables/useToast';
 import { useConfirm } from '../composables/useConfirm';
 import { type HeaderRow, addHeaderRow, removeHeaderRow, collectHeaders } from './mcpHeaders';
-import { Copy } from '@lucide/vue';
 
 const { show: showToast } = useToast();
 const { run } = useBrainAction();
@@ -48,7 +47,9 @@ async function saveInbound(updates: Partial<McpServerConfig>): Promise<void> {
     success: 'Settings saved',
     failMsg: 'Save failed',
   });
-  if (ok) Object.assign(inConfig.value, updates);
+  // The update is applied to the listener before the 204 returns, so a fresh
+  // read shows whether it is actually listening on the new settings.
+  if (ok) await loadInbound();
 }
 
 function onEnabledChange(e: Event): void {
@@ -60,23 +61,6 @@ function onPortBlur(): void {
   if (val >= 1024 && val <= 65535 && val !== inConfig.value.port) {
     saveInbound({ port: val });
   }
-}
-
-async function copyToken(): Promise<void> {
-  try {
-    await navigator.clipboard.writeText((inConfig.value.token as string) || '');
-    showToast('Token copied', 'success');
-  } catch {
-    showToast('Copy failed', 'error');
-  }
-}
-
-async function regenToken(): Promise<void> {
-  const { ok, data } = await run(() => mcp.regenerateToken(), {
-    success: 'Token regenerated',
-    failMsg: 'Regenerate failed',
-  });
-  if (ok) inConfig.value = { ...inConfig.value, token: data.token };
 }
 
 async function loadOutbound(): Promise<void> {
@@ -160,10 +144,10 @@ async function testServer(id: string | number, silent = false): Promise<void> {
   try {
     const data = await mcp.testClient(id);
     if (!silent) {
-      const msg = data.reachable
-        ? `Online — ${data.tool_count} tool(s) synced`
-        : `Offline (${data.status})`;
-      showToast(msg, data.reachable ? 'success' : 'error');
+      const msg = data.connected
+        ? `Connected — ${data.tool_count} tool(s) synced`
+        : data.error ? `Offline — ${data.error}` : 'Offline';
+      showToast(msg, data.connected ? 'success' : 'error');
     }
   } catch (e) {
     if (!silent)
@@ -210,8 +194,8 @@ onMounted(async () => {
   <section class="mcp-section">
     <h3 class="mcp-section-title">Inbound</h3>
     <p class="panel-desc">
-      External agents (Claude Code, Codex, CI bots) connect to Chalie via MCP. Manage access and
-      view the connection token below.
+      External agents (Claude Code, Codex, CI bots) connect to Chalie via MCP. What each one may
+      do is set per tool under Policies › External agent.
     </p>
 
     <div v-if="loadingInbound" class="loading">Loading…</div>
@@ -245,25 +229,11 @@ onMounted(async () => {
         </div>
       </div>
 
-      <div class="mcp-token-section">
-        <h4>Connection Token</h4>
-        <p class="mcp-hint">Give this token to external agents so they can authenticate.</p>
-        <div class="input-group">
-          <input
-            type="text"
-            class="monospace"
-            aria-label="Connection Token"
-            :value="(inConfig.token as string) || ''"
-            readonly
-          />
-          <button class="input-suffix-btn" title="Copy" @click="copyToken">
-            <Copy :size="14" />
-          </button>
-        </div>
-        <div class="mt-sm">
-          <button class="btn btn-sm btn-danger" @click="regenToken">Regenerate Token</button>
-        </div>
-      </div>
+      <p class="mcp-hint" :class="{ 'mcp-status-error': inConfig.error }" aria-live="polite">
+        <template v-if="inConfig.listening">Listening on port {{ inConfig.listening_port }}</template>
+        <template v-else-if="inConfig.error">Not listening — {{ inConfig.error }}</template>
+        <template v-else>Not listening</template>
+      </p>
     </div>
   </section>
 
@@ -354,7 +324,7 @@ onMounted(async () => {
               <span class="mcp-out-host"> — {{ server.host }}</span>
             </div>
             <div class="mcp-out-badges">
-              <span :class="`badge badge-status badge-${server.status}`">{{ server.status }}</span>
+              <span :class="server.connected ? 'badge badge-status badge-online' : 'badge badge-status badge-offline'">{{ server.connected ? 'connected' : 'offline' }}</span>
               <span :class="server.enabled ? 'badge badge-enabled' : 'badge badge-disabled'">
                 {{ server.enabled ? 'enabled' : 'disabled' }}
               </span>

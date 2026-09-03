@@ -56,6 +56,7 @@ class Keys(StrEnum):
     active_only = "active_only"
     area = "area"
     args = "args"
+    attachments = "attachments"
     automation_id = "automation_id"
     body = "body"
     buffer_minutes = "buffer_minutes"
@@ -65,6 +66,7 @@ class Keys(StrEnum):
     content = "content"
     contents = "contents"
     context_lines = "context_lines"
+    convert_to_markdown = "convert_to_markdown"
     current_path = "current_path"
     date_from = "date_from"
     date_time = "date_time"
@@ -81,9 +83,8 @@ class Keys(StrEnum):
     duration_seconds = "duration_seconds"
     end_line = "end_line"
     entity_id = "entity_id"
-    evidence_transcript_ids = "evidence_transcript_ids"
+    file_path = "file_path"
     frequency = "frequency"
-    fuzzy = "fuzzy"
     glob = "glob"
     goal = "goal"
     headers = "headers"
@@ -103,7 +104,6 @@ class Keys(StrEnum):
     limit = "limit"
     list = "list"  # noqa: A003 — member name mirrors the wire key (shadows builtin)
     location = "location"
-    max_chars = "max_chars"
     message = "message"
     minute = "minute"
     minutes = "minutes"
@@ -136,10 +136,10 @@ class Keys(StrEnum):
     start_at = "start_at"
     start_line = "start_line"
     subject = "subject"
+    subtitle = "subtitle"
     summary = "summary"
     tags = "tags"
     target = "target"
-    time_anchor = "time_anchor"
     time_range = "time_range"
     timeout = "timeout"
     timeout_s = "timeout_s"
@@ -208,7 +208,7 @@ VARIANTS: "dict[str, frozenset[str]]" = {
     Keys.source: frozenset({
         Keys.url, "uri", "link", "href", Keys.path, "file", "filepath", "file_path",
     }),
-    # web_download earns the SAME family on its canonical 'url': the keys a model
+    # web_fetch earns the SAME family on its canonical 'url': the keys a model
     # uses for a fetch target are identical to read's. 'source' is included so a
     # model that learned read's key still lands. Canonical = url.
     Keys.url: frozenset({
@@ -255,8 +255,6 @@ VARIANTS: "dict[str, frozenset[str]]" = {
     Keys.dtstart: frozenset({"start_date", "start_datetime", "start_time"}),
     Keys.duration_seconds: frozenset({"duration", "length", "seconds"}),
     Keys.entity_id: frozenset({"device", "device_id", "entity", "ha_id"}),
-    Keys.evidence_transcript_ids: frozenset({"evidence_ids", "transcript_ids"}),
-    Keys.frequency: frozenset({"recurrence", "repeat", "schedule"}),
     Keys.headers: frozenset({"auth_headers", "extra_headers", "http_headers", "request_headers"}),
     Keys.host: frozenset({"address", "endpoint", "server_url", Keys.url}),
     Keys.id: frozenset({"doc_id", "document_id", "item_id", Keys.uid}),
@@ -265,7 +263,6 @@ VARIANTS: "dict[str, frozenset[str]]" = {
     Keys.item_id: frozenset({Keys.id, "reminder_id", "schedule_id"}),
     Keys.items: frozenset({"entries", "values"}),
     Keys.keyword: frozenset({"q", Keys.query, "search_query", "search_term", "term"}),
-    Keys.max_chars: frozenset({"max_length"}),
     Keys.message: frozenset({Keys.body, "msg", "note", "text"}),
     Keys.minutes: frozenset({"duration", "mins"}),
     Keys.operation: frozenset({"op", "task"}),

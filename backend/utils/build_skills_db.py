@@ -38,7 +38,6 @@ def _rebuild_schema(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE IF EXISTS skill_search_vec")
     conn.execute("DROP INDEX IF EXISTS idx_skill_search_entries_skill")
     conn.execute("DROP TABLE IF EXISTS skill_search_entries")
-    conn.execute("DROP TABLE IF EXISTS skill_associations")
     conn.execute("DROP TABLE IF EXISTS skills")
     conn.commit()
 
@@ -54,16 +53,6 @@ def _rebuild_schema(conn: sqlite3.Connection) -> None:
                                  CHECK(source IN ('curated', 'user')),
             enabled          INTEGER NOT NULL DEFAULT 1,
             based_on         INTEGER
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE skill_associations (
-            id           INTEGER PRIMARY KEY AUTOINCREMENT,
-            skill_id     INTEGER NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
-            pattern_name TEXT    NOT NULL,
-            rule         TEXT    NOT NULL,
-            created_at   TEXT    NOT NULL DEFAULT (datetime('now')),
-            UNIQUE(skill_id, pattern_name)
         )
     """)
     conn.execute("""

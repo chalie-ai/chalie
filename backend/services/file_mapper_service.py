@@ -47,6 +47,11 @@ class FileMapperService:
         return cls._DATA_DIR / "chalie.db"
 
     @classmethod
+    def get_telemetry_json_path(cls) -> Path:
+        """Return path to the JSON client-telemetry snapshot file."""
+        return cls._DATA_DIR / "telemetry.json"
+
+    @classmethod
     def get_secure_dir(cls) -> Path:
         """Return the vault key-material backups directory."""
         return cls._SECURE_DIR
@@ -125,16 +130,6 @@ class FileMapperService:
     def get_search_providers_db_path(cls) -> Path:
         """Return path to the search-provider routing database."""
         return cls._BACKEND_DIR / "tools" / "search" / "assets" / "search_tool_providers.sqlite"
-
-    @classmethod
-    def get_concept_lut_db_path(cls) -> Path:
-        """Return path to the concept LUT sqlite database."""
-        return cls._BACKEND_DIR / "services" / "data_graph" / "assets" / "concept_lut.sqlite"
-
-    @classmethod
-    def get_concept_lut_yaml_path(cls) -> Path:
-        """Return path to the concept LUT YAML source file."""
-        return cls._BACKEND_DIR / "services" / "data_graph" / "assets" / "concept_lut.yaml"
 
     @classmethod
     def get_abilities_sha_path(cls) -> Path:
@@ -241,6 +236,18 @@ class FileMapperService:
         an enforced boundary; created lazily on first use, not at import time.
         """
         return cls._CODE_AGENT_WORKSPACE_DIR.joinpath(*parts) if parts else cls._CODE_AGENT_WORKSPACE_DIR
+
+    @classmethod
+    def get_web_pages_path(cls, *parts: str) -> Path:
+        """Return data/web/pages/ joined with any additional path parts."""
+        base = cls._DATA_DIR / "web" / "pages"
+        return base.joinpath(*parts) if parts else base
+
+    @classmethod
+    def get_downloads_path(cls, *parts: str) -> Path:
+        """Return data/downloads/ joined with any additional path parts."""
+        base = cls._DATA_DIR / "downloads"
+        return base.joinpath(*parts) if parts else base
 
     @classmethod
     def validate_document_path(cls, full_path: str) -> bool:

@@ -23,7 +23,7 @@ Act-trail guard: the shared :func:`abilities._read_guard.read_guard` must clear
 the edit first — the model's most recent ``read`` of the path has to be newer
 than the most recent successful change to it on this turn. A stale anchor
 otherwise returns ``not-found``, which the model reads as "retry" rather than
-"look again", and it loops. Unlike a whole-file overwrite, a truncated read is
+"look again", and it loops. Unlike a whole-file overwrite, a partial read is
 fine here: an anchored edit only touches text the model quoted back verbatim.
 """
 
@@ -38,6 +38,7 @@ from abilities._result import ToolResult
 from configs.enums.param_key import Keys
 from contracts.params.edit_file_params_bag import EditFileParamsBag
 from contracts.params.param_bag import ParamBag
+from services.file_text_service import FileTextService
 from configs.enums.ability_category import AbilityCategory
 
 
@@ -143,14 +144,49 @@ class EditFileAbility(Ability[EditFileParamsBag]):
         # A blind edit anchors on text the model never saw — or saw before its own
         # earlier edit moved it — and comes back not-found, which reads to the
         # model as "try again" rather than "look again". Refuse once here instead
-        # of letting it retry into the runaway backstop. ``truncated-read`` is NOT
+        # of letting it retry into the runaway backstop. ``partial-read`` is NOT
         # opted into: an anchored edit only touches text the model quoted back.
-        refusal = read_guard(self.mp, target.resolve(), refuse_truncated=False)
+        refusal = read_guard(self.mp, target.resolve(), refuse_partial=False)
         if refusal is not None:
             return refusal
 
-        content = target.read_text(encoding="utf-8")
-        count = content.count(params.search)
+        # Read with NO newline translation (the default open() would fold every
+        # \r\n to \n on the way in — the line-ending rewrite bug this closes).
+        # Strict
+        # UTF-8: an undecodable file is refused with a clean error, never a
+        # stack trace — and the `read` tool decodes leniently (errors='replace'),
+        # so the model CAN see such a file and must not be able to edit it.
+        try:
+            raw = FileTextService.read_raw(target)
+        except UnicodeDecodeError:
+            return ToolResult.err(
+                f"{params.path} is not valid UTF-8 and cannot be edited.",
+                code="decode-error",
+                hint="re-save the file as UTF-8 first; an anchored edit must not rewrite bytes it cannot decode.",
+            )
+
+        ending = FileTextService.detect_ending(raw)
+        if ending == "mixed":
+            # A file that mixes \r\n and \n cannot be restored byte-identical
+            # for every untouched line under ANY single choice of ending —
+            # normalizing it here would silently rewrite the lines carrying the
+            # other convention. Refuse loudly and leave the file alone.
+            return ToolResult.err(
+                f"{params.path} mixes \\r\\n and \\n line endings and cannot be edited without rewriting unrelated lines.",
+                code="mixed-line-endings",
+                hint="normalize the file to a single line ending, re-read it, then edit it.",
+            )
+
+        # Match on the LF-normalized form — the same text the `read` tool's
+        # display showed the model — so an anchor quoted from `read` matches.
+        # The params get the SAME fold: `read` never shows the model a \r, so
+        # any \r\n it sends in search/replace is intent-for-a-newline (typically
+        # because it believes the file is CRLF), and folding it here keeps
+        # `restore` from doubling it to \r\r\n on write.
+        content = FileTextService.normalize(raw)
+        search = FileTextService.normalize(params.search)
+        replace = FileTextService.normalize(params.replace_)
+        count = content.count(search)
 
         if count == 0:
             return ToolResult.err(
@@ -166,8 +202,11 @@ class EditFileAbility(Ability[EditFileParamsBag]):
                 hint=f"found {count} occurrences; include more context to make it unique.",
             )
 
-        new_content = content.replace(params.search, params.replace_, 1)
-        target.write_text(new_content, encoding="utf-8")
+        # Restore the file's original ending (CRLF files get their \r\n back)
+        # and write with NO translation, so every line outside the replaced
+        # span stays byte-identical.
+        new_content = content.replace(search, replace, 1)
+        FileTextService.write_raw(target, FileTextService.restore(new_content, ending))
 
         return ToolResult.ok(
             f"Replaced 1 occurrence in {params.path}.",

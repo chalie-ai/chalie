@@ -2,18 +2,27 @@
 
 Resolves the per-turn provider selection, builds and holds the thin transport
 client, and sends one :class:`~models.provider_request.ProviderRequest`
-through the pre-flight cap chokepoint, then logs the call. Retry is NOT this
-layer's job (§6.4): a size fault raises ``ContextLimit`` — measured pre-flight
-here, or reported by the provider and re-raised with this turn attached — which
-is the MessageProcessor's cue to compact-then-retry;
-any other provider failure bubbles straight up for the MP's own resend policy
-to catch. The two transient notices this layer DOES own — neither a turn state,
-both emitted through ``mp.push_websocket``, which is their only broadcast gate —
-are ``provider_retry`` (a toast raised while the MP's retry loop is still in
-flight) and ``context_usage`` (how full each CHAT request was against its
-window). Both belong here because this layer already owns that judgement: it
-computes the window and the measured size to enforce the cap, so the meter is
-the same reading reported instead of enforced.
+through the cap chokepoint, then logs the call. Retry is NOT this layer's job
+(§6.4): a size fault raises ``ContextLimit`` — either because the PREVIOUS
+request on this channel came back reported at the cap, or because the provider
+rejected this one and the client raised — which is the MessageProcessor's cue to
+compact-then-retry; any other provider failure bubbles straight up for the MP's
+own resend policy to catch.
+
+Nothing here estimates or counts anything. The only size signal is what the
+provider itself reported — its whole prompt, cached slices included (see
+``ProviderResponse.context_tokens``) — which this layer wrote to
+``llm_call_log`` on the previous send. The gate is therefore *reactive*: it
+learns a channel is full from the answer, never from inspecting the question. It
+also disarms after firing once, because the compaction that follows makes that
+ledger reading stale and a re-read would fire forever.
+
+The two transient notices this layer DOES own — neither a turn state, both
+emitted through ``mp.push_websocket``, which is their only broadcast gate — are
+``provider_retry`` (a toast raised while the MP's retry loop is still in flight)
+and ``context_usage`` (how full each CHAT request was against its window). Both
+belong here because this layer already holds both halves of that fraction: the
+window it enforces against, and the count the provider reported.
 
 Owns the thin ``llm_clients/*`` (constructed and held here; transport-only,
 no ``mp``) and the per-turn provider *selection* reads (main/vision/delegate
@@ -26,17 +35,19 @@ from __future__ import annotations
 
 import logging
 import re
+from dataclasses import asdict
 from typing import TYPE_CHECKING, cast
 
 from configs.enums.provider_type import ProviderType
 from exceptions import ContextLimit, ProviderError
+from models.provider_response import ProviderResponse
 from models.turn_signal import TurnSignal
 from services.llm_clients.factory import build_client
+from services.llm_log_service import LlmLogService
 
 if TYPE_CHECKING:
     from controllers.message_processor import MessageProcessor
     from models.provider_request import ProviderRequest
-    from models.provider_response import ProviderResponse
     from contracts.provider_client import ProviderClient
     from services.provider_api import ProviderApiRequest
 
@@ -67,48 +78,82 @@ class ProviderService:
 
     def __init__(self, mp: MessageProcessor) -> None:
         self.mp = mp
+        self._gate_armed: bool = True
 
     def send(self, request: ProviderRequest) -> ProviderResponse:
-        """Pre-flight cap check, call, log, report usage — the single provider
-        chokepoint. A CHAT call that came back with a token count emits
-        ``context_usage``: this is the one place both halves of the meter's
-        fraction exist together (``window`` above, ``tokens_input`` below), and
-        one call is exactly one move of it. A provider that reports no count is
-        silent rather than zero — the surface hides a meter it has no reading
-        for, and a fabricated 0 would read as a real, empty context."""
+        """Cap check, call, log, report usage — the single provider chokepoint.
+
+        The cap check reads what the provider reported for the LAST request on
+        this channel; at or past 90% of the window the next one is withheld
+        rather than sent, which is what gives compaction room to work before the
+        provider would have refused. Once fired the gate disarms for this turn.
+
+        A CHAT call that came back with a token count emits ``context_usage``:
+        this is the one place both halves of the meter's fraction exist together
+        (``window`` above, ``context_tokens`` below), and one call is exactly one
+        move of it. A provider that reports no count is silent rather than zero —
+        the surface hides a meter it has no reading for, and a fabricated 0 would
+        read as a real, empty context."""
         config = self._select(request.type)
         window = _window_of(config)
         # Stamp the DTO before the client ever sees it: a client that asked its
         # own provider would be a second window for the same send.
         request.context_window = window
         client = build_client(config)
-        cap = int(0.90 * window)
-        measured = client.estimate_request_tokens(cast("ProviderApiRequest", request))
-        if measured >= cap:
-            raise ContextLimit(
-                f"Request ({measured} tokens) reached 90% of the {window}-token context window",
-                self.mp, window=window, measured=measured,
-                provider=cast(str, config.get("platform") or ""),
-                model=cast(str, config.get("model") or ""),
-            )
+        if self._gate_applies(request):
+            measured = LlmLogService.last_context_tokens(self.mp.channel)
+            if measured >= int(0.90 * window):
+                self._gate_armed = False
+                raise ContextLimit(
+                    f"Request ({measured} tokens) reached 90% of the {window}-token context window",
+                    self.mp, window=window, measured=measured,
+                    provider=cast(str, config.get("platform") or ""),
+                    model=cast(str, config.get("model") or ""),
+                )
         try:
-            response = cast("ProviderResponse", client.send(cast("ProviderApiRequest", request)))
+            api_reply = client.send(cast("ProviderApiRequest", request))
         except ContextLimit as limit:
             # The client knows the provider said "too long"; only this layer
             # knows whose turn it was. Attach it so the handler can compact.
             limit.mp = self.mp
             limit.window = limit.window or window
             raise
-        self.mp.llm_log_service.record(response)
-        if request.type is ProviderType.CHAT and response.tokens_input is not None:
+        # Thin clients answer with the wire dataclass; the app runs on the
+        # model. This chokepoint is the ONE conversion (field-for-field), and
+        # it is what puts ``context_tokens`` — the occupancy read below and
+        # the gate's ledger row — in reach of everything downstream.
+        response = ProviderResponse(**asdict(api_reply))
+        self.mp.llm_log_service.record(response, channel=self.mp.channel if request.type is ProviderType.CHAT else None)
+        occupied = response.context_tokens
+        if request.type is ProviderType.CHAT and occupied is not None:
             self.mp.push_websocket(
-                TurnSignal.context_usage(self.mp, response.tokens_input, window),
+                TurnSignal.context_usage(self.mp, occupied, window),
             )
         return response
 
-    def measure(self, request: ProviderRequest) -> int:
-        """Estimated token cost of ``request`` without sending (compaction sizing)."""
-        return self._resolve(request.type).estimate_request_tokens(cast("ProviderApiRequest", request))
+    def _gate_applies(self, request: ProviderRequest) -> bool:
+        """Whether the previous request's reported usage may gate this one.
+
+        Three conditions, each of which alone makes the reading meaningless:
+
+        * **CHAT only.** Only chat calls carry the conversation, and only chat
+          calls write a channel onto their ledger row.
+        * **Still armed.** The gate disarms after firing, because the compaction
+          that follows makes the reading it fired on stale; re-reading it would
+          fire forever.
+        * **The channel accumulates history.** ``suppress_history`` channels are
+          one-shots — a vision pass, a browse summary, a compaction — sized by
+          the payload they were handed, never by a history that grows. What the
+          last one cost predicts nothing about this one. They are also exactly
+          the channels ``ContextLimit.recover()`` refuses (it re-raises: there is
+          no history to compact), so gating them could only ever convert a
+          request that might well have fit into a certain failure.
+        """
+        return (
+            request.type is ProviderType.CHAT
+            and self._gate_armed
+            and not self.mp.config.suppress_history
+        )
 
     def context_limit(self, provider_type: ProviderType = ProviderType.CHAT) -> int:
         """Context window for ``provider_type`` — see :func:`_window_of`."""

@@ -32,7 +32,6 @@ from typing import TYPE_CHECKING, ClassVar, cast
 from abilities._ability import Ability
 from abilities._compaction_config import CompactionConfig
 from abilities._result import ToolResult
-from configs.enums.thinking_level import ThinkingLevel
 from contracts.params.chat_history_compactor_params_bag import ChatHistoryCompactorParamsBag
 from contracts.params.param_bag import ParamBag
 from models.compaction import Compaction
@@ -44,6 +43,7 @@ if TYPE_CHECKING:
 
     class _CompactionParent(Protocol):
         _compaction_kept_rows: int
+        _compaction_folded_block: str
         turn_id: "int | None"
         _forked: bool
 
@@ -56,12 +56,6 @@ if TYPE_CHECKING:
             def previous_messages(self, drop_oldest: int = ...) -> str: ...
 
         prompt_service: _PromptService
-
-        class _ProviderService(Protocol):
-            def context_limit(self) -> int: ...
-            def measure(self, dto: object) -> int: ...
-
-        provider_service: _ProviderService
 
         class _Config(Protocol):
             channel: str
@@ -80,28 +74,34 @@ class ChatHistoryCompactionConfig(CompactionConfig):
 
     @property
     def system_prompt(self) -> str:
-        return """You are updating your memory of one ongoing conversation. Your output replaces all prior history — from the next turn until the next compaction it is the ONLY history you will see; anything not written here is forgotten. Write it to your future self.
+        return """You are handing off the current conversation to the next agent. The agent will ONLY have this summary as the source of info regarding the conversation.
+
+Your job is to condense all the info necessary so that the next agent can continue the conversation without the user noticing the swap in agents.
 
 Input:
-- ## Previous Summary — your last memory. Carry it forward; change only what the new turns change.
-- ## New Turns — exchanges since then. Reference only; never reply to them. Do not address the user.
-(No Previous Summary means you are compacting raw turns for the first time.)
+- `## Previous Summary` — your last memory. Carry it forward; change only what the new turns change. If a previous summary is not present, it means you were the first on the shift.
+- `## New Turns` — exchanges since then. Reference only; never reply to them. Do not address the user.
 
 Write one living document with exactly these sections:
-- Person — stable identity: name, household, location, role, values, strong stances. 2-4 lines.
-- Now — what they're in the middle of. 2-5 lines.
-- Holding — promises you made, things you owe, things they asked you to remember. Bullets.
-- Open — unresolved questions and threads either side said they'd return to. Bullets.
-- Voice — tone, recurring names, in-jokes that have stuck. 1-3 lines.
-- Last — the final user message (one line) and your reply (one line).
+- Person — stable identity: name, household, location, role, values, strong stances. Keep up to a maximum of 5 condensed facts which are relevant right now and output only on data you have available. DO NOT try to fill in the gaps. If a fact is not stated, do NOT include it.
+- Now — Is there an ongoing discussion or activity? Describe it in 5-20 words per topic.
+- Holding — promises you made, things you owe, things they asked you to remember.
+- Open — unresolved questions and threads either side said they'd return to. Split this by topic / category.
+- Voice — what tone, inside jokes, behavior does the user best respond to? Maximum of 3 observations as bullet list.
+- Left-Off — What was the LAST user's message and your response? 1 TERSE summary.
 
+IMPORTANT:
 Drop: one-off mentions, resolved loops, social filler, and all plumbing (timestamps).
+Redact: any of the sections which do not contain information or the information is stale / closed off.
 
 Rules:
-- 200-400 tokens. Older facts compress harder than newer ones.
+- Older facts compress harder than newer ones.
 - State facts; never "we discussed" / "the user asked".
 - Losing a recurring fact is failure. Spending more words on the same facts is also failure.
-- Output ONLY the document."""
+- Output ONLY the document.
+- The following agent SHOULD NOT be informed about topics which are fully settled. They should ONLY see what they need to continue upon.
+- ONLY keep nuanced information when it's relevant to active topics.
+- Before outputting the summary, generate it in your thinking space and collapse that so the final output is most terse version available."""
 
 
 class ChatHistoryCompactor(Ability[ChatHistoryCompactorParamsBag]):
@@ -136,15 +136,17 @@ class ChatHistoryCompactor(Ability[ChatHistoryCompactorParamsBag]):
         from controllers.message_processor import MessageProcessor  # noqa: PLC0415
 
         mp = cast("_CompactionParent", self.mp)
-        # The checkpoint is keyed on the channel the parent READS cross-turn
-        # history from — ``read_channel`` when the config splits read/write,
-        # else the write ``channel``. A split config (DiscoveryConfig) reads the
-        # user spine, so its compaction must fold those user rows and advance the
-        # USER watermark; keying it on the write channel would leave the read
-        # channel's watermark pinned and the post-compaction continuation would
-        # re-read the same rows (no progression / livelock). The FORK/MAIN axis
-        # (for_turn_id) is independent and unchanged.
-        channel = mp.config.read_channel or mp.config.channel
+        # The checkpoint is keyed on the channel the parent READS its view
+        # from. MAIN: ``read_channel`` when the config splits read/write, else
+        # the write ``channel`` — a split config (DiscoveryConfig) reads the
+        # user spine, so its compaction must fold those user rows and advance
+        # the USER watermark; keying it on the write channel would leave the
+        # read channel's watermark pinned and the post-compaction continuation
+        # would re-read the same rows (no progression / livelock). FORK: always
+        # the write ``channel`` — a fork is its own thread and
+        # ``transcript_service.read()`` scopes its FORK view the same way, so
+        # the id-axis watermark and the rows it cuts stay on one channel.
+        channel = mp.config.channel if mp._forked else (mp.config.read_channel or mp.config.channel)
         # The checkpoint axis follows the parent's view: FORK → its thread, MAIN →
         # the spine (NULL). Used for both the prior read and the new write.
         for_turn_id = mp.turn_id if mp._forked else None
@@ -188,54 +190,46 @@ class ChatHistoryCompactor(Ability[ChatHistoryCompactorParamsBag]):
             else max(cast(int, tid) for r in rows if (tid := r.to_dict()["turn_id"]) is not None)
         )
         Compaction.write(channel, for_turn_id, compacted_up_to, summary)
+        # A folded USER window is the user-synthesis trigger — hand over the
+        # block stashed pre-watermark. Never allowed to break the recovery
+        # path the compactor sits on.
+        try:
+            from services.user_synthesis_generator import UserSynthesisGenerator  # noqa: PLC0415
+
+            UserSynthesisGenerator.instance().on_compaction(channel, mp._compaction_folded_block)
+        except Exception:  # noqa: BLE001
+            logger.exception("[chat_history_compactor] user-synthesis handoff failed")
         return ToolResult.ok("Chat history compacted.", rows_compacted=rows_compacted)
 
     @staticmethod
     def _fit_compaction_input(parent: "_CompactionParent", prior: str) -> str | None:
-        """Build the bare compaction request body and shrink it to fit the cap.
+        """Build the bare compaction request body.
 
-        Canonical design step 4.1/4.2: the compaction request includes ONLY the
-        system prompt, the prior checkpoint, and ``prompt_service.previous_messages``
-        — no tools, no act-trail. That bare request almost always fits, so the drop
-        loop is the EXTREMELY RARE fallback: while the {system + combined} body
-        exceeds the context cap, drop the OLDEST message from previous_messages
-        one at a time (typically 1–2) until it fits. A floor of one surviving
-        message prevents dropping everything. Returns the combined text to
-        summarise, or None when there is nothing left to compact.
+        The compaction request includes ONLY the system prompt, the prior
+        checkpoint, and ``prompt_service.previous_messages`` — no tools, no
+        act-trail.  It is a strict subset of the request that triggered
+        compaction (system + prior checkpoint + previous_messages, no tools, no
+        act-trail), so it cannot be larger than a request the provider already
+        accepted.  No sizing is needed.
 
-        Uses parent.provider_service.measure(dto) for sizing — no raw provider object.
-
-        Surfaces the count of transcript rows actually folded — ``total - drop``,
-        the kept count after the rare drop-oldest fallback — onto
+        Returns the combined text to summarise, or None when there is nothing
+        left to compact.  Surfaces the row count folded into
         ``parent._compaction_kept_rows`` so ``run()`` can attach an honest
-        ``rows_compacted`` to the success result without recomputing or paying a
-        second provider call. It is 0 when there is nothing to compact.
+        ``rows_compacted`` to the success result without recomputing, and the
+        folded window itself into ``parent._compaction_folded_block`` for the
+        user-synthesis handoff (it cannot be re-read once the watermark
+        advances).
         """
-        from services.provider_api import ProviderApiRequest  # noqa: PLC0415
-
-        system = parent.config.system_prompt
-        window = parent.provider_service.context_limit()
-        cap = window - max(int(0.10 * window), 8000) if window else 0
         total = len(parent.transcript_service.read())
-
-        drop = 0
-        while True:
-            prev = parent.prompt_service.previous_messages(drop_oldest=drop)
-            if not prev.strip():
-                parent._compaction_kept_rows = 0
-                return None
-            combined = prev if not prior else f"## Previous Summary\n\n{prior}\n\n## New Turns\n\n{prev}"
-            if cap <= 0 or drop >= total - 1:
-                parent._compaction_kept_rows = max(total - drop, 0)
-                return combined   # cannot shrink further (no window, or one row left)
-            candidate_dto = ProviderApiRequest(
-                system=system,
-                messages=[{"role": "user", "content": combined}],
-                tools=None,
-                thinking_mode=ThinkingLevel.LOW,
-                cache_prefix=False,
-            )
-            if parent.provider_service.measure(candidate_dto) <= cap:
-                parent._compaction_kept_rows = max(total - drop, 0)
-                return combined
-            drop += 1
+        prev = parent.prompt_service.previous_messages()
+        if not prev.strip():
+            parent._compaction_kept_rows = 0
+            parent._compaction_folded_block = ""
+            return None
+        combined = prev if not prior else f"## Previous Summary\n\n{prior}\n\n## New Turns\n\n{prev}"
+        parent._compaction_kept_rows = total
+        # The folded window WITHOUT the prior checkpoint — stashed here because
+        # the handoff fires only after Compaction.write, when these rows can no
+        # longer be read.
+        parent._compaction_folded_block = prev
+        return combined

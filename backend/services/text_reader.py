@@ -1,11 +1,10 @@
 """TextReader — the single place a URL or filesystem path becomes plain text.
 
-Shared by the ``read`` tool and the file-ingest pipeline. Returns the FULL
-text verbatim: no truncation (the caller truncates to ``max_chars``) and no
-whitespace munging. Every failure is a raise, never an empty string.
-
-The SSRF guard lives in :mod:`services.web_fetch` and its :class:`FetchBlocked`
-propagates untouched — the ``read`` ability maps it to a stable tool code.
+Shared by the file-ingest pipeline, the ``read`` tool (file branch only — the
+ability rejects URLs before constructing a reader) and the docs pipeline (URL
+branch). Returns the FULL text verbatim: no truncation (the caller gates
+oversized content behind its own line-window contract) and no whitespace
+munging. Every failure is a raise, never an empty string.
 """
 
 from __future__ import annotations
@@ -27,9 +26,8 @@ from services.web_fetch import BROWSER, fetch_page
 class TextReader:
     _URL_FETCH_TIMEOUT: ClassVar[int] = 15
 
-    #: Filesystem prefixes a read never descends into. Unrelated to the SSRF guard
-    #: (that one lives in web_fetch and covers network destinations) — this blocks
-    #: local system paths on the FILE branch.
+    #: Filesystem prefixes a read never descends into — the FILE branch only;
+    #: network destinations are never refused.
     _BLOCKED_PATH_PREFIXES: ClassVar[tuple[str, ...]] = ("/etc", "/proc", "/dev", "/sys", "/var/run")
 
     #: Path suffixes whose bytes are plain text, not markup. A URL/file ending in
@@ -44,14 +42,14 @@ class TextReader:
         self._source: str = file_path_or_url.strip()
 
     def get_value(self) -> str:
-        if self._is_url(self._source):
+        if TextReader.is_url(self._source):
             return self._read_url()
         return self._read_file()
 
     # ── Classification ─────────────────────────────────────────────────────────
 
     @staticmethod
-    def _is_url(source: str) -> bool:
+    def is_url(source: str) -> bool:
         return urlparse(source).scheme in ("http", "https", "ftp")
 
     @classmethod

@@ -13,11 +13,7 @@ in Phase E — the configs are now pure declarative data. Each builder's docstri
 names the config it was ported from.
 
 Memory boundary (§3.11): every structured user-context read goes through a
-sibling service — the FACTS vertical (``FactRow.traits``) for the traits lane and
-``self.mp.behavioral_pattern_service`` for the pattern lane — never a raw
-``data_graph`` read here. The behavioural-pattern confidence ranking + cap lives
-on ``BehavioralPatternService.top_patterns``; this file only formats the rows the
-service hands back.
+sibling service — never a raw ``data_graph`` read here.
 
 Cross-turn / cross-channel reads (skill-building's trigger-turn tool trail,
 thread-gist's opener rows) are the trigger turn's identity — a DIFFERENT
@@ -25,35 +21,32 @@ thread-gist's opener rows) are the trigger turn's identity — a DIFFERENT
 / ``self.mp._trigger_turn_id`` (§4.3, added by F1). A service reads its own
 models, so those go straight through ``ToolCall`` / ``Transcript`` classmethods.
 
-``self.mp.post_compaction_continuation`` is read verbatim (same name as today's
-``MessageProcessor``) to gate the post-compaction continuity banner; the banner's
-user-query text comes straight off ``self.mp.raw_input`` — the new processor holds
-the turn's input for its whole recursion, so the old ``continuation_user_query``
-DB-refetch (a redundant read of the same value) is gone.
+``self.mp.turn_handover`` is read by :meth:`_handover` to gate the post-compaction
+continuity banner; the banner carries the first-person hand-over summary produced
+by :class:`~services.turn_handover_service.TurnHandoverService` immediately before
+the compactor erases the act trail.
 """
 
 from __future__ import annotations
 
 import base64
-import json
 import logging
 from typing import TYPE_CHECKING, cast
 
-from abilities.memory import MemoryAbility
-from abilities.review_transcript import ReviewTranscriptAbility
-from configs.channels.dmn import DmnConfig
+from abilities.recall import Recall
 from configs.channels.external_agent import EAMPConfig
+from configs.channels.memory_step import PROMPT_CHANNEL as MEMORY_STEP_PROMPT_CHANNEL
 from configs.channels.user import UserConfig
 from configs.enums.channels import Channel
 from exceptions import UnroutedPromptChannel
-from models.behavioral_pattern import BehavioralPattern
-from models.fact import FactRow
 from models.tool_call import ToolCall
 from models.transcript import Transcript
+from models.transcript_thinking import TranscriptThinking
+from models.user_synthesis import UserSynthesisRow
 from services.locale_service import CHAT_TIMESTAMP_FMT, format_date
+from services.markup import PROMPT_TAGS
 from services.personality.personality_service import personality_service
 from services.time_formatter_service import TimeFormatterService
-from services.user_synthesis import UserSynthesis
 from services.world_state import world_state
 
 if TYPE_CHECKING:
@@ -61,26 +54,15 @@ if TYPE_CHECKING:
 
     from controllers.message_processor import MessageProcessor
 
-    class _FactExtractionConfig(Protocol):
-        _gist: str
-        _neighbours: list[object]
-
     class _ExternalAgentConfig(Protocol):
         _agent_name: str
         _project: str
         system_prompt: str
 
-    class _SuperEpisodeConfig(Protocol):
-        _sources: list[object]
-
 logger = logging.getLogger(__name__)
 
 _CHANNEL_USER = Channel.USER
-_CHANNEL_USER_SUMMARY = Channel.USER_SUMMARY
-_CHANNEL_PATTERN_MATCH = Channel.PATTERN_MATCH
 _CHANNEL_SCHEDULE = Channel.SCHEDULE
-_CHANNEL_FACT_EXTRACTION = Channel.FACT_EXTRACTION
-_CHANNEL_SKILL_ASSOCIATION = Channel.SKILL_ASSOCIATION
 _CHANNEL_SKILLS_BUILDING = Channel.SKILLS_BUILDING
 _CHANNEL_THREAD_GIST = Channel.DELEGATE_THREAD_GIST
 _CHANNEL_VISION = Channel.DELEGATE_VISION
@@ -90,10 +72,9 @@ _CHANNEL_PIM = Channel.DELEGATE_PIM
 _CHANNEL_CODE_AGENT = Channel.DELEGATE_CODE_AGENT
 _CHANNEL_EXTERNAL_AGENT = "external_agent"
 _CHANNEL_COMPACTION = Channel.COMPACTION
-_CHANNEL_SUPER_EPISODE = Channel.SUPER_EPISODE_ENCODER
-_CHANNEL_GEO_PATTERN = Channel.GEO_PATTERN
-_CHANNEL_DMN = Channel.DMN
-_CHANNEL_EPISODE_ENCODER = Channel.EPISODE_ENCODER
+_CHANNEL_MEMORY_HYGIENE = Channel.MEMORY_HYGIENE
+_CHANNEL_USER_SYNTHESIS = Channel.USER_SYNTHESIS
+_CHANNEL_MEMORY_STEP = MEMORY_STEP_PROMPT_CHANNEL
 
 _USER_DEFINITION_FALLBACK = (
     "The user is a real human. Treat this conversation as peer-to-peer dialogue."
@@ -101,21 +82,40 @@ _USER_DEFINITION_FALLBACK = (
 _CONTENT_FIELD_PLACEHOLDER = "{{provider_content_field_name}}"
 _MISSING_TS_PLACEHOLDER = "????-??-?? ??:??"
 
-#: Appended to the system prompt on any channel whose config sets
-#: ``SUPPORTS_ASYNC`` — the SAME gate that exposes the ``async`` tool parameter —
-#: so enabling async on a new ProcessorConfig surfaces this guidance with zero
-#: extra wiring. Appended trailing (constant text) so the cached system prefix
-#: stays byte-stable across turns.
-_ASYNC_GUIDANCE = """
+_HANDOVER_FRAME = (
+    "You hit your context limit mid-task and are continuing the same task — "
+    "this is not a new conversation. Below is the hand-over you produced. "
+    "Trust it: do not re-verify or repeat completed work; continue from the "
+    "pending list.\n\n{handover}"
+)
 
-## Background tasks
+#: The tag list the model is given, rendered from the sanitiser's own authority
+#: (``markup.PROMPT_TAGS``) so widening or narrowing the contract rewrites this
+#: instruction in the same edit. Built separately rather than inlined into an
+#: f-string: the literal below carries ``{{provider_content_field_name}}``, which
+#: an f-string would collapse to single braces before ``_substitute_content_field``
+#: ever sees it.
+_TAG_LIST = ", ".join(f"<{tag}>" for tag in PROMPT_TAGS)
 
-Some tools accept an `async` flag. Set `async: true` to run a tool in the background: you get an immediate acknowledgement, the current turn ends, and the moment the tool finishes you are automatically invoked again with its result as a new turn — so you can keep talking to the user while the work runs.
+#: The single source of the HTML output contract, shared by every channel whose
+#: output is rendered to a human, and gated by ``ProcessorConfig.RENDERS_HTML``.
+_RESPONSE_FORMAT = (
+    """
 
-Choose `async: true` when the user asks for something to happen "in the background" or "while" they do something else, or when a call is likely to be slow (web research, browsing, lengthy shell or file work) and the user should not have to wait. Call tools normally (synchronously) for quick results the user is actively waiting on."""
+────────────────────────────────
 
-_MAX_TRAIT_ROWS = 200
-_MAX_PATTERN_ROWS = 25
+## Response format
+
+In the {{provider_content_field_name}} field (what the user sees) format your response as HTML.
+Specifically only use the following tags: """
+    + _TAG_LIST
+    + """
+NEVER use markdown syntax. Use <b> not **, use <i> not _, use <h1> not #, use <ul><li> not - or *. No backtick fences. HTML tags only.
+Avoid using table structures to represent data. If you do need to use tables, output in html only NEVER as markdown and keep column count under 4.
+
+────────────────────────────────"""
+)
+
 
 
 class PromptService:
@@ -129,13 +129,14 @@ class PromptService:
     # ── public dispatch (channel-keyed, zero-param) ─────────────────────────
 
     def system_prompt(self) -> str:
-        """The turn's system instruction block, with the background-tasks
-        guidance appended on any channel that exposes the ``async`` tool flag
-        (``SUPPORTS_ASYNC``) — the one place all system-prompt assembly lands."""
+        """The turn's system instruction block: the per-channel body, plus the
+        shared response-format contract on any channel that renders to a human
+        (``RENDERS_HTML``) — the one place all
+        system-prompt assembly and placeholder substitution lands."""
         base = self._system_prompt_body()
-        if self.mp.config.SUPPORTS_ASYNC:
-            return base + _ASYNC_GUIDANCE
-        return base
+        if self.mp.config.RENDERS_HTML:
+            base += _RESPONSE_FORMAT
+        return self._substitute_content_field(base)
 
     def _system_prompt_body(self) -> str:
         """The per-channel system block.
@@ -154,9 +155,9 @@ class PromptService:
         return config.system_prompt
 
     def user_definition(self) -> str:
-        """``UserConfig.get_user_definition``: the short user synthesis via
-        :class:`UserSynthesis`, or the peer-to-peer fallback."""
-        return UserSynthesis.get(shorthand=True) or _USER_DEFINITION_FALLBACK
+        """``UserConfig.get_user_definition``: the newest ``user_synthesis``
+        version via :class:`UserSynthesisRow`, or the peer-to-peer fallback."""
+        return UserSynthesisRow.latest_content() or _USER_DEFINITION_FALLBACK
 
     def user_prompt(self) -> str:
         """The turn's user-message body, ported from each config's
@@ -171,14 +172,12 @@ class PromptService:
         channel = self._channel()
         if channel == _CHANNEL_USER:
             return self._user_prompt()
-        if channel == _CHANNEL_USER_SUMMARY:
-            return self._user_summary_prompt()
-        if channel == _CHANNEL_PATTERN_MATCH:
-            return self._pattern_prompt()
         if channel == _CHANNEL_SCHEDULE:
             return self._schedule_prompt()
-        if channel == _CHANNEL_FACT_EXTRACTION:
-            return self._fact_extraction_prompt()
+        if channel == _CHANNEL_MEMORY_HYGIENE:
+            return self._memory_hygiene_prompt()
+        if channel == _CHANNEL_MEMORY_STEP:
+            return self._memory_step_prompt()
         if channel == _CHANNEL_SKILLS_BUILDING:
             return self._skill_suggestion_prompt()
         if channel == _CHANNEL_THREAD_GIST:
@@ -193,17 +192,13 @@ class PromptService:
             return self._code_agent_prompt()
         if channel == _CHANNEL_EXTERNAL_AGENT:
             return self._external_agent_prompt()
-        if channel == _CHANNEL_SUPER_EPISODE:
-            return self._super_episode_prompt()
-        if channel == _CHANNEL_GEO_PATTERN:
-            return self._geo_pattern_prompt()
-        if channel == _CHANNEL_DMN:
-            return self._dmn_prompt()
-        if channel == _CHANNEL_EPISODE_ENCODER:
-            return self._episode_encoder_prompt()
-        # skill_association, vision and compaction pass the raw input straight
+        # vision, compaction and user_synthesis pass the raw input straight
         # through.
-        if channel in (_CHANNEL_SKILL_ASSOCIATION, _CHANNEL_VISION, _CHANNEL_COMPACTION):
+        if channel in (
+            _CHANNEL_VISION,
+            _CHANNEL_COMPACTION,
+            _CHANNEL_USER_SYNTHESIS,
+        ):
             return self.mp.raw_input
         raise UnroutedPromptChannel(channel)
 
@@ -269,7 +264,18 @@ class PromptService:
         A chat-history compaction anchors to one assistant row and becomes the
         interim cutoff: that row's interim prose AND its ordinary calls are
         dropped (``call.id <= last_compaction``), while rows written after the
-        compactor marker still render with their interim prose."""
+        compactor marker still render with their interim prose.
+
+        Thinking-trace interleave: before the first surviving call (or interim
+        prose) anchored to each transcript id of the current exchange,
+        ``act_trail`` emits that anchor's stored thinking traces (in row order),
+        each wrapped ``[thinking]{trace}[end_thinking]``. Generation order was
+        think → prose → tools, so the trail reads that way. Traces anchored to
+        a row with no surviving call (an empty-completion steer at the exchange
+        input row, or a trace-only exchange) are emitted before the call trail —
+        chronologically they precede every call-bearing anchor — so no step's
+        trace is dropped and the prompt-level guard still renders a trace-only
+        trail."""
         calls = self.mp.tool_call_service.by_exchange()
         last_compaction = max(
             (cast("int", call.id) for call in calls if call.tool_name == "chat_history_compactor"),
@@ -286,20 +292,42 @@ class PromptService:
             if not content or not content.strip():
                 continue
             interim[cast("int", row.id)] = content.replace("\n", " ").strip()
+        thinking_rows = TranscriptThinking.by_exchange(self.mp.channel, self.mp.turn_id, self.mp.uid)
+        thinking: dict[int, list[str]] = {}
+        for think_row in thinking_rows:
+            tid = think_row.transcript_id
+            if tid <= cutoff:
+                continue
+            trace = think_row.thinking_trace
+            if not trace or not trace.strip():
+                continue
+            thinking.setdefault(tid, []).append(trace)
         emitted: set[int] = set()
         parts: list[str] = []
+        # Traces anchored to rows that never got a call (an empty-completion
+        # steer at the exchange input row) precede every call-bearing anchor
+        # chronologically — emit them first so no step's trace is dropped.
+        called_tids = {call.transcript_id for call in calls}
+        for tid in sorted(t for t in thinking if t not in called_tids):
+            for trace in thinking[tid]:
+                parts.append(f"[thinking]{trace}[end_thinking]")
+            emitted.add(tid)
         for call in calls:
             if call.tool_name == "chat_history_compactor" or cast("int", call.id) <= last_compaction:
                 continue
             result = call.result
             tid = call.transcript_id
-            if tid in interim and tid > cutoff and tid not in emitted:
-                parts.append(f"[interim_response] {interim[tid]}")
+            if tid not in emitted and tid > cutoff:
+                if tid in thinking:
+                    for trace in thinking[tid]:
+                        parts.append(f"[thinking]{trace}[end_thinking]")
+                if tid in interim:
+                    parts.append(f"[interim_response] {interim[tid]}")
                 emitted.add(tid)
-            if call.tool_name == MemoryAbility.NAME and '"_auto": true' in call.params:
+            if call.tool_name == Recall.NAME and '"_auto": true' in call.params:
                 body = result.split("\n", 1)[1] if "\n" in result else result
                 parts.append(
-                    f"[background_memory]\n{body}".replace("[end:memory]", "[end:background_memory]")
+                    f"[background_memory]\n{body}".replace("[end:recall]", "[end:background_memory]")
                 )
                 continue
             parts.append(f"[{call.tool_name}] {call.params} → {result}")
@@ -330,6 +358,13 @@ class PromptService:
             logger.warning("[PromptService] act_trail failed: %s", exc, exc_info=True)
             return ""
 
+    def _handover(self) -> str:
+        """The post-compaction continuity banner, or ``""`` when there is no
+        hand-over stored on this turn."""
+        if not self.mp.turn_handover:
+            return ""
+        return _HANDOVER_FRAME.format(handover=self.mp.turn_handover)
+
     def _world(self) -> str:
         """``world_state.render()``, guarded — the turn's telemetry block, whose
         ``local_time`` line is the ONLY date anchor any channel receives. Off-spine
@@ -344,13 +379,12 @@ class PromptService:
 
     def _user_system_prompt(self) -> str:
         """``UserConfig``: the voice line (cache-warm prefix) over the config's
-        ``system_prompt`` base literal, with the provider content-field
-        placeholder substituted. Runs for ``UserConfig`` and its
+        ``system_prompt`` base literal. Runs for ``UserConfig`` and its
         ``DiscoveryConfig`` subclass."""
         try:
             voice_line = f"When responding; {personality_service.get_voice()}"
             prompt = f"{voice_line}\n\n{self.mp.config.system_prompt}"
-            return self._substitute_content_field(prompt)
+            return prompt
         except Exception as exc:  # noqa: BLE001 — a prompt build hiccup must not crash the turn
             logger.warning("[PromptService] user system prompt build failed: %s", exc)
             return ""
@@ -375,15 +409,9 @@ class PromptService:
 
         parts.append("")
 
-        if self.mp.post_compaction_continuation:
-            query = self.mp.raw_input
-            parts.append(
-                f"You are continuing after a mid-turn compaction. "
-                f"The user query was: {query}. "
-                f"Read the Checkpoint section above to recover what you were "
-                f"working on, and use the {ReviewTranscriptAbility.NAME} tool to read the "
-                f"previous turns of this conversation."
-            )
+        handover = self._handover()
+        if handover:
+            parts.append(handover)
 
         parts.append(f"user: {self.mp.raw_input}")
 
@@ -406,73 +434,6 @@ class PromptService:
             label = None
         return body.replace(_CONTENT_FIELD_PLACEHOLDER, label) if label else body
 
-    # ── UserSummaryConfig (channel="user_summary") ───────────────────────────
-
-    def _user_summary_prompt(self) -> str:
-        """``UserSummaryConfig.get_user_prompt``: traits facts section, plus the
-        active-patterns section when any exist."""
-        facts_section = self._traits_block()
-        patterns_section = self._user_summary_patterns_block()
-        if not patterns_section:
-            return facts_section
-        return f"{facts_section}\n\n{patterns_section}"
-
-    def _traits_block(self) -> str:
-        """Section 1 of ``UserSummaryConfig.get_user_prompt``: up to
-        ``_MAX_TRAIT_ROWS`` live ``user_specific`` facts, most-reinforced first,
-        via ``FactRow.traits()``."""
-        rows = FactRow.traits().get()[:_MAX_TRAIT_ROWS]
-        lines = [f"{row.key}: {row.value}" for row in rows if row.key and row.value]
-        if not lines:
-            return "Facts:\n(no facts available)"
-        return "Facts:\n" + "\n".join(lines)
-
-    def _user_summary_patterns_block(self) -> str:
-        """Section 2 of ``UserSummaryConfig.get_user_prompt``: up to
-        ``_MAX_PATTERN_ROWS`` active behavioural patterns, most-recently-confirmed
-        first, via ``self.mp.behavioral_pattern_service.patterns()``."""
-        lines: list[str] = []
-        for row in self.mp.behavioral_pattern_service.patterns()[:_MAX_PATTERN_ROWS]:
-            content = BehavioralPattern.parse(row.value)
-            if content is not None:
-                lines.append(BehavioralPattern.render_line(content, include_last_seen=True))
-        if not lines:
-            return ""
-        return "## Behavioural patterns (frequency, last seen)\n" + "\n".join(
-            f"- {line}" for line in lines
-        )
-
-    # ── PatternConfig (channel="pattern_match") ──────────────────────────────
-
-    def _pattern_prompt(self) -> str:
-        """``PatternConfig.get_user_prompt``: the pattern window's transcripts
-        (``self.mp.transcript_service.window()`` — the id-bounded ``user`` read)
-        + the existing-patterns block + this turn's act trail."""
-        rows = self.mp.transcript_service.window()
-        transcript_block = (
-            "\n".join(
-                f"[id={row.id} | {cast('str', row.to_dict()['role'])} | "
-                f"{cast('str', row.to_dict()['created_at'])}] "
-                f"{cast('str', row.to_dict()['content'])}"
-                for row in rows
-            )
-            if rows
-            else "(no transcripts in window)"
-        )
-        parts = [f"Existing patterns:\n{self._pattern_existing_patterns_block()}", transcript_block]
-        trail = self._trail()
-        if trail:
-            parts.append(trail)
-        return "\n\n".join(parts)
-
-    def _pattern_existing_patterns_block(self) -> str:
-        """The top behavioural patterns by confidence as a ``name -> summary``
-        JSON object — the pattern/geo channels' existing-patterns block. The
-        confidence ranking + cap live on ``BehavioralPatternService.top_patterns``;
-        this builder only renders the result as prompt text."""
-        patterns = self.mp.behavioral_pattern_service.top_patterns()
-        return json.dumps(patterns, indent=2) if patterns else "(none yet)"
-
     # ── ScheduledConfig (channel="schedule") ─────────────────────────────────
 
     def _schedule_prompt(self) -> str:
@@ -482,28 +443,54 @@ class PromptService:
         prev = self._prev()
         if prev:
             parts.append(f"## Previous Messages\n{prev}")
+        handover = self._handover()
+        if handover:
+            parts.append(handover)
         parts.append(f"Scheduled task:\n{self.mp.raw_input}")
         trail = self._trail()
         if trail:
             parts.append(trail)
         return "\n\n".join(parts)
 
-    # ── FactExtractionConfig (channel="fact_extraction") ─────────────────────
+    # ── MemoryHygieneConfig (channel="memory_hygiene") ─────────────────────
 
-    def _fact_extraction_prompt(self) -> str:
-        """``FactExtractionConfig.get_user_prompt``: the episode gist and the
-        pre-fetched neighbour facts captured on the config (``_gist`` /
-        ``_neighbours`` — per-episode frozen data, not mp-reachable)."""
-        config = cast("_FactExtractionConfig", self.mp.config)
-        if config._neighbours:
-            known = "\n".join(
-                f"- key={cast('dict[str, object]', n).get('key')!r} "
-                f"value={cast('dict[str, object]', n).get('value')!r}"
-                for n in config._neighbours
-            )
-        else:
-            known = "(no similar facts on record)"
-        return f"Episode:\n{config._gist}\n\nMost similar known facts:\n{known}"
+    def _memory_hygiene_prompt(self) -> str:
+        """``MemoryHygieneConfig.get_user_prompt``: previous messages, the day-window
+        listing, then this turn's act trail — joined by blank lines."""
+        parts: list[str] = []
+        prev = self._prev()
+        if prev:
+            parts.append(f"## Previous Messages\n{prev}")
+        handover = self._handover()
+        if handover:
+            parts.append(handover)
+        parts.append(self.mp.raw_input)
+        trail = self._trail()
+        if trail:
+            parts.append(trail)
+        return "\n\n".join(parts)
+
+    # ── MemoryStepConfig (prompt_channel="memory_step") ──────────────────────
+
+    def _memory_step_prompt(self) -> str:
+        """``MemoryStepConfig``: the transcript window the step records, then
+        this turn's act trail — joined by blank lines.
+
+        There is no input line. The step's instruction lives entirely in its
+        system prompt, so the body is the conversation it is being asked to
+        look at: the newest ``history_limit`` rows above the compaction
+        watermark, under the same ``## Previous Messages`` heading every other
+        channel uses. When a checkpoint exists, ``CompactionService.checkpoint``
+        wraps this body with the prose covering everything below the
+        watermark."""
+        parts: list[str] = []
+        prev = self._prev()
+        if prev:
+            parts.append(f"## Previous Messages\n{prev}")
+        trail = self._trail()
+        if trail:
+            parts.append(trail)
+        return "\n\n".join(parts)
 
     # ── SkillSuggestionConfig (channel="skills_building") ────────────────────
 
@@ -625,15 +612,17 @@ class PromptService:
 
     def _external_agent_system_prompt(self) -> str:
         """``EAMPConfig.get_system_prompt``: the external-agent producer body
-        with the provider content-field placeholder substituted, the user's
-        first name resolved from data_graph, and the agent/project placeholders
-        filled — prefixed with the agent identity definition. Any failure yields
-        ``""`` (the pre-rewrite try/except contract)."""
+        with the user's first name resolved from the latest user synthesis and
+        the agent/project placeholders filled — prefixed with the agent identity
+        definition. Any failure yields ``""`` (the pre-rewrite try/except
+        contract)."""
         config = cast("_ExternalAgentConfig", self.mp.config)
         try:
-            body = self._substitute_content_field(config.system_prompt)
-            summary = UserSynthesis.get(shorthand=True)
-            user_name = summary.split()[0] if summary and summary.split() else "the user"
+            body = config.system_prompt
+            # Bullet-form synthesis opens with punctuation — only a clean
+            # leading word can be read as the user's name.
+            tokens = UserSynthesisRow.latest_content().split()
+            user_name = tokens[0] if tokens and tokens[0].isalpha() else "the user"
             body = (
                 body
                 .replace("{user_name}", user_name)
@@ -659,116 +648,6 @@ class PromptService:
         if trail:
             parts.append(trail)
         return "\n".join(parts)
-
-    # ── SuperEpisodeConfig (channel="super_episode_encoder") ─────────────────
-
-    def _super_episode_prompt(self) -> str:
-        """``SuperEpisodeConfig.get_user_prompt``: the cluster's source-episode
-        gists alone (``_sources``, per-cluster frozen data captured on the config
-        at construction, not mp-reachable — same pattern as fact-extraction's
-        payload). Every level distils its child gists; raw transcript turns are
-        never re-hydrated into the prompt, so a super-episode always contracts
-        the level beneath it."""
-        config = cast("_SuperEpisodeConfig", self.mp.config)
-        src = "\n\n".join(
-            f"[{cast('dict[str, object]', e)['id']}] {cast('dict[str, object]', e)['gist']}"
-            for e in config._sources
-        )
-        return f"Source episodes:\n\n{src}"
-
-    # ── EpisodeEncoderConfig (channel="episode_encoder") ─────────────────────
-
-    def _episode_encoder_prompt(self) -> str:
-        """``EpisodeEncoderConfig.get_user_prompt``: the formatted transcript
-        window, then (when present) the episodes referenced during those turns —
-        both computed by ``EpisodicService`` and carried on ``self.mp.metadata``
-        (keys ``window`` / ``referenced``), the sanctioned per-turn payload channel
-        (§2.4), replacing the pre-rewrite ``mp._window`` / ``mp._referenced``
-        instance-attribute injection."""
-        meta = self.mp.metadata or {}
-        window = cast("str", meta.get("window") or "")
-        referenced = cast("str", meta.get("referenced") or "")
-        parts = [
-            "Transcript window — each line is `[id] (timestamp) role: content`:",
-            "",
-            window,
-        ]
-        if referenced:
-            parts.extend([
-                "",
-                "Episodes referenced during these turns (candidates for update / delete):",
-                "",
-                referenced,
-            ])
-        return "\n".join(parts)
-
-    # ── GeoConfig (channel="geo_pattern") ────────────────────────────────────
-
-    def _geo_pattern_prompt(self) -> str:
-        """``GeoConfig.get_user_prompt``: the existing-patterns block, the
-        location-tagged transcript window, then this turn's act trail."""
-        parts = [
-            f"Existing patterns:\n{self._pattern_existing_patterns_block()}",
-            self._geo_transcript_block(),
-        ]
-        trail = self._trail()
-        if trail:
-            parts.append(trail)
-        return "\n\n".join(parts)
-
-    def _geo_transcript_block(self) -> str:
-        """The geo window's location-tagged ``user`` rows
-        (``self.mp.transcript_service.location_window()``) rendered
-        ``[id | role | ts | lat,lon place] content``. Guarded — a window-read
-        hiccup must not crash the turn (the pre-rewrite builder wrapped this)."""
-        try:
-            rows = self.mp.transcript_service.location_window()
-        except Exception as exc:  # noqa: BLE001 — a window-read hiccup must not crash the turn
-            logger.warning("[PromptService] geo transcript block failed: %s", exc)
-            return "(transcript fetch failed)"
-        if not rows:
-            return "(no location-tagged transcripts in window)"
-        lines: list[str] = []
-        for row in rows:
-            fields = row.to_dict()
-            lat, lon = fields.get("location_lat"), fields.get("location_lon")
-            place = cast("str", fields.get("location_name") or "")
-            location = f"{lat},{lon}" if not place else f"{lat},{lon} {place}"
-            lines.append(
-                f"[id={fields.get('id')} | {cast('str', fields.get('role'))} | "
-                f"{cast('str', fields.get('created_at'))} | {location}] "
-                f"{cast('str', fields.get('content'))}"
-            )
-        return "\n".join(lines)
-
-    # ── DmnConfig (channel="dmn") ────────────────────────────────────────────
-
-    def _dmn_prompt(self) -> str:
-        """``DmnConfig.get_user_prompt``: the user synthesis (long summary,
-        falling back to the short one), the recent-salient-episodes reflection
-        context, then this turn's act trail."""
-        parts: list[str] = []
-        synthesis = UserSynthesis.get()
-        if synthesis:
-            parts.append(f"## About the User\n{synthesis}")
-        episodes = self._dmn_episodes_block()
-        if episodes:
-            parts.append(f"## Episodes\n{episodes}")
-        trail = self._trail()
-        if trail:
-            parts.append(trail)
-        return "\n\n".join(parts)
-
-    def _dmn_episodes_block(self) -> str:
-        """DMN's recent-salient-episode reflection context — the episodic read
-        at prompt-assembly time. Sourced from ``DmnConfig``'s own DB-reaching
-        static (marked ``@todo: Refactor`` there): one home for the DMN reads
-        until episodic prompt-context is folded onto the spine as a service."""
-        try:
-            return DmnConfig.recent_salient_user_episodes()
-        except Exception as exc:  # noqa: BLE001 — a reflection-context read must not crash the turn
-            logger.debug("[PromptService] dmn episodes read failed: %s", exc)
-            return ""
 
     # ── formatting helpers ───────────────────────────────────────────────────
 

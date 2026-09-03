@@ -14,7 +14,10 @@
 set -euo pipefail
 
 CHALIE_HOME="$HOME/.chalie"
-CHALIE_BIN="$HOME/.local/bin"
+# Where uv and the bundled Deno sandbox runtime live. run.sh puts this on the
+# backend's PATH, which is how `shutil.which("deno")` finds it at runtime — so
+# this stays under $HOME regardless of where the user-facing CLI goes.
+CHALIE_RUNTIME_BIN="$HOME/.local/bin"
 CHALIE_REPO="chalie-ai/chalie"
 GITHUB_API="https://api.github.com/repos/$CHALIE_REPO/releases/latest"
 
@@ -93,6 +96,25 @@ _detect_linux_distro() {
     echo "${ID_LIKE:-$ID}"
   else
     echo "unknown"
+  fi
+}
+
+# Where the user-facing `chalie` command goes.
+#
+# Linux: /usr/local/bin, which PAM puts on PATH for every session from
+# /etc/environment — login or not, bash or zsh or fish. No shell startup file
+# needs editing, so the command works in the shell that ran the installer. It
+# costs no new privilege either: _install_build_deps already requires root on
+# every Linux run.
+#
+# macOS: a macOS install needs root nowhere else (build deps are skipped and
+# Playwright installs unprivileged), so writing to /usr/local/bin would add a
+# sudo prompt for one file. Keep the CLI under $HOME and add a profile line.
+_cli_bin_dir() {
+  if [[ "$(_detect_os)" == "linux" ]]; then
+    echo "/usr/local/bin"
+  else
+    echo "$HOME/.local/bin"
   fi
 }
 
@@ -175,7 +197,18 @@ _install_build_deps() {
       _run_privileged dnf install -y gcc gcc-c++ make libffi-devel sqlite-devel gettext curl unzip
       ;;
     *)
-      _warn "Unknown distro '$distro' — assuming build tools are present"
+      # Refuse rather than continue. Carrying on installs a Chalie whose browser
+      # cannot launch (Chromium's system libraries are never installed) while the
+      # installer still reports success — a broken instance that looks healthy.
+      # A clear refusal is the honest outcome for a platform we do not support.
+      _error "Unsupported Linux distribution: '$distro'"
+      _error ""
+      _error "Chalie supports Debian/Ubuntu (apt) and Fedora/RHEL/CentOS (dnf)."
+      _error "Installing here would leave the browser unable to start, so the"
+      _error "installer stops instead of producing a half-working instance."
+      _error ""
+      _error "Docker works on any distribution: https://chalie.ai/guide/installation"
+      exit 1
       ;;
   esac
   _ok "Build dependencies ready"
@@ -341,17 +374,13 @@ _install_playwright() {
         # Ubuntu 24.04's t64 transition) that a hand-listed set would miss.
         _run_privileged "$pw" install --with-deps chromium
         ;;
-      *fedora*|*rhel*|*centos*)
+      # No fallback branch: _install_build_deps already refused anything that is
+      # not apt or dnf, so by here the distro is one of these two.
+      *)
         _run_privileged dnf install -y \
           nss nspr atk at-spi2-atk at-spi2-core cups-libs libdrm libxkbcommon \
           libXcomposite libXdamage libXrandr libXext libXfixes libX11 libxcb \
           mesa-libgbm pango cairo alsa-lib
-        "$pw" install chromium
-        ;;
-      *)
-        # Unhandled distro: fetch the browser; its system libraries are the
-        # user's responsibility (same class as the build-deps unknown-distro case).
-        _warn "Unknown distro '$distro' — installing Chromium without system libraries"
         "$pw" install chromium
         ;;
     esac
@@ -391,7 +420,7 @@ _download_voice_models() {
 # ─── Deno (code_agent sandbox runtime) ──────────────────────────────────────
 _install_deno() {
   _section "Deno Sandbox Runtime"
-  local deno_bin="$CHALIE_BIN/deno"
+  local deno_bin="$CHALIE_RUNTIME_BIN/deno"
   if [[ -x "$deno_bin" ]] && "$deno_bin" --version >/dev/null 2>&1; then
     _ok "Deno already installed ($("$deno_bin" --version | head -1))"
     return 0
@@ -413,7 +442,7 @@ _install_deno() {
   esac
   url="https://github.com/denoland/deno/releases/latest/download/$archive"
 
-  mkdir -p "$CHALIE_BIN"
+  mkdir -p "$CHALIE_RUNTIME_BIN"
   tmpdir="$(mktemp -d)"
   _info "Downloading Deno ($os/$arch)…"
   if ! curl -fsSL "$url" -o "$tmpdir/deno.zip"; then
@@ -437,9 +466,11 @@ _install_deno() {
 # ─── Install CLI Wrapper ─────────────────────────────────────────────────────
 _install_cli() {
   _section "CLI Wrapper"
-  mkdir -p "$CHALIE_BIN"
+  local cli_dir tmp_cli
+  cli_dir="$(_cli_bin_dir)"
+  tmp_cli="$(mktemp)"
 
-  cat > "$CHALIE_BIN/chalie" <<'CHALIE_CLI'
+  cat > "$tmp_cli" <<'CHALIE_CLI'
 #!/usr/bin/env bash
 CHALIE_HOME="${CHALIE_HOME:-$HOME/.chalie}"
 PID_FILE="$CHALIE_HOME/chalie.pid"
@@ -476,23 +507,50 @@ case "$_cmd" in
   start)
     _is_running && echo "Chalie is already running (PID $(cat "$PID_FILE"))" && exit 0
     mkdir -p "$DATA_DIR"
-    CHALIE_VENV="$CHALIE_HOME/venv" \
+    rm -f "$PID_FILE"
+    CHALIE_VENV="$CHALIE_HOME/venv" CHALIE_PID_FILE="$PID_FILE" \
       bash "$CHALIE_HOME/app/run.sh" --port="$_port" --host="$_host" \
       >> "$LOG_FILE" 2>&1 &
-    echo $! > "$PID_FILE"
+    # run.sh writes the backend's pid once Python is launched. Wait for it so
+    # `status` and `stop` are never blind to a backend that is already live.
+    _waited=0
+    while [[ ! -s "$PID_FILE" ]] && [[ "$_waited" -lt 300 ]]; do
+      sleep 0.1
+      _waited=$((_waited + 1))
+    done
+    if [[ ! -s "$PID_FILE" ]]; then
+      echo "Chalie failed to start — see $LOG_FILE" >&2
+      exit 1
+    fi
     echo "Chalie started → http://localhost:$_port"
     ;;
   stop)
-    _is_running || { echo "Chalie is not running"; exit 0; }
-    kill "$(cat "$PID_FILE")" && rm -f "$PID_FILE" && echo "Chalie stopped"
+    _is_running || { rm -f "$PID_FILE"; echo "Chalie is not running"; exit 0; }
+    _pid="$(cat "$PID_FILE")"
+    # SIGINT is the same signal Ctrl+C sends; the backend handles it and shuts
+    # its services down cleanly.
+    kill -INT "$_pid" 2>/dev/null || true
+    # Never clear the pidfile while the process is still alive — doing so hides
+    # a running Chalie and lets the next `start` boot a second one on the same
+    # database.
+    _waited=0
+    while kill -0 "$_pid" 2>/dev/null && [[ "$_waited" -lt 300 ]]; do
+      sleep 0.1
+      _waited=$((_waited + 1))
+    done
+    if kill -0 "$_pid" 2>/dev/null; then
+      echo "Chalie (PID $_pid) did not stop within 30s — still running" >&2
+      exit 1
+    fi
+    rm -f "$PID_FILE"
+    echo "Chalie stopped"
     ;;
   restart)
-    "$0" stop
-    sleep 1
+    "$0" stop || exit 1
     "$0" --port="$_port" --host="$_host"
     ;;
   update)
-    "$0" stop
+    "$0" stop || exit 1
     curl -fsSL https://chalie.ai/install | bash
     "$0" --port="$_port" --host="$_host"
     ;;
@@ -540,26 +598,53 @@ case "$_cmd" in
 esac
 CHALIE_CLI
 
-  chmod +x "$CHALIE_BIN/chalie"
-  _ok "CLI installed at $CHALIE_BIN/chalie"
+  if [[ "$(_detect_os)" == "linux" ]]; then
+    # _run_privileged is a no-op when already root, so this adds no prompt to
+    # root installs (Docker build, CI) and reuses the sudo the build-deps step
+    # has already required of everyone else. -D creates the target directory on
+    # the rare minimal image that ships without one.
+    _run_privileged install -D -m 0755 "$tmp_cli" "$cli_dir/chalie"
+  else
+    mkdir -p "$cli_dir"
+    install -m 0755 "$tmp_cli" "$cli_dir/chalie"
+  fi
+  rm -f "$tmp_cli"
+  _ok "CLI installed at $cli_dir/chalie"
 
-  # Ensure ~/.local/bin is in PATH
-  local path_line='export PATH="$HOME/.local/bin:$PATH"'
-  local added_path=false
+  # Installs made before the CLI moved left a wrapper in ~/.local/bin — and
+  # those same installs prepended that directory to PATH, so the stale copy
+  # would shadow the one just written. Drop the installer's own dead artifact.
+  if [[ "$cli_dir" != "$CHALIE_RUNTIME_BIN" && -f "$CHALIE_RUNTIME_BIN/chalie" ]]; then
+    rm -f "$CHALIE_RUNTIME_BIN/chalie"
+    _info "Removed the superseded CLI at $CHALIE_RUNTIME_BIN/chalie"
+  fi
 
-  if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
-    for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
-      if [[ -f "$rc" ]]; then
-        if ! grep -qF '.local/bin' "$rc" 2>/dev/null; then
-          printf '\n# Added by Chalie installer\n%s\n' "$path_line" >> "$rc"
-          added_path=true
-        fi
-      fi
-    done
-    if [[ "$added_path" == "true" ]]; then
-      _info "Added ~/.local/bin to PATH in shell config"
-      _warn "Run 'source ~/.bashrc' (or open a new terminal) to use the chalie command"
-    fi
+  _ensure_cli_on_path
+}
+
+# On Linux the CLI lands in /usr/local/bin, which is already on PATH for every
+# session — nothing to do. Only the macOS install, which keeps the CLI under
+# $HOME, needs a line in the user's shell profile.
+_ensure_cli_on_path() {
+  [[ "$(_detect_os)" == "linux" ]] && return 0
+
+  local rc
+  case "$(basename "${SHELL:-/bin/zsh}")" in
+    zsh)  rc="$HOME/.zshrc" ;;
+    bash) rc="$HOME/.bash_profile" ;;  # macOS terminals run login shells
+    *)
+      _warn "Add $(_cli_bin_dir) to PATH in your shell profile to use the chalie command"
+      return 0
+      ;;
+  esac
+
+  # Guard on the file's contents, not on $PATH: _ensure_uv exports
+  # ~/.local/bin into this process before we get here, so a $PATH test would
+  # always see the directory present and never write the line.
+  if ! grep -qF '.local/bin' "$rc" 2>/dev/null; then
+    printf '\n# Added by Chalie installer\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$rc"
+    _info "Added ~/.local/bin to PATH in $rc"
+    _warn "Open a new terminal (or run 'source $rc') to use the chalie command"
   fi
 }
 
@@ -616,7 +701,7 @@ main() {
     read -r -p "  Start Chalie now? [Y/n] " _start_reply
     printf "\n"
     if [[ "${_start_reply,,}" != "n" ]]; then
-      "$CHALIE_BIN/chalie" start
+      "$(_cli_bin_dir)/chalie" start
     fi
   fi
 }

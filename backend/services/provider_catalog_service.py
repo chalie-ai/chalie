@@ -1,57 +1,30 @@
-"""Curated provider catalog — presets for the reactive provider-setup wizard.
+"""Provider catalog — the setup wizard's list of platforms, derived from the registry.
 
-Each preset maps a popular AI provider onto one of Chalie's five existing
-platforms (``ollama`` / ``openai`` / ``anthropic`` / ``gemini`` / ``openai_compatible`` /
-``codex_cli``) plus its base URL, so the wizard can pre-fill the host and
-reuse the live model-fetch path (``POST /api/providers/list-models``) unchanged.
+Every entry is a real Chalie platform, and the provider is created through the
+ordinary create path with no catalog special-casing. Nothing is listed here by
+hand: the name, the pre-filled host and whether a key or a host is required are
+read off each client class, so a preset cannot describe a provider differently
+from the client that will serve it.
 
-A preset is NEVER a runtime platform of its own — ``platform`` is always a real
-Chalie platform, and the provider is created through the ordinary create path
-with no catalog special-casing. That is why this module is a plain in-process
-constant: no file I/O, no path resolution.
+Adding a provider is a new module plus a line in
+``services.llm_clients.registry`` — this file needs no edit.
 """
 
 from __future__ import annotations
 
-CURATED_PROVIDERS: list[dict[str, object]] = [
-    {"id": "ollama", "name": "Ollama (local)", "platform": "ollama",
-     "host": "http://localhost:11434", "needs_key": False},
-    {"id": "openai", "name": "OpenAI", "platform": "openai",
-     "host": "", "needs_key": True},
-    {"id": "anthropic", "name": "Anthropic", "platform": "anthropic",
-     "host": "", "needs_key": True},
-    {"id": "gemini", "name": "Google Gemini", "platform": "gemini",
-     "host": "", "needs_key": True},
-    {"id": "deepseek", "name": "DeepSeek", "platform": "openai_compatible",
-     "host": "https://api.deepseek.com", "needs_key": True},
-    {"id": "xai", "name": "xAI (Grok)", "platform": "openai_compatible",
-     "host": "https://api.x.ai/v1", "needs_key": True},
-    {"id": "mistral", "name": "Mistral", "platform": "openai_compatible",
-     "host": "https://api.mistral.ai/v1", "needs_key": True},
-    {"id": "groq", "name": "Groq", "platform": "openai_compatible",
-     "host": "https://api.groq.com/openai/v1", "needs_key": True},
-    {"id": "openrouter", "name": "OpenRouter", "platform": "openai_compatible",
-     "host": "https://openrouter.ai/api/v1", "needs_key": True},
-    {"id": "nvidia", "name": "NVIDIA", "platform": "openai_compatible",
-     "host": "https://integrate.api.nvidia.com/v1", "needs_key": True},
-    {"id": "minimax", "name": "MiniMax", "platform": "openai_compatible",
-     "host": "https://api.minimax.io/v1", "needs_key": True},
-    {"id": "moonshot", "name": "Moonshot (Kimi)", "platform": "openai_compatible",
-     "host": "https://api.moonshot.ai/v1", "needs_key": True},
-    {"id": "fireworks", "name": "Fireworks AI", "platform": "openai_compatible",
-     "host": "https://api.fireworks.ai/inference/v1", "needs_key": True},
-    {"id": "zhipu", "name": "Zhipu (GLM)", "platform": "openai_compatible",
-     "host": "https://open.bigmodel.cn/api/paas/v4", "needs_key": True},
-    {"id": "alibaba", "name": "Alibaba (Qwen)", "platform": "openai_compatible",
-     "host": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", "needs_key": True},
-    {"id": "novita", "name": "Novita AI", "platform": "openai_compatible",
-     "host": "https://api.novita.ai/openai", "needs_key": True},
-    {"id": "baseten", "name": "Baseten", "platform": "openai_compatible",
-     "host": "https://inference.baseten.co/v1", "needs_key": True},
-    {"id": "codex_cli", "name": "Codex CLI (OpenAI)", "platform": "codex_cli",
-     "host": "", "needs_key": False},
-]
+from services.llm_clients.registry import PROVIDER_CLASSES
 
 
 def get_catalog() -> list[dict[str, object]]:
-    return CURATED_PROVIDERS
+    """The platforms offered during provider setup, in registry order."""
+    return [
+        {
+            "id": client.PLATFORM,
+            "name": client.LABEL,
+            "platform": client.PLATFORM,
+            "host": client.DEFAULT_BASE_URL,
+            "needs_key": client.REQUIRES_KEY,
+            "needs_host": client.REQUIRES_HOST,
+        }
+        for client in PROVIDER_CLASSES
+    ]

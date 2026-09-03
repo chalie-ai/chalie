@@ -21,9 +21,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, ClassVar
 
 from abilities.browser import BrowserAbility
-from abilities.memory import MemoryAbility
+from abilities.recall import Recall
 from abilities.read import ReadAbility
 from abilities.vision import VisionAbility
+from abilities.web_fetch import WebFetchAbility
 
 from configs.enums.channels import Channel
 from services.processor_config import ProcessorConfig
@@ -31,7 +32,12 @@ from services.processor_config import ProcessorConfig
 if TYPE_CHECKING:
     from configs.enums.policy_channel import PolicyChannel
 
-_WEB_BROWSE_TOOLS: tuple[str, ...] = (BrowserAbility.NAME, ReadAbility.NAME, VisionAbility.NAME)
+_WEB_BROWSE_TOOLS: tuple[str, ...] = (
+    BrowserAbility.NAME,
+    WebFetchAbility.NAME,
+    ReadAbility.NAME,
+    VisionAbility.NAME,
+)
 
 
 class WebBrowseConfig(ProcessorConfig):
@@ -45,11 +51,10 @@ class WebBrowseConfig(ProcessorConfig):
             channel=Channel.DELEGATE_WEB_BROWSE.value,
             role="web_browse",
             policy_channel=policy_channel,
-            always_available=[*_WEB_BROWSE_TOOLS, MemoryAbility.NAME],
+            always_available=[*_WEB_BROWSE_TOOLS, Recall.NAME],
             skip_transcript=False,  # uid + own transcript row, or the
             skip_input_row=False,   # act-trail dies and the loop runs blind
             suppress_history=True,
-            broadcast_to=None,
             memory_seed=False,
         )
 

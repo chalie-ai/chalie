@@ -13,22 +13,21 @@ from .response import Response
 
 
 class McpServer(Response):
-    """Read shape for an outbound MCP server. ``headers`` is write-only — never returned."""
+    """Read shape for an outbound MCP server. ``headers`` is write-only — never
+    returned; ``connected`` is a process-memory flag, not a column."""
 
     id: str
     name: str
     host: str
     enabled: bool
-    status: str
-    last_pinged_at: datetime | None
+    connected: bool
     created_at: datetime
     updated_at: datetime
 
 
 class McpTestResult(Response):
-    """Result of pinging+syncing one server (status, tool_count, reachable, error)."""
+    """Result of pinging+syncing one server (connected, tool_count, error)."""
 
-    status: str
+    connected: bool
     tool_count: int
-    reachable: bool
     error: str | None

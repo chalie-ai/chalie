@@ -61,8 +61,9 @@ class TestGeminiToolCallIds:
             )
 
         tool_calls: list[dict[str, object]] = []
-        _gemini_accumulate_part(make_part('find_tools'), [], tool_calls)
-        _gemini_accumulate_part(make_part('find_tools'), [], tool_calls)
+        thinking_parts: list[str] = []
+        _gemini_accumulate_part(make_part('find_tools'), [], tool_calls, thinking_parts)
+        _gemini_accumulate_part(make_part('find_tools'), [], tool_calls, thinking_parts)
 
         ids = [tc['id'] for tc in tool_calls]
         assert len(set(ids)) == len(ids), f"colliding gemini ids: {ids}"

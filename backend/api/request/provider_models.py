@@ -6,8 +6,15 @@ from .request import Request
 
 
 class ListModelsRequest(Request):
-    """Inbound body for POST /api/providers/list-models."""
+    """Inbound body for POST /api/providers/list-models.
 
+    ``provider_id`` names a stored provider whose host and credential fill in
+    whatever this body leaves blank, so the edit form can refresh its model list
+    without first pulling the secret into the browser. Inline values still win —
+    listing models for an edit-in-progress is the whole point.
+    """
+
+    provider_id: int | None = None
     platform: str
     host: str | None = None
     api_key: str | None = None

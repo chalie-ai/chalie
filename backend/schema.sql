@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS episodes (
     last_relevant_at TEXT,                     -- timestamp of the last write-relevant event; drives absolute decay (backfilled on boot)
     tombstoned_at TEXT,                        -- set when an episode is tombstoned ahead of hard deletion (NULL = live)
     facts_extracted_at TEXT,                   -- fact-extraction backlog cursor; NULL = not yet processed by the worker
-    search_queries    TEXT DEFAULT NULL        -- doc2query keyword variants (JSON); NULL = not yet indexed by SearchExpanderService
+    indexed_at        TEXT DEFAULT NULL        -- when SearchExpanderService posted this row into episodes_fts; NULL = never indexed
 );
 
 CREATE INDEX IF NOT EXISTS idx_episodes_channel ON episodes(channel) WHERE deleted_at IS NULL;
@@ -50,7 +50,7 @@ CREATE INDEX IF NOT EXISTS idx_episodes_apex ON episodes(retrieval_weight DESC, 
 -- all fts5 tables — each table binds to its own source table by name. Not a
 -- copy-paste error; SQLite FTS5 requires these per-table parameters.
 CREATE VIRTUAL TABLE IF NOT EXISTS episodes_fts USING fts5(
-    gist, search_queries, content='episodes', content_rowid='rowid'
+    gist, content='episodes', content_rowid='rowid'
 );
 
 -- cortex_iterations removed — CortexIterationService not wired into runtime.
@@ -256,6 +256,23 @@ CREATE INDEX IF NOT EXISTS idx_list_items_active ON list_items(list_id) WHERE re
 -- documents, watched_folders, transcript_docs, documents_fts, documents_vec.
 
 -- ────────────────────────────────────────────────────────────────
+-- EMAILS_SENT — ledger of outgoing messages sent via SMTP
+-- Each row is a Message-ID stamped by ImapHandler.send_email (see
+-- imap_handler.py); the value column holds the send timestamp
+-- (UTC, filled by the column default). Cross-checking this table
+-- against newly-fetched INBOX rows lets Chalie recognise its own
+-- echoed send-backs as its own replies rather than fresh incoming
+-- mail — the connected mailbox IS Chalie's address, so sends ring
+-- back into INBOX untouched. Schema convergence creates this at
+-- boot; no migration required.
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS emails_sent (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    key TEXT UNIQUE NOT NULL,
+    value TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- ────────────────────────────────────────────────────────────────
 -- SCHEMA VERSION
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -269,23 +286,6 @@ INSERT OR IGNORE INTO schema_version (version) VALUES (1);
 -- the live DB to the shape this file declares.  One-time DATA migrations are
 -- tracked separately: migrations/runner.py records each step in the
 -- schema_migrations table declared at the end of this file.
-
--- ────────────────────────────────────────────────────────────────
--- CONCEPT LUT MISSES — keys that didn't match the concept LUT
--- Rows accumulate as the LUT is encountered at runtime; used to
--- identify canonical key candidates for future LUT expansion.
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS concept_lut_misses (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    kind       TEXT NOT NULL,
-    key        TEXT NOT NULL,
-    value_preview TEXT,
-    count      INTEGER NOT NULL DEFAULT 1,
-    first_seen TEXT NOT NULL,
-    last_seen  TEXT NOT NULL,
-    UNIQUE(kind, key)
-);
-CREATE INDEX IF NOT EXISTS idx_lut_misses_kind ON concept_lut_misses(kind, count DESC);
 
 -- ────────────────────────────────────────────────────────────────
 -- WORLD STATE VECTOR TABLES — salience-based retrieval
@@ -335,6 +335,7 @@ CREATE TABLE IF NOT EXISTS llm_call_log (
     type TEXT NOT NULL DEFAULT 'background',
     provider TEXT NOT NULL,
     model TEXT NOT NULL,
+    channel TEXT,
     tokens_input INTEGER NOT NULL DEFAULT 0,
     tokens_output INTEGER NOT NULL DEFAULT 0,
     tokens_cache_read INTEGER NOT NULL DEFAULT 0,
@@ -352,40 +353,15 @@ CREATE TABLE IF NOT EXISTS llm_call_log (
 -- unconstrained. One index on the always-present predicate covers both.
 CREATE INDEX IF NOT EXISTS idx_llm_call_log_created
     ON llm_call_log (created_at);
-
--- ────────────────────────────────────────────────────────────────
--- MEMORY RECALL LOG — telemetry for the per-lane retrieval pipeline
--- One row per memory recall call (seed or llm-driven). Written after
--- episode recall returns. The legacy radius-tuning columns were removed
--- in favour of the per-lane relative-floor telemetry below.
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS memory_recall_log (
-    id                       INTEGER PRIMARY KEY AUTOINCREMENT,
-    created_at               TEXT NOT NULL DEFAULT (datetime('now')),
-    turn_uid                 TEXT NOT NULL,
-    transcript_id            INTEGER,
-    channel                  TEXT NOT NULL,
-    caller                   TEXT NOT NULL CHECK(caller IN ('seed', 'llm_recall')),
-    query                    TEXT NOT NULL,
-    query_embedding_hash     TEXT NOT NULL,
-    episode_count            INTEGER NOT NULL DEFAULT 0,
-    floor_cut_count          INTEGER NOT NULL DEFAULT 0,  -- candidates dropped by the per-lane relative score floor
-    final_rrf_count          INTEGER NOT NULL DEFAULT 0,  -- results surfaced after composite rerank
-    top_distances            TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_memory_recall_log_turn
-    ON memory_recall_log (turn_uid, id);
-CREATE INDEX IF NOT EXISTS idx_memory_recall_log_caller
-    ON memory_recall_log (caller, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_llm_call_log_channel
+    ON llm_call_log (channel, id);
 
 -- ────────────────────────────────────────────────────────────────
 -- MCP_CLIENT_SERVERS — outbound MCP client connections
 --
 -- Chalie connects OUT to remote MCP servers (inverse of the inbound
--- MCP server in mcp_server/server.py, which uses wrapper_tokens for
--- auth).  Each row represents one configured remote server.
--- status:  'unknown' | 'online' | 'offline'  — updated by heartbeat.
+-- MCP server in mcp_server/server.py).  Each row represents one
+-- configured remote server.
 -- headers: JSON object of extra HTTP headers (e.g. Authorization).
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS mcp_client_servers (
@@ -394,8 +370,6 @@ CREATE TABLE IF NOT EXISTS mcp_client_servers (
     host          TEXT NOT NULL,
     headers       TEXT NOT NULL DEFAULT '{}',
     enabled       INTEGER NOT NULL DEFAULT 1,
-    status        TEXT NOT NULL DEFAULT 'unknown',
-    last_pinged_at TEXT,
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL
 );
@@ -500,6 +474,16 @@ CREATE TABLE IF NOT EXISTS compactions (
 );
 CREATE INDEX IF NOT EXISTS ix_compactions_scope ON compactions(channel, for_turn_id, id);
 
+-- ────────────────────────────────────────────────────────────────
+-- USER SYNTHESIS — versioned append-only user profile summary
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS user_synthesis (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    version    INTEGER NOT NULL,
+    content    TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 
 -- ────────────────────────────────────────────────────────────────
 -- TRANSCRIPT FILES — filepath-keyed attachment link.
@@ -520,6 +504,20 @@ CREATE TABLE IF NOT EXISTS voice_transcript (
     file_path     TEXT,
     PRIMARY KEY (transcript_id)
 );
+
+-- ────────────────────────────────────────────────────────────────
+-- TRANSCRIPT THINKING — chain-of-thought traces per transcript anchor
+-- Multiple rows per transcript_id are expected (one per thinking pass).
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS transcript_thinking (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    transcript_id INTEGER NOT NULL REFERENCES transcript(id) ON DELETE CASCADE,
+    thinking_trace TEXT NOT NULL,
+    duration_ms   INTEGER NOT NULL,
+    tokens        INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_transcript_thinking_transcript ON transcript_thinking(transcript_id);
 
 -- ────────────────────────────────────────────────────────────────
 -- TURN EXECUTIONS — DB-backed lifecycle of one MessageProcessor turn.
@@ -557,8 +555,9 @@ CREATE INDEX IF NOT EXISTS idx_turn_executions_open
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS data_graph (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
-    -- CHECK constraint removed: Python validates kind via VALID_KINDS in data_graph_service.py.
-    -- To be restored when SchemaConvergence handles constraint changes (v0.5.0 TODO).
+    -- CHECK constraint removed: Python validates kind via the vertical models'
+    -- KIND ClassVars (models/data_graph.py). To be restored when
+    -- SchemaConvergence handles constraint changes (v0.5.0 TODO).
     kind              TEXT NOT NULL,
     key               TEXT NOT NULL,
     value             TEXT,
@@ -572,7 +571,7 @@ CREATE TABLE IF NOT EXISTS data_graph (
     source            TEXT,
     deleted_at        TEXT,
     active            INTEGER NOT NULL DEFAULT 1,
-    search_queries    TEXT DEFAULT NULL,
+    indexed_at        TEXT DEFAULT NULL,       -- when SearchExpanderService posted this row into data_graph_fts; NULL = never indexed
     valid_from        TEXT,                    -- bi-temporal start: when the fact became true (backfilled on boot)
     valid_to          TEXT                     -- bi-temporal end: when the fact was superseded (NULL = live fact)
 );
@@ -588,13 +587,55 @@ CREATE INDEX IF NOT EXISTS idx_data_graph_live         ON data_graph(kind) WHERE
 -- better recall on natural-language queries. content_rowid='rowid' is
 -- intentionally the same literal as in episodes_fts.
 CREATE VIRTUAL TABLE IF NOT EXISTS data_graph_fts USING fts5(
-    key, value, kind, search_queries,
+    key, value, kind,
     content='data_graph', content_rowid='rowid',
     tokenize='porter unicode61'
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS data_graph_key_vec   USING vec0(embedding float[768]);
 CREATE VIRTUAL TABLE IF NOT EXISTS data_graph_value_vec USING vec0(embedding float[768]);
+
+-- ────────────────────────────────────────────────────────────────
+-- MEMORY GRAPH — subject-keyed living facts (Memory v3)
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS memory_graph (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+    last_updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    subject           TEXT NOT NULL UNIQUE,
+    contents          TEXT NOT NULL,
+    sourced_from      TEXT NOT NULL DEFAULT '[]',
+    indexed_at        TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_graph_subject ON memory_graph(subject);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS memory_graph_fts USING fts5(
+    subject, content='memory_graph', content_rowid='rowid'
+);
+
+-- ────────────────────────────────────────────────────────────────
+-- MEMORY MAP — episodic lineage searched by situational cues (Memory v3)
+-- ────────────────────────────────────────────────────────────────
+-- `source` is the one-sentence origin of the episode, rendered on recall.
+-- `cues` is the comma-joined situational tag set — the ONLY indexed column,
+-- never rendered and never shown back to a model.
+CREATE TABLE IF NOT EXISTS memory_map (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    generated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    contents     TEXT NOT NULL,
+    source       TEXT NOT NULL DEFAULT '',
+    cues         TEXT NOT NULL DEFAULT '',
+    derived_from TEXT NOT NULL DEFAULT '[]',
+    sourced_from TEXT NOT NULL DEFAULT '[]',
+    iteration    INTEGER NOT NULL DEFAULT 1,
+    indexed_at   TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_map_iteration ON memory_map(iteration DESC);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS memory_map_cues_vec USING vec0(embedding float[768]);
 
 -- ────────────────────────────────────────────────────────────────
 -- DATA GRAPH EDGES — typed join table for graph traversal
@@ -612,40 +653,6 @@ CREATE TABLE IF NOT EXISTS data_graph_edges (
 
 CREATE INDEX IF NOT EXISTS idx_data_graph_edges_from ON data_graph_edges(from_id, edge_type);
 CREATE INDEX IF NOT EXISTS idx_data_graph_edges_to   ON data_graph_edges(to_id, edge_type);
-
--- ────────────────────────────────────────────────────────────────
--- EXPANDED SEMANTIC — variant query strings + embeddings for KNN recall
--- Populated by SearchExpanderService (search_expander_service.py) after
--- every knowledge / data_graph write. Each row is one doc2query variant
--- whose embedding lives in the companion vec0 table, keyed by this row's id.
--- Callers: data_graph_service.recall() joins
---          expanded_semantic_vec → expanded_semantic to surface variant hits.
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS expanded_semantic (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    relates_to_table TEXT NOT NULL,   -- 'data_graph'
-    related_to_id   INTEGER NOT NULL, -- rowid of the source row
-    str             TEXT NOT NULL     -- the variant query string
-);
-
-CREATE INDEX IF NOT EXISTS idx_expanded_semantic_lookup
-    ON expanded_semantic(relates_to_table, related_to_id);
-
--- One vec row per expanded_semantic row; rowid matches expanded_semantic.id.
-CREATE VIRTUAL TABLE IF NOT EXISTS expanded_semantic_vec USING vec0(embedding float[768]);
-
--- Cascade: DELETE data_graph row → purge its expanded_semantic rows.
-CREATE TRIGGER IF NOT EXISTS expanded_semantic_cascade_data_graph
-    AFTER DELETE ON data_graph BEGIN
-    DELETE FROM expanded_semantic
-        WHERE relates_to_table = 'data_graph' AND related_to_id = OLD.id;
-END;
-
--- Cascade: DELETE expanded_semantic row → purge its vec row.
-CREATE TRIGGER IF NOT EXISTS expanded_semantic_vec_sync
-    AFTER DELETE ON expanded_semantic BEGIN
-    DELETE FROM expanded_semantic_vec WHERE rowid = OLD.id;
-END;
 
 -- ============================================================================
 -- POLICY — per-action permission control (allow / ask / deny).
@@ -668,22 +675,6 @@ CREATE TABLE IF NOT EXISTS policy_blocked_log (
 );
 
 CREATE INDEX IF NOT EXISTS idx_policy_blocked_log_created ON policy_blocked_log(created_at DESC);
-
--- ============================================================================
--- TELEMETRY — flat key/value store for the latest client heartbeat.
--- ============================================================================
--- Populated by /health POST. The frontend (heartbeat.js) is the source of
--- truth for which keys are collected; the backend persists whatever is sent.
--- Nested payload keys are flattened with dots, e.g.
---   {"device": {"name": "iPhone"}}  →  key='device.name', value='iPhone'
--- One row per flattened key. Each push is a whole-snapshot SWAP (DELETE-all +
--- re-INSERT in one txn, owned by the Telemetry model), NOT a per-key upsert:
--- a key absent from the new payload disappears. WorldState renders by reading
--- the whole table and grouping by the top-level prefix.
-CREATE TABLE IF NOT EXISTS telemetry (
-    key   TEXT PRIMARY KEY,
-    value TEXT
-);
 
 -- ============================================================================
 -- SCHEMA MIGRATIONS — run-once ledger for the startup migration runner.

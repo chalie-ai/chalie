@@ -7,9 +7,10 @@ Rules (enforced by code review):
 - ALL locale-sensitive values (currency, language, location) MUST be
   read from this service — never directly from telemetry, settings, or env.
 
-The backing store is the ``telemetry`` table (populated by the frontend
-heartbeat via ClientContextService.save()). This service is the
-exclusive read interface for locale fields.
+The backing store is the telemetry JSON snapshot (``data/telemetry.json``,
+populated by the frontend heartbeat via ClientContextService.save() →
+TelemetryService). This service is the exclusive read interface for
+locale fields.
 """
 
 import logging
@@ -21,36 +22,26 @@ from services.time_utils import utc_now, parse_utc
 
 logger = logging.getLogger(__name__)
 
-_LOCALE_KEYS = frozenset({
-    "timezone", "locale", "language", "currency",
-    "location.lat", "location.lon", "location_name",
-})
-
-
 def _read_locale_fields() -> dict[str, object]:
-    """Extract locale-relevant fields from the telemetry cache.
+    """Extract locale-relevant fields from the telemetry snapshot.
 
     Returns a flat dict with keys like 'timezone', 'locale', 'location.lat'.
     Returns empty dict when no heartbeat has been received yet.
     """
     try:
-        from services.heartbeat_service import heartbeat_service
-        ctx = heartbeat_service.read()
-        if not ctx:
-            return {}
-        result: dict[str, object] = {}
-        for key in _LOCALE_KEYS:
-            parts = key.split(".")
-            value: object = ctx
-            for part in parts:
-                if isinstance(value, dict):
-                    value = value.get(part)
-                else:
-                    value = None
-                    break
-            if value is not None:
-                result[key] = value
-        return result
+        from services.telemetry_service import TelemetryService
+        telemetry = TelemetryService.read()
+        location = telemetry.location or {}
+        fields: dict[str, object] = {
+            "timezone": telemetry.timezone,
+            "locale": telemetry.locale,
+            "language": telemetry.language,
+            "currency": telemetry.currency,
+            "location.lat": location.get("lat"),
+            "location.lon": location.get("lon"),
+            "location_name": telemetry.location_name,
+        }
+        return {key: value for key, value in fields.items() if value is not None}
     except Exception:
         return {}
 
@@ -162,20 +153,6 @@ def format_date(dt: datetime | str | None, fmt: str = "%Y-%m-%d %H:%M", for_ui: 
     return dt.strftime(fmt)
 
 
-def to_utc(dt: datetime | str) -> datetime:
-    """Ensure a datetime is timezone-aware UTC.
-
-    Use this before ANY database write involving a timestamp.
-
-    Args:
-        dt: A datetime (naive or aware), or ISO string.
-
-    Returns:
-        Timezone-aware UTC datetime.
-    """
-    return parse_utc(dt)
-
-
 def to_local(dt: datetime | str) -> datetime:
     """Convert a datetime to the user's local timezone.
 
@@ -205,9 +182,9 @@ def parse_local(dt: datetime | str) -> datetime:
 
     Use for user/LLM-supplied wall-clock values (e.g. the scheduler "Start
     Time", which the World State surfaces in local time and which is never
-    timezone-converted upstream). This is the inverse intent of ``to_utc``,
-    which assumes a naive input is already UTC — here a naive input is assumed
-    to be in the user's timezone. Aware inputs are converted as-is.
+    timezone-converted upstream). This is the inverse of ``parse_utc`` in that
+    a naive input is assumed to be in the user's timezone rather than UTC.
+    Aware inputs are converted as-is.
 
     Args:
         dt: A naive local datetime, an aware datetime, or an ISO string.

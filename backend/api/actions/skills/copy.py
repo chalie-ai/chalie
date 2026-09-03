@@ -68,7 +68,7 @@ class SkillCopy(Action):
             return SkillResponse.failure(f"A user copy named '{copy_title}' already exists"), 409
 
         with Database.transaction(str(FileMapperService.get_skills_db_path())) as conn:
-            copy = SkillModel(
+            new_id = cast(int, SkillModel(
                 title=copy_title,
                 use_for=skill.use_for,
                 content=skill.content,
@@ -76,13 +76,16 @@ class SkillCopy(Action):
                 version=DEFAULT_VERSION,
                 source="user",
                 based_on=skill_id,
-            ).save()
-            new_id = cast(int, copy.id)
+            ).save().id)
 
             skill.enabled = 0
             skill.save()
 
             _index_new_skill(conn, new_id, copy_title, skill.use_for, tags)
+
+            # Re-read inside the transaction: enabled is a SQL default the saved
+            # instance never carries, and the row is still ours to read here.
+            copy = cast(SkillModel, SkillModel.get(new_id))
 
         ensure_user_skills_dir()
         write_skill_file(
@@ -100,17 +103,4 @@ class SkillCopy(Action):
             "[SKILLS API] Copied curated skill id=%d '%s' -> user skill id=%d '%s'",
             skill_id, base_title, new_id, copy_title,
         )
-        return self._to_response(copy).single(), 201
-
-    def _to_response(self, skill: SkillModel) -> SkillResponse:
-        return SkillResponse(
-            id=cast(int, skill.id),
-            title=skill.title,
-            use_for=skill.use_for,
-            content=skill.content,
-            tags=skill.tags or "",
-            version=skill.version,
-            source=skill.source,
-            enabled=bool(skill.enabled),
-            based_on=skill.based_on,
-        )
+        return SkillResponse.from_model(copy).single(), 201

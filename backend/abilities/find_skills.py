@@ -3,8 +3,7 @@
 Queries skills.sqlite through the discovery cascade in
 :class:`abilities._search.SearchableAbility`: a ``query`` array of intents,
 each run exact-title → bm25 on the title only (segment-gated) → vector on the
-full prose. Matching playbooks are returned with any personalisation rules
-derived from the user's behavioural patterns (written by SkillAssociationService).
+full prose.
 
 What it returns is shaped by what a skill IS — a playbook: the row carries the
 full ``content`` the model executes, not a tool activation.
@@ -12,8 +11,7 @@ full ``content`` the model executes, not a tool activation.
 Returns a sealed :class:`abilities._result.ToolResult` (never a wire envelope):
 
 * matches → a JSON list, one row per skill ``{"name": <title>, "content": <full
-  playbook content>, "rules": [{"pattern_name", "rule"}, …]}`` with ``meta
-  count=<n>``.
+  playbook content>}`` with ``meta count=<n>``.
 * zero hits against a HEALTHY index → ``err(code="no-results")`` with the
   broaden suggestion as ``hint`` — a loud miss, never a quiet zero-row success.
 * a missing/blank query → ``err(code="missing-params")`` naming ``query``.
@@ -36,7 +34,6 @@ from abilities._search import KNN_DEPTH, SearchableAbility
 from contracts.params.find_skills_params_bag import FindSkillsParamsBag
 from contracts.params.param_bag import ParamBag
 from models.skill import Skill
-from models.skill_association import SkillAssociation
 from services.file_mapper_service import FileMapperService
 
 logger = logging.getLogger(__name__)
@@ -170,14 +167,7 @@ class FindSkillsAbility(SearchableAbility):
         matches = [self._row(skill_id) for skill_id in ids]
         return ToolResult.ok(matches, count=len(matches))
 
-    def _row(self, skill_id: int) -> dict[str, object]:
-        title, content, rules = self._fetch_detail(skill_id)
-        return {"name": title, "content": content, "rules": rules}
-
-    def _fetch_detail(self, skill_id: int) -> tuple[str, str, list[dict[str, object]]]:
+    def _row(self, skill_id: int) -> dict[str, str]:
         skill = Skill.get(skill_id)
         title, content = (skill.title, skill.content) if skill is not None else ("", "")
-
-        rules = SkillAssociation.filter("skill_id", skill_id).select("pattern_name", "rule")
-
-        return title, content, rules
+        return {"name": title, "content": content}

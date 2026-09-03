@@ -9,21 +9,17 @@ pytestmark = pytest.mark.unit
 
 
 # ---------------------------------------------------------------------------
-# Test 1 — SavePattern / SaveGraph are real, registered Ability subclasses
+# Test 1 — SaveGraph is a real, registered Ability subclass
 # ---------------------------------------------------------------------------
 
 
-def test_save_pattern_save_graph_are_registered_abilities() -> None:
-    """SavePattern / SaveGraph are first-class Ability subclasses registered"""
+def test_save_graph_is_registered_ability() -> None:
+    """SaveGraph is a first-class Ability subclass registered"""
     from abilities.save_graph import SaveGraph
-    from abilities.save_pattern import SavePattern
 
-    assert issubclass(SavePattern, Ability)
     assert issubclass(SaveGraph, Ability)
 
     registry_names = {a.NAME for a in _reg_module.AbilityRegistry.all()}
-    assert "save_pattern" in registry_names
     assert "save_graph" in registry_names
 
-    assert isinstance(_reg_module.AbilityRegistry.get("save_pattern"), SavePattern)
     assert isinstance(_reg_module.AbilityRegistry.get("save_graph"), SaveGraph)

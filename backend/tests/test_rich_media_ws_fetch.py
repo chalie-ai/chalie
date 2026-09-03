@@ -6,9 +6,9 @@ This replaces the original recency-based lookup that had two known bugs:
 
   1. It filtered ``role='user'``, so subagent rows (``role='subagent'``) were
      silently invisible. Subagent weather calls produced orphan tags.
-  2. It raced the DMN daemon, which can write user-channel rows between ACT
-     completion and the WS emit, causing the recency lookup to point at the
-     wrong turn.
+  2. It raced concurrent background writes, which can land user-channel rows
+     between ACT completion and the WS emit, causing the recency lookup to
+     point at the wrong turn.
 
 These regression-sentinel tests assert that the function pairs tool_calls
 to *exact* transcript IDs regardless of channel/role, and doesn't drift
@@ -126,16 +126,16 @@ class TestFetchByTranscriptIds:
         )
         assert "<span id='weather_1'>" in cast(str, rows[0]["result"])
 
-    def test_concurrent_dmn_write_does_not_pollute_results(self, db: sqlite3.Connection) -> None:
-        """Regression sentinel against the DMN race. A concurrent user-channel
+    def test_concurrent_background_write_does_not_pollute_results(self, db: sqlite3.Connection) -> None:
+        """Regression sentinel against the concurrent-write race. A user-channel
         row written *after* the assistant turn must not appear in the result
         when the lookup is by ID.
         """
         ump_tid = _seed_transcript(db, "user", "user", "weather please")
         _seed_tool_call(db, ump_tid, 1)
-        # Simulate DMN writing a fresh user-channel row mid-emit.
-        dmn_tid = _seed_transcript(db, "user", "user", "dmn synthesis")
-        _seed_tool_call(db, dmn_tid, 99, "Mars, X1")
+        # Simulate a background loop writing a fresh user-channel row mid-emit.
+        bg_tid = _seed_transcript(db, "user", "user", "background synthesis")
+        _seed_tool_call(db, bg_tid, 99, "Mars, X1")
         db.commit()
 
         from services.segment_service import SegmentService
@@ -144,8 +144,8 @@ class TestFetchByTranscriptIds:
         assert len(rows) == 1
         assert "<span id='weather_1'>" in cast(str, rows[0]["result"])
         assert "Mars" not in cast(str, rows[0]["result"]), (
-            "DMN row leaked into the assistant turn — recency lookup has "
-            "been reintroduced."
+            "Concurrent row leaked into the assistant turn — recency lookup "
+            "has been reintroduced."
         )
 
     def test_empty_id_list_returns_empty(self) -> None:

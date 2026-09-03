@@ -1,10 +1,11 @@
 name: Install Verification
 
 # Runs the real installer end to end on a matrix of pristine distro containers
-# (see installer/verify/) and confirms dependencies resolve and — where a green
-# boot is the claim — that /ready reaches 200. Guards against installer
-# regressions and against upstream distro drift (a stock-Python bump, a wheel
-# disappearing) breaking the install experience.
+# (see installer/verify/), then proves the installed instance actually works:
+# /ready green, the interface served, Chromium driving a live page, a Kokoro →
+# Moonshine voice round trip, and Deno executing a script. A row passes only if
+# every one of those does. Guards the install experience against both our own
+# regressions and upstream drift (a stock-Python bump, a wheel disappearing).
 
 on:
   workflow_dispatch:
@@ -13,18 +14,14 @@ on:
         description: Branch ref to install (installer self-fetches this from GitHub)
         required: true
         default: main
-  pull_request:
-    paths:
-      - installer/**
-      - backend/pyproject.toml
-  schedule:
-    - cron: '0 6 * * 1'   # weekly, Monday 06:00 UTC — catches distro drift
+  push:
+    branches: [main]
 
 # The installer self-fetches refs/heads/<ref>.tar.gz from the repo, so the ref
-# under test must exist on this repo. Same-repo branches and dispatch inputs work;
-# a pull_request from a fork cannot be self-fetched and is skipped by that fact.
+# under test must exist on this repo — which is why this runs on merged main
+# rather than on a pull request head.
 env:
-  REF: ${{ github.event.inputs.ref || github.head_ref || 'main' }}
+  REF: ${{ github.event.inputs.ref || 'main' }}
 
 jobs:
   linux:
@@ -35,29 +32,26 @@ jobs:
       matrix:
         include:
           # Native arm64 runners for the arm64 rows, native amd64 for the amd64
-          # rows — no emulation, and fast enough for the /ready boots.
+          # rows — no emulation, so a failure is always the installer's.
           - { row: debian12,         runner: ubuntu-24.04-arm }
           - { row: ubuntu2404,       runner: ubuntu-24.04-arm }
           - { row: ubuntu2204,       runner: ubuntu-24.04-arm }
           - { row: fedora41,         runner: ubuntu-24.04-arm }
           - { row: fedora40,         runner: ubuntu-24.04-arm }
           - { row: alma9,            runner: ubuntu-24.04-arm }
-          - { row: opensuse-tw,      runner: ubuntu-24.04-arm }
-          - { row: alpine320,        runner: ubuntu-24.04-arm }
           - { row: debian12-amd64,   runner: ubuntu-latest }
           - { row: ubuntu2404-amd64, runner: ubuntu-latest }
-          - { row: arch,             runner: ubuntu-latest }
     timeout-minutes: 40
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Run install verification
         run: installer/verify/run-matrix.sh --branch "$REF" "${{ matrix.row }}"
 
       - name: Upload log
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: install-log-${{ matrix.row }}
           path: installer/verify/results/${{ matrix.row }}.log
@@ -72,7 +66,7 @@ jobs:
     timeout-minutes: 40
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Run install verification
         env:
@@ -80,7 +74,6 @@ jobs:
           INSTALLER_PATH: ${{ github.workspace }}/installer/install.sh
           ROW_NAME: macos-14
           ROW_EXPECT: pass
-          DO_BOOT: '1'
         run: |
           set -o pipefail
           bash installer/verify/verify-inside.sh 2>&1 | tee macos-14.log
@@ -89,13 +82,13 @@ jobs:
           verdict="$(grep -oE 'VERDICT=[A-Z-]+' macos-14.log | tail -1 | cut -d= -f2)"
           echo "verdict=$verdict"
           case "$verdict" in
-            PASS|REFUSED|GAP-CONFIRMED|UNEXPECTED-PASS|INCONCLUSIVE) ;;
+            PASS) ;;
             *) echo "macOS install verification failed (verdict=$verdict)"; exit 1 ;;
           esac
 
       - name: Upload log
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: install-log-macos-14
           path: macos-14.log

@@ -29,6 +29,7 @@ from enum import Enum
 class AbilityCategory(str, Enum):
     FILE_OPERATIONS     = "File Operations"
     WEB                 = "Web"
+    MEDIA               = "Media"
     INFORMATION         = "Information"
     PRODUCTIVITY        = "Productivity"
     SMART_HOME          = "Smart Home & Network"

@@ -32,11 +32,12 @@ from .actions.lists.items import ListItems
 from .actions.mcp_clients.discoverable import McpDiscoverable
 from .actions.mcp_clients.test import McpTest
 from .actions.mcp_clients.tools import McpTools
-from .actions.mcp_server.regenerate_token import RegenerateTokenAction
 from .actions.memory.search import MemorySearch
 from .actions.policies.blocked import BlockedAction
+from .actions.policies.pending import PendingAction
 from .actions.policies.reset import ResetAction
 from .actions.policies.respond import RespondAction
+from .actions.providers.api_key import ProviderApiKey
 from .actions.providers.catalog import ProviderCatalog
 from .actions.providers.delegate import ProviderDelegate
 from .actions.providers.list_models import ProviderListModels
@@ -45,7 +46,6 @@ from .actions.providers.test import ProviderTest
 from .actions.providers.vision import ProviderVision
 from .actions.scheduler.turns import SchedulerTurns
 from .actions.settings.personality import PersonalityAction
-from .actions.skills.associations import SkillAssociations
 from .actions.skills.copy import SkillCopy
 from .actions.skills.toggle import SkillToggle
 from .actions.snapshot.export import SnapshotExportAction
@@ -64,7 +64,6 @@ from .endpoints.policies import PoliciesEndpoint
 from .endpoints.providers import Providers
 from .endpoints.scheduler import Scheduler
 from .endpoints.skills import Skills
-from .endpoints.subagents import SubagentsEndpoint
 from .endpoints.threads import ThreadsEndpoint
 from .endpoints.wrappers import WrappersEndpoint
 
@@ -85,16 +84,17 @@ ROUTES: tuple[Endpoint, ...] = (
     McpTools("mcp-clients", "tools"),
 
     McpSettingsEndpoint("mcp-server"),
-    RegenerateTokenAction("mcp-server", "regenerate-token"),
 
     MemorySearch("memory", "search"),
 
     PoliciesEndpoint("policies"),
     BlockedAction("policies", "blocked"),
+    PendingAction("policies", "pending"),
     ResetAction("policies", "reset"),
     RespondAction("policies", "respond"),
 
     Providers("providers"),
+    ProviderApiKey("providers", "api-key"),
     ProviderCatalog("providers", "catalog"),
     ProviderDelegate("providers", "delegate"),
     ProviderListModels("providers", "list-models"),
@@ -108,14 +108,11 @@ ROUTES: tuple[Endpoint, ...] = (
     PersonalityAction("settings", "personality"),
 
     Skills("skills"),
-    SkillAssociations("skills", "associations"),
     SkillCopy("skills", "copy"),
     SkillToggle("skills", "toggle"),
 
     SnapshotExportAction("snapshot", "export"),
     SnapshotImportAction("snapshot", "import"),
-
-    SubagentsEndpoint("subagents"),
 
     ThreadsEndpoint("threads"),
     ThreadsBatch("threads", "batch"),

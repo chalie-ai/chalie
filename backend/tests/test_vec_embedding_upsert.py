@@ -15,7 +15,7 @@ import pytest
 from models.list import List
 from models.scheduled_item import ScheduledItem
 from services.embedding_utils import pack_embedding
-from services.episodic_service import EpisodicService
+
 
 pytestmark = pytest.mark.unit
 
@@ -40,27 +40,6 @@ def _blob(dim: int, hot: int) -> bytes:
     blob = pack_embedding(_emb(dim, hot))
     assert blob is not None
     return blob
-
-
-def test_update_episode_reembed_replaces_vector(db: sqlite3.Connection) -> None:
-    """The encoder's update-snapshot path (``update_id``) regenerates the
-    gist and its embedding — ``episodes_vec`` must serve the new vector."""
-    dim = _vec_dim(db, 'episodes_vec')
-    svc = EpisodicService()
-    episode_id = svc.store_episode(
-        {'gist': 'original gist', 'salience': 5, 'channel': 'programming'},
-        embedding=_emb(dim, 0),
-    )
-
-    svc.update_episode(episode_id, {'gist': 'rewritten gist'}, embedding=_emb(dim, 1))
-
-    rows = db.execute(
-        "SELECT v.embedding FROM episodes_vec v "
-        "JOIN episodes e ON e.rowid = v.rowid WHERE e.id = ?",
-        (episode_id,),
-    ).fetchall()
-    assert len(rows) == 1
-    assert rows[0][0] == _blob(dim, 1)
 
 
 def test_list_set_embedding_replaces_vector(db: sqlite3.Connection) -> None:

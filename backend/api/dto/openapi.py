@@ -6,11 +6,12 @@ models under ``$defs``; :func:`register_dto` lifts those into separately
 registered top-level definitions so every ``$ref`` resolves, then registers the
 DTO itself under its class name.
 
-Attach a registered model to a route with the one-liner the namespaces reuse::
+Attach a registered model to a route with the one-liner the namespaces reuse
+(``api/user_auth.py`` is the worked example)::
 
-    register_dto(api, ListItem, ListItemCreate)
-    @ns.response(200, "The item", model=api.models["ListItem"])
-    @ns.expect(api.models["ListItemCreate"])
+    register_dto(ns, AuthStatus, LoginRequest)
+    @ns.response(200, "Auth status", model=ns.models["AuthStatus"])
+    @ns.expect(ns.models["LoginRequest"])
 
 :func:`register_envelope` and :func:`register_error_envelope` build on the
 same bridge to document the response *envelope* (``{"success", "result",

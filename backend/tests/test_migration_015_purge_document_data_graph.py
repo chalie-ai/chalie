@@ -46,9 +46,9 @@ def _index_row(db: sqlite3.Connection, rowid: int, key: str, value: str, kind: s
     write-sync engine did: the external-content FTS posting plus one shadow
     row in each vec lane (keyed by the base rowid)."""
     db.execute(
-        "INSERT INTO data_graph_fts (rowid, key, value, kind, search_queries) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (rowid, key, value, kind, value.split()[0]),
+        "INSERT INTO data_graph_fts (rowid, key, value, kind) "
+        "VALUES (?, ?, ?, ?)",
+        (rowid, key, value, kind),
     )
     db.execute(
         "INSERT INTO data_graph_key_vec (rowid, embedding) VALUES (?, ?)",
@@ -62,9 +62,9 @@ def _index_row(db: sqlite3.Connection, rowid: int, key: str, value: str, kind: s
 
 def _insert(db: sqlite3.Connection, kind: str, key: str, value: str, source: str | None) -> int:
     cur = db.execute(
-        "INSERT INTO data_graph (kind, key, value, source, search_queries) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (kind, key, value, source, value.split()[0]),
+        "INSERT INTO data_graph (kind, key, value, source) "
+        "VALUES (?, ?, ?, ?)",
+        (kind, key, value, source),
     )
     assert cur.lastrowid is not None
     _index_row(db, cur.lastrowid, key, value, kind)

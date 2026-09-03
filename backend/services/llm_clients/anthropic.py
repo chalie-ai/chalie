@@ -13,14 +13,13 @@ it.  Confirmed via:
                     issubclass(e.RequestTooLargeError, anthropic.APIError))"
   → 413 True
 
-Depends on: services.provider_api (contract), services.llm_service (estimate_tokens,
-_app_user_agent, _resolve_api_key — utilities kept in llm_service during migration).
+Depends on: services.provider_api (contract), services.llm_service
+(_app_user_agent, _resolve_api_key — utilities kept in llm_service during migration).
 Consumed by: services.llm_clients.factory (platform dispatch).
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from collections.abc import Sequence
@@ -47,6 +46,7 @@ from exceptions import (
     ProviderTimeoutError,
     RateLimitError,
 )
+from services.llm_clients.context_window import DEFAULT_WINDOW
 from services.llm_clients.thinking_map import ANTHROPIC_NONE_THINKING, ANTHROPIC_THINKING_BUDGETS
 from services.provider_api import (
     ProviderApiRequest,
@@ -140,6 +140,20 @@ class AnthropicClient(ProviderClient):
     """Anthropic Claude API thin client."""
 
     CONTENT_FIELD_LABEL: ClassVar[str] = "content[].text"
+
+    PLATFORM: ClassVar[str] = 'anthropic'
+    LABEL: ClassVar[str] = 'Anthropic'
+    DEFAULT_BASE_URL: ClassVar[str] = ''   # the SDK already points at Anthropic
+    REQUIRES_KEY: ClassVar[bool] = True
+    REQUIRES_HOST: ClassVar[bool] = False
+
+    @classmethod
+    def fetch_models(
+        cls, host: str, api_key: str,
+    ) -> tuple[list[dict[str, str | None]] | None, str | None]:
+        """Anthropic publishes the list against the key; there is no host to give."""
+        from services.provider_probe import fetch_anthropic_models  # noqa: PLC0415
+        return fetch_anthropic_models(api_key)
 
     def __init__(self, config: dict[str, object]) -> None:
         """Initialise from provider config dict (platform, model, api_key)."""
@@ -271,33 +285,46 @@ class AnthropicClient(ProviderClient):
         )
 
     def get_context_limit(self) -> int | None:
-        """All Claude 3+ models support 200k context.
+        """The window Anthropic publishes for this model, measured once.
 
-        Anthropic publishes no per-model window endpoint, so the documented
-        figure is the measurement — not a fallback. Used only to seed
-        ``providers.context_window``; sends read that column.
+        ``GET /v1/models/{model_id}`` returns ``max_input_tokens`` — the model's
+        own maximum input context window. Read defensively: the field is newer
+        than some pinned SDK versions, which surface it as an untyped extra
+        rather than a declared attribute.
+
+        A refusal (unknown model, bad key, revoked access) still proves the API
+        answered, so it sizes at the default rather than blocking the provider.
+        Only an unreachable API yields None, leaving the column unset so the
+        next send re-probes.
         """
-        return 200_000
+        if hasattr(self, '_cached_context_limit'):
+            return self._cached_context_limit
 
-    def estimate_request_tokens(self, dto: ProviderApiRequest) -> int:
-        """Estimate the token cost of a request using a local heuristic.
+        import anthropic  # noqa: PLC0415
+        try:
+            info = self._get_client().models.retrieve(self.model)
+            window = getattr(info, 'max_input_tokens', None)
+            if not isinstance(window, int) or isinstance(window, bool) or window <= 0:
+                logger.warning(
+                    "[AnthropicClient] Model %s published no usable max_input_tokens "
+                    "— sizing at %d",
+                    self.model, DEFAULT_WINDOW,
+                )
+                window = DEFAULT_WINDOW
+        except anthropic.APIStatusError as exc:
+            logger.warning(
+                "[AnthropicClient] Model lookup for %s was refused with HTTP %s (%s) "
+                "— the API is up, so sizing it at %d",
+                self.model, exc.status_code, exc, DEFAULT_WINDOW,
+            )
+            window = DEFAULT_WINDOW
+        except Exception as exc:
+            logger.warning(
+                "[AnthropicClient] Model lookup for %s failed: %s "
+                "— leaving the window unset to re-probe on the next send",
+                self.model, exc,
+            )
+            window = None
 
-        Uses the same strategy as the pre-refactor _over_cap path: serialise
-        the request body and apply estimate_tokens() (no live API call).  This
-        matches the old behaviour — the old providers._over_cap called
-        build_request_body() + estimate_tokens(), never count_tokens().
-
-        The Anthropic count_tokens API (exact but a live round-trip) is NOT
-        called here.  That would double the number of API calls per ACT
-        iteration and introduce a new failure mode (rate-limit on count_tokens
-        before the main send).  Pre-flight over-cap checks only need a safe
-        heuristic, not an exact count.
-        """
-        from services.llm_service import estimate_tokens  # noqa: PLC0415
-        body = json.dumps({
-            'model': self.model,
-            'system': dto.system,
-            'messages': _anthropic_convert_messages(dto.messages),
-            **({'tools': dto.tools} if dto.tools else {}),
-        }, default=str)
-        return estimate_tokens(body)
+        self._cached_context_limit: int | None = window
+        return self._cached_context_limit

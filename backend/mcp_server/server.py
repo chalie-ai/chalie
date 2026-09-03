@@ -8,105 +8,47 @@
 
 """MCP server built on the SDK's ``MCPServer`` — single ``talk_to_chalie`` tool for external agents.
 
-Streamable HTTP on a dedicated port (default 8462). Bearer tokens validated by
-ASGI middleware against ``wrapper_tokens`` (same as the REST API).
+Streamable HTTP on a dedicated port (default 8462). The transport carries no
+authentication of its own: what an external agent may do is decided per tool
+by the external-agent policy channel. :class:`McpListener` owns the uvicorn
+lifecycle, so ``mcp_server_enabled`` and ``mcp_server_port`` take effect the
+moment they change — no backend restart.
 """
 
 import asyncio
-import contextvars
 import logging
 import re
-import sqlite3
+import socket
+import threading
+import time
 
 import uvicorn
 from mcp.server import MCPServer
 from starlette.applications import Starlette
-from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
-from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
 
 from configs.channels import EAMPConfig
 from exceptions import ProviderRetriesExhaustedError
-from services.database import Database
+from models.setting import Setting
 
 logger = logging.getLogger(__name__)
 
 _MCP_SERVER_NAME = "chalie"
 _DEFAULT_PORT = 8462
+_BIND_HOST = "0.0.0.0"
 _SAFE_NAME_RE = re.compile(r'^[A-Za-z0-9 _\-\.]{1,100}$')
-
-_current_wrapper_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
-    'mcp_current_wrapper_id', default=None
-)
-
-
-class BearerTokenMiddleware(BaseHTTPMiddleware):
-    """ASGI middleware that validates Bearer tokens against wrapper_tokens."""
-
-    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
-        auth_header = request.headers.get("authorization", "")
-        if not auth_header.startswith("Bearer "):
-            return JSONResponse(
-                {"error": "Missing or invalid Authorization header"},
-                status_code=401,
-            )
-
-        raw_token = auth_header[len("Bearer "):]
-        if not raw_token:
-            return JSONResponse(
-                {"error": "Empty bearer token"},
-                status_code=401,
-            )
-
-        wrapper_id = await asyncio.to_thread(self._validate_token, raw_token)
-        if wrapper_id is None:
-            return JSONResponse(
-                {"error": "Invalid or revoked token"},
-                status_code=401,
-            )
-
-        ctx_token = _current_wrapper_id.set(wrapper_id)
-        try:
-            response = await call_next(request)
-        finally:
-            _current_wrapper_id.reset(ctx_token)
-        return response
-
-    @staticmethod
-    def _validate_token(raw_token: str) -> str | None:
-        from services.wrapper_auth_service import _hash_token
-        from services.time_utils import utc_now
-
-        token_hash = _hash_token(raw_token)
-
-        with Database.transaction() as conn:
-            row = conn.execute(
-                "SELECT wrapper_id FROM wrapper_tokens "
-                "WHERE token_hash = ? AND revoked_at IS NULL",
-                (token_hash,),
-            ).fetchone()
-
-        if row is None:
-            return None
-
-        wrapper_id: str = row[0] if isinstance(row, (tuple, list)) else row["wrapper_id"]
-
-        now = utc_now().isoformat()
-        with Database.transaction() as conn:
-            conn.execute(
-                "UPDATE wrapper_tokens SET last_seen_at = ? WHERE wrapper_id = ?",
-                (now, wrapper_id),
-            )
-
-        return wrapper_id
+# Every wait is bounded so a wedged server can park neither the settings
+# endpoint nor the reconcile loop.
+_START_TIMEOUT_S = 10.0
+_STOP_TIMEOUT_S = 10.0
+_RECONCILE_INTERVAL_S = 5.0
 
 
 def create_mcp_server() -> MCPServer:
     """Create and configure the MCP server with the talk_to_chalie tool.
 
-    Bind host and port are not set here — the constructor no longer takes them
+    Bind host and port are not set here — the constructor does not take them
     (they are applied where they matter: ``host`` in ``_build_app`` and ``port``
-    by ``uvicorn.run`` in ``run_mcp_server``).
+    by :class:`McpListener`).
     """
     mcp = MCPServer(name=_MCP_SERVER_NAME)
 
@@ -139,10 +81,9 @@ def create_mcp_server() -> MCPServer:
 
         from controllers.message_processor import MessageProcessor  # noqa: PLC0415
 
-        wrapper_id = _current_wrapper_id.get()
         logger.info(
-            "[MCP] talk_to_chalie: agent=%s project=%s loop_in_human=%s wrapper=%s",
-            agent_name, project_or_task_name, loop_in_human, wrapper_id,
+            "[MCP] talk_to_chalie: agent=%s project=%s loop_in_human=%s",
+            agent_name, project_or_task_name, loop_in_human,
         )
 
 
@@ -164,68 +105,167 @@ def create_mcp_server() -> MCPServer:
 
 
 def _build_app(mcp: MCPServer) -> Starlette:
-    """Wrap the MCP Starlette app with bearer token auth middleware."""
+    """Build the streamable-HTTP ASGI app for one listener start.
+
+    The SDK's session manager runs once per instance, so every start builds a
+    fresh server and app instead of reusing the previous one.
+    """
     # host="0.0.0.0" is load-bearing, not cosmetic: the SDK auto-enables
-    # DNS-rebinding protection (localhost-only allowed_hosts) ONLY when host is a
-    # loopback address. Passing the real bind host keeps that protection OFF, so
-    # networked external agents can connect — the permissive transport 1.x always
-    # ran. Do not "simplify" this back to the default.
-    app = mcp.streamable_http_app(host="0.0.0.0")
-    app.add_middleware(BearerTokenMiddleware)
+    # DNS-rebinding protection (allowed_hosts locked to 127.0.0.1/localhost/[::1])
+    # ONLY when this host is a loopback address. Passing the real bind host keeps
+    # that protection OFF, so networked external agents can connect — the
+    # permissive transport 1.x always ran. Do not "simplify" this back to the
+    # default 127.0.0.1.
+    app: Starlette = mcp.streamable_http_app(host=_BIND_HOST)
     return app
 
 
-def run_mcp_server() -> None:
-    """Run the MCP server (blocking). Intended as a WorkerManager service."""
-    from models.setting import Setting
+class McpListener:
+    """Owns the inbound MCP server's lifecycle.
 
-    enabled = Setting.get_value("mcp_server_enabled")
-    if enabled is not None and str(enabled).lower() in ("false", "0", "no"):
-        logger.info("[MCP] Server disabled via settings (mcp_server_enabled=false)")
-        return
+    Desired state lives in the ``settings`` table (``mcp_server_enabled``,
+    ``mcp_server_port``); :meth:`reconcile` reads it and starts, stops, or
+    moves the uvicorn server until the live listener matches. Every caller —
+    the settings endpoint right after a write, the worker loop on its tick —
+    goes through one lock, so two reconciles never race each other.
+    """
 
-    port_setting = Setting.get_value("mcp_server_port")
-    try:
-        port = int(port_setting) if port_setting else _DEFAULT_PORT
-    except (ValueError, TypeError):
-        port = _DEFAULT_PORT
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._server: uvicorn.Server | None = None
+        self._thread: threading.Thread | None = None
+        self._port: int | None = None
+        self.error: str | None = None
 
-    _ensure_mcp_token()
+    @property
+    def listening(self) -> bool:
+        """True while the uvicorn server has started and its thread is alive."""
+        return (
+            self._server is not None
+            and self._server.started
+            and self._thread is not None
+            and self._thread.is_alive()
+        )
 
-    logger.info("[MCP] Starting MCP server on port %d", port)
-    mcp = create_mcp_server()
-    app = _build_app(mcp)
+    @property
+    def listening_port(self) -> int | None:
+        """The port actually being served, or None when nothing is listening."""
+        return self._port if self.listening else None
 
-    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
+    @staticmethod
+    def desired_state() -> tuple[bool, int]:
+        """The owner's intent from the settings table: ``(enabled, port)``.
 
+        Absent rows mean the defaults — enabled, on 8462 — so a fresh install
+        serves without anyone having visited the settings page.
+        """
+        enabled = Setting.get_value("mcp_server_enabled")
+        port_setting = Setting.get_value("mcp_server_port")
+        try:
+            port = int(port_setting) if port_setting else _DEFAULT_PORT
+        except (ValueError, TypeError):
+            port = _DEFAULT_PORT
+        return enabled is None or str(enabled).lower() not in ("false", "0", "no"), port
 
-def _ensure_mcp_token() -> None:
-    """Generate an MCP auth token on first boot if none exists."""
-    from services.wrapper_auth_service import WrapperAuthService
-    from models.setting import Setting
+    def reconcile(self) -> None:
+        """Make the live listener match the settings table. Safe from any thread."""
+        with self._lock:
+            enabled, port = self.desired_state()
+            if self._thread is not None and not self._thread.is_alive():
+                # The serving thread ended on its own (crash, startup failure):
+                # it already logged why, so just forget it and start clean below.
+                self._server = self._thread = self._port = None
+            if self.listening and enabled and self._port == port:
+                return
+            if self._server is not None:
+                self._stop()
+            if enabled:
+                self._start(port)
+            else:
+                self.error = None
 
-    existing = Setting.get_value("mcp_server_token_wrapper_id")
-    if existing:
-        auth_svc = WrapperAuthService()
-        wrapper = auth_svc.get_wrapper(existing)
-        if wrapper:
+    def _start(self, port: int) -> None:
+        # Bind here rather than letting uvicorn do it: uvicorn answers a taken
+        # port with sys.exit inside its own thread, which would surface only as
+        # a dead thread. Binding synchronously turns it into a recorded,
+        # retryable error the settings page can show.
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind((_BIND_HOST, port))
+        except (OSError, OverflowError) as exc:
+            # OverflowError is bind()'s answer to a port outside 0-65535, which
+            # only a hand-edited settings row can produce: record it like any
+            # other bind failure instead of crashing the reconcile loop.
+            sock.close()
+            self.error = f"cannot bind port {port}: {exc}"
+            logger.warning("[MCP] %s — retrying every %gs", self.error, _RECONCILE_INTERVAL_S)
             return
 
-    auth_svc = WrapperAuthService()
-    try:
-        raw_token, wrapper_id = auth_svc.create_token(
-            name="MCP Server (External Agents)",
-            wrapper_id_override="__mcp_server__",
+        server = uvicorn.Server(
+            uvicorn.Config(
+                _build_app(create_mcp_server()),
+                host=_BIND_HOST,
+                port=port,
+                log_level="info",
+                timeout_graceful_shutdown=5,
+            )
         )
-    except sqlite3.IntegrityError:
-        logger.info("[MCP] Token already exists (concurrent boot); skipping")
-        return
+        thread = threading.Thread(
+            target=self._serve,
+            args=(server, sock, port),
+            name=f"mcp-listener-{port}",
+            daemon=True,
+        )
+        self._server, self._thread, self._port = server, thread, port
+        thread.start()
 
-    Setting.set("mcp_server_token_wrapper_id", wrapper_id)
+        deadline = time.monotonic() + _START_TIMEOUT_S
+        while not server.started and thread.is_alive() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        if server.started:
+            self.error = None
+            logger.info("[MCP] Listening on %s:%d", _BIND_HOST, port)
+        elif thread.is_alive():
+            self.error = f"port {port}: server did not start within {_START_TIMEOUT_S:g}s"
+            logger.error("[MCP] %s", self.error)
 
-    logger.info(
-        "[MCP] Generated MCP auth token (wrapper_id=%s). "
-        "Retrieve via: Settings > MCP Server in the brain dashboard.",
-        wrapper_id,
-    )
-    logger.info("[MCP] Token (shown once): %s", raw_token)
+    def _serve(self, server: uvicorn.Server, sock: socket.socket, port: int) -> None:
+        try:
+            server.run(sockets=[sock])
+        except (Exception, SystemExit) as exc:
+            self.error = f"port {port}: listener crashed ({type(exc).__name__}: {exc})"
+            logger.exception("[MCP] Listener on port %d crashed", port)
+        finally:
+            sock.close()
+
+    def _stop(self) -> None:
+        server, thread, port = self._server, self._thread, self._port
+        self._server = self._thread = self._port = None
+        if server is None or thread is None:
+            return
+        server.should_exit = True
+        thread.join(_STOP_TIMEOUT_S)
+        if thread.is_alive():
+            server.force_exit = True
+            thread.join(_STOP_TIMEOUT_S)
+        if thread.is_alive():
+            logger.error("[MCP] Listener on port %s did not stop within %gs", port, 2 * _STOP_TIMEOUT_S)
+            return
+        logger.info("[MCP] Listener on port %s stopped", port)
+
+
+listener = McpListener()
+
+
+def run_mcp_server() -> None:
+    """WorkerManager service: keep the inbound listener matched to its settings.
+
+    Applies the settings at boot, then re-checks on a fixed tick so a crashed
+    listener is restarted, a failed bind is retried, and a settings row edited
+    outside the API still takes effect. Never returns — the manager flags a
+    returning service as dead and respawns it every five seconds.
+    """
+    while True:
+        listener.reconcile()
+        time.sleep(_RECONCILE_INTERVAL_S)

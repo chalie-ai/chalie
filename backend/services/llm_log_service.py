@@ -34,7 +34,7 @@ class LlmLogService:
     def __init__(self, mp: MessageProcessor) -> None:
         self.mp = mp
 
-    def record(self, response: ProviderResponse) -> None:
+    def record(self, response: ProviderResponse, *, channel: str | None) -> None:
         """Persist one ``LlmCallLog`` row for a completed provider call.
 
         Reached only from ``ProviderService.send`` — the single provider
@@ -49,6 +49,7 @@ class LlmLogService:
                 type=self.mp.config.USAGE_TYPE,
                 provider=response.provider or '',
                 model=response.model,
+                channel=channel,
                 tokens_input=response.tokens_input or 0,
                 tokens_output=response.tokens_output or 0,
                 tokens_cache_read=response.tokens_cache_read or 0,
@@ -60,6 +61,30 @@ class LlmLogService:
             ).save()
         except Exception as e:
             logger.debug(f"[LLM_LOG] Failed to log call: {e}")
+
+    @staticmethod
+    def last_context_tokens(channel: str) -> int:
+        """How full the context window was on the last CHAT call on *channel*.
+
+        Sums the three prompt-side counters rather than reading ``tokens_input``
+        alone, because they are disjoint slices of one prompt — see
+        :attr:`ProviderResponse.context_tokens`, which states the rule and which
+        this query is the stored-row equivalent of. Reading ``tokens_input``
+        alone here would under-report a cached conversation by everything
+        cached, and the gate above it would never fire on exactly the long
+        conversations it exists for.
+
+        0 when the channel has no row yet — including every row written before
+        the ``channel`` column existed, which is NULL and matches nothing. A
+        freshly upgraded instance therefore starts ungated rather than
+        compacting its first turn against a predecessor it cannot attribute.
+        """
+        row = Database.conn().execute(
+            "SELECT tokens_input + tokens_cache_read + tokens_cache_create AS occupied "
+            "FROM llm_call_log WHERE channel = ? ORDER BY id DESC LIMIT 1",
+            [channel],
+        ).fetchone()
+        return int(row["occupied"]) if row is not None else 0
 
     @staticmethod
     def token_usage(window: str, usage_type: str | None = None) -> dict[str, object]:

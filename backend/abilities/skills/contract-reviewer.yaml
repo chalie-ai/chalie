@@ -6,7 +6,7 @@ version: 1
 ---
 
 1. Use `memory` to recall any stored red lines or prior contract preferences, then ask the user to paste the contract text or provide a URL and clarify the agreement type (employment, SaaS terms, partnership, NDA, vendor, lease, etc.).
-2. Use `read` to fetch the contract if provided as a URL.
+2. Use `web_fetch` to fetch the contract if provided as a URL, or `read` if provided as a file.
 3. Use `memory` to recall any prior contract preferences, red lines, or legal notes the user has stored.
 4. Use `write_file` to extract and record the key structural elements: parties, effective date, term/duration, payment/compensation, scope of services or obligations, and termination conditions.
 5. Use `write_file` to flag any clauses that are unusual, one-sided, or potentially risky: auto-renewal, arbitration/jurisdiction, IP assignment, liability caps, non-compete or non-solicit, penalty clauses, or data handling terms.

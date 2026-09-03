@@ -2,7 +2,7 @@
 
 Thin wrapper around ``ddgs.images()``. No parallel providers, no circuit
 breakers, no HTML scraping. Returns a deduplicated, capped list of image
-results shaped ``{url, title, source, thumb_url}``.
+results shaped ``{url, title, source}``.
 
 Engine failure is loud: a DDG / network / parse error raises ``RuntimeError``
 so the caller can surface it as an error result. An empty return means the
@@ -29,7 +29,7 @@ def fetch(query: str, limit: int = 5) -> list[dict[str, str]]:
 
     Returns:
         Up to ``limit`` de-duplicated dicts shaped
-        ``{url, title, source, thumb_url}``. An empty list means the engine
+        ``{url, title, source}``. An empty list means the engine
         succeeded but found nothing.
 
     Raises:
@@ -64,7 +64,6 @@ def fetch(query: str, limit: int = 5) -> list[dict[str, str]]:
                     "url": url,
                     "title": item.get("title") or "",
                     "source": item.get("url") or "",
-                    "thumb_url": item.get("thumbnail") or "",
                 }
             )
     except DDGRatelimitException:

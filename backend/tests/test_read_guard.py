@@ -19,16 +19,16 @@ counted, including one the first edit had already invalidated. The second edit
 then anchors on text the file no longer contains, returns ``not-found``, and the
 model retries it until the runaway backstop kills the turn.
 
-``write_file`` alone opts into the extra ``truncated-read`` refusal (cases 1-2):
-a truncated read is fatal to a whole-file overwrite, which would destroy the tail
+``write_file`` alone opts into the extra ``partial-read`` refusal (cases 1-2):
+a partial read is fatal to a whole-file overwrite, which would destroy the lines
 the model never saw, and harmless to an anchored edit, which only touches text
-the model quoted back verbatim. Truncation itself comes from
-``ReadAbility``/``TextReader``: a ``max_chars`` smaller than the file content
-clips the body and stamps ``truncated=true`` into the envelope
+the model quoted back verbatim. The partial view itself comes from
+``ReadAbility``: a ``start_line``/``end_line`` window smaller than the file
+returns only that slice and stamps ``partial=true`` into the envelope
 ``dispatch_service._render`` writes into the persisted ``tool_calls.result``
 row — the exact field the guard reads back.
 
-Cases 1-7 drive the REAL production entry point end to end: a real
+All cases except case 10 drive the REAL production entry point end to end: a real
 ``MessageProcessor`` turn against the real SQLite DB (``db`` fixture), the real
 ``DispatchService``, the real ``read``/``write_file``/``edit_file`` abilities, and
 real files on disk under ``tmp_path``. The only substitution is the LLM network
@@ -36,7 +36,7 @@ boundary (``services.provider_service.build_client``), scripted to replay one to
 call per step — mirrors ``test_dispatch_repeat_call_steer.py``. All three tools
 carry seeded ``allow`` policy rows on the ``chat`` channel in the real policy seed
 (``abilities/assets/policy_defaults.json``), so no policy seeding is needed here.
-Case 8 asserts the two bypasses directly, since neither is reachable from a turn.
+Case 10 asserts the two bypasses directly, since neither is reachable from a turn.
 """
 
 import sqlite3
@@ -60,14 +60,12 @@ pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 # test_dispatch_repeat_call_steer.py).
 _BUILD_CLIENT = "services.provider_service.build_client"
 
-# Real file content, long enough (> 100 chars — the ReadParamsBag max_chars
-# floor, see contracts/params/read_params_bag.py's clamp_int(lo=100)) that a
-# max_chars=100 read is guaranteed to truncate it.
+# Real file content, TWO lines — so a start_line=1, end_line=1 read is a
+# window strictly smaller than the file and comes back stamped ``partial=true``.
 _ORIGINAL_CONTENT = (
     "Line one of the original file.\n"
-    "Line two adds more real prose so the content comfortably exceeds the "
-    "100-character minimum max_chars floor enforced by ReadParamsBag, "
-    "guaranteeing a truncated read whenever max_chars=100 is requested.\n"
+    "Line two is the tail a one-line window never shows the model — the exact "
+    "content a partial-view overwrite would silently destroy.\n"
 )
 
 # Three distinct one-word anchors, so a sequence of edits is legible on disk and
@@ -100,9 +98,6 @@ class _ScriptedProvider:
 
     def get_context_limit(self) -> int:
         return 200000
-
-    def estimate_request_tokens(self, _dto: object) -> int:
-        return 1
 
     def send(self, _dto: object) -> ProviderResponse:
         if self.sends >= len(self._responses):
@@ -140,7 +135,7 @@ def _run(provider: _ScriptedProvider, raw_input: str) -> MessageProcessor:
 
 
 def _open_tag(result: str) -> str:
-    """The envelope's first line — where ``truncated=true`` / ``code=...`` /
+    """The envelope's first line — where ``partial=true`` / ``code=...`` /
     ``status=...`` are rendered (dispatch_service._render)."""
     return result.split("\n", 1)[0]
 
@@ -165,15 +160,15 @@ def _codes(calls: list[ToolCall]) -> list[str]:
     return [next((p for p in head if p.startswith("code=")), head[0]) for head in parts]
 
 
-# ── Case 1: a truncated read refuses the overwrite, file left untouched ────────
+# ── Case 1: a partial read refuses the overwrite, file left untouched ──────────
 
 
-def test_truncated_read_blocks_overwrite_file_unchanged(
+def test_partial_read_blocks_overwrite_file_unchanged(
     db: sqlite3.Connection, tmp_path: Path,
 ) -> None:
-    """A read that truncated the file (max_chars=100 on content > 100 chars)
-    refuses the very next write_file on the same path with
-    code=truncated-read, and the file on disk is left byte-identical."""
+    """A read that saw only a window of the file (start_line=1, end_line=1 on
+    two-line content) refuses the very next write_file on the same path with
+    code=partial-read, and the file on disk is left byte-identical."""
     assert db is not None
     target = tmp_path / "notes.txt"
     target.write_text(_ORIGINAL_CONTENT, encoding="utf-8")
@@ -181,7 +176,7 @@ def test_truncated_read_blocks_overwrite_file_unchanged(
     provider = _ScriptedProvider(
         ProviderResponse(
             text="", model="scripted",
-            tool_calls=[_tool("read", source=str(target), max_chars=100)],
+            tool_calls=[_tool("read", source=str(target), start_line=1, end_line=1)],
         ),
         ProviderResponse(
             text="", model="scripted",
@@ -196,25 +191,25 @@ def test_truncated_read_blocks_overwrite_file_unchanged(
     writes = [c for c in mp.tool_call_service.by_turn() if c.tool_name == "write_file"]
 
     assert len(reads) == 1
-    assert "truncated=true" in _open_tag(reads[0].result), reads[0].result
+    assert "partial=true" in _open_tag(reads[0].result), reads[0].result
 
     assert len(writes) == 1
     assert writes[0].state == ToolCall.ERROR
-    assert "code=truncated-read" in _open_tag(writes[0].result), writes[0].result
+    assert "code=partial-read" in _open_tag(writes[0].result), writes[0].result
 
     assert target.read_text(encoding="utf-8") == _ORIGINAL_CONTENT
 
 
-# ── Case 2: a newer full read overrides an older truncated one ─────────────────
+# ── Case 2: a newer whole-file read overrides an older partial one ─────────────
 
 
-def test_fresh_full_read_after_truncated_read_allows_overwrite(
+def test_fresh_full_read_after_partial_read_allows_overwrite(
     db: sqlite3.Connection, tmp_path: Path,
 ) -> None:
     """Most-recent-read semantics: after case 1's refusal, re-reading the SAME
-    target with no truncation (max_chars large enough for the full content)
-    makes the following write_file succeed and rewrite the file — the newer
-    full read overrides the older truncated one."""
+    target whole (no start_line/end_line window) makes the following write_file
+    succeed and rewrite the file — the newer whole-file read overrides the
+    older partial one."""
     assert db is not None
     target = tmp_path / "notes.txt"
     target.write_text(_ORIGINAL_CONTENT, encoding="utf-8")
@@ -222,7 +217,7 @@ def test_fresh_full_read_after_truncated_read_allows_overwrite(
     provider = _ScriptedProvider(
         ProviderResponse(
             text="", model="scripted",
-            tool_calls=[_tool("read", source=str(target), max_chars=100)],  # truncated
+            tool_calls=[_tool("read", source=str(target), start_line=1, end_line=1)],  # partial
         ),
         ProviderResponse(
             text="", model="scripted",
@@ -230,7 +225,7 @@ def test_fresh_full_read_after_truncated_read_allows_overwrite(
         ),
         ProviderResponse(
             text="", model="scripted",
-            tool_calls=[_tool("read", source=str(target))],  # full re-read, default max_chars
+            tool_calls=[_tool("read", source=str(target))],  # whole-file re-read, no window
         ),
         ProviderResponse(
             text="", model="scripted",
@@ -245,12 +240,12 @@ def test_fresh_full_read_after_truncated_read_allows_overwrite(
     writes = [c for c in mp.tool_call_service.by_turn() if c.tool_name == "write_file"]
 
     assert len(reads) == 2
-    assert "truncated=true" in _open_tag(reads[0].result), reads[0].result
-    assert "truncated=true" not in _open_tag(reads[1].result), reads[1].result
+    assert "partial=true" in _open_tag(reads[0].result), reads[0].result
+    assert "partial=true" not in _open_tag(reads[1].result), reads[1].result
 
     assert len(writes) == 2
     assert writes[0].state == ToolCall.ERROR
-    assert "code=truncated-read" in _open_tag(writes[0].result), writes[0].result
+    assert "code=partial-read" in _open_tag(writes[0].result), writes[0].result
     assert writes[1].state == ToolCall.DONE
     assert "status=success" in _open_tag(writes[1].result), writes[1].result
 
@@ -509,10 +504,49 @@ def test_guard_bypasses_when_the_act_trail_cannot_be_inspected(
     target.write_text(_EDITABLE_CONTENT, encoding="utf-8")
 
     # No processor at all — e.g. an ability invoked outside the ACT loop.
-    assert read_guard(None, target, refuse_truncated=True) is None
+    assert read_guard(None, target, refuse_partial=True) is None
 
     # A processor whose turn was never allocated: turn_id is the -1 sentinel
     # MessageProcessor.__init__ sets, and begin() would replace.
     inert = MessageProcessor(UserConfig(), raw_input="never begun")  # inert (I2)
     assert inert.turn_id == -1
-    assert read_guard(inert, target, refuse_truncated=True) is None
+    assert read_guard(inert, target, refuse_partial=True) is None
+
+
+# ── Case 11: an ERRORED read does not satisfy the guard ───────────────────────
+
+
+def test_too_large_read_error_does_not_satisfy_the_guard(
+    db: sqlite3.Connection, tmp_path: Path,
+) -> None:
+    """An errored read showed the model nothing. A whole-file read of an
+    over-20k file comes back code=too-large with zero content — counting that
+    row as "the model saw the file" would license a blind overwrite, so the
+    write_file behind it is refused code=read-required and the file on disk is
+    left untouched."""
+    assert db is not None
+    target = tmp_path / "big.txt"
+    oversized = "line of filler text to push the file over the read gate\n" * 500
+    target.write_text(oversized, encoding="utf-8")
+
+    provider = _ScriptedProvider(
+        ProviderResponse(
+            text="", model="scripted",
+            tool_calls=[_tool("read", source=str(target))],
+        ),
+        ProviderResponse(
+            text="", model="scripted",
+            tool_calls=[_tool("write_file", path=str(target), contents="blind-overwrite")],
+        ),
+        ProviderResponse(text="I never saw that file.", model="scripted", tool_calls=None),
+    )
+
+    mp = _run(provider, "read the big file then overwrite it")
+
+    reads = _calls(mp, "read")
+    assert len(reads) == 1
+    assert reads[0].state == ToolCall.ERROR
+    assert "code=too-large" in _open_tag(reads[0].result), reads[0].result
+
+    assert _codes(_calls(mp, "write_file")) == ["code=read-required"]
+    assert target.read_text(encoding="utf-8") == oversized

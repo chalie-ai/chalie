@@ -1,7 +1,7 @@
 """``MachineStateRow`` — the operational ``machine_state`` vertical of
 ``data_graph``: state read and written by exact key, never by semantic search.
-The user-summary prose the prompt builder reads every turn, the subconscious
-worker's pattern/geo cursors, and durable clocks all live here. Because these
+The stable background-thread turn ids (discovery, memory hygiene) and durable
+clocks all live here. Because these
 rows are read only by exact key, the ``Searchable`` trait is declared off
 (``__search__ = None``), excluding the ``machine_state`` kind from FTS/vec
 indexing entirely (dead weight otherwise). Adds only the cursor read
