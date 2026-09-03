@@ -42,12 +42,10 @@ from abilities._result import ToolResult, truncate
 from configs.enums.param_key import Keys
 from contracts.params.chalie_docs_params_bag import ChalieDocsParamsBag
 from contracts.params.param_bag import ParamBag
-from services.file_mapper_service import FileMapperService
+from services.app_version import get_version
 from services.text_reader import TextReader
 from exceptions import NoReadableContent
 from configs.enums.ability_category import AbilityCategory
-
-_VERSION_FILE = FileMapperService.get_version_path()
 
 #: Documentation cap — a chalie.ai page (or the joined basics pages) is returned
 #: as prose, clipped here so a multi-MB body never floods the context unbounded.
@@ -68,13 +66,6 @@ _QUERY_URLS: dict[str, list[str]] = {
         "https://github.com/chalie-ai/chalie",
     ],
 }
-
-
-def _read_version() -> str:
-    try:
-        return _VERSION_FILE.read_text().strip()
-    except OSError:
-        return "unknown"
 
 
 class ChalieDocsAbility(Ability[ChalieDocsParamsBag]):
@@ -176,7 +167,7 @@ class ChalieDocsAbility(Ability[ChalieDocsParamsBag]):
         clipped, was_clipped = truncate(body, _MAX_CHARS)
         meta: "_DocsMeta" = {
             "source": " & ".join(urls),
-            "version": _read_version(),
+            "version": get_version(),
         }
         if was_clipped:
             meta["truncated"] = True

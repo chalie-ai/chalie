@@ -5,7 +5,7 @@ tags: finance, stocks, market-data, fundamentals, valuation, investing
 version: 1
 ---
 
-1. Use `memory` to recall any previously analysed companies, then ask the user for the company name or ticker symbol, and what data they need: current price/market cap, income statement, cash flow, balance sheet, WACC inputs, or analyst estimates.
+1. Use `recall` to surface any previously analysed companies, then ask the user for the company name or ticker symbol, and what data they need: current price/market cap, income statement, cash flow, balance sheet, WACC inputs, or analyst estimates.
 2. Use `search` to find the company's investor relations page and any recent financial filings or earnings reports.
 3. Use `web_fetch` to extract financial data from the investor relations page, SEC filings, or reputable financial data sites.
 4. Use `search` to find current analyst consensus estimates and ratings from reputable financial sources.

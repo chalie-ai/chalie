@@ -23,34 +23,36 @@ if TYPE_CHECKING:
 
 @pytest.fixture(scope='session')
 def _db_template(tmp_path_factory: pytest.TempPathFactory) -> str:
-    """Build a fully-converged SQLite database file (once per session).
+    """Build a fully-provisioned SQLite database file (once per session).
 
-    Runs the real production boot sequence — SchemaConvergenceService.converge()
+    Runs the real production boot sequence — VersionedDatabaseService.provision()
     plus the policy seed (PolicyManager.apply_seed, as run.py does at boot) —
     against a temp file.  The result is a "golden" database that
     function-scoped fixtures copy cheaply.
     """
+    import run as _run
     import services.database as _newdb
     from services.file_mapper_service import FileMapperService
     from services.policy_manager import PolicyManager
-    from services.schema_convergence_service import SchemaConvergenceService
+    from services.versioned_database_service import VersionedDatabaseService
 
     template_dir = tmp_path_factory.mktemp('db_template')
     template_path = str(template_dir / 'template.db')
 
-    # The convergence + seed services reach the DB through the Database gateway,
-    # which resolves FileMapperService.get_db_path() at call time. Point that at
-    # the template file for the build so the golden db lands there, not chalie.db.
+    # The provisioner and the seed reach the DB through FileMapperService — the
+    # provisioner resolves get_db_path() for its target and everything else from
+    # that file's directory, the seed goes through the Database gateway. Point
+    # get_db_path at the template file so the golden db lands there, in an empty
+    # temp dir with no earlier database to copy forward (the fresh-install path).
     with patch.object(FileMapperService, 'get_db_path', return_value=Path(template_path)):
         _newdb.Database.close()  # drop any thread connection bound to another path
-        convergence = SchemaConvergenceService()
-        convergence.converge()
-        # Mirror production boot (run.py / consumer.py): converge() applies only
-        # static column DEFAULTs, never value backfills, so the deterministic
-        # redesign-column backfill runs as a separate step right after it. Without
-        # this the template diverges from a real boot — valid_from / valid_to stay
-        # NULL where production would have populated them.
-        convergence.backfill_redesign_columns()
+        VersionedDatabaseService().provision()
+        # Mirror production boot (run.py): provisioning applies only static column
+        # DEFAULTs, never value backfills, so the deterministic redesign-column
+        # backfill runs as its own startup step. Without this the template
+        # diverges from a real boot — valid_from / valid_to stay NULL where
+        # production would have populated them.
+        _run._backfill_redesign_columns()
 
         # Mirror boot: seed the flat policy table so gated tool calls on non-chat
         # channels (e.g. subconscious bash.* / timer) resolve to their real defaults

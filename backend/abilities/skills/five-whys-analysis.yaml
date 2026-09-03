@@ -5,7 +5,7 @@ tags: root cause, five whys, problem solving, debugging, analysis
 version: 1
 ---
 
-1. Use `memory` to recall any relevant background or previous analysis on this issue.
+1. Use `recall` to surface any relevant background or previous analysis on this issue.
 2. State the problem clearly as a single observable symptom or failure, then use `write_file` to capture the Why chain.
 3. Ask "Why did this happen?" and record the first-level cause via `write_file`.
 4. For each answer, ask "Why?" again and record each level via `write_file` until reaching a systemic or process-level root cause (typically 4-6 iterations).

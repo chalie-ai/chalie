@@ -3,9 +3,8 @@
 Each prompt schedule is now a growing, inspectable thread on the `schedule`
 channel: one `turn_id` per series (keyed by `COALESCE(group_id, id)`), allocated
 on the first fire and shared by every occurrence and user reply. `schema.sql`
-declares the column; SchemaConvergenceService adds it automatically on the next
-boot. This file is the standalone idempotent script for operators applying the
-change manually.
+declares the column, so the next release's database file carries it. This file is
+the standalone idempotent script for operators applying the change manually.
 
 No backfill is needed — NULL is the correct initial value: `turn_id` is
 allocated lazily on the first fire (a schedule that has never fired has no

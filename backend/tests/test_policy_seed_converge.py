@@ -8,7 +8,7 @@ That reap is what makes retiring an ability a seed-file edit instead of a
 one-shot cleanup migration, so these tests pin the four behaviours the reap
 must get right together — kill a retired ability, kill a gate-bypassing
 INTERNAL row, SPARE lazily-created MCP rows, and PRESERVE a user's setting on a
-still-seeded permission.  Real convergence, real seed file, real SQLite; the
+still-seeded permission.  Real provisioning, real seed file, real SQLite; the
 only patch is the DB path (mirrors test_policy_migration.py).
 """
 import json
@@ -21,19 +21,19 @@ import pytest
 from services.database import Database
 from services.file_mapper_service import FileMapperService
 from services.policy_manager import PolicyManager
-from services.schema_convergence_service import SchemaConvergenceService
+from services.versioned_database_service import VersionedDatabaseService
 
 pytestmark = pytest.mark.unit
 
 
 @pytest.fixture()
 def seeded_db(tmp_path: Path) -> Iterator[Path]:
-    """A booted DB: converged schema + policy defaults applied, exactly as
+    """A booted DB: provisioned schema + policy defaults applied, exactly as
     _init_database does it."""
-    db_path = tmp_path / "converge.db"
+    db_path = tmp_path / "seeded.db"
     with patch.object(FileMapperService, "get_db_path", return_value=db_path):
         Database.close()
-        SchemaConvergenceService().converge()
+        VersionedDatabaseService().provision()
         PolicyManager().apply_seed()
         yield db_path
         Database.close()
@@ -92,15 +92,15 @@ def test_reap_kills_retired_and_internal_rows_but_spares_mcp_and_user_settings(
 
 
 def test_fresh_install_seeds_api_key_as_sensitive(tmp_path: Path) -> None:
-    """REGRESSION: a fresh boot (converge → seed) must run schema.sql's seed pass
+    """REGRESSION: a fresh boot (provision → seed) must run schema.sql's seed pass
     so ``api_key`` is marked sensitive — otherwise the REST API key is persisted
-    in cleartext.  Convergence skips that pass on a database that already looks
-    non-empty, so nothing may create the ``policy`` table ahead of it.  Mirrors
-    _init_database's boot order against a real temp DB, zero mocks."""
+    in cleartext.  Provisioning runs that pass only against the file it creates, so
+    nothing may create the ``policy`` table ahead of it.  Mirrors _init_database's
+    boot order against a real temp DB, zero mocks."""
     fresh_path = tmp_path / "fresh.db"
     with patch.object(FileMapperService, "get_db_path", return_value=fresh_path):
         Database.close()  # drop any thread connection bound to another path
-        SchemaConvergenceService().converge()  # creates + seeds
+        VersionedDatabaseService().provision()  # creates + seeds
         PolicyManager().apply_seed()                                   # policy defaults
         api_key = Database.conn().execute(
             "SELECT is_sensitive FROM settings WHERE key='api_key'"

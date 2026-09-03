@@ -22,16 +22,15 @@ _APP_URL = "https://chalie.ai"
 _APP_TITLE = "Chalie"
 
 
-def _read_version() -> str:
-    from services.file_mapper_service import FileMapperService
-    try:
-        return FileMapperService.get_version_path().read_text().strip()
-    except OSError:
-        return "0.0.0"
-
-
 def _app_user_agent() -> str:
-    return f"Chalie/{_read_version()}"
+    """User agent for provider requests: ``Chalie/<running version>``.
+
+    The version is read per call through the single version chokepoint
+    (services/app_version.py) — no fallback: a missing or empty VERSION
+    file raises here rather than masquerading as "0.0.0".
+    """
+    from services.app_version import get_version
+    return f"Chalie/{get_version()}"
 
 
 def _strip_think_blocks(text: str) -> tuple[str, str | None]:

@@ -5,8 +5,8 @@ tags: scenario planning, war room, what-if analysis, risk modeling, cascading ef
 version: 1
 ---
 
-1. Use `memory` to recall the company's current metrics, runway, headcount, and any prior scenario analyses.
-2. Use `memory` to recall any prior scenario inputs, then ask the user to define up to three scenario variables, each with: what changes, estimated probability, and timeline.
+1. Use `recall` to surface the company's current metrics, runway, headcount, and any prior scenario analyses.
+2. Use `recall` to surface any prior scenario inputs, then ask the user to define up to three scenario variables, each with: what changes, estimated probability, and timeline.
 3. Use `write_file` to map the impact of each variable across relevant business domains: cash and runway, revenue, product, engineering velocity, people, and operations.
 4. Use `write_file` to model cascade effects — show how Variable A triggering consequences in one domain amplifies or accelerates Variable B's effects.
 5. Use `code_agent` to compute quantitative impacts such as runway changes, ARR gaps, or burn multiple shifts under each scenario combination.

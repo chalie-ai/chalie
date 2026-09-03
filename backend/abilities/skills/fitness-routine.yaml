@@ -5,7 +5,7 @@ tags: fitness, exercise, health, workout, training
 version: 1
 ---
 
-1. Use the `memory` tool to recall any stored fitness goals, injuries, medical considerations, or available equipment.
+1. Use the `recall` tool to surface any stored fitness goals, injuries, medical considerations, or available equipment.
 2. Ask the user for their current fitness level, available time per session, training days per week, and primary goal — strength, endurance, flexibility, or weight management.
 3. Use the `search` tool to find evidence-based exercise recommendations matching the user's goals and experience level.
 4. Design a weekly routine with specific exercises, sets, reps, rest periods, and progression plan. Alternate muscle groups to allow recovery.

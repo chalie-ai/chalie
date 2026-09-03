@@ -5,9 +5,9 @@ tags: email, writing, outreach, communication, follow-up, professional
 version: 1
 ---
 
-1. Ask what the email is for: outreach, follow-up, internal update, negotiation, complaint, or difficult conversation — and who the recipient is; use `memory` to surface any prior context on the topic.
-2. Ask what the single most important outcome of this email is; use `memory` to recall the user's communication style preferences.
-3. Use `memory` to recall any context on the recipient, prior correspondence, or the user's communication style preferences.
+1. Ask what the email is for: outreach, follow-up, internal update, negotiation, complaint, or difficult conversation — and who the recipient is; use `recall` to surface any prior context on the topic.
+2. Ask what the single most important outcome of this email is; use `recall` to surface the user's communication style preferences.
+3. Use `recall` to surface any context on the recipient, prior correspondence, or the user's communication style preferences.
 4. Use `contacts` to retrieve any stored information about the recipient that is relevant (role, company, prior interactions).
 5. Use `write_file` to draft the email: subject line, opening that establishes context in one sentence, body with a clear ask or information, and a specific CTA or next step — no more than 3 short paragraphs.
 6. Use `write_file` to produce a second shorter version (3–5 sentences) for cases where brevity is needed.

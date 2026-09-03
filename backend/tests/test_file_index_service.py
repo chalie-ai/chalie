@@ -39,7 +39,11 @@ import pytest
 from watchdog.observers import Observer
 from watchdog.observers.api import BaseObserver
 
-from services.file_index_service import FileIndexService, _is_in_skip_subtree
+from services.file_index_service import (
+    FileIndexService,
+    _is_chalie_main_db,
+    _is_in_skip_subtree,
+)
 from services.file_mapper_service import FileMapperService
 from workers.file_index_worker import _FileIndexHandler
 
@@ -360,3 +364,60 @@ def test_should_index_refuses_a_symlink_resolving_onto_a_refused_prefix(
     alias = scan_root / "alias_notes.md"
     alias.symlink_to(real)
     assert service.should_index(str(alias))
+
+
+def test_skip_rule_covers_every_main_db_release_and_sidecars(
+    scan_root: Path, index_db_path: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The main database is versioned per release (data/chalie-<version>.sqlite),
+    so a skip list frozen at import time can only name the running build's own
+    file: a previous release's database would slip through and get indexed.
+    The rule is evaluated per path instead — the legacy chalie.db, ANY
+    chalie-<version>.sqlite whenever it appears, and the -wal/-shm sidecars of
+    all of them are skipped, while an ordinary file in the same data directory
+    is still indexed.
+
+    Asserted through _is_chalie_main_db — the exact predicate _is_chalie_path
+    (and thus should_index and reconcile's directory pruning) consults —
+    rather than through should_index: a .sqlite/.db path and an extensionless
+    sidecar are already refused by the extension whitelist on their own, so a
+    should_index assertion on them would be vacuous (same reasoning as
+    test_the_walk_never_descends_into_etc).
+    """
+    data_dir = scan_root / "data"
+    data_dir.mkdir()
+    monkeypatch.setattr(FileMapperService, "_DATA_DIR", data_dir)
+
+    # Every main-database file in the data dir is skipped — including a
+    # release that is not the running build (the rule must not depend on
+    # which version is running, which is exactly the frozen-list failure).
+    skipped = (
+        data_dir / "chalie-9.9.9.sqlite",  # a release's versioned database
+        data_dir / "chalie-1.3.0-beta.sqlite",  # dotted/hyphenated version
+        data_dir / "chalie.db",  # the pre-versioning name
+        data_dir / "chalie-9.9.9.sqlite-wal",
+        data_dir / "chalie-9.9.9.sqlite-shm",
+        data_dir / "chalie.db-wal",
+        data_dir / "chalie.db-shm",
+    )
+    for db_file in skipped:
+        assert _is_chalie_main_db(str(db_file)), f"{db_file.name} was not skipped"
+
+    # The rule is about the data dir's own databases, not the name anywhere:
+    # a same-named file the user owns outside data/ is not Chalie's.
+    assert not _is_chalie_main_db(str(scan_root / "chalie-9.9.9.sqlite"))
+
+    # ...and it must not widen into "skip the whole data dir", which would
+    # strand every user file under data/ (documents, downloads, ...).
+    ordinary = data_dir / "notes.txt"
+    ordinary.write_text("quarterly figures")
+    assert not _is_chalie_main_db(str(ordinary))
+
+    service = FileIndexService(scan_root=str(scan_root), db_path=index_db_path)
+    assert service.should_index(str(ordinary)), "an ordinary data-dir file must still be indexed"
+    # End to end: the walk descends into the data dir and indexes the ordinary
+    # file while no main-database file ever reaches the index.
+    service.reconcile()
+    assert str(ordinary) in service.search("quarterly")
+    for db_file in skipped:
+        assert str(db_file) not in service.search("chalie", limit=100)

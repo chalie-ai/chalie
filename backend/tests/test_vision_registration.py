@@ -29,7 +29,7 @@ from services.file_mapper_service import FileMapperService
 from controllers.message_processor import MessageProcessor
 from services.policy_manager import PolicyManager
 from services.processor_config import ProcessorConfig
-from services.schema_convergence_service import SchemaConvergenceService
+from services.versioned_database_service import VersionedDatabaseService
 from tests._tool_result_harness import built
 
 pytestmark = pytest.mark.unit
@@ -54,7 +54,7 @@ def _find_tools_on(mp: MessageProcessor, params: dict[str, object]) -> Mapping[s
 
 
 def _seeded_policy_db(tmp_path: Path) -> PolicyManager:
-    SchemaConvergenceService().converge()  # creates policy
+    VersionedDatabaseService().provision()  # creates policy
     PolicyManager().apply_seed()                                  # reads the JSON
     return PolicyManager()
 
@@ -67,7 +67,7 @@ class TestVisionPolicyDefaults:
 
     @pytest.fixture(autouse=True)
     def _gateway_to_tmp_db(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-        # converge()/apply_seed()/_setting() all resolve
+        # provision()/apply_seed()/_setting() all resolve
         # their path through the Database gateway (FileMapperService.get_db_path).
         # Redirect the gateway to the same tmp file so the seed writes and the
         # _setting reads share one database, not the real chalie.db.

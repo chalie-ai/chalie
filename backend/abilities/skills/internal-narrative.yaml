@@ -5,11 +5,11 @@ tags: company narrative, internal communication, investor update, all-hands, mes
 version: 1
 ---
 
-1. Use `memory` to recall any existing company narrative, prior investor updates, or all-hands messaging.
+1. Use `recall` to surface any existing company narrative, prior investor updates, or all-hands messaging.
 2. Use `write_file` to draft a single-paragraph core narrative covering: mission, what is being built, the problem it solves, unique approach, current state, and near-term destination.
 3. Use `write_file` to translate the core narrative into an audience matrix covering employees, investors, customers, and candidates — same facts, different frames.
-4. Use `memory` to run a contradiction check: compare what was communicated to investors last period versus what was communicated to employees on the same topic.
+4. Use `recall` to run a contradiction check: compare what was communicated to investors last period versus what was communicated to employees on the same topic.
 5. Use `write_file` to flag any contradictions or messaging gaps found across audiences.
 6. Use `write_file` to draft the specific communication artifact requested (all-hands script, investor update, candidate pitch, or crisis statement) using the audience-appropriate frame.
 7. Use `write_file` to save the core narrative and audience translation matrix as a reusable reference.
-8. Use `memory` to store the approved narrative so it surfaces consistently in future communications.
+8. Restate the approved narrative in the reply so it is remembered and reused consistently in future communications.

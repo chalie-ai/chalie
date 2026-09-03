@@ -1,7 +1,7 @@
 """Feature tests — migration 015 (purge orphaned ``kind='document'`` rows).
 
 Recreates the on-disk footprint the deleted document vertical left behind on
-a converged database: ``data_graph`` fragment rows plus their FTS5 postings,
+a provisioned database: ``data_graph`` fragment rows plus their FTS5 postings,
 key/value vec shadows, and referencing edges. The migration must remove every
 piece of that footprint — index postings and vec rows included, or their
 rowids later alias onto new ``data_graph`` rows — while leaving every other

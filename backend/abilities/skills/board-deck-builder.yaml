@@ -5,11 +5,11 @@ tags: board deck, investor update, board meeting, quarterly review, fundraising,
 version: 1
 ---
 
-1. Use `memory` to recall the company's current metrics, recent decisions, and prior board updates.
-2. Ask the user for the deck type (quarterly, monthly, or fundraising) and the key metrics to include — use `memory` to pre-fill any metrics already stored.
+1. Use `recall` to surface the company's current metrics, recent decisions, and prior board updates.
+2. Ask the user for the deck type (quarterly, monthly, or fundraising) and the key metrics to include — use `recall` to pre-fill any metrics already stored.
 3. Use `search` to benchmark the company's metrics against industry standards if comparisons are needed.
 4. Use `write_file` to structure the deck in order: Executive Summary (3 sentences), Key Metrics Dashboard, Financial Update, Revenue and Pipeline, Product Update, and Asks.
 5. For each section, use `write_file` to write a headline, supporting data, narrative interpretation, and the "so what" or decision required.
-6. Use `memory` to cross-check stored metrics against what the user provided — flag any missing metrics or data gaps explicitly, never invent numbers.
+6. Use `recall` to cross-check stored metrics against what the user provided — flag any missing metrics or data gaps explicitly, never invent numbers.
 7. Use `write_file` to save the complete deck outline with all sections and placeholders clearly marked.
-8. Use `memory` to store the finalized deck structure and key decisions for future reference.
+8. Restate the finalized deck structure and key decisions in the reply so they are remembered for future decks.

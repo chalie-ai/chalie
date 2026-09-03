@@ -3,9 +3,8 @@
 ``settled`` is a positive flag: 1 on assistant rows that carry no model-driven
 tool (the turn's settle0), 0 on every other row. Written as 1 by the write path;
 ``ToolCallService.start()`` demotes to 0 when a settling tool is recorded. ``schema.sql``
-declares the column; SchemaConvergenceService adds it automatically on the next
-boot. This file is the standalone idempotent script for operators applying the
-change manually.
+declares the column, so the next release's database file carries it. This file is
+the standalone idempotent script for operators applying the change manually.
 
 Backfill: mark settled=1 on every assistant row that the old NOT-EXISTS predicate
 would have considered settled — i.e. rows with no tool_calls entry carrying a
@@ -42,8 +41,8 @@ _SETTLE0_FILTER = (
 
 def needed(conn: sqlite3.Connection) -> bool:
     """Any settle0 assistant row still carrying ``settled = 0``? The write path
-    keeps new rows settled, so a hit is pre-column backlog. Runs after schema
-    convergence, so the column itself already exists."""
+    keeps new rows settled, so a hit is pre-column backlog. Runs after the release's
+    database file is provisioned, so the column itself already exists."""
     return conn.execute(
         f"SELECT 1 FROM transcript WHERE settled = 0 AND {_SETTLE0_FILTER} LIMIT 1",
         _NON_SETTLING,

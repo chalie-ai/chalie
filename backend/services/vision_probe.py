@@ -1,237 +1,165 @@
-"""Vision probe — verify a provider actually understands images.
+"""Vision probe — five questions about one image decide whether a provider's
+model can actually see.
 
-Sends a known test image (3 shapes + text) with an exact-JSON prompt, scores the
-structured reply against the answer key, and returns True iff score >= 0.80.
+Runs synchronously when a provider is saved (on create, and on update whenever
+the platform, model, host or api key change); its verdict becomes
+``supports_vision``. The image (``backend/vision/vision-test.png``) shows two
+red circles, one green circle and one blue square above the black caption
+"Count the blue as red". Each question is sent as its own image+text request,
+so no answer can lean on an earlier one; the five go out concurrently, so the
+probe costs one round-trip instead of five. Each demands a bare answer — one
+word, one digit, or the caption verbatim — so scoring is whole-answer equality
+after normalisation, never a search through prose.
 
-Scoring scheme (weights sum to 1.0):
-    * 0.30  count — exactly 3 shapes reported
-    * 0.45  six attribute checks (0.075 each): for each of the three expected
-            (shape, colour) tuples we greedily pick one not-yet-consumed reported
-            entry whose combined token bag contains the expected colour, then
-            award the colour half and — if that same entry's bag also holds the
-            expected shape word — the shape half. Each reported entry answers
-            for at most one expected shape. If no entry matches the colour we
-            fall back to matching on shape alone and award only that half.
-    * 0.25  text  — equality of the normalised forms
+The five questions probe distinct abilities, and a blind model that guesses
+cannot pass them together: a colour that is absent (a reflexive "yes" fails),
+a colour that is present, counting the shapes, reading the caption, and
+reading it well enough to apply it to the shapes. A provider passes with at
+least ``PASS_MINIMUM`` correct answers; fewer means the model is not seeing the
+picture, however fluently it talks about it.
 
-Matching is case-insensitive and synonym-aware (_COLOUR_SYNONYMS /
-_SHAPE_SYNONYMS), and both fields of an entry contribute to one token bag, so a
-model folding colour into the shape name ({"shape": "red rod"}) scores the
-rectangle in full — a correct observation phrased differently. Leniency belongs
-in what counts as the right answer, never in how much of the answer is required.
-
-Normaliser for every comparison (shape tokens, colour tokens, and the text
-field alike): lowercase, non-alphanumeric characters become spaces, whitespace
-collapsed and stripped. One helper does it — :func:`_normalise_tokens` — so the
-text field cannot drift from the tokens.
+Fail-closed: an empty reply, or one that is not an accepted answer, is wrong;
+any exception inside the probe is a fail. Each answer is logged the moment it
+arrives, so an interrupted probe still leaves evidence of what the model
+answered. The caller writes the verdict straight into the provider row.
 """
 
-import json
 import logging
 import re
-from typing import Dict, List, Optional, Set
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Dict, FrozenSet, List, Optional, Sequence, Tuple
+
+from services.log_utils import safe
 
 logger = logging.getLogger(__name__)
 
-PASS_THRESHOLD = 0.80
-
-# Sent verbatim with backend/vision/vision-test.png attached.
-PROBE_PROMPT = """Analyse the image attached and return back this EXACT json with filled in details based on the image you see;
-
-{
-"number_of_shapes": <<enter_a_whole_number_here>>,
-"shapes": [
-    <<specify the shape name and color you see, 1 object per shape as per the example below>>
-    {"shape": <<shape_name>>, "color": <<color>>}
-],
-"text": <<is there text in the image and if so what does it read? Paste it EXACTLY without prose>>
-}"""
-
-# Answer key for backend/vision/vision-test.png.
-_EXPECTED_COUNT = 3
-_EXPECTED_SHAPES = [
-    ('rectangle', 'red'),
-    ('circle', 'yellow'),
-    ('hexagon', 'green'),
-]
-
-# Slot weights, summing to 1.0 across the count, six attribute halves, and the
-# text. Named rather than inlined because PASS_THRESHOLD is only meaningful
-# relative to them: at 0.80 a reply must earn the count, the text, and nearly
-# every attribute — miss the count and the ceiling is 0.70, miss the text 0.75.
-_COUNT_WEIGHT = 0.30
-_ATTRIBUTE_HALF_WEIGHT = 0.075  # × 3 shapes × 2 halves (colour, shape) = 0.45
-_TEXT_WEIGHT = 0.25
-# Colour and shape synonym sets used by the tokenizer/matcher in
-# score_probe_response. Each set maps the canonical key to all accepted
-# surface forms. The normaliser strips punctuation and splits on whitespace, so
-# compound model outputs like "red rod" yield token bags containing both
-# "red" and "rod".
-_COLOUR_SYNONYMS: Dict[str, Set[str]] = {
-    'red': {'red', 'crimson', 'scarlet', 'maroon', 'vermilion'},
-    'yellow': {'yellow', 'gold', 'golden', 'amber', 'mustard'},
-    'green': {'green', 'lime', 'emerald', 'olive'},
-}
-_SHAPE_SYNONYMS: Dict[str, Set[str]] = {
-    'rectangle': {
-        'rectangle', 'rect', 'rectangular', 'square', 'bar', 'rod',
-        'box', 'block', 'oblong', 'quadrilateral', 'stick', 'strip',
-    },
-    'circle': {
-        'circle', 'circular', 'dot', 'disc', 'disk', 'round',
-        'ellipse', 'oval', 'sphere', 'ball',
-    },
-    'hexagon': {'hexagon', 'hex', 'hexagonal', 'polygon'},
-}
-
-#: Lookup miss for either table above — a colour or shape the probe does not ask
-#: about, which therefore matches nothing.
-_NO_SYNONYMS: Set[str] = set()
-
-# The words the image spells out. Written here in normalised form — lowercase
-# and unpunctuated — because the comparison runs on normalised tokens; the image
-# itself renders "Chalie can read!" and the exclamation mark is not evidence of
-# anything the probe is testing.
-_EXPECTED_TEXT = 'chalie can read'
+#: Correct answers, out of five, a provider needs to be marked vision-capable.
+PASS_MINIMUM = 3
 
 
-def _normalise_tokens(value: str) -> List[str]:
-    """Split on whitespace after lowering case and replacing non-alphanumerics
-    with spaces — used for both shape/colour tokens and the text field."""
-    return ''.join(ch if ch.isalnum() else ' ' for ch in value.lower()).split()
+def normalise_answer(reply: str) -> str:
+    """The comparison form of an answer: lower case, integer-valued decimals
+    folded to their integer, every non-alphanumeric character turned into a
+    space, whitespace collapsed and stripped.
+
+    ``No.``, ``"no"`` and ``**No**`` all become ``no``; the caption wrapped in
+    quotes or ended with a full stop still equals the caption. ``4.0`` and
+    ``10.00`` are numeric figures, so they fold to ``4`` and ``10``; a genuine
+    fraction like ``4.5`` is a different answer and is left as is, so it still
+    fails a whole-answer comparison. Words are never dropped or reordered, so
+    prose around an answer still fails it.
+    """
+    text = re.sub(r'\b(\d+)\.0+\b', r'\1', reply.lower())
+    return ' '.join(''.join(ch if ch.isalnum() else ' ' for ch in text).split())
 
 
-#: The text answer key as the normaliser will render it, so the comparison never
-#: depends on this constant having been written punctuation-free by hand.
-_EXPECTED_TEXT_TOKENS = _normalise_tokens(_EXPECTED_TEXT)
+def _accepted(*answers: str) -> FrozenSet[str]:
+    """Accepted answers in their comparison form, so the table below reads as
+    plain words and can never drift from the normaliser."""
+    return frozenset(normalise_answer(answer) for answer in answers)
 
 
-def _token_bag(color: str, shape: str) -> Set[str]:
-    """Normalised tokens of both fields as ONE combined bag: the model might
-    put the colour in the shape field (``{"shape": "red rod"}``), so which
-    field a token arrived in carries no information."""
-    return set(_normalise_tokens(color)) | set(_normalise_tokens(shape))
+_BARE_ANSWER = 'No reasoning, thinking or prose allowed.'
+
+#: ``(prompt sent with the image, accepted answers)`` — asked in this order.
+PROBE_QUESTIONS: Tuple[Tuple[str, FrozenSet[str]], ...] = (
+    (
+        f'Is the colour yellow present in this image? Respond with ONLY Yes or No. {_BARE_ANSWER}',
+        _accepted('No', 'false', 'not present'),
+    ),
+    (
+        f'Is the colour black present in this image? Respond with ONLY Yes or No. {_BARE_ANSWER}',
+        _accepted('Yes', 'true', 'correct', 'present'),
+    ),
+    (
+        f'How many shapes are in this image? Respond with ONLY 1 numeric figure between 1 & 10. {_BARE_ANSWER}',
+        _accepted('4', 'four'),
+    ),
+    (
+        'What text is present in this image? Respond with ONLY the text on screen VERBATIM, '
+        'no prose or reasoning allowed.',
+        _accepted('Count the blue as red'),
+    ),
+    (
+        'If you followed the instruction shown in the image, how many red shapes would there be? '
+        f'Respond with ONLY 1 numeric figure between 1 & 10. {_BARE_ANSWER}',
+        _accepted('3', 'three'),
+    ),
+)
 
 
-def _bag_matches(bag: Set[str], key: str, synonyms: Dict[str, Set[str]]) -> bool:
-    """Whether the bag holds any accepted surface form of ``key`` (canonical
-    lowercase; the key is normalised so mixed-case inputs still resolve)."""
-    return bool(bag & synonyms.get(key.lower().strip(), _NO_SYNONYMS))
+def _is_correct(index: int, reply: Optional[str]) -> bool:
+    """Whether one reply passes its question: the reply's comparison form is in
+    the accepted set of the question at ``index``. A missing or empty reply is
+    a wrong answer, not an error — the probe scores what came back, however
+    thin, and only the transport layer decides what is a failure."""
+    _, accepted = PROBE_QUESTIONS[index]
+    return normalise_answer(reply or '') in accepted
 
 
-def _extract_json(text: str) -> Optional[Dict[str, object]]:
-    if not text:
-        return None
-    fenced = re.search(r'```(?:json)?\s*(\{.*\})\s*```', text, re.DOTALL)
-    if fenced:
-        candidate = fenced.group(1)
-    else:
-        start = text.find('{')
-        end = text.rfind('}')
-        candidate = text[start:end + 1] if (start != -1 and end > start) else None
-    if not candidate:
-        return None
-    try:
-        parsed = json.loads(candidate)
-    except (ValueError, TypeError):
-        return None
-    return parsed if isinstance(parsed, dict) else None
-
-
-def score_probe_response(text: str) -> float:
-    data = _extract_json(text)
-    if not data:
-        return 0.0
-
-    score = 0.0
-
-    # ---- count ------------------------------------------------------------
-    # Accepted as a number or as its digits: models answer this field both ways,
-    # and "3" is the same observation as 3. Anything else (a list, a null, a
-    # word) simply does not score — it is not evidence the model counted.
-    count = data.get('number_of_shapes')
-    if isinstance(count, (int, float, str)) and not isinstance(count, bool):
-        try:
-            if int(count) == _EXPECTED_COUNT:
-                score += _COUNT_WEIGHT
-        except ValueError:
-            pass
-
-    # ---- build bags -------------------------------------------------------
-    bags: List[Set[str]] = []
-    shapes = data.get('shapes')
-    if isinstance(shapes, list):
-        for item in shapes:
-            if not isinstance(item, dict):
-                continue
-            color = str(item.get('color', '') or '').strip()
-            shape = str(item.get('shape', '') or '').strip()
-            if color or shape:
-                bags.append(_token_bag(color, shape))
-
-    # ---- attribute matching -----------------------------------------------
-    # Colour and shape score independently, so a reply naming one correctly is
-    # worth more than a reply naming neither — the probe is asking whether the
-    # model saw the image, not whether it phrased the answer our way.
-    used_indices: Set[int] = set()
-    for expected_shape, expected_colour in _EXPECTED_SHAPES:
-        chosen_idx: Optional[int] = None
-
-        # Prefer the first unconsumed entry matching the expected colour;
-        # colour is the more discriminating of the two, since every shape
-        # synonym set overlaps ordinary description ("round", "box").
-        for i, bag in enumerate(bags):
-            if i not in used_indices and _bag_matches(bag, expected_colour, _COLOUR_SYNONYMS):
-                chosen_idx = i
-                break
-
-        if chosen_idx is None:
-            for i, bag in enumerate(bags):
-                if i not in used_indices and _bag_matches(bag, expected_shape, _SHAPE_SYNONYMS):
-                    chosen_idx = i
-                    break
-
-        if chosen_idx is None:
-            continue
-
-        # One reported entry answers for at most one expected shape, so three
-        # copies of the same correct answer cannot score as three shapes seen.
-        used_indices.add(chosen_idx)
-        bag = bags[chosen_idx]
-        if _bag_matches(bag, expected_colour, _COLOUR_SYNONYMS):
-            score += _ATTRIBUTE_HALF_WEIGHT
-        if _bag_matches(bag, expected_shape, _SHAPE_SYNONYMS):
-            score += _ATTRIBUTE_HALF_WEIGHT
-
-    # ---- text -------------------------------------------------------------
-    # Compared through the shared normaliser, so punctuation and spacing in the
-    # model's transcription are irrelevant while the words must be exact.
-    reported_text = _normalise_tokens(str(data.get('text', '') or ''))
-    if reported_text == _EXPECTED_TEXT_TOKENS:
-        score += _TEXT_WEIGHT
-
-    return round(score, 4)
+def score_answers(replies: Sequence[Optional[str]]) -> List[bool]:
+    """One verdict per question, in question order: whether the reply's
+    comparison form is an accepted answer. A missing or empty reply is wrong."""
+    if len(replies) != len(PROBE_QUESTIONS):
+        raise ValueError(f'expected {len(PROBE_QUESTIONS)} replies, got {len(replies)}')
+    return [_is_correct(index, reply) for index, reply in enumerate(replies)]
 
 
 def probe_provider(provider: Dict[str, object]) -> bool:
+    """Ask the provider every probe question about the probe image; True when
+    at least ``PASS_MINIMUM`` answers are correct.
+
+    The five questions go out on a function-scoped pool, so the probe costs
+    one round-trip instead of five, and every answer is logged the moment it
+    arrives: an operator sees exactly which question a provider failed, and an
+    interrupted probe still leaves evidence of what the model answered. Any
+    exception is a fail, never a raise: the caller is a provider save, and an
+    unprobeable provider is a provider without vision. A send that raises is
+    logged against its question and the remaining answers are still collected
+    and logged before the fail, so one bad question never hides the others.
+    """
     try:
         from services.file_mapper_service import FileMapperService
         from services import vision_service
+
         asset_path = FileMapperService.get_backend_path('vision', 'vision-test.png')
         with open(asset_path, 'rb') as fh:
             image_bytes = fh.read()
         config = vision_service.build_vision_config(provider)
-        reply = vision_service.send_image_with_config(
-            config, image_bytes, PROBE_PROMPT, mime_type='image/png',
-        )
-        if not reply:
+        name = safe(provider.get('name'))
+        replies: List[Optional[str]] = [None] * len(PROBE_QUESTIONS)
+        raised = False
+        with ThreadPoolExecutor(max_workers=len(PROBE_QUESTIONS)) as pool:
+            futures = {
+                pool.submit(
+                    vision_service.send_image_with_config,
+                    config, image_bytes, prompt, mime_type='image/png',
+                ): index
+                for index, (prompt, _) in enumerate(PROBE_QUESTIONS)
+            }
+            for future in as_completed(futures):
+                index = futures[future]
+                try:
+                    reply = future.result()
+                except Exception as exc:
+                    raised = True
+                    logger.warning("[VisionProbe] name=%s q%d raised: %s", name, index + 1, safe(str(exc)))
+                    continue
+                replies[index] = reply
+                logger.info(
+                    "[VisionProbe] name=%s q%d correct=%s answer=%r",
+                    name, index + 1, _is_correct(index, reply), safe((reply or '')[:80]),
+                )
+        if raised:
+            logger.warning("[VisionProbe] name=%s probe failed: a question raised", name)
             return False
-        score = score_probe_response(reply)
-        passed = score >= PASS_THRESHOLD
+        verdicts = score_answers(replies)
+        correct_count = sum(verdicts)
+        passed = correct_count >= PASS_MINIMUM
         logger.info(
-            "[VisionProbe] name=%s platform=%s model=%s score=%.2f pass=%s",
-            provider.get('name'), provider.get('platform'),
-            provider.get('model'), score, passed,
+            "[VisionProbe] name=%s platform=%s model=%s correct=%d/%d pass=%s",
+            name, safe(provider.get('platform')), safe(provider.get('model')),
+            correct_count, len(PROBE_QUESTIONS), passed,
         )
         return passed
     except Exception as exc:

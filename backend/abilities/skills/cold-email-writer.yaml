@@ -5,11 +5,11 @@ tags: email, sales, outreach, copywriting, prospecting, follow-up, sales-prospec
 version: 1
 ---
 
-1. Use `memory` to recall any stored sender profile, past campaigns, or ICP notes before gathering requirements.
+1. Use `recall` to surface any stored sender profile, past campaigns, or ICP notes before gathering requirements.
 2. Ask who the sender is (role, company, what they sell), who the target is (job title, company type, trigger), and whether a single email or multi-email sequence is needed — then record via `write_file`.
 3. Use `search` to research the target company or person if a specific prospect was named, looking for recent news or signals to personalise the opener.
 4. Use `write_file` to draft the first email: subject line (short, internal-looking), opener about the prospect's world (not the sender's product), one-sentence value connection, and a single clear ask.
 5. For a sequence, use `write_file` to draft 4–6 follow-up emails each with a distinct angle (new evidence, different pain point, related insight, direct question, or breakup) and recommended send gaps (Day 4, 9, 16, 25, 35).
 6. Review all drafts against core principles: peer tone not vendor tone, under 150 words, no "I hope this finds you well", one ask only — revise inline via `write_file`.
 7. Present the final email(s) with 2–3 subject line variants and a brief rationale for the structural choices made.
-8. Save the sequence structure and target profile to `memory` if the user plans to iterate on this campaign.
+8. If the user plans to iterate on this campaign, summarise the sequence structure and target profile so they are remembered.

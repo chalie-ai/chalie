@@ -15,6 +15,8 @@ pip install -e backend/                 # all dependencies, voice (TTS/STT/VAD) 
 python backend/run.py                   # SQLite auto-initializes; no external services required
 ```
 
+The database is versioned per release (`data/chalie-<version>.sqlite`) and is never rewritten in place — a change to `schema.sql` only takes effect in a fresh file. After editing the schema locally, delete the versioned database file (and its `-wal`/`-shm` sidecars) under `data/`, or bump `VERSION`, then restart. Treat a dev container the same way: it's disposable, never built on top of across a schema change.
+
 There is no `.env` and no environment-variable configuration: code-level config is Python constants, runtime settings live in the Brain interface, and secrets auto-generate on first run.
 
 This manual flow syncs Python dependencies only. The Playwright browser and the on-device voice models are fetched once by `installer/install.sh` (or the Docker build), not by `pip install -e backend/` or `python backend/run.py` — abilities that need them fail loudly with a reinstall hint until you've run the installer at least once.

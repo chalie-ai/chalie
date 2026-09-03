@@ -55,8 +55,12 @@ _SKIP_DIR_NAMES: tuple[str, ...] = (
 )
 
 # Chalie's own databases and sensitive directories to skip.
+# The main database is deliberately NOT listed here: it is versioned per
+# release (data/chalie-<version>.sqlite), and a frozen list computed at import
+# time would only know the running build's own name. _is_chalie_main_db()
+# matches every release's file — plus the legacy chalie.db and the -wal/-shm
+# sidecars of all of them — per path instead.
 _SKIP_CHALIE_PATHS: tuple[str, ...] = (
-    str(FileMapperService.get_db_path()),
     str(FileMapperService.get_file_index_db_path()),
     str(FileMapperService.get_skills_db_path()),
     str(FileMapperService.get_mcp_tools_db_path()),
@@ -118,8 +122,33 @@ def _is_in_skip_dirs(path: str) -> bool:
     return False
 
 
+def _is_chalie_main_db(path: str) -> bool:
+    """Return True if *path* is one of Chalie's main-database files in the
+    data directory: the legacy ``chalie.db``, any versioned
+    ``chalie-<version>.sqlite`` whenever a release's file appears, or the
+    ``-wal`` / ``-shm`` sidecars of any of those.
+
+    Evaluated per path rather than from a frozen list: a list built at import
+    time could only name the running build's own database, so a previous
+    release's file (or an upcoming one's) would slip through and be indexed.
+    """
+    p = Path(path)
+    if p.parent != FileMapperService.get_data_path():
+        return False
+    name = p.name
+    for suffix in ("-wal", "-shm"):
+        if name.endswith(suffix):
+            name = name[: -len(suffix)]
+            break
+    if name == FileMapperService.get_legacy_db_path().name:
+        return True
+    return FileMapperService.version_from_db_path(name) is not None
+
+
 def _is_chalie_path(path: str) -> bool:
     """Return True if *path* is one of Chalie's own databases or sensitive dirs."""
+    if _is_chalie_main_db(path):
+        return True
     for entry in _SKIP_CHALIE_PATHS:
         if path == entry or path.startswith(entry + "/"):
             return True

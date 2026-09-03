@@ -5,11 +5,11 @@ tags: roadmap, release notes, changelog, stakeholder update, feature announcemen
 version: 1
 ---
 
-1. Use `memory` to recall the product's current roadmap, recent releases, and any prior stakeholder communication preferences.
+1. Use `recall` to surface the product's current roadmap, recent releases, and any prior stakeholder communication preferences.
 2. Identify the audience and format needed — board/executive, engineering, or customer — and select the appropriate roadmap format (Now/Next/Later, Timeline, or Theme-based), then use `write_file` to start the draft.
 3. For release notes, use `write_file` to lead with user value not implementation details, group by user workflows, and call out migration or behaviour changes explicitly.
 4. For feature announcements, use `write_file` to structure as: problem context, what changed, who it benefits, and what to do next.
 5. For board or executive updates, use `write_file` to focus on progress against strategic goals, trade-offs made, and decisions required — not feature lists.
-6. Use `memory` to store the finalized communication so future updates reference consistent framing and audience priors.
+6. Restate the finalized framing and audience priors so they are remembered and future updates stay consistent.
 7. Present the draft for review and refine via `write_file` based on feedback.
 8. Use `email` to distribute the finalized communication if sending directly to stakeholders.

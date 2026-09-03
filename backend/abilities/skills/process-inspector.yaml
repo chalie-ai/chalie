@@ -5,7 +5,7 @@ tags: process, port, pid, lsof, netstat, resource, cpu, memory, inspect, trouble
 version: 1
 ---
 
-1. Use `memory` to recall any prior process investigations or known problematic services.
+1. Use `recall` to surface any prior process investigations or known problematic services.
 2. Ask the user what they want to inspect: a specific port number, a process name, or a general overview of resource-heavy processes.
 3. For **port inspection**: use `bash` with action read to run `lsof -i :<port> -P -n` or `ss -tlnp | grep :<port>` to identify which process is binding the port — report PID, process name, and user.
 4. For **process search**: use `bash` with action read to run `ps aux | grep -i <name>` to find matching processes — report PID, CPU%, MEM%, and command line.

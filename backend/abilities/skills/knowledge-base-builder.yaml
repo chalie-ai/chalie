@@ -5,11 +5,10 @@ tags: knowledge-base, documentation, reading, archiving, reference, notes, organ
 version: 1
 ---
 
-1. Ask the user what the knowledge base is for, what sources to include (URLs, topics to search, or pasted text), and how they want it organised; use `memory` to recall any existing structure.
-2. Use `memory` to recall any existing knowledge base structure or related prior entries.
+1. Ask the user what the knowledge base is for, what sources to include (URLs, topics to search, or pasted text), and how they want it organised; use `recall` to surface any existing structure.
+2. Use `recall` to surface any existing knowledge base structure or related prior entries.
 3. For each source URL, use `web_fetch` to extract the full content; use `browser` for JS-heavy or login-required pages.
 4. Use `search` to discover additional sources on the topic if the user provided keywords rather than explicit URLs.
-5. For large sets (5+ sources), process sources in parallel with `web_fetch` and `search`, using async: true on each so each source is extracted and distilled into a structured note concurrently.
-6. Use `write_file` to structure each entry: title, source URL, date retrieved, 3–5 key takeaways, and any notable quotes or data points.
-7. Use `write_file` to organise the entries into the agreed structure and build an index document linking all entries.
-8. Use `write_file` to save each entry and the index, then use `memory` to store a summary of what the knowledge base covers for quick future reference.
+5. Use `write_file` to structure each entry: title, source URL, date retrieved, 3–5 key takeaways, and any notable quotes or data points.
+6. Use `write_file` to organise the entries into the agreed structure and build an index document linking all entries.
+7. Use `write_file` to save each entry and the index, then summarise what the knowledge base covers so it is remembered for quick future reference.

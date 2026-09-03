@@ -40,10 +40,12 @@ snapshot walk also reaches:
 
 ``get_db_path`` is already redirected by the ``db`` fixture to the per-test
 SQLite file, independently of ``_DATA_DIR`` — the ``chalie_db`` artifact
-``stage_import``'s schema-downgrade guard hard-requires
-(``SnapshotError("Snapshot has no chalie.db to restore")`` otherwise) is
-satisfied by that same converged test database, so no extra wiring is needed
-for it here.
+``stage_import``'s restore guard hard-requires
+(``SnapshotError("Snapshot has no main database to restore")`` otherwise) is
+satisfied by that same provisioned test database, so no extra wiring is needed
+for it here.  The guard's other half — refusing a snapshot from a newer build —
+never fires here: ``get_version_path`` points at nothing, so export stages no
+VERSION artifact and the version comparison is skipped.
 """
 
 import sqlite3

@@ -11,5 +11,5 @@ version: 1
 4. Use `write_file` to tally filler words (um, uh, like, you know, basically) per 100 words and classify the user's questions by type: closed, leading, open genuine, clarifying, and building.
 5. If the user was the facilitator, use `write_file` to evaluate agenda adherence, decision clarity, and whether action items were assigned with explicit owners and deadlines.
 6. Use `write_file` to produce a report with: top 3 findings with evidence, detailed analysis per module, 3 genuine strengths, and 3 ranked growth opportunities each with a concrete "try this next time" action.
-7. Save the report using `write_file` and store key metrics in `memory` as a baseline for future comparison.
-8. Use `memory` to surface prior session baselines alongside this report so the user can see trend data.
+7. Save the report using `write_file` and state the key metrics in the reply so they are remembered as a baseline for future comparison.
+8. Use `recall` to surface prior session baselines alongside this report so the user can see trend data.

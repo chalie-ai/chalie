@@ -2,10 +2,10 @@
 
 On databases created after ``schema.sql`` declared
 ``id INTEGER PRIMARY KEY AUTOINCREMENT`` the column is a real rowid alias and
-every insert hands back an id. On databases that predate it, SchemaConvergence
-could only ``ALTER TABLE tool_calls ADD COLUMN id INTEGER`` — SQLite cannot add
-a PRIMARY KEY (or AUTOINCREMENT) with ALTER — so ``id`` landed as a plain,
-nullable, non-key column that nothing ever populates. Every row's id stays
+every insert hands back an id. On databases that predate it, boot could only
+``ALTER TABLE tool_calls ADD COLUMN id INTEGER`` — SQLite cannot add a PRIMARY KEY
+(or AUTOINCREMENT) with ALTER — so ``id`` landed as a plain, nullable, non-key
+column that nothing ever populates. Every row's id stays
 NULL, so ``ToolCallService.start()`` returns None, ``finish()`` no-ops, tool
 results are never written back, and the turn re-feeds empty results to the
 model — which then repeats the call until the runaway-loop guard trips.
@@ -54,7 +54,7 @@ CREATE TABLE tool_calls_new (
 
 # Every canonical column except id, which is backfilled from rowid. Copied by
 # name (never position) so live column order — which drift left different from
-# schema.sql — never matters; any converged column the live table happens to
+# schema.sql — never matters; any declared column the live table happens to
 # lack is skipped and takes the new table's default.
 _CARRY_COLUMNS = (
     "transcript_id",

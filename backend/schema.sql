@@ -241,15 +241,15 @@ CREATE TABLE IF NOT EXISTS list_items (
 CREATE INDEX IF NOT EXISTS idx_list_items_active ON list_items(list_id) WHERE removed_at IS NULL;
 
 -- list_events + idx_list_events_list removed — list history was a pointless
--- LLM-facing feature; SchemaConvergenceService DROPs both on next boot.
+-- LLM-facing feature.
 
 -- tool_capability_profiles + idx_tcp_tool_name removed — profiles replaced
--- by abilities.sqlite (ability registry). SchemaConvergenceService auto-DROPs
--- both the table and its index on next boot.
+-- by abilities.sqlite (ability registry).
 
--- Note: tables that disappear from this schema are dropped automatically by
--- SchemaConvergenceService on the next boot.  No explicit DROP statements
--- needed here.  Past examples: cortex_iterations, persistent_tasks,
+-- Note: a table that disappears from this schema simply stops existing — each
+-- release builds a new database file from this schema and copies forward only
+-- the tables both files share (VersionedDatabaseService).  No explicit DROP
+-- statements needed here.  Past examples: cortex_iterations, persistent_tasks,
 -- cognitive_reflexes, triage_calibration_events, document_chunks,
 -- knowledge, knowledge_vec, knowledge_fts, scheduled_items_vec, lists_vec,
 -- goals_vec, place_fingerprints, ambient_inferences, situation_states,
@@ -263,8 +263,8 @@ CREATE INDEX IF NOT EXISTS idx_list_items_active ON list_items(list_id) WHERE re
 -- against newly-fetched INBOX rows lets Chalie recognise its own
 -- echoed send-backs as its own replies rather than fresh incoming
 -- mail — the connected mailbox IS Chalie's address, so sends ring
--- back into INBOX untouched. Schema convergence creates this at
--- boot; no migration required.
+-- back into INBOX untouched. Declared here, so every release's
+-- database carries it; no migration required.
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS emails_sent (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -282,10 +282,27 @@ CREATE TABLE IF NOT EXISTS schema_version (
 
 INSERT OR IGNORE INTO schema_version (version) VALUES (1);
 
--- Schema SHAPE carries no version ledger — SchemaConvergenceService converges
--- the live DB to the shape this file declares.  One-time DATA migrations are
--- tracked separately: migrations/runner.py records each step in the
--- schema_migrations table declared at the end of this file.
+-- Schema SHAPE carries no version ledger — every release opens its own database
+-- file, built from this file and filled by copying the previous release's data
+-- forward (VersionedDatabaseService); database_lineage records that copy.
+-- One-time DATA migrations are tracked separately: migrations/runner.py records
+-- each step in the schema_migrations table declared at the end of this file.
+
+-- ────────────────────────────────────────────────────────────────
+-- DATABASE LINEAGE — how this file came to be
+-- ────────────────────────────────────────────────────────────────
+-- One row per release that provisioned this file (VersionedDatabaseService),
+-- written as the LAST step of a provisioning: a file carrying the running
+-- release's row is by definition complete, one without it died mid-copy and is
+-- rebuilt. The rows copy forward like any other table, so a database states its
+-- own upgrade history — which release built it, from which file, and which
+-- tables (failed_tables, comma-separated) SQLite could not read across.
+CREATE TABLE IF NOT EXISTS database_lineage (
+    version       TEXT PRIMARY KEY,
+    source_file   TEXT,
+    completed_at  TEXT NOT NULL,
+    failed_tables TEXT NOT NULL DEFAULT ''
+);
 
 -- ────────────────────────────────────────────────────────────────
 -- WORLD STATE VECTOR TABLES — salience-based retrieval
@@ -397,8 +414,8 @@ CREATE TABLE IF NOT EXISTS transcript (
     -- Per-channel monotonic turn counter. The single conversation
     -- boundary: every row written during one logical turn shares one turn_id,
     -- so context, act-trail and cancellation cleanup all key on (channel,
-    -- turn_id) rather than a transcript row id. Nullable + no DEFAULT keeps it
-    -- convergence-safe (ADD COLUMN) on existing databases; the value is computed
+    -- turn_id) rather than a transcript row id. Nullable + no DEFAULT keeps rows
+    -- copied forward from a release that predates it valid; the value is computed
     -- at insert time by transcript_service.
     turn_id     INTEGER,
     -- Positive settle flag: 1 on assistant rows that carry no model-driven tool
@@ -556,8 +573,8 @@ CREATE INDEX IF NOT EXISTS idx_turn_executions_open
 CREATE TABLE IF NOT EXISTS data_graph (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
     -- CHECK constraint removed: Python validates kind via the vertical models'
-    -- KIND ClassVars (models/data_graph.py). To be restored when
-    -- SchemaConvergence handles constraint changes (v0.5.0 TODO).
+    -- KIND ClassVars (models/data_graph.py). Restorable now that each release
+    -- builds its own file — a rejected row would fail its table's copy (v0.5.0 TODO).
     kind              TEXT NOT NULL,
     key               TEXT NOT NULL,
     value             TEXT,

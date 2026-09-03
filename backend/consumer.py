@@ -18,15 +18,12 @@ import threading
 import time
 from typing import Callable, Dict, List, Tuple, cast
 
+from services.app_version import get_version
 
-def _read_version() -> str:
-    try:
-        from services.file_mapper_service import FileMapperService
-        return FileMapperService.get_version_path().read_text().strip()
-    except Exception:
-        return "0.0.0"
-
-APP_VERSION = _read_version()
+# The running build's version, read once at import through the single version
+# chokepoint (services/app_version.py). No fallback: a missing or empty
+# VERSION file fails this import loudly rather than masquerading as "0.0.0".
+APP_VERSION = get_version()
 
 
 def _thread_excepthook(args: threading.ExceptHookArgs) -> None:

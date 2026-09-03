@@ -5,11 +5,11 @@ tags: decision log, action items, meeting minutes, decisions, accountability, fo
 version: 1
 ---
 
-1. Use `memory` to recall any existing decision log context or prior decisions relevant to this topic.
+1. Use `recall` to surface any existing decision log context or prior decisions relevant to this topic.
 2. Ask the user for the decision details — what was decided, who owns it, the deadline, and the rationale — then record a structured entry via `write_file` including: date, topic, decision statement, owner, deadline, rationale, and rejected alternatives.
 3. Use `read` then `write_file` to append the new decision to the persistent decision log, preserving all prior decisions.
 4. Use `schedule` to create a reminder for the owner's deadline so follow-up is not missed.
 5. To review the log, use `read` to retrieve the full decision log.
 6. From the retrieved log, surface all open action items grouped by owner and due date.
 7. Flag any items past their deadline and ask the user whether to update, escalate, or close them — then use `write_file` to write back any changes.
-8. Use `memory` to store the most recent decision summary so it surfaces automatically in future planning discussions.
+8. Restate the decision summary in the reply so it is remembered for future planning discussions.

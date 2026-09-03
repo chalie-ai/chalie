@@ -8,7 +8,8 @@ tool_calls anchored to one (the FK has no ON DELETE CASCADE, so children go
 first).
 
 Delete-only — migrations never create schema. The ``compactions`` table is
-declared in ``schema.sql`` and created by the boot schema convergence, and
+declared in ``schema.sql`` and created when the release's database file is
+provisioned, and
 compaction self-heals its data: the first compaction after this purge writes a
 fresh checkpoint into that table; until then a thread simply reads its full
 history. No backfill — the old per-turn checkpoints were written under the
