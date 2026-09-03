@@ -1,17 +1,57 @@
-"""Tests that FileMapperService resolves paths to correct locations."""
+"""Tests that FileMapperService resolves paths to correct locations.
+
+The main database is versioned (``data/chalie-<VERSION>.sqlite``); the
+naming convention lives in FileMapperService, and these tests exercise it
+through the builder (version → path) and its inverse (path → version).
+"""
 
 import pytest
 
 from services.file_mapper_service import FileMapperService
 
 
+def _version() -> str:
+    """The repo-root VERSION content, exactly as the running build reads it."""
+    return FileMapperService.get_version_path().read_text().strip()
+
+
 @pytest.mark.unit
 class TestFileMapperService:
 
-    def test_get_db_path_ends_with_data_chalie_db(self) -> None:
+    def test_get_db_path_is_versioned(self) -> None:
+        """The running db is data/chalie-<VERSION file content>.sqlite under data/."""
         db_path = FileMapperService.get_db_path()
-        assert db_path.parts[-1] == "chalie.db"
+        assert db_path.parts[-1] == f"chalie-{_version()}.sqlite"
         assert db_path.parts[-2] == "data"
+
+    def test_get_legacy_db_path_is_data_chalie_db(self) -> None:
+        """The pre-versioning file name is preserved as the legacy path."""
+        legacy = FileMapperService.get_legacy_db_path()
+        assert legacy.parts[-1] == "chalie.db"
+        assert legacy.parts[-2] == "data"
+
+    def test_versioned_db_path_round_trips_through_its_inverse(self) -> None:
+        """version → path → version is the identity for versioned names."""
+        for version in ("1.3.0-beta", "1.10.0", "2.0.0"):
+            path = FileMapperService.get_versioned_db_path(version)
+            assert path.name == f"chalie-{version}.sqlite"
+            assert path.parent.name == "data"
+            assert FileMapperService.version_from_db_path(path) == version
+        # The running build's db path round-trips with the running version.
+        assert FileMapperService.version_from_db_path(FileMapperService.get_db_path()) == _version()
+
+    def test_version_from_db_path_is_none_for_unversioned_names(self) -> None:
+        """Only chalie-<version>.sqlite names encode a version — everything else is None."""
+        for path in (
+            FileMapperService.get_legacy_db_path(),
+            FileMapperService.get_mcp_tools_db_path(),
+            FileMapperService.get_file_index_db_path(),
+            FileMapperService.get_skills_db_path(),
+            "chalie-.sqlite",
+            "chalie-1.3.0",
+            "db-chalie-1.3.0-beta.sqlite",
+        ):
+            assert FileMapperService.version_from_db_path(path) is None, str(path)
 
     def test_get_schema_path_ends_correctly_and_file_exists(self) -> None:
         schema = FileMapperService.get_schema_path()
@@ -34,6 +74,7 @@ class TestFileMapperService:
         root = FileMapperService._CHALIE_ROOT
         candidates = [
             FileMapperService.get_db_path(),
+            FileMapperService.get_legacy_db_path(),
             FileMapperService.get_schema_path(),
             FileMapperService.get_version_path(),
             FileMapperService.get_skills_db_path(),

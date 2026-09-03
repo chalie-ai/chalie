@@ -21,6 +21,13 @@ class FileMapperService:
     classmethods — no instances are created.
     """
 
+    # Main-database naming: the running build opens its own
+    # ``data/chalie-<version>.sqlite``; ``chalie.db`` is the pre-versioning
+    # name. This class is the only place that knows the convention.
+    _LEGACY_DB_NAME: str = "chalie.db"
+    _VERSIONED_DB_PREFIX: str = "chalie-"
+    _VERSIONED_DB_SUFFIX: str = ".sqlite"
+
     _CHALIE_ROOT: Path = Path(__file__).resolve().parents[2]
     _BACKEND_DIR: Path = _CHALIE_ROOT / "backend"
     _FRONTEND_DIR: Path = _CHALIE_ROOT / "frontend"
@@ -43,8 +50,47 @@ class FileMapperService:
 
     @classmethod
     def get_db_path(cls) -> Path:
-        """Return path to the main SQLite database."""
-        return cls._DATA_DIR / "chalie.db"
+        """Return the main SQLite database path for the running build.
+
+        Versioned (``data/chalie-<VERSION>.sqlite``) so an upgrade opens its
+        own file instead of the previous build's; the pre-versioning name is
+        :meth:`get_legacy_db_path`. The running version comes from
+        :func:`services.app_version.get_version` — a function-local import
+        because app_version needs this class for the VERSION path (the
+        pattern run.py already uses).
+        """
+        from services.app_version import get_version
+        return cls.get_versioned_db_path(get_version())
+
+    @classmethod
+    def get_legacy_db_path(cls) -> Path:
+        """Return the legacy (pre-versioning) main database file: ``data/chalie.db``."""
+        return cls._DATA_DIR / cls._LEGACY_DB_NAME
+
+    @classmethod
+    def get_versioned_db_path(cls, version: str) -> Path:
+        """Build the main database path for *version*: ``data/chalie-<version>.sqlite``."""
+        return cls._DATA_DIR / f"{cls._VERSIONED_DB_PREFIX}{version}{cls._VERSIONED_DB_SUFFIX}"
+
+    @classmethod
+    def version_from_db_path(cls, path: str | Path) -> str | None:
+        """Return the version encoded in *path*, or None when the file name is
+        not a versioned Chalie database.
+
+        Inverse of :meth:`get_versioned_db_path`: only
+        ``chalie-<version>.sqlite`` matches — the legacy name
+        (:meth:`get_legacy_db_path`) and every other file (``mcp_tools.sqlite``,
+        ``file_index.sqlite``, …) yield None, as does an empty version
+        (``chalie-.sqlite``).
+        """
+        name = Path(path).name
+        if not (
+            name.startswith(cls._VERSIONED_DB_PREFIX)
+            and name.endswith(cls._VERSIONED_DB_SUFFIX)
+        ):
+            return None
+        version = name[len(cls._VERSIONED_DB_PREFIX):-len(cls._VERSIONED_DB_SUFFIX)]
+        return version if version else None
 
     @classmethod
     def get_telemetry_json_path(cls) -> Path:
