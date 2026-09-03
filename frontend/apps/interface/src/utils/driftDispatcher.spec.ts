@@ -189,7 +189,7 @@ describe('dispatchDrift — turn_signal frame', () => {
   // frames alone. Without it, the SOLE releaser is the execution path and
   // `_reconcileWorking` never touches the hold, so the spine's `isSurfaceBusy`
   // gate strands forever and every later send silently queues.
-  it('status=updated releases the send\'s POST-scoped busy hold only AFTER the refetch settles — releasing sooner would let a second queued send slip through against stale state (TKT-1516)', async () => {
+  it('status=updated releases the send\'s POST-scoped busy hold only AFTER the refetch settles — releasing sooner would let a second queued send slip through against stale state', async () => {
     dispatchDrift(frame({ status: 'updated', turn_id: 11, type: 'user' }));
     expect(releasePendingSendMock).not.toHaveBeenCalled();
     await Promise.resolve();
@@ -410,7 +410,7 @@ describe('dispatchDrift — turn_execution frame', () => {
   // 'working' is the one state with an in-flight refetch — releasing the hold
   // synchronously here would reopen the spine's busy gate before that refetch
   // resolves, letting a second queued send slip through against stale
-  // (pre-refetch) state (TKT-1516). The release must wait for the refetch to
+  // (pre-refetch) state. The release must wait for the refetch to
   // settle.
   it('state=working releases the send\'s POST-scoped busy hold only AFTER the refetch settles', async () => {
     dispatchDrift(frame({ state: 'working', turn_id: 60, started_at: '2026-01-01T00:00:00Z', type: 'user' }));

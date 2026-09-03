@@ -211,7 +211,7 @@ function _dispatchTurnSignal(data: WsPushEvent): boolean {
       // The release must wait for the refetch to SETTLE, not fire alongside
       // it — releasing synchronously reopens the spine's busy gate while this
       // refetch is still in flight, letting a second queued send slip through
-      // against stale (pre-refetch) state (TKT-1516). `.finally` (not `.then`)
+      // against stale (pre-refetch) state. `.finally` (not `.then`)
       // so a REJECTED refetch still releases the hold rather than stranding
       // the gate closed forever.
       void _refetchAndUpsert(turnId, type).finally(() => hooks().releasePendingSend(turnId, type));
@@ -289,7 +289,7 @@ function _dispatchTurnExecution(data: WsPushEvent): boolean {
     // release must wait for the refetch to SETTLE rather than fire alongside
     // it — releasing synchronously reopens the spine's busy gate while this
     // refetch is still in flight, letting a second queued send slip through
-    // against stale (pre-refetch) state (TKT-1516). `.finally` (not `.then`)
+    // against stale (pre-refetch) state. `.finally` (not `.then`)
     // so a REJECTED refetch still releases the hold rather than stranding the
     // gate closed forever.
     void _refetchAndUpsert(exec.turn_id, type).finally(() => h.releasePendingSend(exec.turn_id, type));
