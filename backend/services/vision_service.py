@@ -11,9 +11,10 @@ _VISION_SYSTEM = (
     "You are a precise vision assistant. Follow the user's instructions exactly."
 )
 
-#: Output ceiling for the candidate-provider probe. The expected reply is a small
-#: JSON object describing a test image; this leaves ample room for it without
-#: needing a context window the candidate has not been pinned to yet.
+#: Output ceiling for the candidate-provider probe. Each expected reply is a
+#: bare answer about a test image — a word, a digit or a short caption; this
+#: leaves ample room for it without needing a context window the candidate has
+#: not been pinned to yet.
 _PROBE_MAX_TOKENS = 2048
 
 
@@ -42,9 +43,8 @@ def send_image_with_config(config: Dict[str, object], image_bytes: bytes,
 
     ``max_tokens`` is explicit because this is the one send that has no context
     window to size against: a candidate has no ``providers.context_window`` to
-    pin, and the reply being asked for is one short JSON object either way.
-    Every other send derives its budget from that column via
-    ``ProviderService.send``.
+    pin, and the reply being asked for is one bare answer either way. Every
+    other send derives its budget from that column via ``ProviderService.send``.
     """
     try:
         from services.provider_api import ProviderApiRequest  # noqa: PLC0415
