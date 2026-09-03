@@ -48,7 +48,6 @@ class DiscoveryConfig(UserConfig):
     one thread.
     """
 
-    SUPPORTS_ASYNC = False
     BROADCASTS_STATE = False
     RENDERS_HTML = False
     # Re-declared, NOT inherited. Subclassing UserConfig would otherwise bill this

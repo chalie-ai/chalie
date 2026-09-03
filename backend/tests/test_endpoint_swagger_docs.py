@@ -52,7 +52,6 @@ _MIGRATED_PREFIXES = (
     "/api/skills",
     "/api/policies",
     "/api/wrappers",
-    "/api/subagents",
     "/api/mcp-clients",
     "/api/providers",
     "/api/scheduler",
@@ -234,16 +233,6 @@ class TestDeclaredExtrasDocumentRealHandlerStatuses:
 
 
 class TestNeverEmitted404IsNotDocumented:
-    def test_subagents_ack_style_delete_documents_no_404(self, swagger_spec: dict[str, object]) -> None:
-        # SubagentsEndpoint.delete is an ack-style cancel: an unknown id is a
-        # benign race answered with a 200 result body, never 404 — so its
-        # DocumentedResponse(not_found=False) must drop the structural 404 doc
-        # while the real branches stay documented.
-        responses = _at(swagger_spec, "paths", "/api/subagents/{id}", "delete", "responses")
-        assert "404" not in responses
-        assert _ref(responses, "200", "schema") == "#/definitions/SubagentStopResultEnvelope"
-        assert _ref(responses, "401", "schema") == "#/definitions/AuthError"
-
     def test_providers_idempotent_delete_documents_no_404(self, swagger_spec: dict[str, object]) -> None:
         # Providers.delete is idempotent: 204 even when the row is already
         # gone; its only real error branch beyond the structural set is the

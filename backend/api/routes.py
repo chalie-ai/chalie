@@ -64,7 +64,6 @@ from .endpoints.policies import PoliciesEndpoint
 from .endpoints.providers import Providers
 from .endpoints.scheduler import Scheduler
 from .endpoints.skills import Skills
-from .endpoints.subagents import SubagentsEndpoint
 from .endpoints.threads import ThreadsEndpoint
 from .endpoints.wrappers import WrappersEndpoint
 
@@ -114,8 +113,6 @@ ROUTES: tuple[Endpoint, ...] = (
 
     SnapshotExportAction("snapshot", "export"),
     SnapshotImportAction("snapshot", "import"),
-
-    SubagentsEndpoint("subagents"),
 
     ThreadsEndpoint("threads"),
     ThreadsBatch("threads", "batch"),

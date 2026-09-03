@@ -35,7 +35,6 @@ class MemoryHygieneConfig(ProcessorConfig):
 
     # Re-declared, not inherited (discovery's rule): background posture is a
     # deliberate declaration, never an accident of the base class.
-    SUPPORTS_ASYNC = False
     BROADCASTS_STATE = False
     RENDERS_HTML = False
     USAGE_TYPE = "background"

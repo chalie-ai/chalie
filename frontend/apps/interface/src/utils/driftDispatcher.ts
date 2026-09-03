@@ -24,7 +24,6 @@ import { showToast } from './toast';
 import { clearLiveTurn, finishLiveTool, startLiveTool } from './liveActTrail';
 import { reconcileCancelledTurn } from './cancelReconcile';
 import { findTurnType, setTurnDone, setTurnWorking, upsertTurnToSurfaces } from './turnDom';
-import { useTasksStore } from '../stores/tasks';
 import { usePermissionsStore } from '../stores/permissions';
 import { useContextUsageStore } from '../stores/contextUsage';
 import { useVoiceTranscriptsStore } from '../stores/voiceTranscripts';
@@ -377,10 +376,6 @@ function _dispatchCancelled(turnId: number, type: string): void {
  *  handled. Verbatim relocation of session.ts's former `_routeSimpleEvent`. */
 function _dispatchSimpleEvent(data: WsPushEvent): boolean {
   switch (data.type as string) {
-    case 'subagent_start':
-    case 'subagent_end':
-      useTasksStore().applyDriftEvent(data);
-      return true;
     case 'capability_alert':
       return true;
     case 'permission_request':

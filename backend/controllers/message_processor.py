@@ -442,8 +442,7 @@ class MessageProcessor:
 
     def _build_request(self) -> ProviderRequest:
         """Assemble this step's provider-neutral request off the prompt and tool
-        services (§4). The system prompt already carries the async guidance the
-        config warrants — this controller does not append it."""
+        services (§4)."""
         from abilities._registry import AbilityRegistry  # noqa: PLC0415
         tools = AbilityRegistry.build_tools(self)
         thinking_str = self.provider_service.resolve_thinking_mode()
@@ -553,7 +552,7 @@ class MessageProcessor:
         to steer the model from the second identical call. The count was tallied
         by :meth:`_guard_runaway` BEFORE dispatch, so a call that has not yet
         dispatched has not yet been counted. Dispatches bypassing ``_step``
-        (compactor, document upload, async delegate's dedicated mp) have zero
+        (compactor, document upload) have zero
         tally and never steer here."""
         return self._tool_invocations[self._invocation_key(tool_name, canonical_params)]
 

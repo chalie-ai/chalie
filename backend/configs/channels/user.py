@@ -19,7 +19,6 @@ class UserConfig(ProcessorConfig):
     indexed and dispatched as ``vision`` (images) or ``read`` (everything
     else) on the drive thread."""
 
-    SUPPORTS_ASYNC = True
     RENDERS_HTML: ClassVar[bool] = True
     BROADCASTS_STATE = True
     USAGE_TYPE = "foreground"

@@ -23,11 +23,11 @@ from abilities._ability import Ability
 from configs.enums.param_key import VARIANTS, Keys
 from services.key_normalizer import KeyNormalizer
 
-# The two keys the framework injects into / strips from every call (see
+# The key the framework injects into / strips from every call (see
 # Ability.get_input_schema and ToolDispatcher.dispatch/_execute). No parameter and
-# no variant may ever collide with these, or a model key could hijack a framework
+# no variant may ever collide with it, or a model key could hijack a framework
 # slot. Compared on the squeezed form (see ``KeyNormalizer.squeeze``).
-FRAMEWORK_KEYS = ("act_summary", "async")
+FRAMEWORK_KEYS = ("act_summary",)
 
 
 class RegistryInvariant:

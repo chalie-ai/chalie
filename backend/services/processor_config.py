@@ -23,14 +23,6 @@ if TYPE_CHECKING:
 class ProcessorConfig(ABC):
     """Everything that varies between channels.  Immutable per-turn."""
 
-    # ── Async capability (ClassVar — not a dataclass field) ────────────────────
-    SUPPORTS_ASYNC: ClassVar[bool] = False
-    """True → the framework ``async`` boolean is exposed on every tool's schema
-    for this channel, letting the model run a call in the background and receive
-    the result as a later turn.  Only a push channel with a durable session can
-    honour a deferred result, so this is False everywhere except UserConfig.
-    It gates schema *exposure* only — never routing."""
-
     RENDERS_HTML: ClassVar[bool] = False
     """True → this channel's output is rendered to a human as HTML, which is one
     fact with three consequences, all of which must move together:

@@ -6,9 +6,7 @@ four zero-arg getters (``get_summary`` / ``get_examples`` /
 The full LLM-facing tool
 descriptor is assembled in ONE place — the ``final`` ``get_input_schema()`` — which
 is also the SINGLE site that injects the ``act_summary`` framework field.
-Subclasses cannot override it; they only fill in the getters. The ``async``
-backgrounding flag is NOT injected here: it is a delegate-only primitive added by
-``DelegateAbility`` (``abilities/_delegate.py``), so plain tools never carry it.
+Subclasses cannot override it; they only fill in the getters.
 
 Dispatch — matching, binding, policy gating, execution, recording — lives in
 ``DispatchService`` (``services/dispatch_service.py``), the single chokepoint
@@ -35,8 +33,7 @@ if TYPE_CHECKING:
 
 # The act_summary framework field, injected into EVERY tool descriptor by
 # get_input_schema — the one place it is declared. It is the per-call act-trail
-# tooltip (always present, required). The ``async`` backgrounding flag lives with
-# ``DelegateAbility`` in abilities/_delegate.py — it is delegate-only.
+# tooltip (always present, required).
 _ACT_SUMMARY_PROPERTY: dict[str, object] = {
     "type": "string",
     "description": (
@@ -68,10 +65,7 @@ class Ability(ABC, Generic[B]):
     (``ProcessorConfig.always_available``), or — if the ability is
     ``DISCOVERABLE`` — the processor discovers it through ``find_tools`` (which
     the processor only carries when ``find_tools`` is in its always_available).
-    There is no per-config discoverable/blocked allow-list. Whether a call blocks
-    or runs in the background is a per-call decision (the framework ``async``
-    flag, exposed ONLY on delegate tools via ``DelegateAbility``), not an
-    ability-level trait.
+    There is no per-config discoverable/blocked allow-list.
     """
 
     # Global discovery flag. True (the default) means find_tools may surface this
@@ -237,8 +231,7 @@ class Ability(ABC, Generic[B]):
     @typing.final
     def get_input_schema(self) -> dict[str, object]:
         """This is the ONE place a tool schema is built and the ONE place
-        ``act_summary`` is declared (``async`` is added on top by
-        ``DelegateAbility`` for delegate tools only). ``final`` — do not override;
+        ``act_summary`` is declared. ``final`` — do not override;
         enrich ``get_parameters()`` / ``get_summary()`` instead."""
         return {
             "name": self.NAME,

@@ -33,7 +33,7 @@ import pytest
 from configs.channels import DiscoveryConfig, ScheduledConfig, UserConfig
 from controllers.message_processor import MessageProcessor
 from services.processor_config import ProcessorConfig
-from services.prompt_service import _ASYNC_GUIDANCE, _RESPONSE_FORMAT
+from services.prompt_service import _RESPONSE_FORMAT
 
 pytestmark = pytest.mark.unit
 
@@ -59,20 +59,15 @@ def test_response_format_present_on_schedule_channel(db: sqlite3.Connection) -> 
     assert "NEVER use markdown syntax" in system
 
 
-def test_response_format_still_precedes_async_guidance_on_user_channel(db: sqlite3.Connection) -> None:
+def test_response_format_present_on_user_channel(db: sqlite3.Connection) -> None:
     """UserConfig previously baked the contract as the literal tail of its
-    ``system_prompt`` property, immediately before ``PromptService`` appended
-    the async-tasks guidance. The contract moved to a shared constant appended
-    by ``PromptService`` itself — the assembled prompt, and the contract's
-    position relative to the async guidance, must be unchanged by that move."""
+    ``system_prompt`` property. The contract moved to a shared constant appended
+    by ``PromptService`` itself — the assembled user-channel prompt must still
+    carry it."""
     system = _assembled_system(UserConfig())
 
     assert _RESPONSE_FORMAT in system
-    assert _ASYNC_GUIDANCE in system
-    response_format_end = system.index(_RESPONSE_FORMAT) + len(_RESPONSE_FORMAT)
-    assert system[response_format_end : response_format_end + len(_ASYNC_GUIDANCE)] == _ASYNC_GUIDANCE, (
-        "HTML contract no longer sits immediately before the async-tasks guidance on the user channel"
-    )
+    assert "NEVER use markdown syntax" in system
 
 
 def test_response_format_absent_on_silent_non_html_channel(db: sqlite3.Connection) -> None:

@@ -116,19 +116,6 @@ Avoid using table structures to represent data. If you do need to use tables, ou
 ────────────────────────────────"""
 )
 
-#: Appended to the system prompt on any channel whose config sets
-#: ``SUPPORTS_ASYNC`` — the SAME gate that exposes the ``async`` tool parameter —
-#: so enabling async on a new ProcessorConfig surfaces this guidance with zero
-#: extra wiring. Appended trailing (constant text) so the cached system prefix
-#: stays byte-stable across turns.
-_ASYNC_GUIDANCE = """
-
-## Background tasks
-
-Some tools accept an `async` flag. Set `async: true` to run a tool in the background: you get an immediate acknowledgement, the current turn ends, and the moment the tool finishes you are automatically invoked again with its result as a new turn — so you can keep talking to the user while the work runs.
-
-Choose `async: true` when the user asks for something to happen "in the background" or "while" they do something else, or when a call is likely to be slow (web research, browsing, lengthy shell or file work) and the user should not have to wait. Call tools normally (synchronously) for quick results the user is actively waiting on."""
-
 
 
 class PromptService:
@@ -144,14 +131,11 @@ class PromptService:
     def system_prompt(self) -> str:
         """The turn's system instruction block: the per-channel body, plus the
         shared response-format contract on any channel that renders to a human
-        (``RENDERS_HTML``) and the background-tasks guidance on any channel that
-        exposes the ``async`` tool flag (``SUPPORTS_ASYNC``) — the one place all
+        (``RENDERS_HTML``) — the one place all
         system-prompt assembly and placeholder substitution lands."""
         base = self._system_prompt_body()
         if self.mp.config.RENDERS_HTML:
             base += _RESPONSE_FORMAT
-        if self.mp.config.SUPPORTS_ASYNC:
-            base += _ASYNC_GUIDANCE
         return self._substitute_content_field(base)
 
     def _system_prompt_body(self) -> str:

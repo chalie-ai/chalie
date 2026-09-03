@@ -1,17 +1,4 @@
 /**
- * Elapsed wall-clock time since an ISO start, for a delegate's live timer:
- * mm:ss under an hour, h:mm:ss beyond. `nowMs` is supplied by the caller (not
- * read from the clock) so a reactive tick drives the update and this stays a
- * pure, deterministic formatter.
- */
-export function elapsedSince(isoStr: string, nowMs: number): string {
-  const started = new Date(isoStr).getTime();
-  if (!Number.isFinite(started)) return '00:00';
-  const secs = Math.max(0, Math.floor((nowMs - started) / 1000));
-  return formatDuration(secs);
-}
-
-/**
  * Format a non-negative whole-seconds duration as a clock string:
  * "MM:SS" under an hour, "h:MM:SS" at or beyond one hour. Minutes and
  * seconds are always zero-padded to two digits.

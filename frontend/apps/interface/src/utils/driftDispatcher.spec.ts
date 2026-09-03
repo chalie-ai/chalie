@@ -8,7 +8,7 @@
  * Boundaries mocked (network + DOM-effect modules, per the project's
  * established convention — see stores/session.spec.ts's "only WS/network is
  * mocked" note): api/conversation, utils/toast, utils/liveActTrail,
- * utils/turnDom, and the four Pinia stores the router touches. Because
+ * utils/turnDom, and the three Pinia stores the router touches. Because
  * `utils/cancelReconcile.ts` imports the SAME `./liveActTrail` and
  * `./turnDom` modules (vi.mock is keyed by resolved path, not import
  * specifier), the cancelled branch's real `reconcileCancelledTurn` runs
@@ -64,11 +64,6 @@ vi.mock('./turnDom', () => ({
   removeTurn: removeTurnMock,
   upsertTurnToSurfaces: upsertTurnToSurfacesMock,
   findTurnType: findTurnTypeMock,
-}));
-
-const { applyDriftEventMock } = vi.hoisted(() => ({ applyDriftEventMock: vi.fn() }));
-vi.mock('../stores/tasks', () => ({
-  useTasksStore: () => ({ applyDriftEvent: applyDriftEventMock }),
 }));
 
 const { enqueueMock, removeMock } = vi.hoisted(() => ({ enqueueMock: vi.fn(), removeMock: vi.fn() }));
@@ -450,14 +445,8 @@ describe('dispatchDrift — simple (content-free) events', () => {
     expect(removeMock).not.toHaveBeenCalled();
   });
 
-  it('subagent_start reaches the tasks store', () => {
-    dispatchDrift(frame({ type: 'subagent_start', sub_id: 's1' }));
-    expect(applyDriftEventMock).toHaveBeenCalled();
-  });
-
   it('an unknown type is a no-op — no throw, no store touched', () => {
     expect(() => dispatchDrift(frame({ type: 'something_nobody_emits' }))).not.toThrow();
     expect(enqueueMock).not.toHaveBeenCalled();
-    expect(applyDriftEventMock).not.toHaveBeenCalled();
   });
 });

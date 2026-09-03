@@ -65,7 +65,7 @@ class MetricsService:
             'requests_total', 'responses_total', 'errors_total',
             'embeddings_total', 'facts_extracted',
             'memory_chunks_enqueued',
-            'subagent_turns_total', 'scheduled_turns_total',
+            'scheduled_turns_total',
         ]
         for name in counter_names:
             counter_key = f"metrics:counter:{name}:{day_key}"

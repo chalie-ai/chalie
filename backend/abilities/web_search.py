@@ -24,10 +24,6 @@ Properties of every delegate tool:
   - No recursion — with no find_tools pinned, a delegate can only call what is in
     always_available; delegate tools are not in that surface, so a delegate can
     never spawn another delegate.
-  - Per-call async — the model may pass ``async: true`` (exposed only on
-    SUPPORTS_ASYNC channels) to run the search in the background and receive the
-    result as a later turn; the framework (Ability.execute) wraps run() in a
-    daemon thread when it does.  run() is ALWAYS synchronous in itself.
 
 Permission boundary — ``policy_channel`` is inherited from the caller that
 invoked the ``web_search`` tool (``self.mp.config.policy_channel``):

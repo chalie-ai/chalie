@@ -174,18 +174,12 @@ class DispatchService:
 
     def canonical_params(self, tool_name: str, params: dict[str, object]) -> dict[str, object]:
         """The params ``run()`` will actually receive for *tool_name* — sanitised,
-        ``act_summary``- and ``async``-stripped, and key-healed — computed WITHOUT
-        executing or recording anything. The runaway guard keys its per-tool tally
-        on this, so neither cycling synonym keys (``city``/``loc``/``place``/
-        ``region`` → ``location``) NOR toggling the framework ``async`` flag around
-        otherwise-identical params — both of which collapse to one executed call —
-        can evade the loop backstop."""
+        ``act_summary``-stripped, and key-healed — computed WITHOUT executing or
+        recording anything. The runaway guard keys its per-tool tally on this, so
+        cycling synonym keys (``city``/``loc``/``place``/``region`` →
+        ``location``) — which collapses to one executed call — cannot evade the
+        loop backstop."""
         params, _act_summary, _ability = self._prepare(tool_name, params)
-        # ``async`` is a framework control flag ``_execute`` pops before run() (like
-        # ``act_summary``, already lifted by ``_prepare``): it decides sync-vs-async
-        # dispatch, never what the tool does, so it is not part of the executed
-        # identity the guard tallies on.
-        params.pop("async", None)
         return params
 
     def _dispatch_bound(
@@ -267,16 +261,11 @@ class DispatchService:
         before the hard kill threshold at ``_RUNAWAY_TOOL_CALL_LIMIT``.
 
         ``params`` is the post-``_prepare`` identity (sanitised + act_summary-
-        lifted + key-healed) — only ``async`` remains to be stripped to byte-
-        match the guard's key. A copy is taken and ``async`` popped on the copy
-        so the live ``params`` dict is never mutated.
+        lifted + key-healed) — the same bytes the guard's key tallies on.
 
-        Dispatches that bypass ``_step`` (the compactor, document upload, or
-        the async delegate's dedicated mp) have zero tally on this mp and so
-        never steer here."""
-        identity = dict(params)
-        identity.pop("async", None)
-        if self.mp.repeat_call_count(tool_name, identity) >= _REPEAT_CALL_STEER_THRESHOLD:
+        Dispatches that bypass ``_step`` (the compactor, document upload) have
+        zero tally on this mp and so never steer here."""
+        if self.mp.repeat_call_count(tool_name, params) >= _REPEAT_CALL_STEER_THRESHOLD:
             return _REPEAT_CALL_STEER
         return ""
 
@@ -328,11 +317,8 @@ class DispatchService:
         action: "str | None" = None,
     ) -> tuple[str, "int | None", str]:
         """Open row (via ``tool_call_service.start`` — emits ``started``) →
-        (async-decision) → run → resolve terminal state → render. Called ONLY on
-        the allow path (``_dispatch_bound`` passes this as the gate's callback).
-        The per-call ``async`` flag — popped here, a framework key never passed
-        to run() — decides whether the real work blocks this ACT iteration or
-        runs on a background thread; run() is identical either way. Returns the
+        run → resolve terminal state → render. Called ONLY on the allow path
+        (``_dispatch_bound`` passes this as the gate's callback). Returns the
         rendered envelope STRING plus the opened row id and its resolved terminal
         state, so ``_dispatch_bound`` can finish that same row instead of opening
         a second one.
@@ -340,29 +326,19 @@ class DispatchService:
         Reads the bound parent off ``ability.mp`` (set by ``_bind()``).
         act_summary (popped from params by ``dispatch()``) is the live summary;
         it is NOT a run() argument."""
-        run_async = bool(params.pop("async", False))
         tool_name = ability.NAME
 
         call_id = self.mp.tool_call_service.start(
             tool_name=tool_name, params=params, summary=act_summary,
         )
 
-        if run_async:
-            # AsyncDelegateRunner owns the daemon-thread lifecycle + the captured
-            # mp it delivers through; it returns the placeholder immediately so
-            # this ACT iteration is never blocked. The placeholder is prose the
-            # model reads while the real work runs.
-            from services.async_delegate_runner import async_delegate_runner  # noqa: PLC0415
-            placeholder = async_delegate_runner.spawn(ability, params, self.mp, act_summary)
-            tr = ToolResult.ok(str(placeholder))
-        else:
-            tr = self._run(ability, params)
+        tr = self._run(ability, params)
 
         state = ToolCall.ERROR if tr.status == "error" else ToolCall.DONE
 
         # Rich-media ordinal is assigned ONLY when the owning mp broadcasts to a
         # live surface (``RENDERS_HTML`` — the user spine or a schedule
-        # thread). Subagents / background channels never get a card: their
+        # thread). Background channels never get a card: their
         # natural-language synthesis is consumed by the parent, so a span emitted
         # at that hop has no tool_calls row paired to it. This is the single
         # physical chokepoint that gates the entire card path.
@@ -370,10 +346,9 @@ class DispatchService:
         if tr.rich is not None and self.mp.config.RENDERS_HTML:
             ordinal = self._next_ordinal(tool_name)
 
-        # The follow-up block fires only on a real synchronous SUCCESS: never on
-        # an error result, never on the async placeholder (it would fire before
-        # the real work ran). Empty => nothing appended, so a tool with neither a
-        # nudge nor untrusted output renders byte-identical to before.
+        # The follow-up block fires only on a real SUCCESS: never on an error
+        # result. Empty => nothing appended, so a tool with neither a nudge nor
+        # untrusted output renders byte-identical to before.
         #
         # An action that brings outside content in adds ITS OWN steer to the same
         # block, LAST — the closest instruction to the point of generation, and
@@ -382,7 +357,7 @@ class DispatchService:
         # `email.read` and `browser.scroll` are not the same warning, and a tool
         # whose current action isn't in the map gets none.
         follow_up = ""
-        if not run_async and tr.status == "success":
+        if tr.status == "success":
             follow_up = ability.get_follow_up(tr)
             steer = ability.UNTRUSTED_CONTENT.get(action or "", "")
             follow_up = f"{follow_up}\n\n{steer}".strip() if steer else follow_up
@@ -432,7 +407,7 @@ class DispatchService:
             )
         return None
 
-    # ── Synchronous run primitive (shared by inline dispatch + AsyncDelegateRunner) ──
+    # ── The synchronous run primitive ─────────────────────────────────────────────
 
     def _run(self, ability: "Ability", params: dict[str, object]) -> ToolResult:
         """Execute ability.run() synchronously and enforce the ToolResult contract.
