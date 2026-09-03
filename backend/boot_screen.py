@@ -1,7 +1,7 @@
 """Instant holding page while the real backend boots.
 
 ``run.py`` binds this stdlib-only HTTP server on the public port *before* the
-heavy imports (numpy/transformers), schema convergence, and startup migrations
+heavy imports (numpy/transformers), database provisioning, and startup migrations
 that delay Flask's bind — seconds on fast hardware, minutes on slow machines
 or first-run installs. Docker publishes the container port immediately, so
 without a listener every early connection is refused or reset: browsers show

@@ -1,6 +1,6 @@
 """Feature tests — startup migration runner (migrations/runner.py).
 
-Real converged database files (the ``db`` fixture), the real migration modules,
+Real provisioned database files (the ``db`` fixture), the real migration modules,
 zero mocks. Covers the three upgrade postures the runner must resolve — fresh
 install (every step no-ops), sentinel-era upgrade (ledger import without
 execution), legacy-shape upgrade (apply fires) — plus run-once semantics and

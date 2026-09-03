@@ -3,7 +3,7 @@
 Real-world assertions only — no mocks of in-process production code. The
 shaping layer (``abilities.email._shape_result``) is exercised directly with
 handler-shaped dicts, and the ``emails_sent`` ledger (``models.email_sent``)
-runs against a fully-converged real SQLite database (the ``db`` fixture), so
+runs against a fully-provisioned real SQLite database (the ``db`` fixture), so
 every assertion covers the same code the dispatcher runs in production.
 
 What the contract guarantees:

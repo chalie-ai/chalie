@@ -6,9 +6,8 @@ crontab plus a ``start_at`` activation floor. There is NO backwards
 compatibility: the old rows have no cron representation, so this migration
 simply wipes ``scheduled_items`` (and its vector shadow) and lets the scheduler
 start fresh. The column reshape itself (add start_at/cron_*, drop
-recurrence/is_prompt) is handled declaratively by SchemaConvergenceService from
-``schema.sql`` on the same boot; this script only clears the now-incompatible
-rows. The wipe is UNCONDITIONAL — every call deletes every scheduled_items row —
+recurrence/is_prompt) is declarative — the release's database file is built from
+``schema.sql`` — and this script only clears the now-incompatible rows. The wipe is UNCONDITIONAL — every call deletes every scheduled_items row —
 so it must run exactly once; the run-once gate (the migrations/runner.py ledger)
 lives in the caller, not here, and needed() only answers True while the table
 still carries the pre-cron TEXT ``id`` shape. Do not re-invoke it against a
@@ -32,9 +31,9 @@ from services.file_mapper_service import FileMapperService  # noqa: E402
 
 def needed(conn: sqlite3.Connection) -> bool:
     """Rows present under the pre-cron scheduler shape? migration_008's rebuild
-    declares ``id`` INTEGER PRIMARY KEY and SchemaConvergenceService never
-    retypes columns, so a TEXT ``id`` reliably marks rows that predate the cron
-    model. A current-shape or empty table needs no wipe."""
+    declares ``id`` INTEGER PRIMARY KEY and nothing retypes a live column, so a
+    TEXT ``id`` reliably marks rows that predate the cron model. A current-shape
+    or empty table needs no wipe."""
     cols = {
         row[1]: str(row[2] or "").upper()
         for row in conn.execute("PRAGMA table_info(scheduled_items)")

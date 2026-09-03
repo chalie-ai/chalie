@@ -1,8 +1,8 @@
 """Feature tests — migration 014 (tool_calls id → AUTOINCREMENT primary key).
 
-Recreates the real upgrade drift on a converged database: SchemaConvergence
-could only ``ALTER TABLE tool_calls ADD COLUMN id INTEGER`` on installs that
-predated the primary-key declaration, leaving ``id`` a plain nullable non-key
+Recreates the real upgrade drift on a provisioned database: boot could only
+``ALTER TABLE tool_calls ADD COLUMN id INTEGER`` on installs that predated the
+primary-key declaration, leaving ``id`` a plain nullable non-key
 column that every row leaves NULL — so ``start()`` gets no id back, ``finish()``
 no-ops, and results never persist. The exact drifted DDL below is copied from
 the live server table. Real migration module, real SQLite, zero mocks.
@@ -46,7 +46,7 @@ def _id_column(conn: sqlite3.Connection) -> tuple[object, ...]:
 
 
 def _drift(db: sqlite3.Connection, rows: int = 25) -> list[int]:
-    """Replace the converged tool_calls with the drifted shape and seed ``rows``
+    """Replace schema.sql's tool_calls with the drifted shape and seed ``rows``
     calls (all with NULL id) against real transcript FK targets. Returns the
     transcript ids used."""
     db.execute("DROP TABLE tool_calls")
@@ -88,7 +88,7 @@ class TestNeeded:
         _drift(db)
         assert mig.needed(db) is True
 
-    def test_false_on_fresh_converged_shape(self, db: sqlite3.Connection) -> None:
+    def test_false_on_fresh_schema_shape(self, db: sqlite3.Connection) -> None:
         # The template db already has id as the primary key — nothing to do.
         assert mig.needed(db) is False
 

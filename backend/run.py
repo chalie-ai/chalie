@@ -9,6 +9,7 @@ run in a single process. Voice runs natively when deps are installed.
 import argparse
 import logging
 import os
+import sqlite3
 import sys
 from typing import TYPE_CHECKING, cast
 
@@ -35,7 +36,7 @@ def _parse_cli() -> argparse.Namespace:
 
 # Own the public port from the first moment of boot. Docker publishes the port
 # at container start, so every connection before Flask binds — after the heavy
-# imports below plus schema convergence and migrations, minutes on slow
+# imports below plus database provisioning and migrations, minutes on slow
 # hardware — is reset: blank pages and failed fetches in the browser.
 # BootScreen binds instantly and serves a self-refreshing holding page until
 # the API worker takes over the port. Script-execution only: tests import
@@ -165,32 +166,12 @@ def _start_model_preload() -> None:
 
 
 def _init_database() -> None:
-    from services.schema_convergence_service import SchemaConvergenceService
+    from services.versioned_database_service import VersionedDatabaseService
 
-    # Provider deletion is permanent — there is no longer a soft-delete flag.
-    # Any rows still parked at is_active=0 are previously-deleted providers;
-    # purge them BEFORE convergence drops the column, otherwise they resurface
-    # as active providers (and collide on the UNIQUE name index). Self-disabling:
-    # once convergence removes is_active this block is a no-op.
-    try:
-        with Database.transaction() as _conn:
-            _cols = [r[1] for r in _conn.execute("PRAGMA table_info(providers)").fetchall()]
-            if 'is_active' in _cols:
-                _purged = _conn.execute("DELETE FROM providers WHERE is_active = 0").rowcount
-                _conn.commit()
-                if _purged:
-                    logger.info("[Startup] Purged %d soft-deleted provider row(s)", _purged)
-    except Exception as _prov_err:
-        logger.warning(f"[Startup] soft-deleted provider purge skipped: {_prov_err}")
+    VersionedDatabaseService().provision()
 
-    convergence = SchemaConvergenceService()
-    convergence.converge()
-    # Separate deterministic value backfill — convergence applies only static
-    # column DEFAULTs, never derived values (valid_from, valid_to, etc.).
-    convergence.backfill_redesign_columns()
-
-    # Policy: apply the declarative seed (idempotent) AFTER convergence has created
-    # the policy table.  INSERT OR IGNORE preserves any copied/user rows.
+    # Policy: apply the declarative seed (idempotent) AFTER the database file
+    # exists.  INSERT OR IGNORE preserves any copied/user rows.
     try:
         from services.policy_manager import PolicyManager
         inserted = PolicyManager().apply_seed()
@@ -209,6 +190,7 @@ def _run_startup_migrations() -> None:
     """
     _run_transcript_rebuild()
     _purge_stale_adaptive_layer_rows()
+    _backfill_redesign_columns()
 
     from migrations.runner import run_all
     from services.file_mapper_service import FileMapperService
@@ -242,6 +224,68 @@ def _purge_stale_adaptive_layer_rows() -> None:
             _conn.commit()
     except Exception as _adl_err:
         logger.warning(f"[Startup] AdaptiveLayer data_graph purge skipped: {_adl_err}")
+
+
+# data_graph_edges.edge_type linking an old fact → the fact that superseded it.
+_SUPERSEDED_BY_EDGE = "superseded_by"
+
+
+def _backfill_redesign_columns() -> None:
+    """Derive the episodic-redesign column values a DEFAULT cannot express.
+
+    A column added by a later release arrives on carried-forward rows holding
+    its declared DEFAULT — static by definition, never a value derived from the
+    row itself (valid_from, valid_to, the tool-call terminal stamp).
+    """
+    with Database.transaction() as _conn:
+        _backfill_data_graph_columns(_conn)
+        _backfill_tool_call_columns(_conn)
+    logger.info("[Startup] Redesign-column backfill complete")
+
+
+def _backfill_tool_call_columns(conn: sqlite3.Connection) -> None:
+    """Stamp legacy ``tool_calls`` rows terminal.
+
+    A row carried forward from a release predating ``state``/``ended_at`` lands
+    on their declared defaults, ``state='started', ended_at=NULL`` — the exact
+    fingerprint of a live in-flight call. Once the REST projection renders
+    persisted state, those legacy rows would show as eternal spinners. A row
+    predating the columns is by definition already terminal (its turn is long
+    over), so stamp it ``done`` with ``ended_at`` reconstructed from
+    ``created_at``.
+
+    Backfill runs once at startup before any turn executes, so no genuinely
+    running call is ever mid-flight here; the raw-default fingerprint
+    (``state='started' AND ended_at IS NULL``) uniquely selects settled-in-
+    reality rows. We never parse the result envelope into a state — when a
+    legacy outcome is indistinguishable we stamp ``done`` (a benign chip)
+    rather than guessing ``error``."""
+    conn.execute(
+        "UPDATE tool_calls SET state = 'done', ended_at = COALESCE(ended_at, created_at) "
+        "WHERE state = 'started' AND ended_at IS NULL"
+    )
+
+
+def _backfill_data_graph_columns(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        "UPDATE data_graph SET valid_from = first_seen_at WHERE valid_from IS NULL"
+    )
+    conn.execute(
+        "UPDATE data_graph AS old SET valid_to = ("
+        "    SELECT new.first_seen_at FROM data_graph_edges AS e "
+        "    JOIN data_graph AS new ON new.id = e.to_id "
+        # Earliest superseder = the moment the fact stopped being true.
+        # The supersession writer demotes a row to active=0 and never
+        # re-matches it, so at most one superseded_by edge exists per row
+        # today — ASC makes the choice explicit if that ever changes.
+        f"    WHERE e.from_id = old.id AND e.edge_type = '{_SUPERSEDED_BY_EDGE}' "
+        "    ORDER BY new.first_seen_at ASC LIMIT 1"
+        ") "
+        "WHERE old.valid_to IS NULL AND old.active = 0 AND EXISTS ("
+        "    SELECT 1 FROM data_graph_edges AS e2 "
+        f"    WHERE e2.from_id = old.id AND e2.edge_type = '{_SUPERSEDED_BY_EDGE}'"
+        ")"
+    )
 
 
 def _init_services() -> None:
@@ -393,9 +437,9 @@ def main() -> None:
     runtime_config.set({"port": port, "host": host})
 
     # Apply any staged whole-instance restore BEFORE the DB is opened. The first
-    # chalie.db open happens inside _init_database() → converge() below, so the
-    # artifact swap must complete here or convergence would run against the old
-    # DB. SnapshotService.apply_pending owns its own try/except (boot safety):
+    # database open happens inside _init_database() below, so the artifact swap
+    # must complete here or this release's file would be provisioned from the
+    # pre-restore data. SnapshotService.apply_pending owns its own try/except (boot safety):
     # a failed restore is rolled back + logged and never aborts startup.
     # Paired with services/snapshot_service.py (Phase B) and api/actions/snapshot/.
     from services.snapshot_service import SnapshotService

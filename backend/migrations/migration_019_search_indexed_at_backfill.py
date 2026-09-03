@@ -1,11 +1,10 @@
 """Migration 019 — backfill ``indexed_at`` on ``episodes`` and ``data_graph``.
 
-Schema convergence DROP+CREATE+rebuilds ``episodes_fts`` and ``data_graph_fts``
-when their FTS5 column lists change (the old ``search_queries`` column was
-replaced by ``indexed_at TEXT DEFAULT NULL``). The rebuild re-posts every row
-from the content table, but the new ``indexed_at`` column is NULL on every
-replayed row — the rebuild only writes FTS5 postings, not the base-table
-timestamp.
+Provisioning rebuilds ``episodes_fts`` and ``data_graph_fts`` from their content
+tables (the old ``search_queries`` column was replaced by ``indexed_at TEXT
+DEFAULT NULL``). The rebuild re-posts every row from the content table, but the
+new ``indexed_at`` column is NULL on every replayed row — the rebuild only writes
+FTS5 postings, not the base-table timestamp.
 
 ``SearchExpanderService``'s self-heal invariant is: ``indexed_at IS NULL``
 means the row was never posted. Left NULL, its self-heal would INSERT a second
@@ -13,8 +12,8 @@ FTS5 posting for every row the rebuild already indexed, producing duplicates
 that corrupt future external-content deletes (the delete-before-first-insert
 path in ``_mark_indexed``). This migration closes that window.
 
-Runs AFTER schema convergence (so the FTS rebuilds are done) and BEFORE the
-worker's self-heal (so the invariant holds by the time the worker starts).
+Runs AFTER provisioning (so the FTS rebuilds are done) and BEFORE the worker's
+self-heal (so the invariant holds by the time the worker starts).
 
 Idempotent: a re-run matches nothing (all live rows already have a non-NULL
 ``indexed_at``).

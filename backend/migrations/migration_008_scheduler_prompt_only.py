@@ -9,12 +9,10 @@ The cron columns also change: the three ``INTEGER`` NULL-means-every fields
 (``cron_dom``/``cron_hour``/``cron_minute``) become five ``TEXT`` crontab-
 expression fields (adding ``cron_month``/``cron_dow``, ``'*'`` = every), so the
 ``schedule`` ability supports real crontab (``*/5``, ranges, lists, day-of-week).
-SchemaConvergenceService reshapes columns declaratively from ``schema.sql``,
-but neither a primary-key type change (TEXT -> INTEGER) nor an in-place column
-retype (INTEGER -> TEXT) is within what convergence performs — it ADDs/DROPs
-columns and only logs type mismatches, it does not rebuild the table. This
-migration does the rebuild explicitly: drop the table and recreate it with
-the exact prompt-only DDL. Data is discarded by design — no cron/thread rows
+A release's database file is built from ``schema.sql``, so it declares the target
+shape — but a table already standing in the legacy shape is never retyped in
+place. This migration does the rebuild explicitly: drop the table and recreate it
+with the exact prompt-only DDL. Data is discarded by design — no cron/thread rows
 survive the reshape; there is no backwards-compatible mapping from a TEXT id
 to a fresh AUTOINCREMENT integer id, nor from an INTEGER cron field to a
 crontab expression.
@@ -83,11 +81,11 @@ _SCHEDULE_TURN_TABLES = ("transcript", "thread_gist", "turn_executions", "compac
 
 
 def needed(conn: sqlite3.Connection) -> bool:
-    """Table still in a pre-prompt-only shape? Convergence ADDs/DROPs columns
-    but never retypes, so a non-INTEGER ``id`` (the pre-cron TEXT primary key)
-    or a non-TEXT ``cron_minute`` (the INTEGER cron fields this rebuild's v2
-    re-fire exists to replace) marks a table needing the rebuild. An absent
-    table needs nothing — convergence creates it in target shape."""
+    """Table still in a pre-prompt-only shape? A live column is never retyped, so
+    a non-INTEGER ``id`` (the pre-cron TEXT primary key) or a non-TEXT
+    ``cron_minute`` (the INTEGER cron fields this rebuild's v2 re-fire exists to
+    replace) marks a table needing the rebuild. An absent table needs nothing —
+    ``schema.sql`` declares it in target shape."""
     cols = {
         row[1]: str(row[2] or "").upper()
         for row in conn.execute("PRAGMA table_info(scheduled_items)")

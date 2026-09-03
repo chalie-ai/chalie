@@ -3,9 +3,9 @@
 The `window_start` / `window_end` columns existed solely to gate firing during
 an item's active window (quiet hours). That behaviour is removed — the scheduler
 no longer honours quiet hours — so nothing reads either column. `schema.sql` no
-longer declares them, so SchemaConvergenceService drops them automatically on the
-next boot (`CHALIE_SCHEMA_ALLOW_DESTRUCTIVE=1`, the default). This file is the
-standalone idempotent script for operators who want to apply the drop manually.
+longer declares them, so the next release's database file is built without them.
+This file is the standalone idempotent script for operators who want to apply the
+drop manually.
 
 No backfill is needed — the dropped data gated removed behaviour and has no
 remaining consumer.

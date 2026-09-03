@@ -3,10 +3,9 @@
 The `capabilities` and `permissions` columns existed solely to gate the
 `/api/query` and `/api/signals` REST endpoints. Both endpoints are gone, so
 nothing reads either column — wrapper tokens are now opaque bearer credentials
-(authN only). `schema.sql` no longer declares the columns, so
-SchemaConvergenceService drops them automatically on the next boot
-(`CHALIE_SCHEMA_ALLOW_DESTRUCTIVE=1`, the default). This file is the
-standalone idempotent script for operators who want to apply the drop manually.
+(authN only). `schema.sql` no longer declares the columns, so the next release's
+database file is built without them. This file is the standalone idempotent
+script for operators who want to apply the drop manually.
 
 No backfill is needed — the dropped data gated removed endpoints and has no
 remaining consumer.

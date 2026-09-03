@@ -6,8 +6,8 @@ document store, the user skills, and the VERSION marker), and restores such a
 clone with a true wipe-and-replace at the next boot.
 
 Restore is two-phase so a half-finished swap can never corrupt a live instance:
-  * Phase A — ``stage_import``: extract + verify checksums + run the
-    schema-downgrade guard into a private temp dir, then *atomically* rename it
+  * Phase A — ``stage_import``: extract + verify checksums + run the restore
+    guard into a private temp dir, then *atomically* rename it
     to ``data/.pending-restore``. Any failure leaves nothing staged.
   * Phase B — ``apply_pending`` (called from ``run.py`` before the DB is opened):
     re-verify each staged artifact, move the live artifacts aside into a single
@@ -15,9 +15,20 @@ Restore is two-phase so a half-finished swap can never corrupt a live instance:
     then clear the marker. On any failure it rolls the live artifacts back, logs
     loudly, and quarantines the staged set so boot does not loop.
 
+The main database is versioned per release, so a restore never writes the
+running build's own file. The snapshot's database lands under the name of the
+release that TOOK it — ``data/chalie-<snapshot VERSION>.sqlite``, or the
+pre-versioning ``data/chalie.db`` when the snapshot carries no VERSION — and
+every other main database in ``data/`` moves aside with it, so the restored
+file is the newest one left. The normal boot does the rest:
+``VersionedDatabaseService.provision`` opens that file directly when it is this
+release's, and copies it forward when it is older. The VERSION file itself is
+never restored — it is the running build's identity; the staged copy is read
+only for the downgrade guard and for that landing name.
+
 Consumed by ``api/actions/snapshot/`` (HTTP surface) and ``run.py`` (boot apply).
-Depends on ``FileMapperService`` (all paths), ``SchemaConvergenceService``
-(shared ``column_set`` for the downgrade guard) and ``services.time_utils``
+Depends on ``FileMapperService`` (all paths), ``services.app_version`` (the
+version comparison behind the restore guard) and ``services.time_utils``
 (UTC stamps).
 """
 
@@ -34,6 +45,7 @@ from typing import cast
 import pyzipper
 
 from exceptions import SnapshotError
+from services.app_version import get_version, version_sort_key
 from services.file_mapper_service import FileMapperService
 from services.time_utils import utc_now
 
@@ -75,11 +87,10 @@ _SQLITE_SIDECAR_SUFFIXES = ("-wal", "-shm")
 # as opposed to single-file kinds that map straight to one destination path.
 _TREE_KINDS = (_KIND_SECURE, _KIND_DOCUMENTS, _KIND_SKILLS_USER)
 
-# Every artifact KIND this build knows how to restore. A snapshot is a portable,
-# cross-version backup, so it may legitimately carry an artifact a newer build
-# has since dropped (e.g. the removed session_secret). Restoring such a snapshot
-# skips the unknown artifact with a warning rather than aborting the whole
-# restore — see _swap_in.
+# Every artifact KIND this build understands. VERSION is one of them — it is
+# exported, checksum-verified and read — but it is the only known KIND that is
+# never written back into the live instance; see _is_restorable, which owns
+# both that rule and the skip for a KIND this build does not know at all.
 _KNOWN_KINDS = frozenset((*_SINGLE_FILE_DB_KINDS, _KIND_VERSION, *_TREE_KINDS))
 
 
@@ -96,15 +107,55 @@ class SnapshotService:
 
     # ── KIND → live destination ──────────────────────────────────────────────
 
-    def _single_file_destination(self, kind: str) -> Path:
-        """Map a single-file artifact KIND to its live filesystem destination."""
+    def _single_file_destination(self, kind: str, snapshot_version: str | None) -> Path:
+        """Map a single-file artifact KIND to its live filesystem destination.
+
+        ``_KIND_VERSION`` has no destination on purpose — it is never restored
+        (see :meth:`_is_restorable`), so routing one here is a bug and raises.
+        """
         routes = {
-            _KIND_CHALIE_DB: self._fm.get_db_path(),
+            _KIND_CHALIE_DB: self._restored_database_path(snapshot_version),
             _KIND_MCP_TOOLS: self._fm.get_mcp_tools_db_path(),
             _KIND_SKILLS: self._fm.get_skills_db_path(),
-            _KIND_VERSION: self._fm.get_version_path(),
         }
         return routes[kind]
+
+    def _restored_database_path(self, snapshot_version: str | None) -> Path:
+        """Where the snapshot's main database lands: the file name of the
+        release that took it, or the pre-versioning ``chalie.db`` when the
+        snapshot carries no VERSION marker.
+
+        Deliberately not ``get_db_path()``. ``VersionedDatabaseService`` opens
+        the running release's own file and treats one standing there without a
+        lineage row for that release as an unfinished build: it moves it aside
+        and rebuilds from whatever older database the data dir still holds — so
+        an older snapshot landed at the running name is silently discarded.
+        Landed under its own name it is just the newest older database, and the
+        ordinary boot copies it forward. A snapshot from this same release
+        lands at the running name anyway, carrying its own lineage row, and is
+        opened as-is.
+        """
+        if snapshot_version is None:
+            return self._fm.get_legacy_db_path()
+        return self._fm.get_versioned_db_path(snapshot_version)
+
+    def _live_main_databases(self) -> list[Path]:
+        """Every main-database file in the data dir: the pre-versioning
+        ``chalie.db`` and each ``data/chalie-<version>.sqlite``.
+
+        Both names are ``FileMapperService``'s to own —
+        :meth:`~services.file_mapper_service.FileMapperService.get_legacy_db_path`
+        and
+        :meth:`~services.file_mapper_service.FileMapperService.version_from_db_path`
+        (the inverse of the versioned name) — so the layout is declared in one
+        place and this module never re-spells the pattern.
+        """
+        legacy = self._fm.get_legacy_db_path()
+        return ([legacy] if legacy.exists() else []) + sorted(
+            path
+            for path in self._fm.get_data_path().glob("*")
+            if self._fm.version_from_db_path(path) is not None
+        )
 
     def _tree_root(self, kind: str) -> Path:
         """Map a tree artifact KIND to its live destination directory root."""
@@ -115,12 +166,12 @@ class SnapshotService:
         }
         return roots[kind]
 
-    def _destination_for(self, entry: dict[str, object]) -> Path:
+    def _destination_for(self, entry: dict[str, object], snapshot_version: str | None) -> Path:
         """Resolve the live destination path for a manifest entry (any KIND)."""
         kind = cast(str, entry["kind"])
         if kind in _TREE_KINDS:
             return self._tree_root(kind) / cast(str, entry["rel"])
-        return self._single_file_destination(kind)
+        return self._single_file_destination(kind, snapshot_version)
 
     # ── Hashing (shared by export verify-write and import verify-read) ─────────
 
@@ -263,7 +314,7 @@ class SnapshotService:
             self._extract_all(zip_path, scratch, password)
             manifest = self._read_manifest(scratch)
             self._verify_members(scratch, manifest)
-            self._guard_schema_downgrade(scratch, manifest)
+            self._guard_restore(scratch, manifest)
             self._commit_staging(scratch)
         except Exception:
             shutil.rmtree(scratch, ignore_errors=True)
@@ -307,54 +358,66 @@ class SnapshotService:
                     f"Checksum mismatch for {cast(str, entry['arcname'])}"
                 )
 
-    def _guard_schema_downgrade(self, root: Path, manifest: dict[str, object]) -> None:
-        """Block a snapshot whose chalie.db carries any column the running
-        build's schema.sql does not declare (snapshot ⊋ build = a newer DB whose
-        restore would make convergence DROP user data)."""
-        chalie_entry = next(
-            (e for e in cast(list[dict[str, object]], manifest["artifacts"]) if e["kind"] == _KIND_CHALIE_DB), None
-        )
-        if chalie_entry is None:
-            raise SnapshotError("Snapshot has no chalie.db to restore")
+    def _guard_restore(self, root: Path, manifest: dict[str, object]) -> None:
+        """Block a snapshot this build cannot restore.
 
-        build_cols = self._build_column_set()
-        snapshot_cols = self._snapshot_column_set(root / cast(str, chalie_entry["arcname"]))
+        Two refusals: a snapshot with no database is nothing to restore, and a
+        snapshot taken by a NEWER release cannot be carried backwards — the
+        older build would provision its own database from an older schema.sql
+        and copy forward only the columns it still declares, silently dropping
+        whatever the newer release added. A snapshot carrying no VERSION marker
+        predates versioning and is by definition older, so it is allowed.
 
-        extra = {
-            f"{table}.{col}"
-            for table, cols in snapshot_cols.items()
-            for col in cols - build_cols.get(table, set())
-        }
-        if extra:
+        A VERSION this build cannot read is a third refusal, and it belongs
+        here rather than at apply time: the same string names the file the
+        restored database lands under, ``apply_pending`` swallows its own
+        errors so boot survives them, and a database landed under an
+        unreadable version is one ``VersionedDatabaseService`` skips — the
+        restore would evaporate with nothing but a warning. Refused at stage
+        time it is an error the operator sees, with nothing staged.
+        """
+        artifacts = cast(list[dict[str, object]], manifest["artifacts"])
+        if not any(e["kind"] == _KIND_CHALIE_DB for e in artifacts):
+            raise SnapshotError("Snapshot has no main database to restore")
+
+        snapshot_version = self._snapshot_version(root, manifest)
+        if snapshot_version is None:
+            return
+
+        try:
+            snapshot_key = version_sort_key(snapshot_version)
+        except ValueError as exc:
             raise SnapshotError(
-                "Snapshot schema is newer than this build (would drop data): "
-                + ", ".join(sorted(extra))
+                f"Snapshot carries an unreadable VERSION ({snapshot_version!r}) "
+                "and cannot be restored"
+            ) from exc
+
+        running_version = get_version()
+        if snapshot_key > version_sort_key(running_version):
+            raise SnapshotError(
+                f"Snapshot was taken by a newer build ({snapshot_version} > "
+                f"{running_version}) and cannot be restored into this one"
             )
 
-    def _build_column_set(self) -> dict[str, set[str]]:
-        """Column set of the running build, derived from schema.sql via the
-        shared convergence introspection (so it matches convergence exactly)."""
-        from services.schema_convergence_service import SchemaConvergenceService
+    def _snapshot_version(self, root: Path, manifest: dict[str, object]) -> str | None:
+        """Return the version of the release that took the snapshot, or None
+        when it carries no VERSION marker (a snapshot from before versioning).
 
-        convergence = SchemaConvergenceService()
-        schema_sql = self._fm.get_schema_path().read_text(encoding="utf-8")
-        desired_conn = convergence._load_desired_state(schema_sql)
-        try:
-            return convergence.column_set(desired_conn)
-        finally:
-            desired_conn.close()
-
-    def _snapshot_column_set(self, chalie_db: Path) -> dict[str, set[str]]:
-        """Column set of the snapshot's chalie.db, read-only, via the shared
-        convergence introspection."""
-        from services.schema_convergence_service import SchemaConvergenceService
-
-        convergence = SchemaConvergenceService()
-        conn = sqlite3.connect(f"file:{chalie_db}?mode=ro", uri=True)
-        try:
-            return convergence.column_set(conn)
-        finally:
-            conn.close()
+        The staged VERSION is read for exactly two decisions — the downgrade
+        guard above and the name the restored database lands under. It is never
+        written over the running build's own VERSION file.
+        """
+        entry = next(
+            (
+                e
+                for e in cast(list[dict[str, object]], manifest["artifacts"])
+                if e["kind"] == _KIND_VERSION
+            ),
+            None,
+        )
+        if entry is None:
+            return None
+        return (root / cast(str, entry["arcname"])).read_text(encoding="utf-8").strip()
 
     def _commit_staging(self, scratch: Path) -> None:
         """Atomically promote the verified scratch dir to ``.pending-restore``
@@ -408,19 +471,14 @@ class SnapshotService:
         quarantine the staged set so the next boot does not re-apply it."""
         aside = self._fm.get_data_path(f"{_PRE_RESTORE_PREFIX}{utc_now().strftime(_TS_FORMAT)}")
         aside.mkdir(parents=True, exist_ok=True)
+        snapshot_version = self._snapshot_version(pending, manifest)
 
-        moved: list[tuple[Path, Path]] = []  # (live_destination, aside_copy)
+        moved: list[tuple[Path, Path]] = []  # (live_path, aside_copy)
         try:
             for entry in cast(list[dict[str, object]], manifest["artifacts"]):
-                if entry["kind"] not in _KNOWN_KINDS:
-                    logger.warning(
-                        "[snapshot] skipping unknown artifact kind %r (arcname=%s) — "
-                        "snapshot was exported by a build that declared an artifact "
-                        "this build no longer restores",
-                        entry["kind"], entry.get("arcname"),
-                    )
+                if not self._is_restorable(entry):
                     continue
-                self._swap_artifact(pending, aside, entry, moved)
+                self._swap_artifact(pending, aside, entry, moved, snapshot_version)
         except Exception:
             self._rollback(moved)
             shutil.rmtree(aside, ignore_errors=True)
@@ -429,6 +487,37 @@ class SnapshotService:
 
         shutil.rmtree(pending, ignore_errors=True)
         self._reenforce_secure_perms()
+
+    @staticmethod
+    def _is_restorable(entry: dict[str, object]) -> bool:
+        """Return True when this artifact is swapped into the live instance.
+
+        Two are read but never written back. The VERSION marker is the running
+        build's identity: restoring an older release's copy would leave the
+        process reporting a version it is not and opening a database named
+        after it, so it is skipped here and used only for the guard and the
+        restored database's name. An artifact whose KIND this build does not
+        know is skipped too — a snapshot is a portable, cross-version backup,
+        so it may legitimately carry an artifact a newer build has since
+        dropped (e.g. the removed session_secret), and that is no reason to
+        abort the whole restore.
+        """
+        kind = entry["kind"]
+        if kind == _KIND_VERSION:
+            logger.info(
+                "[snapshot] not restoring the VERSION marker — this build keeps its own "
+                "version; the snapshot's names the file its database is restored into"
+            )
+            return False
+        if kind not in _KNOWN_KINDS:
+            logger.warning(
+                "[snapshot] skipping unknown artifact kind %r (arcname=%s) — "
+                "snapshot was exported by a build that declared an artifact "
+                "this build no longer restores",
+                kind, entry.get("arcname"),
+            )
+            return False
+        return True
 
     def _reenforce_secure_perms(self) -> None:
         """Re-lock the restored key material — zip extraction does not preserve
@@ -444,48 +533,107 @@ class SnapshotService:
         except OSError:
             logger.exception("[snapshot] could not re-enforce secure-dir perms after restore")
 
-    def _swap_artifact(self, pending: Path, aside: Path, entry: dict[str, object], moved: list[tuple[Path, Path]]) -> None:
-        """Move one live artifact into the aside, then move the staged copy into
-        the live destination. Records the (dest, aside_copy) pair for rollback.
+    def _swap_artifact(
+        self,
+        pending: Path,
+        aside: Path,
+        entry: dict[str, object],
+        moved: list[tuple[Path, Path]],
+        snapshot_version: str | None,
+    ) -> None:
+        """Clear whatever this artifact would overwrite into the aside, then
+        move the staged copy into its live destination.
 
-        For single-file DBs the live WAL-mode sidecars are moved aside alongside
-        the main file so the restored (WAL-folded) DB starts clean."""
+        The main database clears every main-database file in the data dir, not
+        just the one it lands on; every other KIND clears its single
+        destination.
+        """
         staged_file = pending / cast(str, entry["arcname"])
-        dest = self._destination_for(entry)
-        aside_copy = aside / cast(str, entry["arcname"])
-        aside_copy.parent.mkdir(parents=True, exist_ok=True)
+        dest = self._destination_for(entry, snapshot_version)
 
-        if dest.exists():
-            shutil.move(str(dest), str(aside_copy))
-        if entry["kind"] in _SINGLE_FILE_DB_KINDS:
-            self._move_sidecars(dest, aside_copy)
+        if entry["kind"] == _KIND_CHALIE_DB:
+            self._clear_main_databases(dest, aside, moved)
+        else:
+            self._clear_destination(entry, dest, aside, moved)
+
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(staged_file), str(dest))
-        moved.append((dest, aside_copy))
+
+    def _clear_main_databases(self, dest: Path, aside: Path, moved: list[tuple[Path, Path]]) -> None:
+        """Move every live main-database file — the legacy name, every versioned
+        release file, and each one's WAL sidecars — into the aside.
+
+        Not only the file the restore lands on: ``VersionedDatabaseService``
+        builds the running release's database from the NEWEST database older
+        than it, so any main database left behind that is newer than the
+        restored one would be copied forward in its place and the restore would
+        be invisible. The snapshot replaces the whole main database, whichever
+        release's name it wears.
+
+        *dest* is recorded even when no file stands there, so a failure while
+        the staged database is being moved in still rolls that file away.
+        """
+        live_files = self._live_main_databases()
+        if dest not in live_files:
+            live_files.append(dest)
+        for live in live_files:
+            self._move_aside(live, aside / _KIND_CHALIE_DB / live.name, moved, sidecars=True)
+
+    def _clear_destination(
+        self, entry: dict[str, object], dest: Path, aside: Path, moved: list[tuple[Path, Path]]
+    ) -> None:
+        """Move the one live file this artifact overwrites into the aside.
+
+        For a database the live WAL-mode sidecars go with it, so the restored
+        (WAL-folded) file starts clean instead of replaying stale frames.
+        """
+        self._move_aside(
+            dest,
+            aside / cast(str, entry["arcname"]),
+            moved,
+            sidecars=entry["kind"] in _SINGLE_FILE_DB_KINDS,
+        )
+
+    def _move_aside(self, live: Path, aside_copy: Path, moved: list[tuple[Path, Path]], sidecars: bool) -> None:
+        """Move one live file (optionally with its WAL sidecars) into the aside
+        and record its return ticket.
+
+        The pair is recorded whether or not anything was there to move, and
+        before the staged file lands: the record is what ``_rollback`` needs to
+        both put the live file back AND remove whatever the swap wrote at that
+        path, and the aside directory is deleted on failure — a file moved
+        aside without its ticket recorded would go with it.
+        """
+        aside_copy.parent.mkdir(parents=True, exist_ok=True)
+        if live.exists():
+            shutil.move(str(live), str(aside_copy))
+        if sidecars:
+            self._move_sidecars(live, aside_copy)
+        moved.append((live, aside_copy))
 
     @staticmethod
-    def _move_sidecars(dest: Path, aside_copy: Path) -> None:
-        """Move any live ``-wal``/``-shm`` sidecars of *dest* next to its aside
-        copy (so rollback can restore them and the new DB starts clean)."""
+    def _move_sidecars(live: Path, aside_copy: Path) -> None:
+        """Move any ``-wal``/``-shm`` sidecars of *live* next to its aside copy
+        (so rollback can restore them and the new DB starts clean)."""
         for suffix in _SQLITE_SIDECAR_SUFFIXES:
-            sidecar = dest.parent / f"{dest.name}{suffix}"
+            sidecar = live.parent / f"{live.name}{suffix}"
             if sidecar.exists():
                 shutil.move(str(sidecar), str(aside_copy.parent / f"{aside_copy.name}{suffix}"))
 
     def _rollback(self, moved: list[tuple[Path, Path]]) -> None:
-        """Restore every artifact that was already swapped, newest first, so the
-        live instance is byte-identical to before the failed apply (incl. any
-        DB sidecars that were moved aside)."""
-        for dest, aside_copy in reversed(moved):
-            if dest.exists():
-                dest.unlink()
+        """Put every file the swap moved aside back where it was, newest first,
+        removing whatever the swap wrote at that path — so the live instance is
+        byte-identical to before the failed apply, sidecars included."""
+        for live, aside_copy in reversed(moved):
+            if live.exists():
+                live.unlink()
             if aside_copy.exists():
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(aside_copy), str(dest))
+                live.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(aside_copy), str(live))
             for suffix in _SQLITE_SIDECAR_SUFFIXES:
                 aside_sidecar = aside_copy.parent / f"{aside_copy.name}{suffix}"
                 if aside_sidecar.exists():
-                    shutil.move(str(aside_sidecar), str(dest.parent / f"{dest.name}{suffix}"))
+                    shutil.move(str(aside_sidecar), str(live.parent / f"{live.name}{suffix}"))
 
     def _quarantine_pending(self, pending: Path) -> None:
         """Rename a failed staged set out of the way so the next boot does not

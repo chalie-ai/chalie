@@ -1,9 +1,10 @@
 """Startup migration runner — the single authority for one-time data migrations.
 
-Boot calls :func:`run_all` once per start (run.py), AFTER SchemaConvergenceService
-has converged the schema: the ``schema_migrations`` ledger table is declared in
-``schema.sql`` and must already exist, and worker threads are not running yet so
-steps execute against a quiet database.
+Boot calls :func:`run_all` once per start (run.py), AFTER
+``VersionedDatabaseService`` has provisioned this release's database file: the
+``schema_migrations`` ledger table is declared in ``schema.sql`` and must already
+exist, and worker threads are not running yet so steps execute against a quiet
+database.
 
 Each step is a module in this package exposing the migration contract:
 
@@ -86,7 +87,7 @@ def run_all(db_path: str) -> None:
     try:
         if not _ledger_exists(conn):
             logger.warning(
-                "[migrations] schema_migrations table missing — schema convergence "
+                "[migrations] schema_migrations table missing — provisioning "
                 "has not run against %s; skipping all startup migrations", db_path,
             )
             return
