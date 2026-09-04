@@ -25,7 +25,7 @@ from exceptions import EndpointError, NotFoundError
 from api.request import Request
 from api.request.provider_models import ListModelsRequest
 from api.response.provider_models import ListModelsResult, ModelInfo
-from services.llm_clients.registry import client_class_for
+from services.llm_clients.registry import PROVIDERS_BY_PLATFORM
 from services.provider_db_service import ProviderDbService
 
 
@@ -45,7 +45,7 @@ class ProviderListModels(Action):
         # Each client knows how its own vendor lists models, so a new provider
         # is listable the moment its module exists — there is no branch here to
         # forget to extend.
-        client_class = client_class_for(platform)
+        client_class = PROVIDERS_BY_PLATFORM.get(platform)
         if client_class is None:
             raise EndpointError(f"Unsupported platform '{platform}'")
 

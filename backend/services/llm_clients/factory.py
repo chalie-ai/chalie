@@ -15,7 +15,7 @@ Consumed by: services.provider_service (send / _resolve).
 from __future__ import annotations
 
 from contracts.provider_client import ProviderClient
-from services.llm_clients.registry import client_class_for
+from services.llm_clients.registry import PROVIDERS_BY_PLATFORM
 
 
 def build_client(config: dict[str, object]) -> ProviderClient:
@@ -33,7 +33,7 @@ def build_client(config: dict[str, object]) -> ProviderClient:
             "LLM config missing 'model'. Configure it via the providers API"
         )
 
-    client_class = client_class_for(str(platform))
+    client_class = PROVIDERS_BY_PLATFORM.get(str(platform))
     if client_class is None:
         raise ValueError(f"Unknown platform: {platform}")
 
