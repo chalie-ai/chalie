@@ -14,7 +14,6 @@ only touches its own table.
 
 from __future__ import annotations
 
-import json
 from typing import ClassVar, Self, cast
 
 from models.model import Model
@@ -389,13 +388,7 @@ class Transcript(Model):
         together with the ``tool_calls`` pre-clear in one
         ``Database.transaction()`` (I6 — ``Database`` owns multi-write
         transactions). Returns rows deleted."""
-        if not ids:
-            return 0
-        cursor = cls._bound_connection().execute(
-            f"DELETE FROM {cls.get_table()} WHERE id IN (SELECT value FROM json_each(?))",
-            (json.dumps(ids),),
-        )
-        return cursor.rowcount or 0
+        return cls._delete_where_in_json("id", ids)
 
     # ── SQL fragment builders (shared, no duplication) ───────────────────────
 

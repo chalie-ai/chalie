@@ -21,7 +21,7 @@ from flask.typing import ResponseReturnValue
 
 from api.action import Action
 from api.endpoint import DocumentedResponse
-from exceptions import EndpointError, NotFoundError
+from exceptions import EndpointError
 from api.request import Request
 from api.request.provider_models import ListModelsRequest
 from api.response.provider_models import ListModelsResult, ModelInfo
@@ -37,8 +37,7 @@ class ProviderListModels(Action):
     response_dto = {"post": DocumentedResponse(ListModelsResult)}
 
     def post(self, id: int | str, data: Request | None) -> ResponseReturnValue:
-        if not self.is_create(id):
-            raise NotFoundError("Not found")
+        self.require_create_sentinel(id)
         dto = cast(ListModelsRequest, data)
         platform = dto.platform.strip().lower()
 

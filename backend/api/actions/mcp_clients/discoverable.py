@@ -15,7 +15,6 @@ from flask.typing import ResponseReturnValue
 
 from api.action import Action
 from api.endpoint import DocumentedResponse
-from exceptions import NotFoundError
 from api.response.mcp_tool import DiscoverableTools
 from services.mcp_client_service import McpClientService
 
@@ -27,7 +26,6 @@ class McpDiscoverable(Action):
     response_dto = {"get": DocumentedResponse(DiscoverableTools)}
 
     def get(self, id: int | str) -> ResponseReturnValue:
-        if not self.is_create(id):
-            raise NotFoundError("Not found")
+        self.require_create_sentinel(id)
         names = McpClientService().get_connected_mcp_tool_names()
         return DiscoverableTools(tools=names, count=len(names)).single()
