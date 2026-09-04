@@ -41,8 +41,7 @@ class ProviderSelected(Action):
     }
 
     def get(self, id: int | str) -> ResponseReturnValue:
-        if not self.is_create(id):
-            raise NotFoundError("Not found")
+        self.require_create_sentinel(id)
         row = ProviderDbService().get_selected_provider()
         return ProviderRole(
             provider=Provider.from_row(row) if row else None,
@@ -50,8 +49,7 @@ class ProviderSelected(Action):
         ).single()
 
     def post(self, id: int | str, data: Request | None) -> ResponseReturnValue:
-        if not self.is_create(id):
-            raise NotFoundError("Not found")
+        self.require_create_sentinel(id)
         dto = cast(ProviderRef, data)
         service = ProviderDbService()
         row = service.get_provider_by_id(dto.provider_id)

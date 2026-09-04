@@ -21,7 +21,6 @@ from flask.typing import ResponseReturnValue
 
 from api.action import Action
 from api.endpoint import DocumentedResponse
-from exceptions import NotFoundError
 from api.request import Request
 from api.request.provider_models import ProviderTestRequest
 from api.response.provider_models import ProviderTestResult
@@ -37,8 +36,7 @@ class ProviderTest(Action):
     response_dto = {"post": DocumentedResponse(ProviderTestResult)}
 
     def post(self, id: int | str, data: Request | None) -> ResponseReturnValue:
-        if not self.is_create(id):
-            raise NotFoundError("Not found")
+        self.require_create_sentinel(id)
         dto = cast(ProviderTestRequest, data)
 
         config: dict[str, object] = {}

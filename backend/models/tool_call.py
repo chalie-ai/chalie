@@ -176,14 +176,7 @@ class ToolCall(Model):
         ``?`` per id, since a first-run sweep's candidate set can exceed
         SQLite's bound-variable limit. Empty ``transcript_ids`` is a clean
         no-op — no query runs. Returns rows deleted."""
-        if not transcript_ids:
-            return 0
-        cursor = cls._bound_connection().execute(
-            f"DELETE FROM {cls.get_table()} "
-            "WHERE transcript_id IN (SELECT value FROM json_each(?))",
-            (json.dumps(transcript_ids),),
-        )
-        return cursor.rowcount or 0
+        return cls._delete_where_in_json("transcript_id", transcript_ids)
 
     @classmethod
     def decay(cls) -> int:
