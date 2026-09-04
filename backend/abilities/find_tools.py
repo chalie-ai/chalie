@@ -12,7 +12,7 @@ No fuzzy search, no external tool surface — this tool is a precise menu.
 
 import logging
 import re
-from typing import ClassVar, cast
+from typing import ClassVar
 
 from abilities._ability import Ability
 from abilities._result import ToolResult
@@ -53,8 +53,8 @@ class FindToolsAbility(Ability):
     }
 
 
-    # The two standing lines above the menu. Static: they describe how to call
-    # find_tools, which never varies by request — only the menu below them does.
+    # The two standing lines above the menu. Static, like the menu below them:
+    # this tool's schema text is identical on every request.
     _INTRO: ClassVar[str] = (
         "Use this tool (`find_tools`) to load more tools into context so that you "
         "can perform more actions.\n"
@@ -62,19 +62,8 @@ class FindToolsAbility(Ability):
         "from the list below in the `query` parameter."
     )
 
-    # Shown instead of the menu once every discoverable tool is already loaded.
-    # An empty "**Available Tools**" heading would read as "no tools exist"; this
-    # says the opposite — they are all here, call one directly.
-    _NOTHING_LEFT: ClassVar[str] = (
-        "Every available tool is already loaded in context — there is nothing "
-        "left to load. Call the tool you need directly."
-    )
-
     def get_summary(self) -> str:
-        menu = self._build_tools_index()
-        if not menu:
-            return f"{self._INTRO}\n\n{self._NOTHING_LEFT}"
-        return f"{self._INTRO}\n\n**Available Tools**\n{menu}"
+        return f"{self._INTRO}\n\n**Available Tools**\n{self._build_tools_index()}"
 
     def get_examples(self) -> list[str]:
         from abilities.read import ReadAbility  # noqa: PLC0415
@@ -170,27 +159,22 @@ class FindToolsAbility(Ability):
             logger.warning("FIND_TOOLS Summary lookup failed for %r: %s", name, exc)
             return ""
 
-    def _build_tools_index(self) -> str:
-        """The discoverable roster grouped under its category headings, minus
-        whatever is already loaded.
+    @staticmethod
+    def _build_tools_index() -> str:
+        """The full discoverable roster grouped under its category headings — the
+        same text on every request, whatever is already loaded.
 
-        A tool the model can already call is noise in a menu whose only purpose is
-        loading tools it cannot — so anything in ``mp.active_tools`` is dropped,
-        and a category left with no tools disappears with it rather than rendering
-        an empty heading. Categories come out in ``AbilityCategory`` declaration
-        order, tools alphabetically inside each.
-
-        Off-spine (``mp is None`` — introspection, index build) nothing is loaded,
-        so the full roster renders and the text stays deterministic.
+        This menu is embedded in the tool's schema, which the provider sees at the
+        head of every request. Subtracting loaded tools rewrote that schema after
+        every load, so each step of a turn invalidated the provider's cached
+        prompt prefix and re-prefilled the whole context. A loaded tool asked for
+        again is simply a no-op. Categories come out in ``AbilityCategory``
+        declaration order, tools alphabetically inside each.
         """
         from abilities._registry import AbilityRegistry
 
-        loaded = set(cast("list[str]", getattr(self.mp, "active_tools", None) or []))
-
         grouped: dict[AbilityCategory, list[str]] = {}
         for name in sorted(AbilityRegistry.discoverable_names()):
-            if name in loaded:
-                continue
             try:
                 ability = AbilityRegistry.get(name)
             except KeyError:
