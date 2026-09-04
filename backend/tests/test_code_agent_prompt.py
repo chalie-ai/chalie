@@ -21,9 +21,11 @@ Both are wrong, and neither is detectable by asserting on the delegate's answer.
 These lock the wiring itself:
 
   1. The prompt carries the task — non-empty, and the instruction text verbatim.
-  2. The prompt carries the date anchor. The telemetry block's ``local_time`` is
-     the only date any channel receives, and a coding agent that cannot date its
-     own work writes wrong dates into the files it creates.
+  2. The prompt starts with the turn's own ``[Ddd YYYY-MM-DD HH:MM] Task:``
+     stamp — the delegate's only anchor for dating the work it writes to
+     disk — and carries no World State block at all: a delegate holding
+     write and execute tools has no business receiving the user's device
+     telemetry.
   3. The prompt carries the act trail's re-feed seam, so the delegate sees its
      own tool output across ACT iterations instead of iterating blind.
   4. An unrouted channel raises :class:`UnroutedPromptChannel` — the fallthrough
@@ -40,6 +42,7 @@ from __future__ import annotations
 
 import importlib
 import pkgutil
+import re
 import sqlite3
 
 import pytest
@@ -64,18 +67,26 @@ def _seed_telemetry(ctx: dict[str, object]) -> None:
     TelemetryService.write(ctx)
 
 
-def _clear_telemetry() -> None:
-    """The no-heartbeat state: no snapshot file, no cache."""
-    from services.file_mapper_service import FileMapperService
-    from services.telemetry_service import TelemetryService
-    FileMapperService.get_telemetry_json_path().unlink(missing_ok=True)
-    TelemetryService._cache = None
-
-
 def _code_agent_prompt(task: str = _TASK) -> str:
     """The real user-message body for a real code_agent delegate turn."""
     mp = MessageProcessor(CodeAgentConfig(PolicyChannel.CHAT), raw_input=task)
     return mp.prompt_service.user_prompt()
+
+
+def _open_code_agent_turn(task: str = _TASK) -> MessageProcessor:
+    """Build a code_agent delegate turn the way ``CodeAgentAbility``'s real
+    invocation does — with a real input row and a real execution row, since
+    ``skip_input_row=False`` for this config (see configs/channels/code_agent.py)
+    — so the prompt's stamp resolves to a real timestamp instead of falling
+    through ``_input_stamp``'s chain to the missing-timestamp placeholder.
+    The other tests in this file don't depend on either row and use the
+    lighter ``_code_agent_prompt`` helper instead."""
+    mp = MessageProcessor(CodeAgentConfig(PolicyChannel.CHAT), raw_input=task)
+    mp.turn_id = mp.transcript_service.allocate_turn()
+    mp.uid = mp.transcript_service.append_input(mp.raw_input)
+    mp.current_transcript_id = mp.uid
+    mp.turn_execution_service.open()
+    return mp
 
 
 # ---------------------------------------------------------------------------
@@ -119,31 +130,36 @@ def test_code_agent_prompt_does_not_route_through_the_user_channel(
 
 
 # ---------------------------------------------------------------------------
-# 2. The date anchor reaches the delegate.
+# 2. The task line is stamped, and the delegate carries no world block.
 # ---------------------------------------------------------------------------
 
 
-def test_code_agent_prompt_carries_the_date_anchor(db: sqlite3.Connection) -> None:
-    """``local_time`` in the telemetry block is the only date any channel gets.
-    Without it the delegate has no way to date the work it writes to disk."""
-    _seed_telemetry({"timezone": "Europe/Malta", "locale": "en-GB"})
-    prompt = _code_agent_prompt()
-    assert "local_time:" in prompt, (
-        "code_agent must receive the telemetry block's date anchor — a coding "
-        f"agent that cannot date its own work writes wrong dates. prompt={prompt!r}"
+def test_code_agent_prompt_starts_with_the_stamped_task_line(db: sqlite3.Connection) -> None:
+    """The whole body is ``[stamp] Task:\\n<task>`` (+ trail): the stamp is
+    the delegate's only anchor for dating the work it writes to disk, taken
+    from the turn's own input row. A coding agent that cannot date its own
+    work writes wrong dates into the files it creates."""
+    mp = _open_code_agent_turn()
+    prompt = mp.prompt_service.user_prompt()
+    match = re.match(r"^\[[A-Z][a-z]{2} \d{4}-\d{2}-\d{2} \d{2}:\d{2}\] Task:\n", prompt)
+    assert match, (
+        "code_agent's prompt must start with a [Ddd YYYY-MM-DD HH:MM] Task: "
+        f"stamp line. prompt={prompt!r}"
+    )
+    assert prompt[match.end():].startswith(_TASK), (
+        f"the task text must follow the stamp line verbatim. prompt={prompt!r}"
     )
 
 
-def test_code_agent_prompt_survives_an_absent_heartbeat(db: sqlite3.Connection) -> None:
-    """Telemetry is off-spine: with no heartbeat persisted the block renders
-    empty, and the task must still arrive rather than the body collapsing."""
-    _clear_telemetry()
+def test_code_agent_prompt_carries_no_world_block(db: sqlite3.Connection) -> None:
+    """The delegate holds write and execute tools; the user's device
+    telemetry (battery, location, focus state) has no business reaching it.
+    Seeding a heartbeat proves the block is omitted by design, not merely
+    absent for lack of data."""
+    _seed_telemetry({"timezone": "Europe/Malta", "locale": "en-GB", "local_time": "10:47"})
     prompt = _code_agent_prompt()
-    assert _TASK in prompt, (
-        f"an empty telemetry block must not cost the delegate its task. prompt={prompt!r}"
-    )
-    assert "local_time:" not in prompt, (
-        f"no heartbeat means no anchor line — not a fabricated one. prompt={prompt!r}"
+    assert "### Background Telemetry,Processes" not in prompt, (
+        f"code_agent must never receive the World State block. prompt={prompt!r}"
     )
 
 

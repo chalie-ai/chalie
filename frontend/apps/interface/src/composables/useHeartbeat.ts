@@ -161,7 +161,6 @@ async function _buildContextPayload(): Promise<Record<string, unknown>> {
     locale: resolvedLocale,
     language: navigator.language,
     currency: _detectCurrency(resolvedLocale),
-    local_time: new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }),
   };
 
   ctx['device'] = _detectDevice();

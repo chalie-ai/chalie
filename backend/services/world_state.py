@@ -30,8 +30,11 @@ _SOURCE_LAST_USER_MESSAGE = "world_state"
 
 
 # Top-level telemetry keys that should not be surfaced in the rendered block —
-# they are internal bookkeeping or noise the LLM does not need.
-_TELEMETRY_HIDDEN_KEYS = {"saved_at", "_location_name_stale", "connection"}
+# they are internal bookkeeping or noise the LLM does not need. ``local_time``
+# is hidden (not overridden): the model's clock is the per-line message stamp,
+# so the block renders the persisted heartbeat verbatim and a client still
+# sending ``local_time`` is dropped, never rendered.
+_TELEMETRY_HIDDEN_KEYS = {"saved_at", "local_time", "_location_name_stale", "connection"}
 
 # Top-level dict groups that should not be rendered as their own bullet.
 # ``location`` carries the raw GPS dict (lat/lon) the frontend heartbeat sends;
@@ -40,9 +43,6 @@ _TELEMETRY_HIDDEN_KEYS = {"saved_at", "_location_name_stale", "connection"}
 # sees the resolved ``location_name`` scalar, which renders under the synthetic
 # ``user`` group.
 _TELEMETRY_HIDDEN_GROUPS = {"behavioral", "location"}
-
-# Strftime format for the synthesised local_time field — "Sat 02 May 2026 11:35".
-_LOCAL_TIME_FORMAT = "%a %d %b %Y %H:%M"
 
 
 def _format_telemetry_value(value: object) -> str | None:
@@ -104,17 +104,6 @@ def _group_telemetry(ctx: dict[str, object]) -> list[tuple[str, list[str]]]:
     return out
 
 
-def _compute_local_time() -> str | None:
-    """Return wall-clock time formatted as ``Sat 02 May 2026 11:35``."""
-    try:
-        from services.locale_service import format_date
-        from services.time_utils import utc_now
-        return format_date(utc_now(), _LOCAL_TIME_FORMAT, for_ui=True)
-    except Exception as exc:
-        logger.debug("[WorldState] local_time compute failed: %s", exc)
-        return None
-
-
 @dataclass(frozen=True)
 class Signal:
     source: str
@@ -164,9 +153,10 @@ class WorldState:
         - "user_message" -> updates last_user_message_at
         - "heartbeat"    -> updates last_heartbeat_at
         - "device"       -> sets current_device_class from payload['device_class']
-        - "local_time"   -> sets current_local_time from payload['local_time']
 
-        Unknown kinds are silently ignored (forward-compatibility).
+        Unknown kinds are silently ignored (forward-compatibility) — in
+        particular a stray "local_time" signal is dropped: the model's clock
+        is the per-line message stamp, not the world state.
         """
         persist_user_message: datetime | None = None
         with self._lock:
@@ -179,12 +169,6 @@ class WorldState:
                 dc = signal.payload.get("device_class")
                 if dc:
                     self._store["world_state:current_device_class"] = dc
-            elif signal.kind == "local_time":
-                lt = signal.payload.get("local_time")
-                if lt:
-                    self._store["world_state:current_local_time"] = (
-                        lt if isinstance(lt, str) else cast("datetime", lt).isoformat()
-                    )
 
         # Durable write happens outside the lock — the dual-write touches
         # MemoryStore + data_graph and must not block other absorb/snapshot
@@ -210,7 +194,7 @@ class WorldState:
                 self._store[_STORE_KEY_LAST_USER_MESSAGE] = hydrated.isoformat()
 
     def snapshot(self) -> dict[str, object]:
-        """Read-only snapshot of the four typed ambient fields. Caller treats as immutable.
+        """Read-only snapshot of the three typed ambient fields. Caller treats as immutable.
 
         Datetime fields are ``None`` when not yet set; once set they return a
         timezone-aware UTC ``datetime``. ``last_user_message_at`` is hydrated
@@ -220,12 +204,10 @@ class WorldState:
         with self._lock:
             raw_msg = self._store.get(_STORE_KEY_LAST_USER_MESSAGE)
             raw_hb = self._store.get("world_state:last_heartbeat_at")
-            raw_lt = self._store.get("world_state:current_local_time")
             return {
                 "last_user_message_at": parse_utc(cast("str", raw_msg)) if raw_msg is not None else None,
                 "last_heartbeat_at": parse_utc(cast("str", raw_hb)) if raw_hb is not None else None,
                 "current_device_class": self._store.get("world_state:current_device_class"),
-                "current_local_time": parse_utc(cast("str", raw_lt)) if raw_lt is not None else None,
             }
 
     def render(self) -> str:
@@ -253,22 +235,18 @@ class WorldState:
     def _render_telemetry(self) -> list[str]:
         """Produce bullet lines for the [telemetry] section.
 
-        Reads the latest heartbeat snapshot (``data/telemetry.json``,
+        Renders the latest persisted heartbeat snapshot (``data/telemetry.json``,
         populated by ``ClientContextService.save()`` → ``TelemetryService``)
-        and surfaces every key the frontend sent, grouped by top-level
-        prefix.  Top-level scalar keys aggregate under the synthetic ``user``
-        group; nested dicts (``device`` …) form their own groups.
-        ``local_time`` is overwritten with a freshly-computed value derived
-        from the stored IANA timezone so it never goes stale.
+        verbatim — nothing is computed per call: the model's clock is the
+        per-line message stamp, not the telemetry block. Every key the
+        frontend sent is surfaced, grouped by top-level prefix.  Top-level
+        scalar keys aggregate under the synthetic ``user`` group; nested dicts
+        (``device`` …) form their own groups.
         """
         from services.telemetry_service import TelemetryService
-        ctx = dict(TelemetryService.read().as_dict())  # shallow copy — _render mutates local_time
+        ctx = TelemetryService.read().as_dict()
         if not ctx:
             return []
-
-        fresh_local_time = _compute_local_time()
-        if fresh_local_time:
-            ctx["local_time"] = fresh_local_time
 
         lines = []
         for group_name, fields in _group_telemetry(ctx):

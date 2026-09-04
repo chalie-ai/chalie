@@ -43,7 +43,6 @@ from models.tool_call import ToolCall
 from models.transcript import Transcript
 from models.transcript_thinking import TranscriptThinking
 from models.user_synthesis import UserSynthesisRow
-from services.locale_service import CHAT_TIMESTAMP_FMT, format_date
 from services.markup import PROMPT_TAGS
 from services.personality.personality_service import personality_service
 from services.time_formatter_service import TimeFormatterService
@@ -80,7 +79,14 @@ _USER_DEFINITION_FALLBACK = (
     "The user is a real human. Treat this conversation as peer-to-peer dialogue."
 )
 _CONTENT_FIELD_PLACEHOLDER = "{{provider_content_field_name}}"
-_MISSING_TS_PLACEHOLDER = "????-??-?? ??:??"
+_MISSING_TS_PLACEHOLDER = "??? ????-??-?? ??:??"
+
+#: The one timestamp shape every model-facing line PromptService builds is
+#: stamped with: weekday, date, hour:minute in the user's local timezone
+#: (e.g. ``Fri 2026-09-04 10:12``). History rows, the thread-gist rows and
+#: the current input line all render through it, and the stamp is the
+#: model's only time source.
+_STAMP_FORMAT = "%a %Y-%m-%d %H:%M"
 
 _HANDOVER_FRAME = (
     "You hit your context limit mid-task and are continuing the same task — "
@@ -366,9 +372,11 @@ class PromptService:
         return _HANDOVER_FRAME.format(handover=self.mp.turn_handover)
 
     def _world(self) -> str:
-        """``world_state.render()``, guarded — the turn's telemetry block, whose
-        ``local_time`` line is the ONLY date anchor any channel receives. Off-spine
-        telemetry, so a render hiccup must never crash the turn."""
+        """``world_state.render()``, guarded — the turn's off-spine telemetry
+        block. It carries no date anchor: the input-line stamp
+        (:meth:`_input_stamp`) is the model's only time source, so this block
+        is context, not the clock. A render hiccup must never crash the
+        turn."""
         try:
             return world_state.render()
         except Exception as exc:  # noqa: BLE001 — off-spine telemetry render must not crash the turn
@@ -390,18 +398,17 @@ class PromptService:
             return ""
 
     def _user_prompt(self) -> str:
-        """``UserConfig.get_user_prompt``: user_def, World State, Previous
-        Messages, blank, (post-compaction banner), input line, act trail —
-        same section order as the pre-rewrite assembly."""
+        """``UserConfig.get_user_prompt``: user definition, the ``## Previous
+        Messages`` block, a blank line, the post-compaction banner (when
+        present), the World State block, the stamped input line, then this
+        turn's act trail. The world block now sits directly above the input
+        line — pre-rewrite it sat above the history — and the input line
+        carries the turn's stamp (the model's only time source)."""
         parts: list[str] = []
 
         user_def = self.user_definition()
         if user_def:
             parts.append(user_def)
-
-        rendered_ws = self._world()
-        if rendered_ws:
-            parts.append(rendered_ws)
 
         prev = self._prev()
         if prev:
@@ -413,7 +420,11 @@ class PromptService:
         if handover:
             parts.append(handover)
 
-        parts.append(f"user: {self.mp.raw_input}")
+        rendered_ws = self._world()
+        if rendered_ws:
+            parts.append(rendered_ws)
+
+        parts.append(f"[{self._input_stamp()}] user: {self.mp.raw_input}")
 
         trail = self._trail()
         if trail:
@@ -437,8 +448,9 @@ class PromptService:
     # ── ScheduledConfig (channel="schedule") ─────────────────────────────────
 
     def _schedule_prompt(self) -> str:
-        """``ScheduledConfig.get_user_prompt``: previous messages, the scheduled
-        task, then this turn's act trail — joined by blank lines."""
+        """``ScheduledConfig.get_user_prompt``: previous messages, the
+        (stamped) scheduled task, then this turn's act trail — joined by blank
+        lines."""
         parts: list[str] = []
         prev = self._prev()
         if prev:
@@ -446,7 +458,7 @@ class PromptService:
         handover = self._handover()
         if handover:
             parts.append(handover)
-        parts.append(f"Scheduled task:\n{self.mp.raw_input}")
+        parts.append(f"[{self._input_stamp()}] Scheduled task:\n{self.mp.raw_input}")
         trail = self._trail()
         if trail:
             parts.append(trail)
@@ -537,7 +549,7 @@ class PromptService:
         picked = [rows[0]] + ([beyond] if beyond is not None and beyond is not rows[0] else [])
         lines = ["# User Message Prompt", "## User Messages"]
         for r in picked:
-            ts = format_date(cast("str | None", r.get("created_at")), CHAT_TIMESTAMP_FMT, for_ui=True) or ""
+            ts = self._format_ts(cast("str | None", r.get("created_at")))
             content = cast("str", r.get("content") or "").replace("\n", " ").strip()
             lines.append(f"[{ts}] {content}")
         return "\n".join(lines)
@@ -545,9 +557,9 @@ class PromptService:
     # ── WebBrowseConfig (channel="delegate:web_browse") ──────────────────────
 
     def _web_browse_prompt(self) -> str:
-        """``WebBrowseConfig.get_user_prompt``: the browsing goal then this
-        turn's act trail."""
-        parts = [f"Browsing goal:\n{self.mp.raw_input}"]
+        """``WebBrowseConfig.get_user_prompt``: the (stamped) browsing goal
+        then this turn's act trail."""
+        parts = [f"[{self._input_stamp()}] Browsing goal:\n{self.mp.raw_input}"]
         trail = self._trail()
         if trail:
             parts.append(trail)
@@ -556,9 +568,9 @@ class PromptService:
     # ── WebSearchConfig (channel="delegate:web_search") ──────────────────────
 
     def _web_search_prompt(self) -> str:
-        """``WebSearchConfig.get_user_prompt``: the research query then this
-        turn's act trail."""
-        parts = [f"Research query:\n{self.mp.raw_input}"]
+        """``WebSearchConfig.get_user_prompt``: the (stamped) research query
+        then this turn's act trail."""
+        parts = [f"[{self._input_stamp()}] Research query:\n{self.mp.raw_input}"]
         trail = self._trail()
         if trail:
             parts.append(trail)
@@ -567,9 +579,9 @@ class PromptService:
     # ── PimConfig (channel="delegate:pim") ───────────────────────────────────
 
     def _pim_prompt(self) -> str:
-        """``PimConfig.get_user_prompt``: the personal-information instruction
-        then this turn's act trail."""
-        parts = [f"Instruction:\n{self.mp.raw_input}"]
+        """``PimConfig.get_user_prompt``: the (stamped) personal-information
+        instruction then this turn's act trail."""
+        parts = [f"[{self._input_stamp()}] Instruction:\n{self.mp.raw_input}"]
         trail = self._trail()
         if trail:
             parts.append(trail)
@@ -578,22 +590,20 @@ class PromptService:
     # ── CodeAgentConfig (channel="delegate:code_agent") ──────────────────────
 
     def _code_agent_prompt(self) -> str:
-        """``CodeAgentConfig.get_user_prompt``: World State, the coding task,
-        then this turn's act trail.
+        """``CodeAgentConfig.get_user_prompt``: the (stamped) coding task, then
+        this turn's act trail.
 
         ``suppress_history=True`` makes this string the delegate's ENTIRE input,
-        so World State rides along deliberately: it carries the only date anchor
-        any channel receives, and a coding agent that cannot date its own work
-        writes wrong dates into the files it creates. Kept as its own builder
-        rather than remapped onto the user channel through ``prompt_channel`` —
-        a task is a hand-off, not a user utterance, and that assembly would also
-        inject the user-identity synthesis and a post-compaction banner naming a
-        tool this channel does not pin."""
+        and the stamped Task line is its only clock: the World State block no
+        longer rides along (the input stamp is the model's only time source),
+        and a coding agent that cannot date its own work writes wrong dates
+        into the files it creates. Kept as its own builder rather than remapped
+        onto the user channel through ``prompt_channel`` — a task is a
+        hand-off, not a user utterance, and that assembly would also inject the
+        user-identity synthesis and a post-compaction banner naming a tool this
+        channel does not pin."""
         parts: list[str] = []
-        rendered_ws = self._world()
-        if rendered_ws:
-            parts.append(rendered_ws)
-        parts.append(f"Task:\n{self.mp.raw_input}")
+        parts.append(f"[{self._input_stamp()}] Task:\n{self.mp.raw_input}")
         trail = self._trail()
         if trail:
             parts.append(trail)
@@ -636,14 +646,15 @@ class PromptService:
 
     def _external_agent_prompt(self) -> str:
         """``EAMPConfig.get_user_prompt``: previous messages, a blank line, the
-        input line, then this turn's act trail — joined by single newlines (the
-        input line comes BEFORE the trail, the pre-rewrite ordering)."""
+        stamped input line, then this turn's act trail — joined by single
+        newlines (the input line comes BEFORE the trail, the pre-rewrite
+        ordering)."""
         parts: list[str] = []
         prev = self._prev()
         if prev:
             parts.append(f"## Previous Messages\n{prev}")
         parts.append("")
-        parts.append(f"user: {self.mp.raw_input}")
+        parts.append(f"[{self._input_stamp()}] user: {self.mp.raw_input}")
         trail = self._trail()
         if trail:
             parts.append(trail)
@@ -651,14 +662,35 @@ class PromptService:
 
     # ── formatting helpers ───────────────────────────────────────────────────
 
+    def _input_stamp(self) -> str:
+        """The stamp for THIS turn's input line, rendered in :data:`_STAMP_FORMAT`
+        through :meth:`_format_ts` — the same formatter the history rows use:
+        the ``created_at`` of this turn's anchoring input row (id ``mp.uid``,
+        looked up once via :meth:`TranscriptService.anchor_row`), or
+        ``mp.execution.started_at`` — the ISO-8601 UTC stamp
+        :class:`TurnExecutionService.open` wrote — when the channel has no
+        input row (``mp.uid`` is None). This stamp is the model's only time
+        source, so the two paths share the one local-time formatter rather
+        than each carrying its own."""
+        row = self.mp.transcript_service.anchor_row()
+        if row is not None:
+            return self._format_ts(row.created_at)
+        execution = self.mp.execution
+        if execution is not None:
+            return self._format_ts(execution.started_at)
+        logger.warning("[PromptService] no input row and no execution to stamp the input line from")
+        return _MISSING_TS_PLACEHOLDER
+
     def _format_ts(self, raw: str | None) -> str:
-        """``_format_ts``: one transcript row's ``created_at`` in the user's local
-        timezone, or the placeholder on a missing/unparseable value."""
+        """``_format_ts``: one timestamp in the user's local timezone rendered
+        in :data:`_STAMP_FORMAT` — the single shape every model-facing line's
+        stamp takes (history rows, thread-gist rows, the current input) — or
+        the placeholder on a missing/unparseable value."""
         if raw is None or not raw.strip():
-            logger.warning("[PromptService] missing created_at on transcript row")
+            logger.warning("[PromptService] missing or blank timestamp")
             return _MISSING_TS_PLACEHOLDER
-        formatted = TimeFormatterService.local(raw)
+        formatted = TimeFormatterService.local(raw, _STAMP_FORMAT)
         if formatted is None:
-            logger.warning("[PromptService] unparseable created_at=%r", raw)
+            logger.warning("[PromptService] unparseable timestamp=%r", raw)
             return _MISSING_TS_PLACEHOLDER
         return formatted

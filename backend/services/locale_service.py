@@ -181,8 +181,9 @@ def parse_local(dt: datetime | str) -> datetime:
     """Interpret a naive LOCAL wall-clock datetime and return it as UTC.
 
     Use for user/LLM-supplied wall-clock values (e.g. the scheduler "Start
-    Time", which the World State surfaces in local time and which is never
-    timezone-converted upstream). This is the inverse of ``parse_utc`` in that
+    Time", which the model copies from the stamp on the current message in
+    local time and which is never timezone-converted upstream). This is the
+    inverse of ``parse_utc`` in that
     a naive input is assumed to be in the user's timezone rather than UTC.
     Aware inputs are converted as-is.
 

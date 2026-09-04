@@ -50,26 +50,23 @@ class TestRenderTelemetry:
         # End-to-end shape: the FE persists a heartbeat with hidden keys
         # (connection, behavioral, saved_at, _location_name_stale) plus a
         # stale local_time string. The rendered block must be exactly the
-        # header + one bullet per surviving group, with local_time recomputed
-        # from the IANA timezone and no blank line under [telemetry].
+        # header + one bullet per surviving group, with the stale local_time
+        # hidden — not rendered, not recomputed — and no blank line under
+        # [telemetry].
         _seed_telemetry(db, {
             "timezone": "Europe/Malta",
             "locale": "en-GB",
             "language": "en-US",
-            "local_time": "10:47",                       # backend overrides from timezone
+            "local_time": "10:47",                       # hidden key — never rendered
             "device": {"name": "MacBook", "battery": 82, "os": "macOS"},
             "behavioral": {"focus_state": "deep", "tab_count": 7},  # hidden group
             "connection": "4g",                          # hidden key
         })
 
-        from zoneinfo import ZoneInfo
-        from services.time_utils import utc_now
-        expected_lt = utc_now().astimezone(ZoneInfo("Europe/Malta")).strftime("%a %d %b %Y %H:%M")
-
         expected = (
             f"{_HEADER}\n"
             "[telemetry]\n"
-            f"* **user**;timezone:Europe/Malta,locale:en-GB,language:en-US,local_time:{expected_lt}\n"
+            "* **user**;timezone:Europe/Malta,locale:en-GB,language:en-US\n"
             "* **device**;name:MacBook,battery:82,os:macOS"
         )
 

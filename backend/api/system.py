@@ -105,18 +105,15 @@ def _health() -> Health:
 
 
 def _absorb_heartbeat_signals(data: dict[str, object]) -> None:
-    """Absorb the heartbeat into WorldState as Signals (heartbeat / device /
-    local_time). The old telemetry mirror is gone: nothing reads the
-    world-state ``"telemetry"`` key — WorldState renders telemetry straight
+    """Absorb the heartbeat into WorldState as Signals (heartbeat / device).
+    The old telemetry mirror is gone: nothing reads the world-state
+    ``"telemetry"`` key — WorldState renders telemetry straight
     from ``TelemetryService``."""
     from services.world_state import world_state, Signal
     world_state.absorb(Signal(source=_SIGNAL_SOURCE_HEALTH, kind="heartbeat", payload=data))
     device_class = data.get("device_class") or cast(dict[str, object], data.get("device") or {}).get("class")
     if device_class:
         world_state.absorb(Signal(source=_SIGNAL_SOURCE_HEALTH, kind="device", payload={"device_class": device_class}))
-    local_time = data.get("local_time")
-    if local_time:
-        world_state.absorb(Signal(source=_SIGNAL_SOURCE_HEALTH, kind="local_time", payload={"local_time": local_time}))
 
 
 def _persist_heartbeat(data: dict[str, object]) -> None:
