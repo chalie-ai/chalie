@@ -19,37 +19,16 @@ service.
 
 import json
 import logging
-from typing import TYPE_CHECKING, Optional, cast
+from typing import cast
+
+import requests
 
 from services.memory_client import MemoryClientService
 from services.telemetry_service import TelemetryService
 
-if TYPE_CHECKING:
-    from typing import Protocol
-
-    class _Location(Protocol):
-        @property
-        def raw(self) -> dict[str, object]:
-            ...
-
-    class _Geocoder(Protocol):
-        def reverse(self, query: object, language: str = ..., exactly_one: bool = ...) -> "_Location | None":
-            ...
-
+_NOMINATIM_REVERSE_URL = "https://nominatim.openstreetmap.org/reverse"
 _NOMINATIM_USER_AGENT = "Chalie/1.0"
 _NOMINATIM_TIMEOUT_S = 3
-_nominatim: "Optional[_Geocoder]" = None
-
-
-def _get_nominatim() -> "_Geocoder":
-    """Return a lazily-initialised Nominatim geocoder singleton."""
-    global _nominatim
-    if _nominatim is None:
-        from geopy.geocoders import Nominatim
-        _nominatim = cast("_Geocoder", Nominatim(
-            user_agent=_NOMINATIM_USER_AGENT, timeout=_NOMINATIM_TIMEOUT_S,
-        ))
-    return _nominatim
 
 
 HISTORY_KEY = "client_context:history"
@@ -71,16 +50,34 @@ class ClientContextService:
         self._store = MemoryClientService.create_connection()
 
     def _resolve_location_name(self, lat: float, lon: float) -> str | None:
-        """Uses the geopy Nominatim geocoder (OpenStreetMap). Prefers
-        city → town → municipality → county → state_district as the
-        locality label, combined with the country name. Returns ``None``
-        on geocoder failure or unusable address."""
+        """Reverse-geocodes the coordinates against the OpenStreetMap
+        Nominatim reverse endpoint. Prefers city → town → municipality →
+        county → state_district as the locality label, combined with the
+        country name. Returns ``None`` on geocoder failure or unusable
+        address."""
         try:
-            geocoder = _get_nominatim()
-            location = geocoder.reverse((lat, lon), language="en", exactly_one=True)
-            if location is None:
+            params: dict[str, str | float] = {
+                "lat": lat,
+                "lon": lon,
+                "format": "json",
+                "accept-language": "en",
+                "addressdetails": 1,
+            }
+            resp = requests.get(
+                _NOMINATIM_REVERSE_URL,
+                params=params,
+                headers={"User-Agent": _NOMINATIM_USER_AGENT},
+                timeout=_NOMINATIM_TIMEOUT_S,
+            )
+            resp.raise_for_status()
+            place = cast("dict[str, object]", resp.json())
+            if not place:
                 return None
-            address = cast(dict[str, object], location.raw.get("address", {}))
+            if (error := place.get("error")) is not None:
+                if error != "Unable to geocode":
+                    logging.warning(f"[CLIENT CONTEXT] Nominatim error: {error}")
+                return None
+            address = cast("dict[str, object]", place.get("address", {}))
             city = cast(str, address.get("city") or address.get("town") or
                     address.get("municipality") or address.get("county") or
                     address.get("state_district") or "")
@@ -89,6 +86,8 @@ class ClientContextService:
                 return f"{city}, {country}"
             if country:
                 return country
+        except requests.RequestException as e:
+            logging.warning(f"[CLIENT CONTEXT] Nominatim request failed: {e}")
         except (KeyError, ValueError, AttributeError) as e:
             logging.debug(f"[CLIENT CONTEXT] Failed to resolve location: {e}")
         except Exception as e:

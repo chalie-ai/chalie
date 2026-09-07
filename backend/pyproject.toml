@@ -67,7 +67,6 @@ dependencies = [
     # ceiling only alongside a matching port.
     "mcp>=2.0.0,<3.0.0",
     "uvicorn>=0.34.0",
-    "geopy>=2.4.0",
     # Natural-language due_at parsing for the schedule ability ("tomorrow 9am",
     # "in 2 hours") resolved in the user's timezone.
     "dateparser>=1.3.0",
