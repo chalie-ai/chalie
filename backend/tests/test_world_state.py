@@ -48,25 +48,24 @@ class TestRenderEmpty:
 class TestRenderTelemetry:
     def test_telemetry_renders_exact_block(self, db: sqlite3.Connection) -> None:
         # End-to-end shape: the FE persists a heartbeat with hidden keys
-        # (connection, saved_at, _location_name_stale) plus a
-        # stale local_time string. The rendered block must be exactly the
-        # header + one bullet per surviving group, with the stale local_time
-        # hidden — not rendered, not recomputed — and no blank line under
-        # [telemetry].
+        # (connection, saved_at, _location_name_stale), a stale local_time
+        # string and a nested device group. The rendered block must be exactly
+        # the header + the user bullet: local_time hidden — not rendered, not
+        # recomputed — the device group left to the user_device tool, and no
+        # blank line under [telemetry].
         _seed_telemetry(db, {
             "timezone": "Europe/Malta",
             "locale": "en-GB",
             "language": "en-US",
             "local_time": "10:47",                       # hidden key — never rendered
-            "device": {"name": "MacBook", "battery": 82, "os": "macOS"},
+            "device": {"name": "MacBook", "battery": 82, "os": "macOS"},  # nested group — never rendered
             "connection": "4g",                          # hidden key
         })
 
         expected = (
             f"{_HEADER}\n"
             "[telemetry]\n"
-            "* **user**;timezone:Europe/Malta,locale:en-GB,language:en-US\n"
-            "* **device**;name:MacBook,battery:82,os:macOS"
+            "* **user**;timezone:Europe/Malta,locale:en-GB,language:en-US"
         )
 
         assert _fresh().render() == expected

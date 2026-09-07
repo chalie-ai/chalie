@@ -1,4 +1,3 @@
-import json
 import logging
 import threading
 from dataclasses import dataclass, field
@@ -36,15 +35,6 @@ _SOURCE_LAST_USER_MESSAGE = "world_state"
 # sending ``local_time`` is dropped, never rendered.
 _TELEMETRY_HIDDEN_KEYS = {"saved_at", "local_time", "_location_name_stale", "connection"}
 
-# Top-level dict groups that should not be rendered as their own bullet.
-# ``location`` carries the raw GPS dict (lat/lon) the frontend heartbeat sends;
-# it stays out of the chat/system prompt. Backend consumers read the coordinates
-# directly (departure advisory, weather, locale_service); the chat LLM only ever
-# sees the resolved ``location_name`` scalar, which renders under the synthetic
-# ``user`` group.
-_TELEMETRY_HIDDEN_GROUPS = {"location"}
-
-
 def _format_telemetry_value(value: object) -> str | None:
     if value is None:
         return None
@@ -56,10 +46,6 @@ def _format_telemetry_value(value: object) -> str | None:
         return value if value else None
     if isinstance(value, (list, tuple)):
         return ",".join(str(v) for v in value) if value else None
-    if isinstance(value, dict):
-        # Nested dicts should have been split into separate rows by the
-        # flattener; if one slips through, JSON-encode as a fallback.
-        return json.dumps(value, separators=(",", ":")) if value else None
     return str(value)
 
 
@@ -67,41 +53,21 @@ def _is_hidden_telemetry_key(key: str) -> bool:
     return key in _TELEMETRY_HIDDEN_KEYS or key.startswith("_")
 
 
-def _render_dict_subfields(d: dict[str, object]) -> list[str]:
-    sub_fields = []
-    for sub_key, sub_value in d.items():
-        if _is_hidden_telemetry_key(sub_key):
-            continue
-        rendered = _format_telemetry_value(sub_value)
-        if rendered is not None:
-            sub_fields.append(f"{sub_key}:{rendered}")
-    return sub_fields
-
-
 def _group_telemetry(ctx: dict[str, object]) -> list[tuple[str, list[str]]]:
+    """Top-level scalars aggregate under the synthetic ``user`` group; nested
+    dicts never render. ``device``/``network``/``battery``/``preferences``
+    are served on demand by the ``user_device`` ability, and the raw
+    ``location`` dict (lat/lon) stays out of the prompt — backend consumers
+    (departure advisory, weather, locale_service) read the coordinates
+    directly and the model only sees the resolved ``location_name`` scalar."""
     user_fields: list[str] = []
-    grouped: dict[str, list[str]] = {}
-
     for key, value in ctx.items():
-        if _is_hidden_telemetry_key(key):
-            continue
-        if isinstance(value, dict):
-            if key in _TELEMETRY_HIDDEN_GROUPS:
-                continue
-            sub_fields = _render_dict_subfields(value)
-            if sub_fields:
-                grouped[key] = sub_fields
+        if _is_hidden_telemetry_key(key) or isinstance(value, dict):
             continue
         rendered = _format_telemetry_value(value)
         if rendered is not None:
             user_fields.append(f"{key}:{rendered}")
-
-    out: list[tuple[str, list[str]]] = []
-    if user_fields:
-        out.append(("user", user_fields))
-    for group_name in sorted(grouped.keys()):
-        out.append((group_name, grouped[group_name]))
-    return out
+    return [("user", user_fields)] if user_fields else []
 
 
 @dataclass(frozen=True)
@@ -238,10 +204,9 @@ class WorldState:
         Renders the latest persisted heartbeat snapshot (``data/telemetry.json``,
         populated by ``ClientContextService.save()`` → ``TelemetryService``)
         verbatim — nothing is computed per call: the model's clock is the
-        per-line message stamp, not the telemetry block. Every key the
-        frontend sent is surfaced, grouped by top-level prefix.  Top-level
-        scalar keys aggregate under the synthetic ``user`` group; nested dicts
-        (``device`` …) form their own groups.
+        per-line message stamp, not the telemetry block. Only the top-level
+        scalar keys render, under the synthetic ``user`` group — see
+        :func:`_group_telemetry` for what stays out.
         """
         from services.telemetry_service import TelemetryService
         ctx = TelemetryService.read().as_dict()
