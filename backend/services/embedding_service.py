@@ -117,7 +117,8 @@ def _get_session_and_tokenizer() -> tuple[object, object]:
         if _session is not None and _tokenizer is not None:
             return _session, _tokenizer
 
-        from transformers import AutoTokenizer
+        from huggingface_hub import hf_hub_download  # noqa: PLC0415
+        from tokenizers import Tokenizer  # noqa: PLC0415
 
         session, onnx_path = _build_session()
 
@@ -126,13 +127,20 @@ def _get_session_and_tokenizer() -> tuple[object, object]:
         _input_names = [i.name for i in cast(_IS, session).get_inputs()]
         logger.debug(f"[EMBEDDING] Inputs: {_input_names}, outputs: {_output_names}")
 
-        # Load tokenizer — cached in HF default cache after first download
+        # tokenizer.json — cached in the HF default cache after the first download,
+        # so an upgraded install finds the file the previous tokenizer library left.
         try:
-            tokenizer = AutoTokenizer.from_pretrained(_MODEL_ID, local_files_only=True)
+            tokenizer_path = hf_hub_download(_MODEL_ID, "tokenizer.json", local_files_only=True)
             logger.info("[EMBEDDING] Tokenizer loaded from cache")
         except Exception:
             logger.info("[EMBEDDING] Downloading tokenizer...")
-            tokenizer = AutoTokenizer.from_pretrained(_MODEL_ID)
+            tokenizer_path = hf_hub_download(_MODEL_ID, "tokenizer.json")
+        tokenizer = Tokenizer.from_file(tokenizer_path)
+        pad_id = tokenizer.token_to_id("[PAD]")
+        if pad_id is None:
+            raise RuntimeError(f"[EMBEDDING] tokenizer.json for {_MODEL_ID} has no [PAD] token")
+        tokenizer.enable_truncation(_MODEL_MAX_TOKENS)
+        tokenizer.enable_padding(pad_id=pad_id, pad_token="[PAD]")
 
         _session = session
         _tokenizer = tokenizer
@@ -156,18 +164,12 @@ def _l2_normalize(embeddings: np.ndarray) -> np.ndarray:
 
 def _encode_batch(texts: List[str]) -> np.ndarray:
     from onnxruntime import InferenceSession as _IS  # noqa: PLC0415
-    from transformers import PreTrainedTokenizerBase as _Tok  # noqa: PLC0415
+    from tokenizers import Tokenizer as _Tok  # noqa: PLC0415
     session, tokenizer = _get_session_and_tokenizer()
 
-    encoded = cast(_Tok, tokenizer)(
-        texts,
-        return_tensors="np",
-        padding=True,
-        truncation=True,
-        max_length=_MODEL_MAX_TOKENS,
-    )
-    input_ids = encoded["input_ids"]
-    attention_mask = encoded["attention_mask"]
+    encoded = cast(_Tok, tokenizer).encode_batch(texts)
+    input_ids = np.asarray([e.ids for e in encoded], dtype=np.int64)
+    attention_mask = np.asarray([e.attention_mask for e in encoded], dtype=np.int64)
 
     feed = {"input_ids": input_ids, "attention_mask": attention_mask}
     if "token_type_ids" in _input_names:
