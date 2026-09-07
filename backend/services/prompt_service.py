@@ -45,8 +45,8 @@ from models.transcript_thinking import TranscriptThinking
 from models.user_synthesis import UserSynthesisRow
 from services.markup import PROMPT_TAGS
 from services.personality.personality_service import personality_service
+from services.locale_service import get_timezone_abbreviation, read_locale_fields
 from services.time_formatter_service import TimeFormatterService
-from services.world_state import world_state
 
 if TYPE_CHECKING:
     from typing import Protocol
@@ -135,14 +135,43 @@ class PromptService:
     # ── public dispatch (channel-keyed, zero-param) ─────────────────────────
 
     def system_prompt(self) -> str:
-        """The turn's system instruction block: the per-channel body, plus the
+        """The turn's system instruction block: the per-channel body, the
         shared response-format contract on any channel that renders to a human
-        (``RENDERS_HTML``) — the one place all
-        system-prompt assembly and placeholder substitution lands."""
+        (``RENDERS_HTML``), then the user's locale line on every channel — the
+        one place all system-prompt assembly and placeholder substitution
+        lands."""
         base = self._system_prompt_body()
         if self.mp.config.RENDERS_HTML:
             base += _RESPONSE_FORMAT
+        if locale := self.locale_line():
+            base += f"\n\n{locale}"
         return self._substitute_content_field(base)
+
+    @staticmethod
+    def locale_line() -> str:
+        """The user's locale as one trailing system-prompt line: where they
+        are, their timezone as an abbreviation, their language and currency —
+        read from the persisted heartbeat, so it lives in the cache-warm system
+        block on every channel instead of riding the user message. Each clause
+        appears only when the heartbeat carries it; no heartbeat, no line. The
+        heartbeat's device groups never render — the model asks ``user_device``
+        for them."""
+        fields = read_locale_fields()
+        clauses: list[str] = []
+        if fields.get("location_name"):
+            clauses.append(f"User is currently in {fields['location_name']}.")
+        if abbreviation := get_timezone_abbreviation():
+            clauses.append(f"The timezone is {abbreviation}.")
+        language, currency = fields.get("language"), fields.get("currency")
+        if language and currency:
+            clauses.append(f"They prefer {language} and use the currency {currency}.")
+        elif language:
+            clauses.append(f"They prefer {language}.")
+        elif currency:
+            clauses.append(f"They use the currency {currency}.")
+        if not clauses:
+            return ""
+        return " ".join(clauses) + " Use this information to better tailor your response."
 
     def _system_prompt_body(self) -> str:
         """The per-channel system block.
@@ -371,18 +400,6 @@ class PromptService:
             return ""
         return _HANDOVER_FRAME.format(handover=self.mp.turn_handover)
 
-    def _world(self) -> str:
-        """``world_state.render()``, guarded — the turn's off-spine telemetry
-        block. It carries no date anchor: the input-line stamp
-        (:meth:`_input_stamp`) is the model's only time source, so this block
-        is context, not the clock. A render hiccup must never crash the
-        turn."""
-        try:
-            return world_state.render()
-        except Exception as exc:  # noqa: BLE001 — off-spine telemetry render must not crash the turn
-            logger.debug("[PromptService] world_state.render failed: %s", exc)
-            return ""
-
     # ── UserConfig (channel="user") ──────────────────────────────────────────
 
     def _user_system_prompt(self) -> str:
@@ -400,10 +417,10 @@ class PromptService:
     def _user_prompt(self) -> str:
         """``UserConfig.get_user_prompt``: user definition, the ``## Previous
         Messages`` block, a blank line, the post-compaction banner (when
-        present), the World State block, the stamped input line, then this
-        turn's act trail. The world block now sits directly above the input
-        line — pre-rewrite it sat above the history — and the input line
-        carries the turn's stamp (the model's only time source)."""
+        present), the stamped input line, then this turn's act trail. The
+        input line carries the turn's stamp (the model's only time source);
+        the heartbeat never rides the user message — its locale line sits at
+        the bottom of the system prompt."""
         parts: list[str] = []
 
         user_def = self.user_definition()
@@ -419,10 +436,6 @@ class PromptService:
         handover = self._handover()
         if handover:
             parts.append(handover)
-
-        rendered_ws = self._world()
-        if rendered_ws:
-            parts.append(rendered_ws)
 
         parts.append(f"[{self._input_stamp()}] user: {self.mp.raw_input}")
 

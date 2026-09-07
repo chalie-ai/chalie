@@ -9,8 +9,6 @@ from services.time_utils import utc_now, parse_utc
 
 logger = logging.getLogger(__name__)
 
-_SECTION_HEADER = "### Background Telemetry,Processes"
-
 # Key for the last user-message timestamp. The in-memory ``_store`` dict and the
 # durable MemoryStore deliberately share this key — both are the fast in-process
 # read path for the same value.
@@ -25,51 +23,6 @@ _DG_KEY_LAST_USER_MESSAGE = "world_state_last_user_message_at"
 _SOURCE_LAST_USER_MESSAGE = "world_state"
 
 
-# ── Render helpers (module-level, pure functions) ─────────────────────────────
-
-
-# Top-level telemetry keys that should not be surfaced in the rendered block —
-# they are internal bookkeeping or noise the LLM does not need. ``local_time``
-# is hidden (not overridden): the model's clock is the per-line message stamp,
-# so the block renders the persisted heartbeat verbatim and a client still
-# sending ``local_time`` is dropped, never rendered.
-_TELEMETRY_HIDDEN_KEYS = {"saved_at", "local_time", "_location_name_stale", "connection"}
-
-def _format_telemetry_value(value: object) -> str | None:
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, (int, float)):
-        return str(value)
-    if isinstance(value, str):
-        return value if value else None
-    if isinstance(value, (list, tuple)):
-        return ",".join(str(v) for v in value) if value else None
-    return str(value)
-
-
-def _is_hidden_telemetry_key(key: str) -> bool:
-    return key in _TELEMETRY_HIDDEN_KEYS or key.startswith("_")
-
-
-def _group_telemetry(ctx: dict[str, object]) -> list[tuple[str, list[str]]]:
-    """Top-level scalars aggregate under the synthetic ``user`` group; nested
-    dicts never render. ``device``/``network``/``battery``/``preferences``
-    are served on demand by the ``user_device`` ability, and the raw
-    ``location`` dict (lat/lon) stays out of the prompt — backend consumers
-    (departure advisory, weather, locale_service) read the coordinates
-    directly and the model only sees the resolved ``location_name`` scalar."""
-    user_fields: list[str] = []
-    for key, value in ctx.items():
-        if _is_hidden_telemetry_key(key) or isinstance(value, dict):
-            continue
-        rendered = _format_telemetry_value(value)
-        if rendered is not None:
-            user_fields.append(f"{key}:{rendered}")
-    return [("user", user_fields)] if user_fields else []
-
-
 @dataclass(frozen=True)
 class Signal:
     source: str
@@ -79,7 +32,7 @@ class Signal:
 
 
 class WorldState:
-    """In-process singleton. Sole owner of world-state data + rendering.
+    """In-process singleton. Sole owner of world-state data.
 
     Thread-safe via a single internal lock protecting ``_store``.
     """
@@ -176,46 +129,5 @@ class WorldState:
                 "current_device_class": self._store.get("world_state:current_device_class"),
             }
 
-    def render(self) -> str:
-        """Combine in-memory fragments and DB reads into the literal output block.
-
-        Returns:
-            Multi-line string starting with the section header, or ``''`` when
-            every section is empty.  Raises on DB errors — callers must handle.
-        """
-        parts = []
-
-        # ── Telemetry ──────────────────────────────────────────────────────
-        telemetry_lines = self._render_telemetry()
-        if telemetry_lines:
-            parts.append("[telemetry]")
-            parts.extend(telemetry_lines)
-
-        if not parts:
-            return ""
-
-        return _SECTION_HEADER + "\n" + "\n".join(parts)
-
-    # ── Private render helpers ─────────────────────────────────────────────
-
-    def _render_telemetry(self) -> list[str]:
-        """Produce bullet lines for the [telemetry] section.
-
-        Renders the latest persisted heartbeat snapshot (``data/telemetry.json``,
-        populated by ``ClientContextService.save()`` → ``TelemetryService``)
-        verbatim — nothing is computed per call: the model's clock is the
-        per-line message stamp, not the telemetry block. Only the top-level
-        scalar keys render, under the synthetic ``user`` group — see
-        :func:`_group_telemetry` for what stays out.
-        """
-        from services.telemetry_service import TelemetryService
-        ctx = TelemetryService.read().as_dict()
-        if not ctx:
-            return []
-
-        lines = []
-        for group_name, fields in _group_telemetry(ctx):
-            lines.append(f"* **{group_name}**;" + ",".join(fields))
-        return lines
 
 world_state = WorldState()

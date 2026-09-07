@@ -43,9 +43,6 @@ from models.turn_execution import TurnExecution
 
 pytestmark = pytest.mark.unit
 
-_WORLD_BLOCK_HEADER = "### Background Telemetry,Processes"
-
-
 def _seed_telemetry(ctx: dict[str, object]) -> None:
     """Persist a heartbeat snapshot the way POST /health does (the ``db``
     fixture redirects the snapshot path into this test's tmp dir)."""
@@ -125,61 +122,6 @@ def test_history_rows_carry_the_same_stamp_shape(db: sqlite3.Connection) -> None
     assert prompt.index("## Previous Messages") < prompt.index(expected_line), (
         "the settled prior row must render inside the Previous Messages "
         f"block, not merely somewhere in the prompt. prompt={prompt!r}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# 3. The world block sits between the history and the stamped input line.
-# ---------------------------------------------------------------------------
-
-
-def test_world_block_sits_between_history_and_the_user_line(db: sqlite3.Connection) -> None:
-    """The world-state block now sits directly above the stamped input
-    line — pre-rewrite it sat above the history instead. Order must be:
-    Previous Messages, then the world block, then the current input line."""
-    _seed_telemetry({"timezone": "Europe/Malta", "locale": "en-GB"})
-
-    prior = _open_turn(UserConfig(), "remind me to call the dentist")
-    prior.transcript_service.append_assistant("Noted, I'll remind you.")
-
-    mp = _open_turn(UserConfig(), "anything else on my list today")
-    prompt = mp.prompt_service.user_prompt()
-
-    history_idx = prompt.index("## Previous Messages")
-    world_idx = prompt.index(_WORLD_BLOCK_HEADER)
-    user_idx = prompt.index(f"] user: {mp.raw_input}")
-    assert history_idx < world_idx < user_idx, (
-        "the world block must sit between the history and the stamped input "
-        f"line (got history={history_idx}, world={world_idx}, "
-        f"user_line={user_idx}). prompt={prompt!r}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# 4. The world block never renders local_time.
-# ---------------------------------------------------------------------------
-
-
-def test_world_block_never_renders_local_time(db: sqlite3.Connection) -> None:
-    """The world block renders the persisted heartbeat verbatim except
-    ``local_time``, which stays hidden — the input-line stamp is the
-    model's only time source, never a second, potentially stale clock."""
-    _seed_telemetry({
-        "timezone": "Europe/Malta", "locale": "en-GB", "local_time": "10:47",
-    })
-
-    mp = _open_turn(UserConfig(), "what's on my calendar")
-    prompt = mp.prompt_service.user_prompt()
-
-    assert _WORLD_BLOCK_HEADER in prompt, (
-        f"the world block itself must still render. prompt={prompt!r}"
-    )
-    assert "timezone:Europe/Malta" in prompt, (
-        f"the surviving telemetry fields must still render. prompt={prompt!r}"
-    )
-    assert "local_time" not in prompt, (
-        "local_time must never reach the model even though it was "
-        f"persisted — the input-line stamp is its only clock. prompt={prompt!r}"
     )
 
 

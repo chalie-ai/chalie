@@ -22,7 +22,7 @@ from services.time_utils import utc_now, parse_utc
 
 logger = logging.getLogger(__name__)
 
-def _read_locale_fields() -> dict[str, object]:
+def read_locale_fields() -> dict[str, object]:
     """Extract locale-relevant fields from the telemetry snapshot.
 
     Returns a flat dict with keys like 'timezone', 'locale', 'location.lat'.
@@ -51,7 +51,7 @@ def get_timezone() -> ZoneInfo:
 
     Falls back to UTC when no heartbeat has been received yet.
     """
-    fields = _read_locale_fields()
+    fields = read_locale_fields()
     tz_name = fields.get("timezone")
     if tz_name:
         try:
@@ -63,8 +63,22 @@ def get_timezone() -> ZoneInfo:
 
 def get_timezone_name() -> str:
     """Return the user's IANA timezone name string (e.g. 'Europe/Malta')."""
-    fields = _read_locale_fields()
+    fields = read_locale_fields()
     return cast(str, fields.get("timezone")) or "UTC"
+
+
+def get_timezone_abbreviation() -> str | None:
+    """The user's timezone the way the model should read it — ``CET``, ``PST``
+    — derived from the IANA zone at the current instant, so it follows DST
+    (``CET`` in winter, ``CEST`` in summer). Zones whose abbreviation is only a
+    numeric offset (``+04``) report the IANA key instead. ``None`` before the
+    first heartbeat.
+    """
+    if "timezone" not in read_locale_fields():
+        return None
+    zone = get_timezone()
+    abbreviation = utc_now().astimezone(zone).tzname() or ""
+    return abbreviation if abbreviation.isalpha() else zone.key
 
 
 def get_locale() -> str:
@@ -72,7 +86,7 @@ def get_locale() -> str:
 
     Falls back to 'en-US' when unavailable.
     """
-    fields = _read_locale_fields()
+    fields = read_locale_fields()
     return cast(str, fields.get("locale")) or "en-US"
 
 
@@ -81,7 +95,7 @@ def get_language() -> str:
 
     Falls back to 'en' when unavailable.
     """
-    fields = _read_locale_fields()
+    fields = read_locale_fields()
     return cast(str, fields.get("language")) or "en"
 
 
@@ -90,7 +104,7 @@ def get_currency() -> str:
 
     Falls back to 'USD' when unavailable.
     """
-    fields = _read_locale_fields()
+    fields = read_locale_fields()
     return cast(str, fields.get("currency")) or "USD"
 
 
@@ -100,7 +114,7 @@ def get_location() -> dict[str, object]:
     Returns:
         Dict with keys 'lat', 'lon', 'name' (any may be None).
     """
-    fields = _read_locale_fields()
+    fields = read_locale_fields()
     return {
         "lat": fields.get("location.lat"),
         "lon": fields.get("location.lon"),

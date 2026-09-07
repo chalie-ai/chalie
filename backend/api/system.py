@@ -106,9 +106,10 @@ def _health() -> Health:
 
 def _absorb_heartbeat_signals(data: dict[str, object]) -> None:
     """Absorb the heartbeat into WorldState as Signals (heartbeat / device).
-    The old telemetry mirror is gone: nothing reads the world-state
-    ``"telemetry"`` key — WorldState renders telemetry straight
-    from ``TelemetryService``."""
+    Nothing renders from WorldState into the prompt: the heartbeat's locale
+    fields reach the model as the system prompt's locale line and its device
+    groups through the ``user_device`` tool, both read straight from
+    ``TelemetryService``."""
     from services.world_state import world_state, Signal
     world_state.absorb(Signal(source=_SIGNAL_SOURCE_HEALTH, kind="heartbeat", payload=data))
     device_class = data.get("device_class") or cast(dict[str, object], data.get("device") or {}).get("class")
@@ -373,16 +374,18 @@ class ObservabilityWorldStateResource(Resource):
     @system_ns.response(500, "Failed to retrieve world state", model=_S["Error"])
     @responds(code=200)
     def get(self) -> ResponseReturnValue:
-        """World state as seen by the ACT loop — rendered block + raw inputs (raw passthrough)."""
+        """World-state inputs — the raw telemetry snapshot — plus ``rendered``,
+        the locale line exactly as it closes the model's system prompt (empty
+        before the first heartbeat)."""
         try:
-            from services.world_state import world_state
+            from services.prompt_service import PromptService
             from services.telemetry_service import TelemetryService
 
             return {
-                "rendered": world_state.render(),
                 "inputs": {
                     "telemetry": TelemetryService.read().as_dict(),
                 },
+                "rendered": PromptService.locale_line(),
             }
         except Exception:
             logger.exception("[REST API] observability/world-state error")

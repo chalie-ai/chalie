@@ -23,9 +23,7 @@ These lock the wiring itself:
   1. The prompt carries the task — non-empty, and the instruction text verbatim.
   2. The prompt starts with the turn's own ``[Ddd YYYY-MM-DD HH:MM] Task:``
      stamp — the delegate's only anchor for dating the work it writes to
-     disk — and carries no World State block at all: a delegate holding
-     write and execute tools has no business receiving the user's device
-     telemetry.
+     disk.
   3. The prompt carries the act trail's re-feed seam, so the delegate sees its
      own tool output across ACT iterations instead of iterating blind.
   4. An unrouted channel raises :class:`UnroutedPromptChannel` — the fallthrough
@@ -59,12 +57,6 @@ from tests.helpers import make_stub_config
 pytestmark = pytest.mark.unit
 
 _TASK = "write a Deno script that reverses a string and prove it runs"
-
-
-def _seed_telemetry(ctx: dict[str, object]) -> None:
-    """Persist a heartbeat snapshot the way POST /health does."""
-    from services.telemetry_service import TelemetryService
-    TelemetryService.write(ctx)
 
 
 def _code_agent_prompt(task: str = _TASK) -> str:
@@ -148,18 +140,6 @@ def test_code_agent_prompt_starts_with_the_stamped_task_line(db: sqlite3.Connect
     )
     assert prompt[match.end():].startswith(_TASK), (
         f"the task text must follow the stamp line verbatim. prompt={prompt!r}"
-    )
-
-
-def test_code_agent_prompt_carries_no_world_block(db: sqlite3.Connection) -> None:
-    """The delegate holds write and execute tools; the user's device
-    telemetry (battery, location, focus state) has no business reaching it.
-    Seeding a heartbeat proves the block is omitted by design, not merely
-    absent for lack of data."""
-    _seed_telemetry({"timezone": "Europe/Malta", "locale": "en-GB", "local_time": "10:47"})
-    prompt = _code_agent_prompt()
-    assert "### Background Telemetry,Processes" not in prompt, (
-        f"code_agent must never receive the World State block. prompt={prompt!r}"
     )
 
 
