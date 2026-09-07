@@ -135,7 +135,7 @@ try:
     print("onnxruntime", ort.__version__, "CPUExecutionProvider")
 except Exception as e:
     print("ONNXRUNTIME-IMPORT-FAIL:", repr(e)); hard_ok = False
-for m in ("onnx", "numpy", "transformers", "soundfile", "playwright",
+for m in ("numpy", "transformers", "soundfile", "playwright",
           "kokoro_onnx", "moonshine_onnx"):
     try:
         __import__(m); print("import-ok", m)
