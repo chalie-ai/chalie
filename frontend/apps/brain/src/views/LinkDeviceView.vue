@@ -4,7 +4,7 @@
 // PairingPayload as a scannable QR shown in a modal. The raw token is shown
 // ONCE (server never stores it) — re-minting issues a new one.
 import { nextTick, ref } from 'vue';
-import QRCode from 'qrcode';
+import qrcode from 'qrcode-generator';
 import type { PairingPayload } from '@chalie/shared';
 import { validatePairingPayload } from '@chalie/shared';
 import { wrappers } from '../api/wrappers';
@@ -23,6 +23,39 @@ const qrCanvas = ref<HTMLCanvasElement | null>(null);
 const pairingJson = ref('');
 const minting = ref(false);
 const showQr = ref(false);
+
+// Quiet-zone modules on each side of the symbol.
+const QR_MARGIN = 2;
+
+// Renders `text` as a QR symbol filling the canvas: the module grid is scaled to
+// the canvas width including the quiet zone, and each module is snapped to whole
+// pixels so nothing is anti-aliased into an unscannable smear.
+function drawQr(canvas: HTMLCanvasElement, text: string): void {
+  qrcode.stringToBytes = qrcode.stringToBytesFuncs['UTF-8'];
+  const qr = qrcode(0, 'M');
+  qr.addData(text, 'Byte');
+  qr.make();
+
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('QR canvas is not available.');
+
+  const size = canvas.width;
+  const count = qr.getModuleCount();
+  const scale = size / (count + QR_MARGIN * 2);
+
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, size, size);
+  ctx.fillStyle = '#000000';
+  for (let row = 0; row < count; row += 1) {
+    const y = Math.ceil((row + QR_MARGIN) * scale);
+    const height = Math.ceil((row + QR_MARGIN + 1) * scale) - y;
+    for (let col = 0; col < count; col += 1) {
+      if (!qr.isDark(row, col)) continue;
+      const x = Math.ceil((col + QR_MARGIN) * scale);
+      ctx.fillRect(x, y, Math.ceil((col + QR_MARGIN + 1) * scale) - x, height);
+    }
+  }
+}
 
 async function generate(): Promise<void> {
   if (minting.value) return;
@@ -46,7 +79,7 @@ async function generate(): Promise<void> {
     await nextTick(); // the canvas only mounts once the modal is open.
     const canvas = qrCanvas.value;
     if (!canvas) throw new Error('QR canvas not ready.');
-    await QRCode.toCanvas(canvas, json, { width: 256, margin: 2 });
+    drawQr(canvas, json);
     pairingJson.value = json;
     showToast('Scan this QR with the Chalie app', 'success', { duration: 8000 });
   } catch (e) {
@@ -120,5 +153,9 @@ async function generate(): Promise<void> {
   border-radius: var(--radius-md);
   background: var(--bg-surface-2);
   padding: var(--space-md);
+  /* Border-box sizing: pins the padded element to the canvas' own 256px so the
+     padding insets the symbol rather than growing the element around it. */
+  width: 256px;
+  height: 256px;
 }
 </style>
