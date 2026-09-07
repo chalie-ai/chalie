@@ -41,7 +41,9 @@ dependencies = [
     "kokoro-onnx>=0.5.0",
     "useful-moonshine-onnx>=20251121",
     "soundfile>=0.13.0",
-    "noisereduce>=3.0.3",
+    # scipy: the in-house spectral noise gate (services/spectral_gate.py) runs on
+    # scipy.signal; declared explicitly rather than leaned on through the speech model's own pulls.
+    "scipy>=1.10",
     "ddgs>=0.1.0",
     "cryptography>=43.0.0",
     # Snapshot Time-Machine zips: pyzipper writes/reads WZ-AES-256 archives and
