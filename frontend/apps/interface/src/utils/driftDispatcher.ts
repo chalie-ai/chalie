@@ -44,8 +44,8 @@ export interface SessionHooks {
   getPanelType(): string;
   /** Surface a turn-level provider/quota error as a closable toast. */
   setErrorMessage(message: string): void;
-  /** Settle bookkeeping for a completed/crashed turn (queue drain, ambient
-   *  sensor, background notification). */
+  /** Settle bookkeeping for a completed/crashed turn (queue drain, background
+   *  notification). */
   finishTurn(turnId: number, type: string): Promise<void>;
   /** Drain every pending queued send — called once a cancel has resolved. */
   drainQueues(): void;

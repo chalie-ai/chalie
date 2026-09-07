@@ -4,7 +4,6 @@ import { isTauri, platform, useTheme } from '@chalie/shared';
 import { useSessionStore } from './stores/session';
 import { useVoiceStore } from './stores/voice';
 import { useHeartbeat } from './composables/useHeartbeat';
-import { useAmbientSensor } from './composables/useAmbientSensor';
 import PresenceBar from './components/layout/PresenceBar.vue';
 import ConversationFeed from './components/conversation/ConversationFeed.vue';
 import ThreadPanel from './components/conversation/ThreadPanel.vue';
@@ -72,7 +71,6 @@ onMounted(() => {
 onBeforeUnmount(() => {
   globalThis.removeEventListener('keydown', onSearchHotkey);
   useHeartbeat().stop();
-  useAmbientSensor().destroy();
 });
 </script>
 

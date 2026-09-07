@@ -42,7 +42,7 @@ _TELEMETRY_HIDDEN_KEYS = {"saved_at", "local_time", "_location_name_stale", "con
 # directly (departure advisory, weather, locale_service); the chat LLM only ever
 # sees the resolved ``location_name`` scalar, which renders under the synthetic
 # ``user`` group.
-_TELEMETRY_HIDDEN_GROUPS = {"behavioral", "location"}
+_TELEMETRY_HIDDEN_GROUPS = {"location"}
 
 
 def _format_telemetry_value(value: object) -> str | None:

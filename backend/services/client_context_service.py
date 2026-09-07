@@ -1,11 +1,11 @@
-"""Stores and retrieves client timezone, location, device info, behavioral
-signals, and system info.
+"""Stores and retrieves client timezone, location, device info, and
+system info.
 
 The raw heartbeat payload (whatever the frontend sends) is persisted as a
 nested JSON document (``data/telemetry.json``) by ``TelemetryService``.
 The frontend (heartbeat.js) is the single source of truth for which keys
-are collected; this service handles location resolution + behavioral
-merging on save, and read-side consumers (locale_service, world_state, …)
+are collected; this service handles location resolution
+on save, and read-side consumers (locale_service, world_state, …)
 see the same nested shape they always did.
 
 Side concerns that stay in MemoryStore (NOT telemetry): the location-history
@@ -58,11 +58,11 @@ TTL = 3600  # 1 hour (used by ephemeral MemoryStore keys, not telemetry)
 
 
 class ClientContextService:
-    """Manages client context (timezone, location, device, behavioral signals).
+    """Manages client context (timezone, location, device).
 
     Telemetry persistence is a JSON file (``data/telemetry.json``) owned by
     ``TelemetryService``; this service only handles save-side concerns —
-    location resolution and behavioral merging. MemoryStore is retained for
+    location resolution. MemoryStore is retained for
     ephemeral inference flags (place-transition, session-reentry) and the
     location-history ring buffer.
     """
@@ -96,13 +96,8 @@ class ClientContextService:
         return None
 
     def save(self, ctx: dict[str, object]) -> None:
-        """Handles location resolution, behavioral-data merging, location
-        history, and session re-entry."""
+        """Handles location resolution, location history, and session re-entry."""
         cached = TelemetryService.read()
-
-        # Merge behavioral data: don't overwrite if new heartbeat lacks it
-        if "behavioral" not in ctx and cached.behavioral is not None:
-            ctx["behavioral"] = cached.behavioral
 
         # Resolve location name if location changed significantly
         if location := cast("dict[str, object]", ctx.get("location")):

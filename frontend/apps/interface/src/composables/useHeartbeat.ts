@@ -1,6 +1,6 @@
 /**
  * Client Context Heartbeat — periodically sends timezone, location, device,
- * battery, network, preferences, and behavioral signals to the backend so
+ * battery, network, and preferences to the backend so
  * services read client context without per-request overhead. Singleton; safe
  * to call useHeartbeat() outside setup().
  */
@@ -8,8 +8,6 @@
 import { system } from '../api';
 import { webPlatformAdapter } from '@chalie/shared';
 import { emit } from './useEventBus';
-import type { AmbientSensorApi } from './useAmbientSensor';
-import { useAmbientSensor } from './useAmbientSensor';
 
 const HEARTBEAT_INTERVAL = 5 * 60 * 1000;
 const GEO_TIMEOUT        = 10_000;           // for requestLocationPermission
@@ -53,13 +51,11 @@ interface NetworkInformation {
 export interface HeartbeatApi {
   start(): void;
   stop(): void;
-  setAmbientSensor(sensor: AmbientSensorApi): void;
   onAuthFailure(cb: () => void): void;
   requestLocationPermission(): Promise<void>;
 }
 
 let _interval: ReturnType<typeof setInterval> | null = null;
-let _ambientSensor: AmbientSensorApi | null = null;
 let _authFailureCb: (() => void) | null = null;
 let _authFailureFired = false;
 let _onVisibilityChange: (() => void) | null = null;
@@ -180,8 +176,6 @@ async function _buildContextPayload(): Promise<Record<string, unknown>> {
 
   ctx['preferences'] = _getPreferences();
 
-  ctx['behavioral'] = (_ambientSensor ?? useAmbientSensor()).snapshot();
-
   ctx['location'] = await _getGrantedLocation();
 
   return ctx;
@@ -239,10 +233,6 @@ function stop(): void {
   }
 }
 
-function setAmbientSensor(sensor: AmbientSensorApi): void {
-  _ambientSensor = sensor;
-}
-
 function onAuthFailure(cb: () => void): void {
   _authFailureCb = cb;
 }
@@ -267,7 +257,6 @@ async function requestLocationPermission(): Promise<void> {
 const _heartbeatApi: HeartbeatApi = {
   start,
   stop,
-  setAmbientSensor,
   onAuthFailure,
   requestLocationPermission,
 };

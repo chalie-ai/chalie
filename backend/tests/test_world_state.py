@@ -48,7 +48,7 @@ class TestRenderEmpty:
 class TestRenderTelemetry:
     def test_telemetry_renders_exact_block(self, db: sqlite3.Connection) -> None:
         # End-to-end shape: the FE persists a heartbeat with hidden keys
-        # (connection, behavioral, saved_at, _location_name_stale) plus a
+        # (connection, saved_at, _location_name_stale) plus a
         # stale local_time string. The rendered block must be exactly the
         # header + one bullet per surviving group, with the stale local_time
         # hidden — not rendered, not recomputed — and no blank line under
@@ -59,7 +59,6 @@ class TestRenderTelemetry:
             "language": "en-US",
             "local_time": "10:47",                       # hidden key — never rendered
             "device": {"name": "MacBook", "battery": 82, "os": "macOS"},
-            "behavioral": {"focus_state": "deep", "tab_count": 7},  # hidden group
             "connection": "4g",                          # hidden key
         })
 
