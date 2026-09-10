@@ -95,5 +95,4 @@ Domain-specific terminology used throughout the Chalie system.
 | route map | `backend/api/routes.py` — the single table mounting every controller at its slug (and verb); controllers declare no path of their own. | `Skills("skills")`, `SkillCopy("skills", "copy")` |
 | `envelope` | The uniform response shape built only by the `Response` DTO base. | `{success, result}`, error: `{success: false, result: [], error}` |
 | `find_tools` | Discovery ability that surfaces tools the model can use. | `find_tools(query=['weather','valletta'])` |
-| `internal_dev` | Env-var flag gating in-development features. | `CHALIE_INTERNAL_DEV='1'` |
 | `garbage collector` | Hourly sweep (`GarbageCollectionJob`, a `ScheduledJob`, not idle-gated) that hard-deletes unlinked `transcript` rows once they are at least 90 days old, then the `tool_calls` rows left orphaned by that (or by any earlier) deletion. One owner, one age window for both tables. | `GarbageCollectionJob` fires at the top of every hour |
