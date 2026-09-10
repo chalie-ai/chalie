@@ -107,6 +107,20 @@ def _build_session() -> tuple[object, Path]:
     return session, onnx_path
 
 
+def _tokenizer_path() -> str:
+    from huggingface_hub import hf_hub_download  # noqa: PLC0415
+
+    # tokenizer.json — cached in the HF default cache after the first download,
+    # so an upgraded install finds the file the previous tokenizer library left.
+    try:
+        tokenizer_path = hf_hub_download(_MODEL_ID, "tokenizer.json", local_files_only=True)
+        logger.info("[EMBEDDING] Tokenizer loaded from cache")
+    except Exception:
+        logger.info("[EMBEDDING] Downloading tokenizer...")
+        tokenizer_path = hf_hub_download(_MODEL_ID, "tokenizer.json")
+    return tokenizer_path
+
+
 def _get_session_and_tokenizer() -> tuple[object, object]:
     global _session, _tokenizer, _output_names, _input_names
 
@@ -117,7 +131,6 @@ def _get_session_and_tokenizer() -> tuple[object, object]:
         if _session is not None and _tokenizer is not None:
             return _session, _tokenizer
 
-        from huggingface_hub import hf_hub_download  # noqa: PLC0415
         from tokenizers import Tokenizer  # noqa: PLC0415
 
         session, onnx_path = _build_session()
@@ -127,14 +140,7 @@ def _get_session_and_tokenizer() -> tuple[object, object]:
         _input_names = [i.name for i in cast(_IS, session).get_inputs()]
         logger.debug(f"[EMBEDDING] Inputs: {_input_names}, outputs: {_output_names}")
 
-        # tokenizer.json — cached in the HF default cache after the first download,
-        # so an upgraded install finds the file the previous tokenizer library left.
-        try:
-            tokenizer_path = hf_hub_download(_MODEL_ID, "tokenizer.json", local_files_only=True)
-            logger.info("[EMBEDDING] Tokenizer loaded from cache")
-        except Exception:
-            logger.info("[EMBEDDING] Downloading tokenizer...")
-            tokenizer_path = hf_hub_download(_MODEL_ID, "tokenizer.json")
+        tokenizer_path = _tokenizer_path()
         tokenizer = Tokenizer.from_file(tokenizer_path)
         pad_id = tokenizer.token_to_id("[PAD]")
         if pad_id is None:
