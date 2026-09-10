@@ -42,17 +42,25 @@ for this harness to verify there. The matrix mirrors exactly those code paths:
 |---|---|---|
 | apt path | Debian 12, Ubuntu 24.04 (arm64 + amd64) | install, boot and every probe pass |
 | dnf path | Fedora 40, Fedora 41 | install, boot and every probe pass |
-| stock Python too old | Ubuntu 22.04 (3.10), AlmaLinux 9 (3.9) | installer **refuses** — correct behaviour |
+| stock Python too old | Ubuntu 22.04 (3.10), AlmaLinux 9 (3.9) | same, from a uv-managed CPython 3.12 |
+| no `python3` at all | Debian 12, Fedora 41 | same — on Debian the build deps supply 3.11, on Fedora nothing does, so a managed CPython 3.12 is provisioned |
 
 `expect` values in `matrix.tsv`:
 
 - **pass** — installer succeeds, dependencies resolve, Chalie boots, and every
   probe in the table above passes.
-- **refuse-old-python** — the distro's stock `python3` is older than 3.11, so the
-  installer must refuse. The installer checks for Python 3.11+ but deliberately
-  never installs it; the harness first installs each distro's stock `python3`
-  (no version bump) to reproduce a realistic machine, so the pass/refuse outcome
-  is driven by what that distro actually ships.
+- **pass-managed-python** — everything `pass` requires, plus one assertion on top:
+  the venv's interpreter resolves under `~/.local/share/uv/python` and reports
+  3.12.x. A suitable stock `python3` is always preferred; only when the host has
+  none — too old, or absent — does the installer fetch a self-contained CPython
+  3.12 with `uv` and build the virtualenv from that. These rows are the hosts
+  where that second path is the one taken, so they are what proves it works.
+
+The `python` column says what the harness sets up *before* running the installer:
+`stock` installs the distro's own `python3` first (official base images are more
+stripped than a real machine — the Debian, Ubuntu and Fedora bases ship none at
+all), while `none` leaves the host without one, which is a real starting state
+and no longer a refusal.
 
 Adding a row means committing to supporting that platform. Unsupported distros
 are absent by design — the installer refuses them rather than producing an
@@ -82,10 +90,10 @@ installer/verify/run-matrix.sh debian12 fedora41
 ```
 
 Per-row logs and a one-word verdict land in `installer/verify/results/`
-(`<row>.log`, `<row>.verdict`). Verdicts: `PASS`, `REFUSED`, `FAIL`. Only `PASS`
-and `REFUSED` are acceptable; anything else — including a row that never produced
-a verdict — fails the driver, because a silent non-result is exactly how a broken
-install reaches a user.
+(`<row>.log`, `<row>.verdict`). Verdicts: `PASS`, `FAIL`. Only `PASS` is
+acceptable; anything else — including a row that never produced a verdict — fails
+the driver, because a silent non-result is exactly how a broken install reaches a
+user.
 
 Each run also records what an install actually costs, so the system requirements
 published in the README stay measured numbers rather than estimates:
@@ -97,7 +105,7 @@ published in the README stay measured numbers rather than estimates:
 
 ## Files
 
-- `matrix.tsv` — the distro rows (image, platform, expectation).
+- `matrix.tsv` — the distro rows (image, platform, expectation, stock python).
 - `run-matrix.sh` — host driver: one container per row, collects logs + verdicts.
 - `verify-inside.sh` — runs inside each container: install → dependency audit →
   boot → the five runtime probes.
