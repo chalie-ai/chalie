@@ -130,28 +130,15 @@ export class WebSocketService {
   private lastInboundAt = 0;
   private livenessTimer: Interval | null = null;
 
-  constructor(
-    private readonly getHost: GetHost,
-    private readonly getToken: GetHost,
-  ) {}
-
-  /**
-   * Bearer header when a token is configured, else `{}`. Spreading the empty
-   * object is a no-op, so the web (cookie) path is unchanged.
-   */
-  private authHeaders(): Record<string, string> {
-    const token = this.getToken();
-    return token ? { Authorization: `Bearer ${token}` } : {};
-  }
+  constructor(private readonly getHost: GetHost) {}
 
   private baseUrl(): string {
     const host = this.getHost();
     return host ? host.replace(/\/$/, '') : globalThis.location.origin;
   }
   private buildWsUrl(): string {
-    // The bearer token is NOT carried in the URL — a query-string credential
-    // leaks into reverse-proxy/access logs, Referer, and history. The native
-    // client sends it as the first WS frame instead (see ``connect``).
+    // The session cookie rides the handshake — no credential is ever carried in
+    // the URL, where it would leak into reverse-proxy/access logs and history.
     return this.baseUrl().replace(/^http/, 'ws') + '/ws';
   }
   private buildHttpUrl(path: string): string {
@@ -200,16 +187,6 @@ export class WebSocketService {
       this.reconnectDelay = 1000;
       this.lastInboundAt = Date.now();
       this.startLivenessWatch();
-      // Native clients have no cookie, so they present the bearer token as the
-      // first WS frame — never in the URL. The web (cookie) path sends none.
-      const token = this.getToken();
-      if (token) {
-        try {
-          ws.send(JSON.stringify({ type: 'auth', token }));
-        } catch {
-          /* frame send failure surfaces as onclose → reconnect */
-        }
-      }
       try {
         this.connectHandler?.();
       } catch {
@@ -359,7 +336,6 @@ export class WebSocketService {
     return fetch(this.buildHttpUrl(path), {
       method: 'POST',
       credentials: 'same-origin',
-      headers: { ...this.authHeaders() },
       body: form,
     })
       .then(async (resp) => {

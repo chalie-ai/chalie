@@ -13,13 +13,9 @@ export type {
   WsToolCallState,
 } from './services/WebSocketService';
 export { ConfigType } from './config/configType';
-export { getHost, setHost, getToken, setToken, getUsername, setUsername } from './config/host';
-export type { PairingPayload } from './config/pairing';
-export { validatePairingPayload } from './config/pairing';
+export { getHost, setHost } from './config/host';
 export type { PlatformAdapter, WakeLockHandle } from './platform/PlatformAdapter';
 export { webPlatformAdapter } from './platform/webPlatformAdapter';
-export { tauriPlatformAdapter } from './platform/tauriPlatformAdapter';
-export { platform, isTauri } from './platform';
 export { describeCron } from './utils/describeCron';
 export { useThemeStore } from './stores/theme';
 export type { Theme } from './stores/theme';

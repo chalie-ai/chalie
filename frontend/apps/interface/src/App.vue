@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted } from 'vue';
-import { isTauri, platform, useTheme } from '@chalie/shared';
+import { useTheme } from '@chalie/shared';
 import { useSessionStore } from './stores/session';
 import { useVoiceStore } from './stores/voice';
 import { useHeartbeat } from './composables/useHeartbeat';
@@ -14,7 +14,6 @@ import PermissionStack from './components/overlays/PermissionStack.vue';
 import TaskDrawer from './components/overlays/TaskDrawer.vue';
 import SchedulerDock from './components/overlays/SchedulerDock.vue';
 import VoicePlayerDialog from './components/voice/VoicePlayerDialog.vue';
-import UnlockVault from './components/layout/UnlockVault.vue';
 
 const { init: initTheme } = useTheme();
 const session = useSessionStore();
@@ -51,12 +50,6 @@ onMounted(() => {
   session.onAuthFailure(handleAuthFailure);
   session.init();
   voiceStore.checkAvailability();
-
-  // Native shell only: request OS notification permission once so background
-  // message notifications can fire. On web the browser drives its own prompt.
-  if (isTauri) {
-    void platform.requestNotificationPermission();
-  }
 
   // Heartbeat also surfaces auth expiry via /auth/status.
   const heartbeat = useHeartbeat();
@@ -105,5 +98,4 @@ onBeforeUnmount(() => {
   <TaskDrawer />
   <SchedulerDock />
   <VoicePlayerDialog />
-  <UnlockVault />
 </template>
