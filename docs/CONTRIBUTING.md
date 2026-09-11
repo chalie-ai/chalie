@@ -6,6 +6,7 @@
 
 - `backend/` — Python backend (Flask + SQLite). Entry point: `backend/run.py`. Key packages: `services/` (business logic), `abilities/` (built-in tools), `capabilities/` (external-system adapters), `api/` (REST + WebSocket), `models/`, `workers/`, `migrations/` + `schema.sql`.
 - `frontend/` — pnpm workspace (Vue 3 + TypeScript + Vite): `apps/interface` (the user-facing UI), `apps/brain` (the admin/cognitive dashboard), shared code under `packages/`.
+- `desktop/` — the macOS desktop app (Tauri 2 + Vue 3): a first-run wizard and the Rust that signs in and points its window at a Chalie server, which serves the same `frontend/` bundles a browser gets. Build steps in [desktop/README.md](../desktop/README.md). Left out of the source archive the installer extracts.
 
 ## Setup & running
 
