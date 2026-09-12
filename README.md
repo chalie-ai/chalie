@@ -91,7 +91,7 @@ What the runtime itself needs — a model's own requirements are separate:
 
 | | |
 |---|---|
-| **Python 3.11+** | Already installed. The installer checks for it and deliberately never installs it, so distributions shipping something older — Ubuntu 22.04 (3.10), AlmaLinux 9 (3.9) — are refused until you supply one. |
+| **Python 3.11+** | Optional. A `python3` of 3.11 or newer already on `PATH` is always preferred and used as is. When there is none — a distribution shipping something older, like Ubuntu 22.04 (3.10) or AlmaLinux 9 (3.9), or a machine with no `python3` at all — the installer fetches a self-contained CPython 3.12 with [uv](https://docs.astral.sh/uv/) and builds Chalie's virtualenv from that, leaving your system Python untouched. |
 | **Root or `sudo`** | Linux only, for the system build packages and the CLI. macOS needs neither. |
 | **~2 GB RAM** | Resident set measured at 1.5–1.7 GB once the voice and embedding models have warmed up. Verified on a 4 GB machine; below that is untested. |
 | **~3 GB disk** | The Python virtualenv and native wheels, the Chromium build Playwright downloads, the local voice models, and Deno. |

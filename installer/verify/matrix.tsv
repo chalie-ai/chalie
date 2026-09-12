@@ -2,24 +2,37 @@
 #   name        unique row label (also the results/<name>.log basename)
 #   image       Docker base image (a pristine, official distro — nothing pre-baked)
 #   platform    linux/arm64 or linux/amd64 (both run on native CI runners)
-#   expect      pass | refuse-old-python
+#   expect      pass | pass-managed-python
+#   python      stock | none
 #
 # expect semantics:
-#   pass              installer succeeds, deps resolve, Chalie boots, and every
-#                     runtime probe passes (readiness, webserver, chromium,
-#                     voice round trip, deno)
-#   refuse-old-python the distro's stock python3 is < 3.11 → the installer MUST
-#                     refuse, which is the only thing such a row can prove
+#   pass                installer succeeds, deps resolve, Chalie boots, and every
+#                       runtime probe passes (readiness, webserver, chromium,
+#                       voice round trip, deno)
+#   pass-managed-python everything `pass` requires, plus one more assertion: the
+#                       venv was built from a uv-managed CPython 3.12 under
+#                       ~/.local/share/uv/python. The installer prefers a stock
+#                       python3 whenever one is 3.11+, and only when the host has
+#                       none does it install a managed CPython of its own — these
+#                       rows are the hosts where that second path is the one taken
+#
+# python semantics — what the harness sets up BEFORE running the installer:
+#   stock  install the distro's own python3 first. Official base images are more
+#          stripped than a real machine (the Debian, Ubuntu and Fedora bases ship
+#          no python3 at all), so this reproduces a realistic system
+#   none   leave the host with no python3 whatsoever
 #
 # Every row is a SUPPORTED platform. install.sh handles exactly two Linux
 # families — apt (Debian/Ubuntu) and dnf (Fedora/RHEL) — plus macOS on Apple
 # Silicon; anything else the installer now refuses outright, so there is nothing
 # to verify. Adding a row means committing to support that platform.
-debian12	debian:12	linux/arm64	pass
-debian12-amd64	debian:12	linux/amd64	pass
-ubuntu2404	ubuntu:24.04	linux/arm64	pass
-ubuntu2404-amd64	ubuntu:24.04	linux/amd64	pass
-ubuntu2204	ubuntu:22.04	linux/arm64	refuse-old-python
-fedora41	fedora:41	linux/arm64	pass
-fedora40	fedora:40	linux/arm64	pass
-alma9	almalinux:9	linux/arm64	refuse-old-python
+debian12	debian:12	linux/arm64	pass	stock
+debian12-amd64	debian:12	linux/amd64	pass	stock
+debian12-nopython	debian:12	linux/arm64	pass	none
+ubuntu2404	ubuntu:24.04	linux/arm64	pass	stock
+ubuntu2404-amd64	ubuntu:24.04	linux/amd64	pass	stock
+ubuntu2204	ubuntu:22.04	linux/arm64	pass-managed-python	stock
+fedora41	fedora:41	linux/arm64	pass	stock
+fedora41-nopython	fedora:41	linux/arm64	pass-managed-python	none
+fedora40	fedora:40	linux/arm64	pass	stock
+alma9	almalinux:9	linux/arm64	pass-managed-python	stock

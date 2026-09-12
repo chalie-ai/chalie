@@ -23,7 +23,9 @@ current LOCAL minute. Each field is a standard crontab expression — ``*``, ``5
 ``0,15,30,45``, ``9-17`` (numeric only, no ``mon``/``jan`` names). Cancel is a hard ``DELETE``; a
 cancelled id is never reissued (AUTOINCREMENT), so its thread can never be re-entered. ``start_at``
 is a plain LOCAL wall-clock ISO string (optional — defaults to local now); the model is instructed
-to copy it straight from the World State's ``local_time`` telemetry and never compute a UTC offset.
+to take the date and time from the stamp on the current message (e.g. ``[Fri 2026-09-04 10:12]``
+→ ``2026-09-04T10:12:00`` — user-local wall clock, seconds ``:00``, no timezone suffix) and never
+compute a UTC offset.
 ``validate_cron`` (``services.cron_schedule``) owns the crontab shape rule; the input bag calls it
 at the seam and surfaces ``ValueError`` as ``code=invalid-cron``.
 
@@ -157,10 +159,12 @@ class ScheduleAbility(Ability[ScheduleParamsBag]):
                 "description": (
                     "Optional for create — the Start Time: the earliest local wall-clock "
                     "moment this schedule may activate. Omit it to start from right now. "
-                    "When you do pass it, COPY IT VERBATIM from the current 'local_time' "
-                    "value in the World State block you are given each turn — never "
-                    "compute a UTC offset or convert timezones yourself, always work in "
-                    "the user's own local wall-clock time. Example: '2026-03-20T09:00:00'."
+                    "When you do pass it, take the date and time from the stamp on the "
+                    "current message — e.g. '[Fri 2026-09-04 10:12]' becomes "
+                    "'2026-09-04T10:12:00': the user's local wall clock, seconds ':00', "
+                    "no timezone suffix. Never compute a UTC offset or convert timezones "
+                    "yourself, always work in the user's own local wall-clock time. "
+                    "Example: '2026-03-20T09:00:00'."
                 ),
             },
             Keys.minute: {

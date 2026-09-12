@@ -53,7 +53,6 @@ vi.mock('@chalie/shared', () => ({
   AuthError: class AuthError extends Error {},
   getWebSocket: () => fakeWs,
   useConnectionStore: () => ({ setConnected: () => { /* not under test */ } }),
-  platform: {},
   api: {},
   getHost: () => '',
 }));

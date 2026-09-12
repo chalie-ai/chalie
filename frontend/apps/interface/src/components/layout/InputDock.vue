@@ -23,7 +23,6 @@ import { useSessionStore } from '../../stores/session';
 import { useVoiceStore } from '../../stores/voice';
 import { useAttachmentsStore } from '../../stores/attachments';
 import { useContextUsageStore } from '../../stores/contextUsage';
-import { useAmbientSensor } from '../../composables/useAmbientSensor';
 import { lsGet, lsSet } from '../../utils/storage';
 import { system } from '../../api';
 import ImageAttachStrip from '../upload/ImageAttachStrip.vue';
@@ -53,7 +52,6 @@ const session = useSessionStore();
 const voiceStore = useVoiceStore();
 const attachments = useAttachmentsStore();
 const contextUsage = useContextUsageStore();
-const ambient = useAmbientSensor();
 const { available: voiceAvailable, recorderState } = storeToRefs(voiceStore);
 // A null turnId (the footer dock) reads the channel's latest reading; a thread
 // panel's dock reads its own thread. Both are fed by the same `context_usage`
@@ -250,9 +248,6 @@ onMounted(() => {
     });
     _dockResizeObserver.observe(footerRef.value);
   }
-
-  // Behavioral signals: typing cadence feeds the ambient snapshot.
-  if (textareaRef.value) ambient.bindTypingInput(textareaRef.value);
 
   void system.thinkingLevel(props.type, props.turnId ?? -1).then((r) => {
     const v = r?.level;

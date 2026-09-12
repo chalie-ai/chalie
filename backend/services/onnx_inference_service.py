@@ -24,21 +24,24 @@ import logging
 import threading
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, cast
 
 import numpy as np
 
 if TYPE_CHECKING:
     from typing import Protocol
 
+    from tokenizers import Tokenizer
+
     class _Session(Protocol):
         def run(self, output_names: None, input_feed: dict[str, np.ndarray]) -> list[np.ndarray]: ...
-
-    _Tokenizer = Callable[..., dict[str, np.ndarray]]
 
 logger = logging.getLogger(__name__)
 
 LOG_PREFIX = "[ONNX]"
+
+# The shipped heads were trained on embeddings of text truncated at this many tokens.
+_CLASSIFIER_MAX_TOKENS = 256
 
 # Tasks to register on boot.
 # Each entry: (task_name, asset_name_prefix)
@@ -148,6 +151,12 @@ class OnnxInferenceService:
         self._heads: Dict[str, _ClassifierHead] = {}
         self._heads_lock = threading.Lock()
 
+        # Own tokenizer pinned to the training truncation — the shared embedding
+        # tokenizer truncates at 8192 and its truncation settings are mutable state
+        # read concurrently by worker threads, so it must not be reconfigured per call.
+        self._tokenizer: "Tokenizer | None" = None
+        self._tokenizer_lock = threading.Lock()
+
         # Boot readiness — set to True after registration attempt completes
         self._ready = False
         # Tasks whose boot-time registration failed.
@@ -168,10 +177,20 @@ class OnnxInferenceService:
 
     # ── Encoder access (borrowed from embedding_service) ──────────────────────
 
-    def _get_encoder(self) -> tuple[object, object, list[str], list[str]]:
+    def _get_encoder(self) -> tuple[object, "Tokenizer", list[str], list[str]]:
         from services import embedding_service as _emb_mod
-        session, tokenizer = _emb_mod._get_session_and_tokenizer()
-        return session, tokenizer, _emb_mod._output_names, _emb_mod._input_names
+        session, _shared_tokenizer = _emb_mod._get_session_and_tokenizer()
+        return session, self._get_tokenizer(), _emb_mod._output_names, _emb_mod._input_names
+
+    def _get_tokenizer(self) -> "Tokenizer":
+        with self._tokenizer_lock:
+            if self._tokenizer is None:
+                from tokenizers import Tokenizer as _Tok  # noqa: PLC0415
+                from services import embedding_service as _emb_mod  # noqa: PLC0415
+                tokenizer = _Tok.from_file(_emb_mod._tokenizer_path())
+                tokenizer.enable_truncation(_CLASSIFIER_MAX_TOKENS)
+                self._tokenizer = tokenizer
+            return self._tokenizer
 
     def _encoder_onnx_path(self) -> Path:
         return self._models_dir / "gte-modernbert-base" / "onnx" / "model.onnx"
@@ -179,15 +198,9 @@ class OnnxInferenceService:
     def _embed(self, text: str) -> np.ndarray:
         session, tokenizer, output_names, input_names = self._get_encoder()
 
-        encoded = cast("_Tokenizer", tokenizer)(
-            [text],
-            return_tensors="np",
-            padding=True,
-            truncation=True,
-            max_length=256,
-        )
-        input_ids = encoded["input_ids"]
-        attention_mask = encoded["attention_mask"]
+        encoded = tokenizer.encode(text)
+        input_ids = np.asarray([encoded.ids], dtype=np.int64)
+        attention_mask = np.asarray([encoded.attention_mask], dtype=np.int64)
 
         feed = {"input_ids": input_ids, "attention_mask": attention_mask}
         if "token_type_ids" in input_names:

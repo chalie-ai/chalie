@@ -8,11 +8,10 @@ dependencies = [
     "requests>=2.32.5",
     "sqlite-vec>=0.1.9",
     "flask-sock>=0.7.0",
-    "transformers>=4.48.0",
     "flask>=3.0.0",
     "flask-cors>=4.0.0",
     "flask-restx>=1.3.0",
-    # numpy: kept pinned <2.5 conservatively — transformers/onnxruntime compatibility with numpy 2.5+ is unverified.
+    # numpy: kept pinned <2.5 conservatively — onnxruntime compatibility with numpy 2.5+ is unverified.
     "numpy>=1.24,<2.5",
     "anthropic>=0.39.0",
     "openai>=1.0.0",
@@ -21,14 +20,19 @@ dependencies = [
     "pdfplumber>=0.11.0",
     "python-docx>=1.1.0",
     "python-pptx>=1.0.0",
-    # onnx (the format library) and the onnxruntime CPU runtime are both direct
-    # base deps — CPU-only, one runtime wheel for every consumer. embeddings, the classifier
-    # heads, rapidocr, and voice (TTS/STT/VAD, below) all run through this one
-    # wheel via the shared session factory (services/onnx_session.py), pinned
-    # explicitly rather than leaned on as a transitive pull — that left it
-    # absent on some images, which hung /ready on the 'Waking up Chalie' splash.
-    "onnx>=1.17.0",
+    # onnxruntime is the direct base dep: the CPU-only runtime wheel that
+    # every consumer (embeddings, the classifier heads, rapidocr, and voice)
+    # runs through the shared session factory (services/onnx_session.py).
+    # Pinned explicitly rather than leaned on as a transitive pull — that
+    # left it absent on some images, which hung /ready on the 'Waking up
+    # Chalie' splash.
     "onnxruntime>=1.20.0",
+    # huggingface-hub fetches the embedding model + tokenizer files once
+    # (services/embedding_service.py); declared explicitly, not leaned on.
+    "huggingface-hub>=0.30",
+    # tokenizers loads the embedding model's tokenizer.json directly (the Rust
+    # tokenizer behind the model card) — the only thing transformers was used for.
+    "tokenizers>=0.21",
     "rapidocr_onnxruntime>=1.4.0",
     # Voice (TTS/STT): downloaded models live in resources/voice-models/,
     # fetched once at install time (installer/install.sh / the Docker build).
@@ -37,13 +41,14 @@ dependencies = [
     "kokoro-onnx>=0.5.0",
     "useful-moonshine-onnx>=20251121",
     "soundfile>=0.13.0",
-    "noisereduce>=3.0.3",
+    # scipy: the in-house spectral noise gate (services/spectral_gate.py) runs on
+    # scipy.signal; declared explicitly rather than leaned on through the speech model's own pulls.
+    "scipy>=1.10",
     "ddgs>=0.1.0",
     "cryptography>=43.0.0",
     # Snapshot Time-Machine zips: pyzipper writes/reads WZ-AES-256 archives and
-    # rides on pycryptodomex (the Cryptodome namespace) for the cipher.
+    # pulls pycryptodomex itself, so it is not declared here.
     "pyzipper>=0.4.0",
-    "pycryptodomex>=3.20.0",
     "playwright>=1.40.0",
     "imapclient>=3.0.0",
     "caldav>=1.3.0",
@@ -64,7 +69,6 @@ dependencies = [
     # ceiling only alongside a matching port.
     "mcp>=2.0.0,<3.0.0",
     "uvicorn>=0.34.0",
-    "geopy>=2.4.0",
     # Natural-language due_at parsing for the schedule ability ("tomorrow 9am",
     # "in 2 hours") resolved in the user's timezone.
     "dateparser>=1.3.0",
@@ -72,14 +76,19 @@ dependencies = [
     # base (abilities/_ability.py) types run()'s input during the ParamBag
     # migration. Declared explicitly rather than leaned on as a transitive pull.
     "typing-extensions>=4.4.0",
-    "pytest>=8.0.0",
-    # mypy gates the ToolResult return-type contract on the abilities package
-    # (see tests/test_ability_returns_tool_result.py) — it runs inside the unit
-    # suite, so it must be present wherever the gate runs.
-    "mypy>=1.8.0",
     # watchdog provides FSEvents (macOS) and inotify (Linux) file-change events
     # for the FileIndexService daemon (backend/workers/file_index_worker.py).
     "watchdog>=4.0.0",
+]
+
+[project.optional-dependencies]
+# Contributor tooling, never shipped: `pip install -e 'backend[dev]'`.
+# mypy gates the ToolResult return-type contract on the abilities package
+# (see tests/test_ability_returns_tool_result.py) and the strict typing gate
+# (tests/test_static_typing_gate.py) — both run inside the unit suite.
+dev = [
+    "pytest>=8.0.0",
+    "mypy>=1.8.0",
 ]
 
 [tool.mypy]

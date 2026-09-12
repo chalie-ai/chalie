@@ -71,7 +71,7 @@ _VAD_PAD_SAMPLES = 1024  # 64 ms at 16 kHz
 # ── Dependency detection ────────────────────────────────────────────────────
 
 _VOICE_REQUIRED_MODULES = (
-    "kokoro_onnx", "moonshine_onnx", "soundfile", "numpy", "noisereduce",
+    "kokoro_onnx", "moonshine_onnx", "soundfile", "numpy", "scipy",
 )
 _VOICE_INSTALL_HINT = (
     "Voice dependencies are missing from this install. Reinstall Chalie to restore them."
@@ -295,7 +295,7 @@ class SpeechToTextService:
             return audio
 
     def _denoise(self, audio: object, sr: int) -> object:
-        """Apply spectral noise reduction to a float32 audio array.
+        """Apply the spectral noise gate to a float32 audio array.
 
         Skips clips shorter than n_fft=2048 samples (128 ms at 16 kHz) to avoid
         STFT boundary errors. Returns original audio on any error (fail-safe).
@@ -304,12 +304,12 @@ class SpeechToTextService:
             return audio
         try:
             import numpy as np
-            import noisereduce as nr
 
-            result = nr.reduce_noise(y=audio, sr=sr, stationary=False)
-            return np.array(result, dtype=np.float32)
+            from services.spectral_gate import spectral_gate
+
+            return spectral_gate(cast("np.ndarray[tuple[int], np.dtype[np.float32]]", audio), sr)
         except Exception:
-            logger.exception("[Voice] noisereduce failed — passing audio through")
+            logger.exception("[Voice] spectral noise gate failed — passing audio through")
             return audio
 
     # Filler words produced by speakers (not by Moonshine). Match whole words only

@@ -43,7 +43,6 @@ import {
 import { laneKey, useQueueStore } from './queue';
 import { useNotificationsStore } from './notifications';
 import { usePermissionsStore } from './permissions';
-import { useAmbientSensor } from '../composables/useAmbientSensor';
 
 /** Guard: init() must be idempotent (HMR / Vue StrictMode). */
 let _initialized = false;
@@ -338,13 +337,12 @@ export const useSessionStore = defineStore('session', {
     /** Settle bookkeeping for a completed/crashed/offline-settled turn.
      *  `data-done` itself is already stamped by the caller (D16, see
      *  `driftDispatcher`'s turn_execution branch and `_reconcileWorking`
-     *  above) — this only drains queues, records ambient activity, and fires
-     *  an OS notification for the final reply when the tab is unfocused.
+     *  above) — this only drains queues and fires an OS notification for the
+     *  final reply when the tab is unfocused.
      *  Identical for every type — only the dock the settled thread lives in
      *  differs. */
     async _finishTurn(turnId: number, type: string = ConfigType.USER): Promise<void> {
       this._drainQueues();
-      useAmbientSensor().recordResponse();
 
       if (!document.hasFocus()) {
         // Fetched ONCE, here, for the notification — deliberately NOT read

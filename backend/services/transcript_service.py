@@ -151,10 +151,20 @@ class TranscriptService:
             q = q.filter("id", self.mp.uid, ">")
         return q.get()
 
+    def anchor_row(self) -> Transcript | None:
+        """This turn's anchoring input row, or ``None`` before it exists
+        (``skip_input_row`` channels have no such row at all). The one lookup
+        :meth:`deliberation_score`, :meth:`set_deliberation_score`, and
+        ``PromptService``'s input-line stamp all share — callers never
+        re-derive it with a second query."""
+        if self.mp.uid is None:
+            return None
+        return Transcript.filter("id", self.mp.uid).first()
+
     def deliberation_score(self) -> float:
         """This turn's persisted deliberation score (§6.12) off its anchoring
         input row, or ``0.0`` before that row exists / has a score."""
-        row = self._anchor_row()
+        row = self.anchor_row()
         return float(row.deliberation_score) if row and row.deliberation_score is not None else 0.0
 
     # ── turn identity (§6.8, resolved once inside begin()) ─────────────────────
@@ -213,7 +223,7 @@ class TranscriptService:
         """Persist ``score`` on this turn's anchoring input row — the value
         that drives thinking-level selection (§6.12). A no-op before that row
         exists (``skip_input_row`` channels)."""
-        row = self._anchor_row()
+        row = self.anchor_row()
         if row is not None:
             row.set_deliberation_score(score)
 
@@ -234,12 +244,6 @@ class TranscriptService:
             row.unsettle()
 
     # ── private helpers ──────────────────────────────────────────────────────
-
-    def _anchor_row(self) -> Transcript | None:
-        """This turn's anchoring input row, or ``None`` before it exists."""
-        if self.mp.uid is None:
-            return None
-        return Transcript.filter("id", self.mp.uid).first()
 
     def _append(self, content: str, *, role: str, settled: int, thinking_level: str | None = None) -> int:
         """Write one transcript row for this turn and return its id."""
