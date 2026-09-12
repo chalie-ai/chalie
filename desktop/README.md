@@ -53,18 +53,17 @@ the app's log, which is where a failure points you.
 
 An app opened from Finder or the Dock starts with only the Mac's system folders
 on its PATH, which is not where Homebrew or a Python version manager put their
-commands. So before running anything, the app reads the PATH a new Terminal
-window would start with, and runs the installer and the start command with
-that. If the answer takes longer than fifteen seconds or doesn't come back as a
-PATH, the window and the log say why, and both run with the app's own PATH
-instead.
+commands. So the installer and the start command are run by your own login
+shell, exactly as the published instructions assume when they tell you to paste
+the one-liner into a terminal — anything your profile puts on the PATH is on it
+here too. Both send everything they print to one stream, so a download that
+fails is read in its place in the output rather than being thrown away.
 
 The installer needs no administrator password and writes under your home
 directory only: `~/.chalie` for the server and its data, `~/.local/bin/chalie`
-for the command that runs it. Cancel stops the install while it is running;
-during a start, it stops only the app's wait — the Chalie that is booting
-keeps booting. Running the installer again over a half-finished install is
-safe.
+for the command that runs it. There is no way to stop an install part-way:
+quitting the app ends it. Running the installer again over a half-finished
+install is safe.
 
 The command that starts Chalie gives up waiting for it after half a minute,
 which a first start on a slow machine can outlast, so a failure there is shown
@@ -87,13 +86,13 @@ times out. A server that answers, even wrongly, is never restarted. A Chalie
 you pointed the wizard at somewhere else is left alone, and so is a server on
 this Mac reached through anything other than the port the installer uses.
 
-That happens once per outage: a start at launch counts, and the background
-check that keeps watching for the server going away never starts it a second
-time while that outage is still open — the outage is over once the server
-answers again. A start the background check makes shows nothing on screen; if
-it fails, that goes only to the app's log. "Try again" on the connecting
-screen starts Chalie again the same way. Cancel there stops only the app's
-wait for it — the Chalie that is booting keeps booting.
+Only one start runs at a time, whoever asked for it: a start at launch and the
+background check that keeps watching for the server going away share the same
+slot, and the second one to arrive waits for the first rather than running its
+own. A start the background check makes shows nothing on screen; if it fails,
+that goes only to the app's log. "Try again" on the connecting screen starts
+Chalie again the same way. Leaving that screen stops only the app's wait for
+it — the Chalie that is booting keeps booting.
 
 ## Prerequisites
 
