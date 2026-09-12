@@ -130,10 +130,3 @@ button[disabled] {
 .output p {
   margin: 0;
 }
-
-/* Deliberately not the error colour: installers say as much on this stream as on the other,
-   so painting it red would make a healthy install look like a failing one. */
-.output p.stderr {
-  font-style: italic;
-  opacity: 0.8;
-}

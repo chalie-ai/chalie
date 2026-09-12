@@ -1,14 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 
-import {
-  DEFAULT_PORT,
-  autoConnect,
-  cancelInstall,
-  detectLocal,
-  getSetupState,
-  onInstallPhase,
-} from './wizard/api';
+import { DEFAULT_PORT, autoConnect, detectLocal, getSetupState, onInstallPhase } from './wizard/api';
 import type { InstallPhase, UnlistenFn } from './wizard/api';
 import { describeError } from './wizard/errors';
 import CreateAccount from './wizard/CreateAccount.vue';
@@ -63,9 +56,9 @@ const connectingLead = computed(
     `Connecting to ${host.value}:${port.value}…`,
 );
 
-// A step can be left before the command it is waiting on answers — every Back and Cancel
-// does exactly that. The token makes the late answer land on the floor instead of
-// dragging the user back to the step they walked away from.
+// A step can be left before the command it is waiting on answers — every Back does exactly
+// that. The token makes the late answer land on the floor instead of dragging the user back
+// to the step they walked away from.
 let current = 0;
 
 function begin(next: Step): number {
@@ -194,19 +187,11 @@ function useServer(nextHost: string, nextPort: number, hasAccount: boolean): voi
   begin(hasAccount ? 'credentials' : 'account');
 }
 
-// Leaving the connecting step while this Mac's own Chalie is on its way up ends the app's
-// wait for it — the boot itself is not the app's to stop, and keeps going in the background.
-// Every other way back to the start (Cancel elsewhere, Back from a form) leaves nothing
-// running, so nativeStartPhase is unset and this is a plain reset.
-async function backToStart(): Promise<void> {
-  if (nativeStartPhase.value) {
-    nativeStartPhase.value = null;
-    try {
-      await cancelInstall();
-    } catch {
-      // The screen is leaving either way.
-    }
-  }
+// Back to the first question. A start of this Mac's own Chalie that is still under way is
+// left to finish — a booting server is not the app's to stop — and the step token makes its
+// late answer land on the floor rather than dragging somebody back here.
+function backToStart(): void {
+  nativeStartPhase.value = null;
   username.value = '';
   notice.value = '';
   begin('mode');

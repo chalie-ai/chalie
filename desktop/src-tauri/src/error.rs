@@ -28,8 +28,6 @@ pub(crate) enum AppError {
     /// One of the commands the install runs did not finish cleanly. The message says which
     /// command, how it ended and where everything it printed can be read back.
     InstallFailed { message: String },
-    /// The install was stopped from the window while it was running.
-    InstallCancelled,
     /// An install was asked for while one was already running.
     InstallRunning,
     /// Chalie was installed and started, but never began answering.
@@ -65,7 +63,6 @@ impl fmt::Display for AppError {
             Self::Config { message } => write!(f, "configuration: {message}"),
             Self::Webview { message } => write!(f, "webview: {message}"),
             Self::InstallFailed { message } => write!(f, "the install failed: {message}"),
-            Self::InstallCancelled => f.write_str("the install was cancelled"),
             Self::InstallRunning => f.write_str("an install is already running"),
             Self::NotReady { message } => write!(f, "Chalie is not answering yet: {message}"),
             Self::AccountExists => f.write_str("this Chalie already has an account"),

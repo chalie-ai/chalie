@@ -5,7 +5,7 @@ use tauri::{AppHandle, Manager, State, WebviewWindow};
 
 use crate::config::{self, Credentials, Mode, ServerAddress};
 use crate::error::{AppError, AppResult};
-use crate::install::{self, Asker, Found, InstallState, Plan};
+use crate::install::{self, InstallState, Plan};
 use crate::server::{self, ServerStatus};
 use crate::session;
 use crate::watcher;
@@ -122,14 +122,6 @@ pub(crate) async fn install_local(
     install::install_and_register(&window, &plan, &state, &credentials).await
 }
 
-/// Stop the install that is running. Answers as soon as the running command has been told to
-/// stop; the install itself answers its own caller with the cancellation.
-#[tauri::command]
-pub(crate) async fn cancel_install(state: State<'_, InstallState>) -> AppResult<()> {
-    state.cancel();
-    Ok(())
-}
-
 /// Give a Chalie that is already running its master account, and show the product UI. It is
 /// where the wizard goes when a probe finds a Chalie with nobody to sign in as.
 #[tauri::command]
@@ -149,9 +141,9 @@ pub(crate) async fn create_account(
 
 /// Relaunch: log in again from the saved login without asking. When that login no longer
 /// works the wizard takes over with the username already filled in. When nothing answers at
-/// all and it is this Mac's own Chalie ([`Plan::found`]), this starts it — or, when a start or
-/// an install is already under way, waits for that one — instead of leaving the window on an
-/// error a restart caused, then signs in the same way once it answers.
+/// all and it is this Mac's own Chalie ([`Plan::is_stopped_local`]), this starts it — or, when
+/// a start or an install is already under way, waits for that one — instead of leaving the
+/// window on an error a restart caused, then signs in the same way once it answers.
 #[tauri::command]
 pub(crate) async fn auto_connect(
     window: WebviewWindow,
@@ -170,14 +162,11 @@ pub(crate) async fn auto_connect(
     let mut outcome =
         session::connect_and_show(&window, &config.address, config.mode, credentials).await;
     let plan = Plan::for_this_mac();
-    let found = match (&outcome, &plan) {
-        (Ok(()), _) => Found::Answered,
-        (Err(problem), Some(plan)) => plan.found(&config, problem),
-        (Err(_), None) => Found::NotOurs,
-    };
-    if let (true, Some(plan)) = (state.outage_step(found, Asker::User), &plan) {
+    let stopped_local = matches!((&outcome, &plan), (Err(problem), Some(plan))
+        if plan.is_stopped_local(&config, problem));
+    if let (true, Some(plan)) = (stopped_local, &plan) {
         // Somebody is waiting on this start, so the watcher is off while it runs: left on, it
-        // would sign the window in behind their back, even after they pressed Cancel.
+        // would sign the window in behind their back while they are watching it happen.
         watcher::disarm(app);
         log::info!(
             "{} is not answering, and this Mac's own Chalie is installed; starting it",
@@ -211,9 +200,6 @@ pub(crate) async fn auto_connect(
                 username: Some(credentials.username.clone()),
             })
         }
-        // Cancel was pressed during the start: whoever pressed it chose to stop waiting, so
-        // nothing signs in now and nothing is left watching to sign in later.
-        Err(AppError::InstallCancelled) => Err(AppError::InstallCancelled),
         Err(other) => {
             // The server is not there yet, or what answered was not a Chalie, or this Mac's
             // own Chalie was started and has not answered. The wizard shows that, but nothing

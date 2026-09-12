@@ -40,12 +40,6 @@ export type InstallPhase =
   | 'creating_account'
   | 'connecting';
 
-/** One line a command the install ran printed, and which of its two streams it came out of. */
-export interface InstallOutput {
-  stream: 'stdout' | 'stderr';
-  line: string;
-}
-
 export interface AutoConnectResult {
   needs_credentials: boolean;
   username: string | null;
@@ -82,10 +76,6 @@ export function installLocal(username: string, password: string): Promise<void> 
   return invoke<void>('install_local', { username, password });
 }
 
-export function cancelInstall(): Promise<void> {
-  return invoke<void>('cancel_install');
-}
-
 /** Give a Chalie that is already running its first account, and sign in to it. */
 export function createAccount(
   host: string,
@@ -96,8 +86,9 @@ export function createAccount(
   return invoke<void>('create_account', { host, port, username, password });
 }
 
-export function onInstallOutput(show: (output: InstallOutput) => void): Promise<UnlistenFn> {
-  return listen<InstallOutput>('install-output', (event) => show(event.payload));
+/** Every line the install's commands print, as each one arrives. */
+export function onInstallOutput(show: (line: string) => void): Promise<UnlistenFn> {
+  return listen<string>('install-output', (event) => show(event.payload));
 }
 
 export function onInstallPhase(show: (phase: InstallPhase) => void): Promise<UnlistenFn> {

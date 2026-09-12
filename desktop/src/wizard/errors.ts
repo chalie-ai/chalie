@@ -11,7 +11,6 @@ export type AppErrorKind =
   | 'config'
   | 'webview'
   | 'install_failed'
-  | 'install_cancelled'
   | 'install_running'
   | 'not_ready'
   | 'account_exists'
@@ -34,7 +33,6 @@ const SENTENCES: Record<AppErrorKind, string> = {
   config: "The app's settings file could not be read or written.",
   webview: 'The window would not take the session, so the Chalie interface was not opened.',
   install_failed: 'The install did not finish. The detail below says which command stopped it and where to read everything it printed.',
-  install_cancelled: 'The install was stopped.',
   install_running: 'An install is already running. Wait for it to finish.',
   not_ready: 'Chalie was installed and started, but never began answering.',
   account_exists: 'That Chalie already has an account, so there is nothing to create. Sign in to it instead.',
@@ -43,14 +41,13 @@ const SENTENCES: Record<AppErrorKind, string> = {
 
 const UNKNOWN = 'Something went wrong.';
 
-// The same three kinds read differently when they come out of starting this Mac's own Chalie
+// The same two kinds read differently when they come out of starting this Mac's own Chalie
 // instead of installing it — nothing was being installed, so the install-flavoured sentence
 // would be false. describeError's context argument swaps these in without touching the kinds
 // or the detail, which the Rust side attaches the same way either time.
 const START_SENTENCES: Partial<Record<AppErrorKind, string>> = {
   install_failed:
     'Chalie did not start. The detail below says which command stopped it and where to read everything it printed.',
-  install_cancelled: 'The start was stopped.',
   not_ready: 'Chalie was started, but never began answering.',
 };
 

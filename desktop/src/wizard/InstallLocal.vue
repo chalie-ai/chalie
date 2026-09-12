@@ -9,14 +9,8 @@
 // there cannot be created at all, so that one leaves for the sign-in form instead.
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 
-import {
-  cancelInstall,
-  createAccount,
-  installLocal,
-  onInstallOutput,
-  onInstallPhase,
-} from './api';
-import type { InstallOutput, InstallPhase, UnlistenFn } from './api';
+import { createAccount, installLocal, onInstallOutput, onInstallPhase } from './api';
+import type { InstallPhase, UnlistenFn } from './api';
 import { describeError, isKind } from './errors';
 import AccountForm from './AccountForm.vue';
 import Message from './Message.vue';
@@ -52,14 +46,8 @@ const PHASES: Record<InstallPhase, string> = {
   connecting: 'Opening Chalie…',
 };
 
-// The phases a Cancel still has something to stop. After them the install is one request
-// and a navigation away, with no command left running, so the button goes rather than
-// staying on screen doing nothing.
-const STOPPABLE: InstallPhase[] = ['installing', 'starting', 'waiting'];
-
 interface Line {
   id: number;
-  stream: InstallOutput['stream'];
   text: string;
 }
 
@@ -91,8 +79,8 @@ onMounted(() => {
     onInstallPhase((next) => {
       phase.value = next;
     }),
-    onInstallOutput((output) => {
-      lines.value.push({ id: (nextLine += 1), stream: output.stream, text: output.line });
+    onInstallOutput((line) => {
+      lines.value.push({ id: (nextLine += 1), text: line });
       if (lines.value.length > KEPT_LINES) {
         lines.value.splice(0, lines.value.length - KEPT_LINES);
       }
@@ -162,16 +150,6 @@ async function makeAccount(username: string, password: string): Promise<void> {
     face.value = landsOn(error);
   }
 }
-
-// Stopping does not end the wait here — the install itself reports the cancellation, which
-// is what puts this screen into its stopped state, so there is one account of what happened.
-async function stop(): Promise<void> {
-  try {
-    await cancelInstall();
-  } catch (error) {
-    problem.value = error;
-  }
-}
 </script>
 
 <template>
@@ -202,27 +180,22 @@ async function stop(): Promise<void> {
     <p class="lead">{{ running ? PHASES[phase] : 'The install stopped.' }}</p>
 
     <div ref="panel" class="output" aria-label="What the install is printing">
-      <p v-for="line in lines" :key="line.id" :class="line.stream">{{ line.text }}</p>
+      <p v-for="line in lines" :key="line.id">{{ line.text }}</p>
     </div>
 
     <Message v-if="failure" tone="error" :text="failure.text" :detail="failure.detail" />
 
-    <div class="actions">
-      <button v-if="running && STOPPABLE.includes(phase)" type="button" @click="stop">
-        Cancel
+    <div v-if="!running" class="actions">
+      <button
+        v-if="hasAccountAlready"
+        type="button"
+        class="primary"
+        @click="emit('sign-in', host, port)"
+      >
+        Sign in instead
       </button>
-      <template v-else-if="!running">
-        <button
-          v-if="hasAccountAlready"
-          type="button"
-          class="primary"
-          @click="emit('sign-in', host, port)"
-        >
-          Sign in instead
-        </button>
-        <button v-else type="button" class="primary" @click="run">Try again</button>
-        <button type="button" @click="emit('back')">Back</button>
-      </template>
+      <button v-else type="button" class="primary" @click="run">Try again</button>
+      <button type="button" @click="emit('back')">Back</button>
     </div>
   </template>
 </template>

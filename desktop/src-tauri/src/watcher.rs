@@ -14,14 +14,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use tauri::webview::{PageLoadEvent, PageLoadPayload, Webview};
 use tauri::{AppHandle, Manager, Url, WebviewWindow};
-use tokio::sync::Notify;
-use tokio::time::timeout;
+use tokio::time::sleep;
 
 use crate::config::{self, ServerAddress, ServerConfig};
-use crate::error::{AppError, AppResult};
-use crate::install::{self, Asker, Found, InstallState, Plan};
+use crate::error::AppError;
+use crate::install::{self, InstallState, Plan};
 use crate::server::{self, SessionCookie, SESSION_COOKIE_NAME};
 use crate::session;
 
@@ -35,12 +33,6 @@ const CHECK_INTERVAL: Duration = Duration::from_secs(15);
 /// would only spend the attempts somebody needs to type their own password.
 const RATE_LIMIT_BACKOFF: Duration = Duration::from_secs(60);
 
-/// The longest that wait is ever honoured. A `Retry-After` asking for more than this is a
-/// server asking the app to stop working for the afternoon, which is not its call to make.
-/// Chalie's own refusal carries no such header, so this bounds somebody else's number: a
-/// reverse proxy in front of a remote instance, which is free to send one.
-const RATE_LIMIT_BACKOFF_CAP: Duration = Duration::from_secs(600);
-
 /// The window declared in `tauri.conf.json` — the one the session is handed to.
 pub(crate) const MAIN_WINDOW: &str = "main";
 
@@ -52,7 +44,6 @@ const LOGIN_PATH: &str = "/login";
 #[derive(Default)]
 struct SessionWatcher {
     armed: AtomicBool,
-    wake: Notify,
     /// The app's own page, as the window was showing it at launch. Where the window is sent
     /// when the stored login stops working: loading it runs the wizard, which tries the
     /// saved login once more and puts the credentials form up with the user name filled in.
@@ -86,33 +77,6 @@ pub(crate) fn install(app: &AppHandle) {
         }
         .run(),
     );
-}
-
-/// What the app's page-load hook has to tell the watcher: the server's own sign-in page has
-/// just loaded, which means the session died since the last check. Checking now rather than
-/// at the next tick is the difference between a form somebody starts typing into and a form
-/// that is gone before they reach it. Anything but a finished load is ignored, so this can
-/// be handed every page-load event the hook receives.
-pub(crate) fn on_page_load(webview: &Webview, payload: &PageLoadPayload<'_>) {
-    if payload.event() != PageLoadEvent::Finished {
-        return;
-    }
-    let app = webview.app_handle();
-    let Some(watcher) = watcher_of(app) else {
-        return;
-    };
-    if !watcher.armed.load(Ordering::SeqCst) {
-        return;
-    }
-    let Some(config) = saved_config(app) else {
-        return;
-    };
-    let url = payload.url();
-    if !is_served_by(url, &config.address) || !is_login_page(url) {
-        return;
-    }
-    log::info!("the server asked for a sign-in, so the session is checked now");
-    watcher.wake.notify_one();
 }
 
 /// Start watching. Called after every connection that put the product UI on screen — the
@@ -165,10 +129,7 @@ impl Watch {
             CHECK_INTERVAL.as_secs()
         );
         loop {
-            // Whichever comes first: the interval, or somebody asking for a check now. A
-            // wake raised while a check is running is kept by `Notify` and taken by the
-            // next wait, so an early trigger is never lost and never doubles a check.
-            let _ = timeout(CHECK_INTERVAL, self.watcher.wake.notified()).await;
+            sleep(CHECK_INTERVAL).await;
             if !self.watcher.armed.load(Ordering::SeqCst) {
                 continue;
             }
@@ -203,9 +164,6 @@ impl Watch {
                 self.maybe_start_native(&window, &config, &problem).await;
             }
             Ok(status) => {
-                self.app
-                    .state::<InstallState>()
-                    .outage_step(Found::Answered, Asker::Watcher);
                 if !self.answering {
                     self.answering = true;
                     log::info!("{} is answering again", config.address);
@@ -217,11 +175,10 @@ impl Watch {
         }
     }
 
-    /// This Mac's own Chalie, not answering: started once per outage, never once per tick —
-    /// the outage step says no once any start has been made in this outage, whether this
-    /// watcher made it or the relaunch did. Nobody is shown this start: its steps go to the
-    /// log, a failure is a warning there, and nothing retries it before the server has
-    /// answered again.
+    /// This Mac's own Chalie, not answering: started. Nobody is shown this start — its steps
+    /// go to the log and a failure is a warning there — and nothing here retries it in a
+    /// tight loop: the start is awaited inside this tick, and it does not answer until the
+    /// server does or until its own limit runs out.
     async fn maybe_start_native(
         &mut self,
         window: &WebviewWindow,
@@ -231,15 +188,15 @@ impl Watch {
         let Some(plan) = &self.plan else {
             return;
         };
-        let state = self.app.state::<InstallState>();
-        if !state.outage_step(plan.found(config, problem), Asker::Watcher) {
+        if !plan.is_stopped_local(config, problem) {
             return;
         }
+        let state = self.app.state::<InstallState>();
         log::info!(
             "{} is not answering, and this Mac's own Chalie is installed; starting it",
             config.address
         );
-        match install::start_installed_chalie(&self.app, plan, &state, Asker::Watcher).await {
+        match install::start_installed_chalie(&self.app, plan, &state, false).await {
             Ok(()) => {
                 log::info!("{} was started; signing in", config.address);
                 self.recover(window, config).await;
@@ -294,9 +251,7 @@ impl Watch {
             Err(AppError::RateLimited {
                 retry_after_seconds,
             }) => {
-                let wait = retry_after_seconds
-                    .map_or(RATE_LIMIT_BACKOFF, Duration::from_secs)
-                    .min(RATE_LIMIT_BACKOFF_CAP);
+                let wait = retry_after_seconds.map_or(RATE_LIMIT_BACKOFF, Duration::from_secs);
                 log::info!(
                     "{address} is refusing logins for now, waiting {}s before trying again",
                     wait.as_secs()
@@ -329,64 +284,34 @@ impl Watch {
     }
 }
 
-/// Hand the window the new session and show the product UI on it. The handoff is the app's
-/// own — the same `set_cookie` and read-back proof the first connect runs — so a cookie the
-/// webview would keep but never send is refused here exactly as it is there.
+/// Hand the window the new session and put the product UI back on it. The handoff is the
+/// app's own — the same `set_cookie` and read-back proof the first connect runs — so a cookie
+/// the webview would keep but never send is refused here exactly as it is there.
+///
+/// Reloading is what keeps somebody where they were, and it is also what clears the page's
+/// own once-per-load "the session died" latch. It is only right when the window is on a page
+/// of the product UI: the sign-in page would just be served again, and the app's own page is
+/// not the product UI at all — both of those go to the server's root instead.
 fn restore(window: &WebviewWindow, address: &ServerAddress, session: &SessionCookie) {
     if let Err(problem) = session::hand_over_session(window, address, session) {
         log::warn!("the new session for {address} could not be handed to the window: {problem}");
         return;
     }
-    if let Err(problem) = show_the_server_again(window, address) {
-        log::warn!("the window could not be put back on {address}: {problem}");
-        return;
+    let showing = window.url().ok();
+    let back = match showing {
+        Some(url) if is_served_by(&url, address) && !is_login_page(&url) => window.reload(),
+        _ => match address.base_url() {
+            Ok(root) => window.navigate(root),
+            Err(problem) => {
+                log::warn!("the window could not be put back on {address}: {problem}");
+                return;
+            }
+        },
+    };
+    match back {
+        Ok(()) => log::info!("session restored for {address}"),
+        Err(problem) => log::warn!("the window could not be put back on {address}: {problem}"),
     }
-    // The windows a server page opened share this one's cookies, so the handoff above signed
-    // them in too; each one still showing the server comes back the same way.
-    for other in window.app_handle().webview_windows().into_values() {
-        let on_the_server = other.url().is_ok_and(|url| is_served_by(&url, address));
-        if other.label() == window.label() || !on_the_server {
-            continue;
-        }
-        if let Err(problem) = show_the_server_again(&other, address) {
-            let label = other.label();
-            log::warn!("the {label} window could not be put back on {address}: {problem}");
-        }
-    }
-    log::info!("session restored for {address}");
-}
-
-/// Reloading is what keeps somebody where they were, and it is also what clears the page's
-/// own once-per-load "the session died" latch. It is only right when the window is on a
-/// page of the product UI: the sign-in page would just be served again, and the app's own
-/// page is not the product UI at all — both of those are sent to [`return_to`] instead.
-fn show_the_server_again(window: &WebviewWindow, address: &ServerAddress) -> AppResult<()> {
-    let showing = window.url().map_err(|e| AppError::Webview {
-        message: format!("the window's own page could not be read: {e}"),
-    })?;
-    if is_served_by(&showing, address) && !is_login_page(&showing) {
-        return window.reload().map_err(|e| AppError::Webview {
-            message: format!("the reload was refused: {e}"),
-        });
-    }
-    window
-        .navigate(return_to(&showing, address)?)
-        .map_err(|e| AppError::Webview {
-            message: format!("the navigation was refused: {e}"),
-        })
-}
-
-/// The page the sign-in page was holding somebody's place for — its `next`, when that is one
-/// of this server's own pages — or else the server's root, which is also where the app's own
-/// page goes. A window a server page opened, such as Brain, comes back as itself this way.
-fn return_to(showing: &Url, address: &ServerAddress) -> AppResult<Url> {
-    let root = address.base_url()?;
-    let next = showing
-        .query_pairs()
-        .find(|(key, _)| key == "next")
-        .and_then(|(_, next)| root.join(&next).ok())
-        .filter(|next| is_served_by(next, address));
-    Ok(next.unwrap_or(root))
 }
 
 /// The session the webview is holding for this server, if it is holding one. Wrapped on the

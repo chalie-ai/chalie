@@ -31,14 +31,9 @@ pub fn run() {
         // bundled wizard first, then the server's own URL once the session is in place.
         // Both ends of the load are recorded so a navigation that starts and never finishes
         // — a server that went away between login and navigate — is visible in the log.
-        .on_page_load(|webview, payload| {
-            match payload.event() {
-                PageLoadEvent::Started => log::info!("page load started: {}", payload.url()),
-                PageLoadEvent::Finished => log::info!("page loaded: {}", payload.url()),
-            }
-            // The server's own sign-in page landing is the app being told the session died,
-            // so the watcher hears about it here rather than waiting for its next check.
-            watcher::on_page_load(webview, payload);
+        .on_page_load(|_webview, payload| match payload.event() {
+            PageLoadEvent::Started => log::info!("page load started: {}", payload.url()),
+            PageLoadEvent::Finished => log::info!("page loaded: {}", payload.url()),
         })
         .menu(windows::menu)
         .on_menu_event(windows::on_menu_event)
@@ -57,7 +52,6 @@ pub fn run() {
             commands::connect,
             commands::auto_connect,
             commands::install_local,
-            commands::cancel_install,
             commands::create_account,
         ])
         .setup(|app| {
