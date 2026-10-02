@@ -56,11 +56,11 @@ def _load() -> dict[str, Ability]:
     return result
 
 
-def _all_concrete_subclasses(cls: type) -> list[type]:
+def _all_concrete_subclasses(cls: type[object]) -> list[type]:
     seen: set[type] = set()
     out: list[type] = []
 
-    def _walk(node: type) -> None:
+    def _walk(node: type[object]) -> None:
         for sub in node.__subclasses__():
             if sub in seen:
                 continue

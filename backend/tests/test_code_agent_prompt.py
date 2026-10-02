@@ -172,7 +172,7 @@ def test_code_agent_prompt_renders_its_act_trail(db: sqlite3.Connection) -> None
 # ---------------------------------------------------------------------------
 
 
-def _all_subclasses(cls: type) -> set[type]:
+def _all_subclasses(cls: type[object]) -> set[type]:
     out: set[type] = set()
     for sub in cls.__subclasses__():
         out.add(sub)

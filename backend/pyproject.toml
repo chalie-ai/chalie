@@ -86,9 +86,11 @@ dependencies = [
 # mypy gates the ToolResult return-type contract on the abilities package
 # (see tests/test_ability_returns_tool_result.py) and the strict typing gate
 # (tests/test_static_typing_gate.py) — both run inside the unit suite.
+# Pinned exactly: each mypy release ships new stdlib stubs that can change what
+# it reports, so a range lets a fresh install fail the gate on unchanged code.
 dev = [
     "pytest>=8.0.0",
-    "mypy>=1.8.0",
+    "mypy==2.4.0",
 ]
 
 [tool.mypy]

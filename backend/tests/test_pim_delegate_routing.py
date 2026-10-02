@@ -131,7 +131,7 @@ def test_default_roster_does_not_expose_personal_info() -> None:
     )
 
 
-def _all_subclasses(cls: type) -> set[type]:
+def _all_subclasses(cls: type[object]) -> set[type]:
     out: set[type] = set()
     for sub in cls.__subclasses__():
         out.add(sub)
