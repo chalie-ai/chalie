@@ -21,7 +21,7 @@ const voiceStore = useVoiceStore();
 
 // When a thread panel is open the base layer (feed + footer dock) dims and
 // blurs behind it — the mockup's baseStyle. The panel and top bar stay crisp.
-const baseDimmed = computed(() => session.panelThreadId != null);
+const baseDimmed = computed(() => session.panelThreadId != null || session.panelDelegate != null);
 
 // Cmd/Ctrl-K toggles the thread-search overlay; the overlay owns Esc-to-close.
 function onSearchHotkey(e: KeyboardEvent): void {

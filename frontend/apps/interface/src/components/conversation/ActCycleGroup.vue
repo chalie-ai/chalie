@@ -26,7 +26,9 @@ const expanded = ref(false);
       {{ summaries.length }} tool{{ summaries.length === 1 ? '' : 's' }} used
     </button>
 
-    <div class="trace-body" :class="{ 'trace-body--open': expanded }">
+    <!-- inert while folded, as on BubbleFooter: a delegate call row is a button,
+         and the fold only collapses its height. -->
+    <div class="trace-body" :class="{ 'trace-body--open': expanded }" :inert="!expanded">
       <div class="trace-body__inner">
         <ToolCallList :calls="summaries" />
       </div>

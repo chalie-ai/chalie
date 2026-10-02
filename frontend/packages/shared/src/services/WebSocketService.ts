@@ -26,8 +26,11 @@ export interface WsPingEvent {
 export type WsTurnStatus = 'updated' | 'provider_retry' | 'context_usage';
 export interface WsTurnSignal {
   status: WsTurnStatus;
-  /** ConfigType — the ProcessorConfig identity the FE routes by. */
-  type: string;
+  /** ConfigType — the ProcessorConfig identity the FE routes by. Absent on a
+   *  delegate turn's frames, which are addressed by `channel` instead. */
+  type?: string | null;
+  /** Delegate turns only: the full transcript channel (`delegate:<name>`). */
+  channel?: string;
   turn_id?: number | null;
   /** `context_usage` only — tokens the sent request measured, and the window it
    *  was measured against. Absent on every other status. */
@@ -44,7 +47,9 @@ export interface WsTurnSignal {
  *  `done` on success/placeholder return, `error` on a failure/denial/pre-validation
  *  bounce. `params`/`result` never cross the wire — the surface refetches the turn
  *  block over REST for the persisted trail; this frame drives the live pill timer
- *  only. */
+ *  only. A delegate tool's frame is re-emitted, state unchanged, once the child
+ *  turn it spawned exists, so `delegate` can arrive on a later frame for the same
+ *  `id`. */
 export type WsToolCallState = 'started' | 'done' | 'error';
 export interface WsToolCallEvent {
   id: number;
@@ -53,9 +58,24 @@ export interface WsToolCallEvent {
   created_at: string;
   ended_at: string | null;
   state: WsToolCallState;
-  /** ConfigType — the ProcessorConfig identity the FE routes by. */
-  type: string | null;
+  /** ConfigType — the ProcessorConfig identity the FE routes by. Absent on a
+   *  delegate turn's frames, which are addressed by `channel` instead. */
+  type?: string | null;
+  /** Delegate turns only: the full transcript channel (`delegate:<name>`). */
+  channel?: string;
   turn_id: number | null;
+  /** The transcript row this call anchors to. */
+  transcript_row_id?: number | null;
+  /** The delegate turn this call spawned, once that turn has written rows. */
+  delegate?: DelegateRef | null;
+}
+
+/** Address of one delegate (subagent) turn. A delegate's turn_id is allocated
+ *  per channel, so it collides with user turn ids — the full channel
+ *  (`delegate:<name>`) is part of the identity, never optional. */
+export interface DelegateRef {
+  channel: string;
+  turn_id: number;
 }
 
 /** One `turn_executions` row, pushed whole on every state flip (see
@@ -69,9 +89,12 @@ export interface WsToolCallEvent {
 export type TurnExecutionState = 'working' | 'completed' | 'cancelled' | 'crashed';
 export interface WsTurnExecutionEvent {
   id: number;
+  /** The transcript channel the turn runs on (`user`, a scheduled channel, or
+   *  `delegate:<name>` for a delegate turn). */
   channel: string;
-  /** ConfigType — the ProcessorConfig identity the FE routes by. */
-  type: string | null;
+  /** ConfigType — the ProcessorConfig identity the FE routes by. Absent on a
+   *  delegate turn's frames, which are addressed by `channel` instead. */
+  type?: string | null;
   turn_id: number;
   started_at: string;
   ended_at: string | null;

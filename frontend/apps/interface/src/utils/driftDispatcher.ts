@@ -18,12 +18,20 @@
  * `init()` — dependency injection instead of a static import, breaking the
  * cycle in both directions.
  */
-import type { WsPushEvent, WsTurnExecutionEvent } from '@chalie/shared';
+import type { DelegateRef, WsPushEvent, WsTurnExecutionEvent } from '@chalie/shared';
 import { conversation as convoApi } from '../api/conversation';
 import { showToast } from './toast';
-import { clearLiveTurn, finishLiveTool, startLiveTool } from './liveActTrail';
+import { clearLiveTurn, finishLiveTool, setLiveToolDelegate, startLiveTool } from './liveActTrail';
 import { reconcileCancelledTurn } from './cancelReconcile';
-import { findTurnType, setTurnDone, setTurnWorking, upsertTurnToSurfaces } from './turnDom';
+import { isDelegateChannel } from './delegateChannel';
+import {
+  findTurnType,
+  hasDelegateSurface,
+  setTurnDone,
+  setTurnWorking,
+  upsertDelegateTurn,
+  upsertTurnToSurfaces,
+} from './turnDom';
 import { usePermissionsStore } from '../stores/permissions';
 import { useContextUsageStore } from '../stores/contextUsage';
 import { useVoiceTranscriptsStore } from '../stores/voiceTranscripts';
@@ -84,6 +92,20 @@ function resolveFrameType(turnId: number, rawType: string | null | undefined): s
   const h = hooks();
   if (h.getPanelThreadId() === turnId) return h.getPanelType();
   return null;
+}
+
+/**
+ * The channel a delegate (subagent) turn's frame is addressed by, or null for
+ * every other frame. A delegate turn has no ConfigType: its frames reach the
+ * wire with `type` stripped and its `delegate:<name>` channel in its place.
+ * Typed frames may carry a channel too (`user`, a scheduled channel) and keep
+ * routing by type exactly as before. A delegate's turn_id collides with user
+ * turn ids, so its frame is routed by this channel alone and must never reach
+ * `resolveFrameType`, whose DOM lookup would hand it a same-id user turn.
+ */
+function delegateChannel(data: WsPushEvent): string | null {
+  const channel = (data as { channel?: unknown }).channel;
+  return isDelegateChannel(channel) ? channel : null;
 }
 
 /** True when `(turnId, type)` identifies the turn currently open in the
@@ -154,8 +176,10 @@ function _dispatchToolCall(data: WsPushEvent): boolean {
   if (!isToolCallEvent(data)) return false;
   const turnId = (data as { turn_id?: number | null }).turn_id ?? null;
   if (turnId == null) return true;
-  const type = resolveFrameType(turnId, (data as { type?: string | null }).type);
-  if (type == null) {
+  // A delegate turn's pills live in a feed keyed by its channel, never by a
+  // type resolved from the DOM (see `delegateChannel`).
+  const feed = delegateChannel(data) ?? resolveFrameType(turnId, (data as { type?: string | null }).type);
+  if (feed == null) {
     console.warn('[driftDispatcher] tool_call frame for turn', turnId, 'has no resolvable type — dropped');
     return true;
   }
@@ -165,12 +189,16 @@ function _dispatchToolCall(data: WsPushEvent): boolean {
     summary?: string;
     state?: string;
     transcript_row_id?: number | null;
+    delegate?: DelegateRef | null;
   };
   if (frame.state === 'started') {
-    startLiveTool(type, turnId, frame.id ?? null, frame.tool_name ?? '', frame.summary, frame.transcript_row_id ?? null);
+    startLiveTool(feed, turnId, frame.id ?? null, frame.tool_name ?? '', frame.summary, frame.transcript_row_id ?? null);
   } else {
-    finishLiveTool(type, turnId, frame.id ?? null, frame.state === 'done');
+    finishLiveTool(feed, turnId, frame.id ?? null, frame.state === 'done');
   }
+  // A delegate call names the child turn it spawned on a frame sent after the
+  // pill opened, so the link is applied to whichever pill that frame names.
+  if (frame.delegate != null) setLiveToolDelegate(feed, turnId, frame.id ?? null, frame.delegate);
   return true;
 }
 
@@ -190,9 +218,15 @@ function _dispatchTurnSignal(data: WsPushEvent): boolean {
   if (!isTurnSignal(data)) return false;
   const status = (data as { status?: string }).status;
   const turnId = (data as { turn_id?: number | null }).turn_id ?? null;
+  const channel = delegateChannel(data);
   switch (status) {
     case 'updated': {
       if (turnId == null) return true;
+      if (channel != null) {
+        // No send hold to release: nobody sends into a delegate turn.
+        if (hasDelegateSurface(channel, turnId)) void refetchDelegate(turnId, channel);
+        return true;
+      }
       const type = resolveFrameType(turnId, (data as { type?: string | null }).type);
       if (type == null) {
         console.warn('[driftDispatcher] turn_signal "updated" for turn', turnId, 'has no resolvable type — dropped');
@@ -222,6 +256,9 @@ function _dispatchTurnSignal(data: WsPushEvent): boolean {
       return true;
     case 'context_usage': {
       if (turnId == null) return true;
+      // The context meter tracks the conversation's own turns; a delegate's
+      // window is not one of them.
+      if (channel != null) return true;
       const type = resolveFrameType(turnId, (data as { type?: string | null }).type);
       if (type == null) {
         console.warn('[driftDispatcher] turn_signal "context_usage" for turn', turnId, 'has no resolvable type — dropped');
@@ -274,6 +311,11 @@ function _dispatchTurnSignal(data: WsPushEvent): boolean {
 function _dispatchTurnExecution(data: WsPushEvent): boolean {
   if (!isTurnExecutionEvent(data)) return false;
   const exec = data as unknown as WsTurnExecutionEvent;
+  const channel = delegateChannel(data);
+  if (channel != null) {
+    _dispatchDelegateExecution(exec.turn_id, channel, exec.state);
+    return true;
+  }
   const type = resolveFrameType(exec.turn_id, exec.type);
   if (type == null) {
     console.warn('[driftDispatcher] turn_execution frame for turn', exec.turn_id, 'has no resolvable type — dropped');
@@ -336,6 +378,39 @@ function _dispatchTurnExecution(data: WsPushEvent): boolean {
   }
   void h.finishTurn(exec.turn_id, type);
   return true;
+}
+
+/**
+ * A delegate turn's lifecycle. Nothing outside its panel tracks it — no send
+ * hold, no lane, no done mark, no settle bookkeeping — so each state only
+ * refetches the block, and only when a surface is following this exact turn.
+ * A settled turn drops its live trail and lands forced, for the same reason
+ * the typed settle does (see `_dispatchTurnExecution`).
+ */
+function _dispatchDelegateExecution(turnId: number, channel: string, state: string): void {
+  const terminal = state !== 'working';
+  if (terminal) clearLiveTurn(channel, turnId);
+  if (!hasDelegateSurface(channel, turnId)) return;
+  void refetchDelegate(turnId, channel, { force: terminal });
+}
+
+/** Fetch a delegate turn's block by its channel and render it on the surfaces
+ *  following that exact turn — on its own frames, and once after a reconnect
+ *  (session.ts). Never rejects: a failed read (including a block echoed back
+ *  on another channel) is warned about and leaves the DOM as is. An empty
+ *  block is an expired transcript, which the panel shows itself, so it is
+ *  never rendered as a turn. */
+export async function refetchDelegate(
+  turnId: number,
+  channel: string,
+  options: { force?: boolean } = {},
+): Promise<void> {
+  try {
+    const block = await convoApi.delegateThread(turnId, channel);
+    if (block.messages.length) upsertDelegateTurn(block, options);
+  } catch (err) {
+    console.warn('[driftDispatcher] delegate refetch failed for turn', turnId, channel, err);
+  }
 }
 
 /**

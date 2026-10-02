@@ -177,10 +177,13 @@ function onCopy(): void {
       </span>
     </div>
 
+    <!-- inert while folded: a delegate call row is a button, and the fold only
+         collapses its height, so it would stay reachable by Tab unseen. -->
     <div
       v-if="toolCalls.length > 0"
       class="trace-body"
       :class="{ 'trace-body--open': expanded }"
+      :inert="!expanded"
     >
       <div class="trace-body__inner">
         <ToolCallList :calls="toolCalls" />

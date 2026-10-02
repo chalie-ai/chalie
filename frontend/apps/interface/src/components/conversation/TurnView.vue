@@ -5,7 +5,12 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { ConfigType } from '@chalie/shared';
-import type { ConversationMessage, ConversationTurnBlock } from '../../api/conversation';
+import type {
+  ConversationMessage,
+  ConversationTurnBlock,
+  DelegateTurnBlock,
+  ToolCallChip,
+} from '../../api/conversation';
 import type { LiveToolPill } from '../../utils/liveActTrail';
 import { liveTrailsFor } from '../../utils/liveActTrail';
 import UserBubble from './UserBubble.vue';
@@ -16,7 +21,7 @@ import BubbleFooter from './BubbleFooter.vue';
 
 const props = withDefaults(
   defineProps<{
-    block: ConversationTurnBlock;
+    block: ConversationTurnBlock | DelegateTurnBlock;
     canReply?: boolean;
     type?: string;
     fullThread?: boolean;
@@ -30,6 +35,11 @@ const props = withDefaults(
 );
 
 const emit = defineEmits<{ reply: [turnId: number]; openThread: [turnId: number] }>();
+
+/** Set when this block is a delegate (subagent) turn, read by its channel: the
+ *  turn has no type, nobody can stop it from here, and its user-role rows are
+ *  the task Chalie handed over. */
+const channel = computed(() => props.block.channel ?? null);
 
 /** A forked thread carries at least one row past its settle0 (see
  *  ConversationMessage.thread_message) — derived directly off the prop, no
@@ -51,13 +61,10 @@ interface MsgRow {
   message: ConversationMessage;
 }
 
-/** One tool call's collapsed summary, as carried by the API model. */
-type ToolSummary = NonNullable<ConversationMessage['tool_calls']>[number];
-
 interface CollapsedGroupRow {
   kind: 'collapsed-group';
   id: string;
-  summaries: ToolSummary[];
+  summaries: ToolCallChip[];
 }
 
 // The completion-time footer — one per turn_exchange. It carries that exchange's
@@ -66,7 +73,7 @@ interface CollapsedGroupRow {
 interface FooterRow {
   kind: 'footer';
   message: ConversationMessage;
-  toolCalls: ToolSummary[];
+  toolCalls: ToolCallChip[];
   thinking?: { traces: string[]; duration_ms: number; tokens: number };
 }
 
@@ -82,7 +89,7 @@ const displayRows = computed<DisplayRow[]>(() => {
   // never a tool chip hoisted past a later exchange. A still-streaming exchange
   // has no footer yet; its calls so far fall back to a collapsed-group
   // row so they are never dropped while the reply streams.
-  let pendingTools: ToolSummary[] = [];
+  let pendingTools: ToolCallChip[] = [];
   let pendingThinking: { traces: string[]; duration_ms: number; tokens: number } | null = null;
   let exchangeLastAssistant: ConversationMessage | null = null;
 
@@ -143,7 +150,7 @@ const displayRows = computed<DisplayRow[]>(() => {
   // pill's animated dot instead — rendering "thinking..." inline would duplicate
   // that indicator and misattribute thread activity to the top-level timeline.
   if (props.block.working && (props.fullThread || !isForkedThread.value)) {
-    const trails = liveTrailsFor(props.type, props.block.turn_id);
+    const trails = liveTrailsFor(channel.value ?? props.type, props.block.turn_id);
     if (trails.length) {
       for (const t of trails) {
         rows.push({ kind: 'live-act', rowId: t.rowId, pills: t.pills });
@@ -224,7 +231,8 @@ function onOpenThread(): void {
   <div
     class="turn-view"
     :data-turn-id="block.turn_id"
-    :data-type="type"
+    :data-type="channel ? undefined : type"
+    :data-channel="channel ?? undefined"
     :data-forked="isForkedThread || undefined"
     :data-gist="block.gist ?? undefined"
     :data-preview="block.preview"
@@ -243,7 +251,11 @@ function onOpenThread(): void {
       />
 
       <!-- Live act-trail anchor -->
-      <ActCycle v-else-if="ar.row.kind === 'live-act'" :pills="(ar.row as LiveActRow).pills" />
+      <ActCycle
+        v-else-if="ar.row.kind === 'live-act'"
+        :pills="(ar.row as LiveActRow).pills"
+        :can-stop="channel == null"
+      />
 
       <!-- Completion-time footer — one per turn_exchange, below its act-trail.
            Its meta line carries the exchange's aggregated tool trace inline, and
@@ -264,6 +276,7 @@ function onOpenThread(): void {
         <UserBubble
           v-if="(ar.row as MsgRow).message.role === 'user'"
           :message="(ar.row as MsgRow).message"
+          :label="channel ? 'Task from Chalie' : null"
         />
         <ChalieBubble v-else :message="(ar.row as MsgRow).message" />
       </template>

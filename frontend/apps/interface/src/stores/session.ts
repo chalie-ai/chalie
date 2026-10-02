@@ -19,14 +19,14 @@
  * stable id of its own until a brand-new send's POST resolves one.
  */
 import { defineStore } from 'pinia';
-import type { WsPushEvent } from '@chalie/shared';
+import type { DelegateRef, WsPushEvent } from '@chalie/shared';
 import { AuthError, ConfigType, getWebSocket, useConnectionStore } from '@chalie/shared';
 import { extractText } from '../composables/useMarkup';
 import { getHost } from '../api/index';
 import { conversation as convoApi } from '../api/conversation';
-import { dispatchDrift, registerSessionHooks } from '../utils/driftDispatcher';
+import { dispatchDrift, refetchDelegate, registerSessionHooks } from '../utils/driftDispatcher';
 import { reconcileCancelledTurn } from '../utils/cancelReconcile';
-import { clearLiveTurn } from '../utils/liveActTrail';
+import { clearDelegateFeeds, clearLiveTurn } from '../utils/liveActTrail';
 import { blockSpeechText } from '../utils/speech';
 import { clearSendEcho, mountSendEcho } from '../utils/sendEcho';
 import {
@@ -102,6 +102,10 @@ export const useSessionStore = defineStore('session', {
     /** ConfigType of the thread currently open in the panel (default user). */
     panelType: ConfigType.USER as string,
 
+    /** The delegate (subagent) turn shown read-only in the panel, or null.
+     *  Exclusive with `panelThreadId`: the panel shows one or the other. */
+    panelDelegate: null as DelegateRef | null,
+
     /** True while the thread-search overlay is open (Cmd/Ctrl-K or the top-bar
      *  search button). The overlay self-fetches; this is pure open/close state. */
     searchOpen: false,
@@ -149,6 +153,10 @@ export const useSessionStore = defineStore('session', {
         // every connect, first load and reconnect alike, so a reload or a drop
         // brings the cards back instead of parking the turn for ever.
         void usePermissionsStore().refreshPending();
+        // An open delegate panel froze with the socket and lost its live pills
+        // on disconnect, and only a frame for its turn would re-read it.
+        const delegate = this.panelDelegate;
+        if (delegate) void refetchDelegate(delegate.turn_id, delegate.channel);
       });
 
       ws.onDisconnect(() => {
@@ -176,6 +184,9 @@ export const useSessionStore = defineStore('session', {
           const turnId = Number(key.slice(idx + 1));
           setTurnWorking(turnId, type, false);
         }
+        // A delegate's terminal frame is lost the same way — drop its pills
+        // and timers now; reconnect re-reads the delegate panel, if open.
+        clearDelegateFeeds();
       });
 
       ws.onDrift((data: WsPushEvent) => {
@@ -487,14 +498,26 @@ export const useSessionStore = defineStore('session', {
      * its channel explicitly rather than risk an implicit `user` guess.
      */
     openThreadPanel(turnId: number, type: string): void {
+      this.panelDelegate = null;
       this.panelThreadId = turnId;
       this.panelType = type;
       setTurnDone(turnId, type, false);
     },
 
+    /**
+     * Open a delegate (subagent) turn read-only in the slide-over panel,
+     * replacing whatever it showed. ThreadPanel.vue watches panelDelegate and
+     * owns the fetch; a delegate turn has no type and no done marker.
+     */
+    openDelegatePanel(ref: DelegateRef): void {
+      this.panelThreadId = null;
+      this.panelDelegate = { channel: ref.channel, turn_id: ref.turn_id };
+    },
+
     /** Close the slide-over panel. */
     closeThreadPanel(): void {
       this.panelThreadId = null;
+      this.panelDelegate = null;
     },
 
     /** Open / close the thread-search overlay. */

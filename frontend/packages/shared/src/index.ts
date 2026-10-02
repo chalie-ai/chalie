@@ -11,6 +11,7 @@ export type {
   TurnExecutionState,
   WsToolCallEvent,
   WsToolCallState,
+  DelegateRef,
 } from './services/WebSocketService';
 export { ConfigType } from './config/configType';
 export { getHost, setHost } from './config/host';

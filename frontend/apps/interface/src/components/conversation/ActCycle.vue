@@ -1,12 +1,20 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue';
-import { Undo2 } from '@lucide/vue';
+import { Bot, Undo2 } from '@lucide/vue';
 import { readDomContext } from '../../utils/domContext';
 import { lastUserText } from '../../utils/turnDom';
 import type { LiveToolPill } from '../../utils/liveActTrail';
 import { useSessionStore } from '../../stores/session';
+import { delegatePillAttrs } from '../../composables/useDelegatePill';
 
-const props = defineProps<{ pills: LiveToolPill[] }>();
+const props = withDefaults(
+  defineProps<{
+    pills: LiveToolPill[];
+    /** False where the turn can't be stopped from here (a delegate's transcript). */
+    canStop?: boolean;
+  }>(),
+  { canStop: true },
+);
 
 const session = useSessionStore();
 const rootRef = ref<HTMLElement | null>(null);
@@ -63,6 +71,7 @@ function pillSeconds(pill: LiveToolPill): string {
     <div class="act-row">
       <span class="act-logo" />
       <button
+        v-if="canStop"
         class="act-stop-btn"
         aria-label="Stop and undo"
         title="Stop & undo"
@@ -77,9 +86,11 @@ function pillSeconds(pill: LiveToolPill): string {
          lands, the bare group is the "thinking…" anchor. -->
     <div class="act-tools">
       <span v-if="!pills.length" class="act-placeholder">thinking…</span>
-      <div
+      <component
+        :is="pill.delegate ? 'button' : 'div'"
         v-for="pill in pills"
         :key="pill.id"
+        v-bind="delegatePillAttrs(pill.delegate)"
         class="act-tool"
         :class="{
           'act-tool--running': !pill.resolved,
@@ -89,11 +100,14 @@ function pillSeconds(pill: LiveToolPill): string {
         :data-call-id="pill.id"
         :data-transcript-row-id="pill.transcriptRowId"
       >
-        <span v-if="pill.summary" class="act-tool__label">
-          <span class="act-tool__name">{{ pill.name }}</span>
-          <span class="act-tool__summary">— {{ pill.summary }}</span>
+        <span class="act-tool__label">
+          <span class="act-tool__name">
+            <Bot v-if="pill.delegate" class="delegate-pill__icon" :size="14" aria-hidden="true" />{{
+              pill.name
+            }}
+          </span>
+          <span v-if="pill.summary" class="act-tool__summary">— {{ pill.summary }}</span>
         </span>
-        <span v-else class="act-tool__name">{{ pill.name }}</span>
 
         <span class="act-tool__status">
           <template v-if="!pill.resolved">
@@ -102,7 +116,7 @@ function pillSeconds(pill: LiveToolPill): string {
           <template v-else-if="pill.ok">{{ pillSeconds(pill) }}s</template>
           <template v-else>error</template>
         </span>
-      </div>
+      </component>
     </div>
   </div>
 </template>

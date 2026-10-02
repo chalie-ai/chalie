@@ -5,6 +5,7 @@ import threading
 from typing import TYPE_CHECKING, cast
 
 from abilities._ability import Ability
+from abilities._delegate import DelegateAbility
 from abilities._mcp_ability import _MCPAbility
 from services.file_mapper_service import FileMapperService
 
@@ -102,6 +103,13 @@ class AbilityRegistry:
     @staticmethod
     def all() -> list[Ability]:
         return list(_get_registry().values())
+
+    @staticmethod
+    def is_watchable_delegate(name: str) -> bool:
+        """Whether ``name`` is a registered delegate tool whose call runs a child
+        turn linked to it, so that turn can be watched. False for a name the
+        registry has no entry for (an MCP proxy)."""
+        return isinstance(_get_registry().get(name), DelegateAbility)
 
     @staticmethod
     def discoverable_names() -> set[str]:

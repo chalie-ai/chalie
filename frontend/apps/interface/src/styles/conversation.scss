@@ -76,6 +76,14 @@
   --row-fade-bg: var(--user-bubble-fade);
 }
 
+// Names who wrote the row when it is not the user — a delegate transcript's
+// opening instruction comes from Chalie.
+.user-message__label {
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--text-tertiary);
+}
+
 .user-text {
   // pre-wrap preserves the newlines the composer inserts (Enter adds a newline;
   // only the send button submits).
@@ -442,6 +450,45 @@
 .call--error .call__fn {
   background: color-mix(in oklab, var(--error) 12%, transparent);
   color: color-mix(in oklab, var(--error) 75%, var(--text-primary));
+}
+
+// A tool row whose call spawned a delegate turn is a button into that turn's
+// transcript. The reset clears only what a native button adds (its box, fill,
+// centring and shrink-to-fit width; the shared reset already inherits font and
+// colour), and :where() keeps it at zero specificity so a row's own padding and
+// layout still win: a `.call` row keeps its dot gutter.
+:where(.delegate-pill) {
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: left;
+}
+
+.delegate-pill {
+  cursor: pointer;
+}
+
+.delegate-pill:hover,
+.delegate-pill:focus-visible {
+  background: color-mix(in oklab, var(--text-primary) 5%, transparent);
+}
+
+.delegate-pill:focus-visible {
+  outline: 1.5px solid var(--text-secondary);
+}
+
+// The tool card clips its rows, so a row's ring is drawn inside it.
+.call.delegate-pill:focus-visible {
+  outline-offset: -2px;
+}
+
+.delegate-pill__icon {
+  flex-shrink: 0;
+  margin-right: 4px;
+  vertical-align: text-bottom;
+  color: currentColor;
 }
 
 // --------------------------------------------------------------------------

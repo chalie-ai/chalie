@@ -62,7 +62,7 @@ from threading import Thread
 from typing import TYPE_CHECKING, Protocol, cast
 
 from configs.channels.user import UserConfig
-from configs.enums.channels import Channel
+from configs.enums.channels import WATCHABLE_DELEGATE_CHANNELS, Channel
 from configs.enums.provider_type import ProviderType
 from configs.enums.thinking_level import ThinkingLevel
 from exceptions import (
@@ -221,16 +221,20 @@ class MessageProcessor:
     # ── websocket ────────────────────────────────────────────────────────────────
 
     def push_websocket(self, instance: "JsonSerializable | None") -> None:
-        """Emit ``instance`` to the frontend, gated by this turn's config — the one
-        pre-flight every spine service shares, so no emit site re-inlines it. A
-        turn broadcasts only when its config opts in (``BROADCASTS_STATE`` — the
-        ``user`` and ``scheduled`` types) AND carries an addressable routing type;
-        an internal channel (``type_value() is None``) never reaches the wire. Past
-        the gate this is a thin pass to ``Websocket.broadcast`` (itself a no-op on
-        ``None`` and when nobody is listening)."""
-        if not self.config.BROADCASTS_STATE or self.config.type_value() is None:
-            return
-        Websocket.broadcast(instance)
+        """Emit ``instance`` to the frontend, gated by this turn's channel and
+        config — the one pre-flight every spine service shares, so no emit site
+        re-inlines it. A watchable delegate turn (``WATCHABLE_DELEGATE_CHANNELS``)
+        broadcasts addressed by its channel, so a surface following it can stream
+        it live. Any other turn broadcasts only when its config opts in
+        (``BROADCASTS_STATE`` — the ``user`` and ``scheduled`` types) AND carries
+        an addressable routing type; an internal channel (``type_value() is
+        None``) never reaches the wire. Past the gate this is a thin pass to
+        ``Websocket.broadcast`` (itself a no-op on ``None`` and when nobody is
+        listening)."""
+        if self.channel in WATCHABLE_DELEGATE_CHANNELS:
+            Websocket.broadcast(instance, channel=self.channel)
+        elif self.config.BROADCASTS_STATE and self.config.type_value() is not None:
+            Websocket.broadcast(instance)
 
     # ── entrypoint ─────────────────────────────────────────────────────────────
 
@@ -304,7 +308,9 @@ class MessageProcessor:
             return None
         raw_level = self.metadata.get("thinking_level")
         return self.transcript_service.append_input(
-            self.raw_input, thinking_level=raw_level if isinstance(raw_level, str) else None,
+            self.raw_input,
+            thinking_level=raw_level if isinstance(raw_level, str) else None,
+            tool_call_id=cast("int | None", self.metadata.get("tool_call_id")),
         )
 
     def result(self) -> str:

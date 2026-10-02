@@ -30,7 +30,7 @@ import { ConfigType } from '@chalie/shared';
 import TurnView from './TurnView.vue';
 import ActCycle from './ActCycle.vue';
 import ActCycleGroup from './ActCycleGroup.vue';
-import type { ConversationMessage, ConversationTurnBlock } from '../../api/conversation';
+import type { ConversationMessage, ConversationTurnBlock, DelegateTurnBlock } from '../../api/conversation';
 
 function msg(
   id: string,
@@ -162,7 +162,7 @@ describe('live act-trail visibility — working turn in the thread panel', () =>
 
 describe('tool-call trace placement', () => {
   const toolCalls: NonNullable<ConversationMessage['tool_calls']> = [
-    { tool_name: 'memory_recall', summary: 'recalled a memory', state: 'done', ended_at: null },
+    { tool_name: 'memory_recall', summary: 'recalled a memory', state: 'done', ended_at: null, delegate: null },
   ];
 
   it('rides a settled exchange\'s pre-turn tool call on the footer trace, not a separate group row', () => {
@@ -248,7 +248,7 @@ describe('tool-call trace placement', () => {
   });
 
   const stepTools: NonNullable<ConversationMessage['tool_calls']> = [
-    { tool_name: 'web_search', summary: 'searched the web', state: 'done', ended_at: null },
+    { tool_name: 'web_search', summary: 'searched the web', state: 'done', ended_at: null, delegate: null },
   ];
 
   it('aggregates every tool call of a multi-step exchange onto its ONE footer trace', () => {
@@ -424,5 +424,68 @@ describe('crashed-turn note', () => {
     });
 
     expect(wrapper.find('.turn-crashed').exists()).toBe(false);
+  });
+});
+
+describe('delegate (subagent) turns', () => {
+  function delegateBlock(turnId: number, working: boolean, messages: ConversationMessage[]): DelegateTurnBlock {
+    return {
+      turn_id: turnId,
+      gist: null,
+      preview: messages[0]?.content ?? '',
+      last_activity_at: null,
+      working,
+      duration_ms: 0,
+      messages,
+      type: null,
+      channel: 'delegate:web_search',
+    };
+  }
+
+  const stopButtons = (wrapper: ReturnType<typeof mount>) =>
+    [...wrapper.element.querySelectorAll('button')].filter((b) => /stop/i.test(b.getAttribute('aria-label') ?? ''));
+
+  it('is addressed by its channel and never by a type, while a user turn with the same id is addressed by its type and never a channel', () => {
+    const turnId = 401;
+    const rows = [msg('4010', 'user', 'look up the museum hours', turnId)];
+
+    const delegate = mount(TurnView, { props: { block: delegateBlock(turnId, false, rows), fullThread: true } });
+    const user = mount(TurnView, { props: { block: { ...block(turnId, rows), working: false }, type: ConfigType.USER } });
+
+    expect(delegate.attributes('data-channel')).toBe('delegate:web_search');
+    expect(delegate.attributes('data-type')).toBeUndefined();
+    expect(user.attributes('data-type')).toBe(ConfigType.USER);
+    expect(user.attributes('data-channel')).toBeUndefined();
+  });
+
+  it('captions the user-role row as a task from Chalie; the same row in a user turn is not captioned, and no assistant row ever is', () => {
+    const turnId = 402;
+    const rows = [
+      msg('4020', 'user', 'look up the museum hours', turnId),
+      msg('4021', 'assistant', 'The museum opens at nine.', turnId),
+    ];
+
+    const delegate = mount(TurnView, { props: { block: delegateBlock(turnId, false, rows), fullThread: true } });
+    const user = mount(TurnView, { props: { block: { ...block(turnId, rows), working: false }, type: ConfigType.USER } });
+
+    const delegateRows = delegate.findAll('.msg-row--user');
+    expect(delegateRows).toHaveLength(1);
+    expect(delegateRows[0]!.text()).toContain('Task from Chalie');
+    expect(delegateRows[0]!.text()).toContain('look up the museum hours');
+    expect(delegate.findAll('.msg-row--chalie').some((r) => r.text().includes('Task from Chalie'))).toBe(false);
+    expect(user.text()).not.toContain('Task from Chalie');
+  });
+
+  it('offers no stop control on a working delegate transcript, while a working user turn keeps its stop control', () => {
+    const turnId = 403;
+    const rows = [msg('4030', 'user', 'look up the museum hours', turnId)];
+
+    const delegate = mount(TurnView, { props: { block: delegateBlock(turnId, true, rows), fullThread: true } });
+    const user = mount(TurnView, { props: { block: block(turnId, rows), type: ConfigType.USER } });
+
+    expect(delegate.findComponent(ActCycle).exists()).toBe(true);
+    expect(stopButtons(delegate)).toHaveLength(0);
+    expect(user.findComponent(ActCycle).exists()).toBe(true);
+    expect(stopButtons(user)).toHaveLength(1);
   });
 });

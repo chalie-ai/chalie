@@ -191,12 +191,19 @@ class TranscriptService:
 
     # ── writes ───────────────────────────────────────────────────────────────
 
-    def append_input(self, content: str, *, thinking_level: str | None = None) -> int:
+    def append_input(
+        self, content: str, *, thinking_level: str | None = None, tool_call_id: int | None = None,
+    ) -> int:
         """Write this turn's anchoring input row (unsettled) and return its id.
         ``thinking_level`` is persisted only when one of {auto, medium, high};
-        otherwise NULL is stored."""
+        otherwise NULL is stored. ``tool_call_id`` is the caller's ``tool_calls``
+        row when this turn is a delegate's — stored on the row as the link from
+        the caller's tool call to this turn."""
         valid = thinking_level if thinking_level in {"auto", "medium", "high"} else None
-        return self._append(content, role=self.mp.config.role, settled=0, thinking_level=valid)
+        return self._append(
+            content, role=self.mp.config.role, settled=0, thinking_level=valid,
+            tool_call_id=str(tool_call_id) if tool_call_id is not None else None,
+        )
 
     def append_assistant(self, content: str) -> int:
         """Write one assistant row for this turn's step (settled) and poke
@@ -245,7 +252,10 @@ class TranscriptService:
 
     # ── private helpers ──────────────────────────────────────────────────────
 
-    def _append(self, content: str, *, role: str, settled: int, thinking_level: str | None = None) -> int:
+    def _append(
+        self, content: str, *, role: str, settled: int,
+        thinking_level: str | None = None, tool_call_id: str | None = None,
+    ) -> int:
         """Write one transcript row for this turn and return its id."""
         loc = self._location()
         row = Transcript(
@@ -254,7 +264,7 @@ class TranscriptService:
             deliberation_score=0.0,
             location_lat=loc.get("lat"), location_lon=loc.get("lon"),
             location_name=loc.get("name"),
-            thinking_level=thinking_level,
+            thinking_level=thinking_level, tool_call_id=tool_call_id,
         ).save()
         return cast("int", row.id)
 
