@@ -13,12 +13,18 @@
  *     the nudge is a reconnect or a stray frame;
  *   - a failed or mismatched read leaves the panel as it was.
  *
+ * The same open transcript is also where a running subagent is stopped. Its
+ * turn number collides with the chat's own turn numbers, so the stop must be
+ * addressed by the subagent's channel alone, must undo nothing, and must leave
+ * a chat turn with the same number running.
+ *
  * Real throughout: the session store (its real `init()` wiring), the real
  * drift dispatcher, ThreadPanel, the TurnView it registers as its surface, the
  * turnDom surface registry, the REST wrappers and the shared ApiClient. Two
- * boundaries are faked: `fetch` (the backend, answering thread reads) and the
- * WebSocket singleton (so the connect, disconnect and push callbacks the store
- * registers can be fired the way a real socket would fire them).
+ * boundaries are faked: `fetch` (the backend, answering thread reads and
+ * stops) and the WebSocket singleton (so the connect, disconnect and push
+ * callbacks the store registers can be fired the way a real socket would fire
+ * them).
  *
  * The session store, turnDom and the dispatcher carry module-level state, so
  * every test re-imports a fresh module graph via `vi.resetModules()`.
@@ -74,14 +80,24 @@ let serve: Serve = () => {
 
 const delegateReads = (): Read[] => reads.filter((r) => r.channel !== null);
 
+/** Every stop (`DELETE`) the backend was sent, as the path and query it named. */
+const stops: string[] = [];
+/** How the backend answers a stop; a test can hold it open to look mid-flight. */
+let answerStop: () => Promise<Response> = async () => json({ success: true });
+
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 }
 
-/** The backend at the network boundary: thread reads, the dock's thinking-level
- *  read, and the pending-permission listing the store re-reads on every connect. */
-async function fakeBackend(input: RequestInfo | URL): Promise<Response> {
+/** The backend at the network boundary: thread reads, stops, the dock's
+ *  thinking-level read, and the pending-permission listing the store re-reads
+ *  on every connect. */
+async function fakeBackend(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const url = new URL(String(input), 'http://chalie.test');
+  if (init?.method === 'DELETE') {
+    stops.push(url.pathname + url.search);
+    return answerStop();
+  }
   if (url.pathname.startsWith('/api/threads/thinking-level/')) {
     return json({ success: true, result: { level: 'auto' } });
   }
@@ -146,7 +162,23 @@ const showsWorking = (panel: VueWrapper): boolean => panel.element.querySelector
 const updatedFrame = (ref: { channel: string; turn_id: number }): WsPushEvent =>
   ({ status: 'updated', turn_id: ref.turn_id, channel: ref.channel }) as unknown as WsPushEvent;
 
+/** The server's cancel confirmation for a subagent turn: addressed by its
+ *  channel, with no type, as every delegate frame reaches the wire. */
+const cancelledFrame = (ref: { channel: string; turn_id: number }): WsPushEvent =>
+  ({ state: 'cancelled', turn_id: ref.turn_id, started_at: '2026-01-01T00:00:00Z', channel: ref.channel }) as unknown as WsPushEvent;
+
+/** The accessible names of every stop control rendered under `root`. */
+const stopControls = (root: Element): string[] =>
+  [...root.querySelectorAll('button')]
+    .map((b) => b.getAttribute('aria-label') ?? '')
+    .filter((name) => /stop/i.test(name));
+
+/** The subagent stop control in the open panel, found by its accessible name. */
+const subagentStop = (panel: VueWrapper): HTMLButtonElement | null =>
+  (panel.element as Element).querySelector<HTMLButtonElement>('button[aria-label="Stop subagent"]');
+
 let wrapper: VueWrapper | null = null;
+const cleanups: Array<() => void> = [];
 
 /** A fresh app: the real store wired by `init()`, and the real panel mounted. */
 async function freshApp() {
@@ -170,6 +202,8 @@ async function dropAndRestoreSocket(): Promise<void> {
 
 beforeEach(() => {
   reads.length = 0;
+  stops.length = 0;
+  answerStop = async () => json({ success: true });
   serve = () => {
     throw new Error('no block served');
   };
@@ -177,6 +211,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  for (const cleanup of cleanups.splice(0)) cleanup();
   wrapper?.unmount();
   wrapper = null;
   vi.unstubAllGlobals();
@@ -318,5 +353,138 @@ describe('a reconnect read that goes wrong', () => {
     expect(panel.text()).toContain('The museum opens at nine.');
     expect(panel.text()).not.toContain('Refactor');
     expect(session.panelDelegate).toEqual(SEARCH);
+  });
+});
+
+describe('stopping a running subagent from its open transcript', () => {
+  const SEARCH_STOP = '/api/threads/12?channel=delegate%3Aweb_search';
+  const FETCH_CALL = { tool_name: 'fetch_url', id: 41, turn_id: 12, channel: 'delegate:web_search', summary: 'museum.example/hours' };
+
+  /** The panel open on the running web_search subagent, one live pill showing. */
+  async function openRunning() {
+    serve = () => delegateBlock(SEARCH, [TASK], true);
+    const app = await freshApp();
+    app.session.openDelegatePanel(SEARCH);
+    await flushPromises();
+    wsCallbacks.onDrift({ ...FETCH_CALL, state: 'started' } as unknown as WsPushEvent);
+    await flushPromises();
+    expect(app.panel.text()).toContain('museum.example/hours');
+    reads.length = 0;
+    return app;
+  }
+
+  /** Every "turn interrupted" hand-back the store announces to a reply box. */
+  function recordHandBacks(): unknown[] {
+    const handBacks: unknown[] = [];
+    const listener = (e: Event): void => { handBacks.push((e as CustomEvent).detail); };
+    document.addEventListener('session:turn-interrupted', listener);
+    cleanups.push(() => document.removeEventListener('session:turn-interrupted', listener));
+    return handBacks;
+  }
+
+  function holdStopOpen(): () => void {
+    const stopReturns = deferred<void>();
+    answerStop = () => stopReturns.promise.then(() => json({ success: true }));
+    return () => stopReturns.resolve();
+  }
+
+  it('sends one stop addressed by the subagent\'s channel and never by a type, and hands nothing back to a reply box', async () => {
+    const { session } = await openRunning();
+    const handBacks = recordHandBacks();
+    serve = () => delegateBlock(SEARCH, [TASK], false);
+
+    await session.requestStop(SEARCH);
+    await flushPromises();
+
+    expect(stops).toEqual([SEARCH_STOP]);
+    expect(handBacks).toEqual([]);
+  });
+
+  it('drops the live pills the moment stop is pressed, and re-reads the transcript only once the stop has returned', async () => {
+    const { session, panel } = await openRunning();
+    const releaseStop = holdStopOpen();
+    serve = () => delegateBlock(SEARCH, [TASK], false);
+
+    const stopping = session.requestStop(SEARCH);
+    await flushPromises();
+
+    // Mid-flight: the pills are gone at once, but nothing has been re-read and
+    // the panel still says the subagent is running until the server answers.
+    expect(stops).toEqual([SEARCH_STOP]);
+    expect(panel.text()).not.toContain('museum.example/hours');
+    expect(delegateReads()).toEqual([]);
+    expect(showsWorking(panel)).toBe(true);
+
+    releaseStop();
+    await stopping;
+    await flushPromises();
+
+    expect(delegateReads()).toEqual([{ turnId: 12, channel: 'delegate:web_search', type: null }]);
+    expect(showsWorking(panel)).toBe(false);
+  });
+
+  it('settles the panel from the server\'s cancel confirmation after its stop control is clicked, and never offers a reply box', async () => {
+    serve = () => delegateBlock(SEARCH, [TASK], true);
+    const { session, panel } = await freshApp();
+    const offersReplyBox = (): boolean => panel.find('textarea').exists();
+    session.openDelegatePanel(SEARCH);
+    await flushPromises();
+    expect(showsWorking(panel)).toBe(true);
+    expect(offersReplyBox()).toBe(false);
+
+    const releaseStop = holdStopOpen();
+    serve = () => delegateBlock(SEARCH, [TASK], false);
+    const stop = subagentStop(panel);
+    expect(stop).not.toBeNull();
+    stop!.click();
+    await flushPromises();
+    expect(stops).toEqual([SEARCH_STOP]);
+    expect(offersReplyBox()).toBe(false);
+
+    wsCallbacks.onDrift(cancelledFrame(SEARCH));
+    await flushPromises();
+    expect(showsWorking(panel)).toBe(false);
+    expect(stopControls(panel.element as Element)).toEqual([]);
+    expect(offersReplyBox()).toBe(false);
+
+    releaseStop();
+    await flushPromises();
+    expect(showsWorking(panel)).toBe(false);
+    expect(stopControls(panel.element as Element)).toEqual([]);
+    expect(offersReplyBox()).toBe(false);
+    expect(panel.text()).toContain('Look up the museum opening hours');
+    expect(session.panelDelegate).toEqual(SEARCH);
+  });
+
+  it('leaves a chat turn with the same number running, with its own stop control, when the subagent is stopped', async () => {
+    serve = () => delegateBlock(SEARCH, [TASK], true);
+    const { session, panel } = await freshApp();
+    const turnDom = await import('../utils/turnDom');
+    const { default: TurnView } = await import('../components/conversation/TurnView.vue');
+    // The chat sits before the panel in the document, so anything that looks
+    // the stopped turn up by its bare number finds the chat turn first.
+    const chat = document.body.insertBefore(document.createElement('div'), document.body.firstChild);
+    turnDom.registerSurface({ id: 'spine', type: 'user', container: chat, component: TurnView });
+    cleanups.push(() => turnDom.clearSurfaceContainer(chat));
+    const question = msg('125', 'user', 'What time does the museum open?', 12);
+    turnDom.upsertTurnToSurfaces({ ...userThread(12, [question]), working: true }, 'user');
+    turnDom.setTurnWorking(12, 'user', true);
+    const handBacks = recordHandBacks();
+    session.openDelegatePanel(SEARCH);
+    await flushPromises();
+    expect(stopControls(chat)).toEqual(['Stop and undo']);
+
+    serve = () => delegateBlock(SEARCH, [TASK], false);
+    subagentStop(panel)!.click();
+    await flushPromises();
+    wsCallbacks.onDrift(cancelledFrame(SEARCH));
+    await flushPromises();
+
+    expect(showsWorking(panel)).toBe(false);
+    expect(stops).toEqual([SEARCH_STOP]);
+    expect(handBacks).toEqual([]);
+    expect(turnDom.isTurnWorking(12, 'user')).toBe(true);
+    expect(stopControls(chat)).toEqual(['Stop and undo']);
+    expect(chat.textContent).toContain('What time does the museum open?');
   });
 });

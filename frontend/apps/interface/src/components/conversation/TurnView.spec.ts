@@ -476,16 +476,28 @@ describe('delegate (subagent) turns', () => {
     expect(user.text()).not.toContain('Task from Chalie');
   });
 
-  it('offers no stop control on a working delegate transcript, while a working user turn keeps its stop control', () => {
+  it('offers a working delegate transcript one stop control, named "Stop subagent", while a working user turn with the same id keeps "Stop and undo"', () => {
     const turnId = 403;
     const rows = [msg('4030', 'user', 'look up the museum hours', turnId)];
 
     const delegate = mount(TurnView, { props: { block: delegateBlock(turnId, true, rows), fullThread: true } });
     const user = mount(TurnView, { props: { block: block(turnId, rows), type: ConfigType.USER } });
 
-    expect(delegate.findComponent(ActCycle).exists()).toBe(true);
+    expect(stopButtons(delegate).map((b) => b.getAttribute('aria-label'))).toEqual(['Stop subagent']);
+    expect(stopButtons(user).map((b) => b.getAttribute('aria-label'))).toEqual(['Stop and undo']);
+  });
+
+  it('offers no stop control and no live working row once a delegate transcript has settled', () => {
+    const turnId = 404;
+    const rows = [
+      msg('4040', 'user', 'look up the museum hours', turnId),
+      msg('4041', 'assistant', 'The museum opens at nine.', turnId),
+    ];
+
+    const delegate = mount(TurnView, { props: { block: delegateBlock(turnId, false, rows), fullThread: true } });
+
+    expect(delegate.text()).toContain('The museum opens at nine.');
+    expect(delegate.findComponent(ActCycle).exists()).toBe(false);
     expect(stopButtons(delegate)).toHaveLength(0);
-    expect(user.findComponent(ActCycle).exists()).toBe(true);
-    expect(stopButtons(user)).toHaveLength(1);
   });
 });
