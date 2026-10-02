@@ -197,6 +197,7 @@ describe('tool-call trace placement', () => {
     // The call is not dropped — it rides the footer's expandable trace.
     expect(wrapper.find('.trace-pill').text()).toContain('1 tool used');
     expect(wrapper.find('.call__fn').text()).toBe('memory_recall');
+    expect(wrapper.find('.call--done .call__dot').attributes('aria-label')).toBe('succeeded');
   });
 
   it('rides a settled exchange\'s assistant-step tool call on the footer trace', () => {
@@ -245,6 +246,33 @@ describe('tool-call trace placement', () => {
 
     expect(userIdx).toBeGreaterThanOrEqual(0);
     expect(groupIdx).toBeGreaterThan(userIdx);
+  });
+
+  it('draws a still-streaming exchange\'s calls in the footer\'s card, each row dotted by its own state', async () => {
+    const turnId = 204;
+    const calls: NonNullable<ConversationMessage['tool_calls']> = [
+      { tool_name: 'web_search', summary: 'searched', state: 'done', ended_at: null },
+      { tool_name: 'read', summary: 'no such file', state: 'error', ended_at: null },
+      { tool_name: 'bash', summary: 'running tests', state: 'started', ended_at: null },
+    ];
+    const b = block(turnId, [msg('2040', 'user', 'still working', turnId, false, calls)]);
+    const group = mount(TurnView, { props: { block: b, type: ConfigType.USER, fullThread: false } })
+      .findComponent(ActCycleGroup);
+
+    // One errored call must not tint or fade the whole group.
+    expect(group.classes()).toEqual(['act-group']);
+    await group.find('.trace-pill').trigger('click');
+    expect(group.find('.trace-body').classes()).toContain('trace-body--open');
+    expect(group.findAll('.trace-body .calls .call').map((r) => [
+      r.classes().join(' '),
+      r.find('.call__fn').text(),
+      r.find('.call__dot').attributes('role'),
+      r.find('.call__dot').attributes('aria-label'),
+    ])).toEqual([
+      ['call call--done', 'web_search', 'img', 'succeeded'],
+      ['call call--error', 'read', 'img', 'failed'],
+      ['call call--started', 'bash', 'img', 'running'],
+    ]);
   });
 
   const stepTools: NonNullable<ConversationMessage['tool_calls']> = [

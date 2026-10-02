@@ -51,7 +51,7 @@ export interface ConversationMessage {
    * The refresh path renders them as a collapsed group beneath the row,
    * mirroring how the live path collapses a superseded step.
    */
-  tool_calls?: { tool_name: string; summary: string; state: string; ended_at: string | null }[];
+  tool_calls?: { tool_name: string; summary: string; state: 'started' | 'done' | 'error'; ended_at: string | null }[];
   /**
    * Set (true) on every row PAST this turn's settle0 — the reply continuation.
    * The main spine drops these (it renders only through settle0); a turn that

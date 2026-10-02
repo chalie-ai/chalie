@@ -6,6 +6,7 @@ import { emit as busEmit } from '../../composables/useEventBus';
 import { useVoiceTranscriptsStore } from '../../stores/voiceTranscripts';
 import { voice } from '../../api/voice';
 import { Copy, Reply, Volume2 } from '@lucide/vue';
+import ToolCallList from './ToolCallList.vue';
 
 const props = withDefaults(defineProps<{
   message: ConversationMessage;
@@ -182,17 +183,7 @@ function onCopy(): void {
       :class="{ 'trace-body--open': expanded }"
     >
       <div class="trace-body__inner">
-        <div class="calls">
-          <div
-            v-for="(c, i) in toolCalls"
-            :key="i"
-            class="call"
-            :class="{ 'call--error': c.state === 'error' }"
-          >
-            <span class="call__fn">{{ c.tool_name }}</span>
-            <span class="call__summary">{{ c.summary }}</span>
-          </div>
-        </div>
+        <ToolCallList :calls="toolCalls" />
       </div>
     </div>
     <div

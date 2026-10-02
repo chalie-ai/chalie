@@ -52,7 +52,7 @@ interface MsgRow {
 }
 
 /** One tool call's collapsed summary, as carried by the API model. */
-type ToolSummary = { tool_name: string; summary: string; state: string; ended_at: string | null };
+type ToolSummary = NonNullable<ConversationMessage['tool_calls']>[number];
 
 interface CollapsedGroupRow {
   kind: 'collapsed-group';
@@ -80,7 +80,7 @@ const displayRows = computed<DisplayRow[]>(() => {
   // footer as its aggregated "N tools used" trace (inline, expandable), so the
   // paint order within one exchange is: assistant prose → footer(with its trace),
   // never a tool chip hoisted past a later exchange. A still-streaming exchange
-  // has no footer yet; its already-finished calls fall back to a collapsed-group
+  // has no footer yet; its calls so far fall back to a collapsed-group
   // row so they are never dropped while the reply streams.
   let pendingTools: ToolSummary[] = [];
   let pendingThinking: { traces: string[]; duration_ms: number; tokens: number } | null = null;
@@ -130,7 +130,7 @@ const displayRows = computed<DisplayRow[]>(() => {
   // streaming continuation is dropped, leaving the opener as the last VISIBLE
   // reply — keeps its footer while the fork streams, so the spine always shows
   // exactly one footer per turn_id. The still-streaming exchange has no footer,
-  // so its finished calls fall back to a collapsed-group row.
+  // so its calls fall back to a collapsed-group row.
   if (exchangeLastAssistant && exchangeLastAssistant !== streamingReply) {
     rows.push({ kind: 'footer', message: exchangeLastAssistant, toolCalls: pendingTools, thinking: pendingThinking ?? undefined });
   } else if (pendingTools.length) {

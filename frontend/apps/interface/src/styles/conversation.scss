@@ -345,23 +345,19 @@
   transition: border-color var(--duration-fast), color var(--duration-fast), background var(--duration-fast);
 }
 
-.trace-pill:hover {
+.trace-pill:hover,
+.trace-pill--open {
   border-color: var(--border-strong);
   color: var(--text-primary);
 }
 
-// Open, the pill takes the trace card's violet tint so pill and panel read as
-// one unit. Doubled class so the tint outranks `:hover` while open.
-.trace-pill.trace-pill--open {
-  border-color: color-mix(in oklab, var(--violet) 16%, var(--border));
-  background: color-mix(in oklab, var(--violet) 5%, var(--bg-surface-2));
-  color: var(--text-primary);
+// Open also lifts the fill, so it stays distinct from a hovered closed pill.
+.trace-pill--open {
+  background: color-mix(in oklab, var(--text-primary) 8%, var(--bg-surface-2));
 }
 
-// Static marker — the trace pill only ever rides a SETTLED exchange's footer (or
-// a collapsed group of already-finished calls), so the dot signals "has a trace",
-// not live activity. Live work is shown by the separate "thinking…" trail / the
-// thread pill's own pulsing dot.
+// Static marker — the dot signals "has a trace", never activity: each row's own
+// dot carries its call's status, still-running calls included.
 .trace-pill__dot {
   width: 6px;
   height: 6px;
@@ -385,19 +381,19 @@
   min-height: 0;
 }
 
-// Activity-log card. Rows run edge to edge and stay square so the dividers are
-// full-width straight rules — a rounded row tapers its border-top at both ends.
+// Tool-call card (ToolCallList), the same neutral surface whether its exchange
+// has settled or is still streaming. Rows run edge to edge and stay square so the
+// dividers are full-width straight rules — a rounded row tapers its border-top.
 .calls {
   overflow: hidden;
   max-width: 100%;
-  border: 1px solid color-mix(in oklab, var(--violet) 16%, var(--border));
+  border: 1px solid var(--border);
   border-radius: 12px;
-  background: color-mix(in oklab, var(--violet) 5%, var(--bg-surface-2));
+  background: var(--bg-surface-2);
   line-height: 1.5;
 }
 
-// The left gutter holds the status dot, drawn off the name chip so it always
-// centres on the first line however the summary wraps.
+// The left padding is the status dot's gutter.
 .call {
   display: flex;
   flex-wrap: wrap;
@@ -408,33 +404,32 @@
 }
 
 .call + .call {
-  border-top: 1px solid color-mix(in oklab, var(--violet) 10%, var(--border));
+  border-top: 1px solid var(--border);
 }
 
-// Chip text mixes toward --text-primary (lighter on dark, deeper on paper) so it
-// clears AA on its tint in both themes — plain --violet-light / --error do not
-// on light.
+// Pulled into the gutter by its margins, the dot takes no inline space and
+// centres on the first line, which it always shares with the chip.
+.call__dot {
+  align-self: center;
+  width: 6px;
+  height: 6px;
+  margin: 0 -2px 0 -14px;
+  border-radius: 50%;
+}
+
+.call--done .call__dot { background: var(--success); }
+.call--error .call__dot { background: var(--error); }
+.call--started .call__dot { background: var(--text-secondary); }
+
 .call__fn {
-  position: relative;
+  max-width: 100%;
   padding: 1px 7px;
   border-radius: 6px;
-  background: color-mix(in oklab, var(--violet) 12%, transparent);
-  color: color-mix(in oklab, var(--violet-light) 75%, var(--text-primary));
+  background: color-mix(in oklab, var(--text-primary) 8%, transparent);
+  color: var(--text-primary);
   font-family: var(--font-mono);
   font-size: 0.72rem;
   font-weight: 600;
-}
-
-.call__fn::before {
-  content: '';
-  position: absolute;
-  top: 50%;
-  right: calc(100% + 8px);
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--accent-primary);
-  transform: translateY(-50%);
 }
 
 .call__summary {
@@ -443,13 +438,10 @@
   color: var(--text-secondary);
 }
 
+// Red mixed toward --text-primary so it clears AA on its tint in both themes.
 .call--error .call__fn {
   background: color-mix(in oklab, var(--error) 12%, transparent);
   color: color-mix(in oklab, var(--error) 75%, var(--text-primary));
-}
-
-.call--error .call__fn::before {
-  background: var(--error);
 }
 
 // --------------------------------------------------------------------------
@@ -714,51 +706,17 @@
   font-variant-numeric: tabular-nums;
 }
 
-// Superseded step (tools done, replaced by next bubble): drop name pill + timer,
-// keep only the summaries indented to align with the live tool list.
-.act-cycle--collapsed {
-  gap: 2px;
-  padding: 0 0 2px;
-}
-
-.act-summaries {
-  margin-left: 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 0; // act-trail rows condensed to line-height gaps only
-}
-
-.act-tool__summary--collapsed {
-  white-space: normal;
-  overflow: visible;
-  line-height: 1.4;
-  font-size: 0.82rem;
-  font-family: var(--font-mono);
-}
-
-// A run of superseded steps folds behind the same trace-pill the footer uses:
-// the pill sits on its own line (sized to its own content, never stretched) and
-// the expanded step list stacks directly beneath it.
+// A footerless exchange's calls, laid out like the footer: the pill keeps its own
+// width, the card spans the row, and `.trace-body--open` alone sets the gap.
 .act-group {
-  align-self: flex-start;
-  max-width: 90%;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 6px;
+  width: 100%;
 }
 
-.act-group__content {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-// Inside the folded group there is no live logo to indent under, so drop the
-// 24px summary indent — the expanded trail then lines up under the pill (no
-// rightward jump on expand).
-.act-group .act-summaries {
-  margin-left: 0;
+.act-group .trace-body {
+  align-self: stretch;
 }
 
 @keyframes act-logo-pulse {
