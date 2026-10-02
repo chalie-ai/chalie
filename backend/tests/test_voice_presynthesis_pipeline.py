@@ -23,6 +23,7 @@ nothing here can write to or delete from the real ``data/generated/voice/``.
 
 import json
 import sqlite3
+import threading
 import time
 from pathlib import Path
 from typing import cast
@@ -73,6 +74,43 @@ class _ReplyingProvider:
         return ProviderResponse(
             text=_REPLY, model="scripted-presynthesis", tool_calls=None, tokens_input=1,
         )
+
+
+class _ToolThenReplyProvider:
+    """A reply that first runs a tool-only step, then answers: the exchange's
+    terminal row is NOT the first row the call stores."""
+
+    def __init__(self) -> None:
+        self._sent = 0
+
+    def get_context_limit(self) -> int:
+        return 120_000
+
+    def send(self, _dto: object) -> ProviderResponse:
+        self._sent += 1
+        if self._sent == 1:
+            return ProviderResponse(
+                text="", model="scripted-presynthesis",
+                tool_calls=[{"name": "noop_probe", "input": {"q": "x"}}], tokens_input=1,
+            )
+        return ProviderResponse(
+            text=_REPLY, model="scripted-presynthesis", tool_calls=None, tokens_input=1,
+        )
+
+
+def _drain_background_turns(timeout_s: float = 10.0) -> None:
+    """Join the fire-and-forget post-turn daemon turns a completed ``user`` turn
+    spawns, so they run to completion inside THIS test's provider+DB patch."""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        pending = [
+            t for t in threading.enumerate()
+            if t.name in ("skill-suggest", "thread-gist") or t.name.startswith("turn-")
+        ]
+        if not pending:
+            return
+        for t in pending:
+            t.join(timeout=deadline - time.monotonic())
 
 
 @pytest.fixture
@@ -143,6 +181,40 @@ class TestSettleKicksSynthesis:
         if row.file_path is not None:
             assert (voice_dir / row.file_path).exists()
             assert states[-1] == "ready"
+
+    def test_a_reply_is_spoken_from_its_own_answer_not_the_openers(
+        self, db: sqlite3.Connection, voice_dir: Path,
+    ) -> None:
+        """A reply forks into the opener's turn, where the turn's first settled
+        row is still the OPENER's answer — already spoken. The reply's own final
+        answer, written after a tool-only step of its own, must still be spoken
+        into storage: the hook follows the exchange that just ended, not the
+        turn's first settled row."""
+        assert db is not None  # taken for its binding side effect (real DB gateway)
+        opener = MessageProcessor(UserConfig(), raw_input="is the kettle on")
+        with patch(_BUILD_CLIENT, return_value=_ReplyingProvider()):
+            opener.begin()
+            opener.result()
+            _drain_background_turns()
+        opener_answer_id = Transcript.settle0("user", opener.turn_id)
+        assert opener_answer_id is not None
+        assert _await_outcome(opener_answer_id) is not None, "the opener's own answer is spoken first"
+
+        reply = MessageProcessor(UserConfig(), raw_input="and the toaster?", turn_id=opener.turn_id)
+        with patch(_BUILD_CLIENT, return_value=_ToolThenReplyProvider()):
+            reply.begin()
+            reply.result()
+            _drain_background_turns()
+
+        reply_rows = [
+            r for r in Transcript.by_turn("user", opener.turn_id)
+            if r["role"] == "assistant" and cast(int, r["id"]) > opener_answer_id
+        ]
+        assert [r["settled"] for r in reply_rows] == [0, 1], "a tool-only step, then the final answer"
+        reply_answer_id = cast(int, reply_rows[-1]["id"])
+        row = _await_outcome(reply_answer_id)
+        assert row is not None, "the reply's own final answer must be spoken"
+        assert row.transcript_id == reply_answer_id
 
     def test_an_unsettled_turn_is_left_alone(
         self, db: sqlite3.Connection, voice_dir: Path,

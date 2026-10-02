@@ -192,9 +192,11 @@ def test_persistent_empty_completions_crash_the_turn(db: sqlite3.Connection) -> 
 
 
 def test_silent_finish_after_tool_work_settles(db: sqlite3.Connection) -> None:
-    """An empty terminal completion AFTER a tool-bearing step settles exactly as
-    before — background channels end silently by design once their work ran. The
-    guard keys on the turn-wide tool tally, not on the terminal step alone."""
+    """An empty terminal completion AFTER a tool-bearing step settles — background
+    channels end silently by design once their work ran. The guard keys on the
+    turn-wide tool tally, not on the terminal step alone. Each completed call
+    stores its own assistant row: the tool-only step an unsettled empty row that
+    carries its call, the silent finish a settled empty row of its own."""
     assert db is not None
     provider = _ScriptedProvider(
         ProviderResponse(text="", model="scripted", tool_calls=[_tool("noop_probe", q="x")]),
@@ -206,8 +208,12 @@ def test_silent_finish_after_tool_work_settles(db: sqlite3.Connection) -> None:
     execution = mp.turn_execution_service.latest_for_turn()
     assert execution is not None
     assert execution.state == TurnExecution.COMPLETED
-    # The silent settle stored the (empty) assistant row, as today.
-    assert len(_assistant_rows(mp)) == 1
+    rows = _assistant_rows(mp)
+    assert [r["content"] for r in rows] == ["", ""]
+    assert [r["settled"] for r in rows] == [0, 1]
+    # The probe call anchors to the tool-only step's own row.
+    probe_calls = [c for c in mp.tool_call_service.by_turn() if c.tool_name == "noop_probe"]
+    assert [c.transcript_id for c in probe_calls] == [rows[0]["id"]]
     # The main turn was never steered: neither of its two requests carries the
     # steer text (post-turn daemon turns may be steered — different turns).
     assert _EMPTY_COMPLETION_STEER not in _body(provider, 0)

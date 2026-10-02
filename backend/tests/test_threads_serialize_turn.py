@@ -175,12 +175,12 @@ def test_completed_execution_is_not_crashed(db: sqlite3.Connection) -> None:
 # ── ``thread_message`` boundary (§ same function, different field) ────────────
 #
 # The companion regression: ``thread_message`` used to derive from
-# ``Transcript.settle0`` (mutable — a reply's own tool call can retroactively
-# demote it, erasing every row's tag on re-fetch), then from "first assistant
-# row" (wrong the moment an interim tool-using step precedes a turn's own
-# final answer). The fix keys the boundary on the id of the turn's SECOND
-# ``role='user'`` row — structural and immutable once written — tagging every
-# row from that id onward. No second user row → nothing is tagged.
+# ``Transcript.settle0`` (which moved whenever a reply's own activity touched
+# the opener's row, erasing every row's tag on re-fetch), then from "first
+# assistant row" (wrong the moment an interim tool-using step precedes a
+# turn's own final answer). The fix keys the boundary on the id of the turn's
+# SECOND ``role='user'`` row — structural and immutable once written — tagging
+# every row from that id onward. No second user row → nothing is tagged.
 
 _USER_CHANNEL = "user"
 
@@ -219,20 +219,14 @@ def test_single_exchange_with_interim_tool_step_has_no_thread_replies(db: sqlite
     assert all("thread_message" not in m for m in messages)
 
 
-def test_reply_with_settling_tool_call_tags_only_the_reply_rows(db: sqlite3.Connection) -> None:
-    """Opener plus a reply whose tool call settles: an opener (user row +
-    settled answer) that later gets a REPLY whose own tool call is a
-    SETTLING ability — when a reply's tool call is a settling ability, it
-    unsettles the opener's row: ``ToolCallService.start`` calls
-    ``TranscriptService.unsettle()`` on the OPENER's settle0 row the instant
-    the reply's tool fires. This is the exact cross-table mutation that broke
-    the old ``settle0``-derived
-    boundary: settle0 moves off the opener and onto the reply's own answer,
-    so re-deriving the boundary from settle0 AFTER the tool call tags
-    nothing at all (opener and reply both read as "not thread"). The fix's
-    boundary — the second user row's id, written once and never mutated by
-    anything downstream — is unaffected: the opener stays untagged and BOTH
-    reply rows are tagged, tool chip included."""
+def test_reply_with_tool_call_tags_only_the_reply_rows(db: sqlite3.Connection) -> None:
+    """Opener plus a reply whose tool call fires: an opener (user row + settled
+    answer) that later gets a REPLY whose own tool call runs. The opener's
+    answer stays settled — a reply's tool activity never touches it — so
+    ``settle0`` stays on the opener's answer. The boundary is the SECOND user
+    row's id, written once and never mutated by anything downstream: the
+    opener's rows stay untagged and BOTH reply rows are tagged, the tool chip
+    included."""
     assert db is not None  # fixture is taken for its binding side effect (real DB gateway)
     turn_id = 7002
     opener = MessageProcessor(UserConfig(), turn_id, "Can you check my calendar for today?")  # inert (I2)
@@ -251,13 +245,11 @@ def test_reply_with_settling_tool_call_tags_only_the_reply_rows(db: sqlite3.Conn
         "calendar", {"action": "create_event", "summary": "Meeting", "dtstart": "15:00"},
     )
     assert call_id is not None  # sanity: the real tool-call write succeeded
-    # sanity: the settling tool call demoted the OPENER's settle0 row (a
-    # reply's own tool activity un-settling the original exchange's row) —
-    # the exact cross-table mutation the old settle0-derived boundary broke on.
+    # The reply's tool call left the opener's settled answer exactly as it was.
     opener_row = Transcript.filter("id", opener_answer_id).first()
     assert opener_row is not None
-    assert opener_row.settled == 0
-    assert Transcript.settle0(_USER_CHANNEL, turn_id) is None  # nothing settled mid-tool-call
+    assert opener_row.settled == 1
+    assert Transcript.settle0(_USER_CHANNEL, turn_id) == opener_answer_id
 
     reply.tool_call_service.finish(call_id, "created", ToolCall.DONE)
     reply_answer_id = reply.transcript_service.append_assistant("Added a 3pm meeting to your calendar.")
