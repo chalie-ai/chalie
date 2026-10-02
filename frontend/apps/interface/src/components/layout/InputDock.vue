@@ -115,10 +115,10 @@ async function handleSend(): Promise<void> {
   await session.sendMessage(trimmed, files, turnId, type, level.value);
 
   // sendMessage takes ownership of `files` in BOTH branches — a direct dispatch
-  // uploads them; a busy send queues the whole {text, files} (queue.ts stores
-  // and replays them on drain). Either way the strip must clear: leaving files
-  // pending after a queued send re-attaches them to the user's NEXT message,
-  // a duplicate upload.
+  // uploads them; a busy send with files queues the whole {text, files}
+  // (queue.ts stores and replays them on drain). Either way the strip must
+  // clear: leaving files pending after a queued send re-attaches them to the
+  // user's NEXT message, a duplicate upload.
   attachments.clear();
 
   textareaRef.value?.focus();

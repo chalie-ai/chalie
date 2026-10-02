@@ -149,6 +149,18 @@ export function isLaneWorking(laneType: string, laneTurnId: number): boolean {
   return spine.container.querySelector('[data-working]:not([data-lane-turn-id])') != null;
 }
 
+/** The spine's own working turn — the one a spine follow-up joins. The same
+ *  match as the spine branch of `isLaneWorking`, narrowed to a marker that
+ *  names its turn; the newest when more than one is working, null when none
+ *  is. */
+export function workingSpineTurnId(): number | null {
+  const els = _surfaces
+    .get(SPINE_SURFACE_ID)
+    ?.container.querySelectorAll('[data-working][data-turn-id]:not([data-lane-turn-id])');
+  const newest = els?.[els.length - 1];
+  return newest ? readTurnId(newest) : null;
+}
+
 /** Claim a turn for its own thread lane on every rendered copy. Called when a
  *  reply is sent into it: the reply proves the fork immediately, whereas
  *  `stampWorking` can only re-derive it once the refetch carrying the new

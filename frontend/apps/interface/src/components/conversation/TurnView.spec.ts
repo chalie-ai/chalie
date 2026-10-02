@@ -521,6 +521,64 @@ describe('tool-call trace placement — each row draws its own trace', () => {
   });
 });
 
+describe('rows a cancel would drop — the stop\'s hand-back marker', () => {
+  const DROPPED = '[data-dropped-on-cancel]';
+
+  function marked(wrapper: VueWrapper): string[] {
+    return wrapper.findAll(DROPPED).map((r) => r.attributes('data-user-text') ?? '');
+  }
+
+  it('marks a working turn\'s opener that nothing has answered yet', () => {
+    const turnId = 501;
+    const wrapper = mount(TurnView, {
+      props: { block: block(turnId, [msg('5010', 'user', 'plan my trip', turnId)]), type: ConfigType.USER },
+    });
+
+    expect(marked(wrapper)).toEqual(['plan my trip']);
+  });
+
+  it('marks nothing once a message has joined the running turn: a cancel keeps it and everything before it', () => {
+    const turnId = 502;
+    const wrapper = mount(TurnView, {
+      props: {
+        block: block(turnId, [
+          msg('5020', 'user', 'plan my trip', turnId),
+          row('5021', 'user', 'make it three days', turnId, { joined: true }),
+        ]),
+        type: ConfigType.USER,
+      },
+    });
+
+    expect(marked(wrapper)).toEqual([]);
+  });
+
+  it('marks only the thread reply the turn has not answered, never the settled opener before it', () => {
+    const turnId = 503;
+    const wrapper = mount(TurnView, {
+      props: {
+        block: block(turnId, [
+          msg('5030', 'user', 'plan my trip', turnId),
+          row('5031', 'assistant', 'Rome it is', turnId, { settled: true }),
+          msg('5032', 'user', 'what about Florence?', turnId, true),
+        ]),
+        type: ConfigType.USER,
+        fullThread: true,
+      },
+    });
+
+    expect(marked(wrapper)).toEqual(['what about Florence?']);
+  });
+
+  it('marks nothing on a turn that is no longer working, even one that ended on an unanswered message', () => {
+    const turnId = 504;
+    const b = settledTurn(turnId, [msg('5040', 'user', 'a question that crashed the turn', turnId)]);
+    b.crashed = true;
+    const wrapper = mount(TurnView, { props: { block: b, type: ConfigType.USER } });
+
+    expect(marked(wrapper)).toEqual([]);
+  });
+});
+
 describe('crashed-turn note', () => {
   it('renders an "ended unexpectedly" note for a crashed turn that produced no reply', () => {
     const turnId = 301;

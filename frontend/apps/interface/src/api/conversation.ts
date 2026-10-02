@@ -76,6 +76,11 @@ export interface ConversationMessage {
    */
   settled?: boolean;
   /**
+   * True on a user row sent into the turn while it was working — it joined the
+   * running exchange instead of opening one. A cancel keeps such a row.
+   */
+  joined?: boolean;
+  /**
    * Pre-synthesis outcome for a settled row, as of this fetch: 'ready' (audio
    * stored), 'failed' (gave up after its attempts), or absent/null for a row
    * with no attempt on record — history from before pre-synthesis, whose first

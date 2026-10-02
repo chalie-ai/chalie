@@ -9,7 +9,8 @@
  * Real DOM (happy-dom — the project's established Vue-mounting environment,
  * see turnDom.spec.ts), real Pinia, real turnDom/queue modules. Only the
  * WS/network boundary is mocked: `getWebSocket` (send/abort are the only
- * stubbed calls, per convention), `getHost`, and the REST `conversation` API
+ * stubbed calls, per convention), `api.upload` (the spine join's POST),
+ * `getHost`, and the REST `conversation` API
  * (`api/conversation.ts`) — the actual `fetch`/XHR transport this app would
  * otherwise hit.
  *
@@ -27,14 +28,18 @@ import type { Component } from 'vue';
 // captures whatever onConnect/onDisconnect callbacks `session.init()`
 // registers so reconnect tests can fire them directly, the same way the real
 // WebSocketService would invoke them on an actual drop/restore.
-const { fakeWs, sendMock, wsCallbacks } = vi.hoisted(() => {
+const { fakeWs, sendMock, uploadMock, wsCallbacks } = vi.hoisted(() => {
   const sendMock = vi.fn();
+  // `api.upload` is the multipart POST a spine follow-up uses to join its
+  // working turn (the same network edge as the WS service's own POST).
+  const uploadMock = vi.fn();
   const wsCallbacks: { onConnect: () => void; onDisconnect: () => void } = {
     onConnect: () => { /* replaced by session.init() */ },
     onDisconnect: () => { /* replaced by session.init() */ },
   };
   return {
     sendMock,
+    uploadMock,
     wsCallbacks,
     fakeWs: {
       send: sendMock,
@@ -53,7 +58,7 @@ vi.mock('@chalie/shared', () => ({
   AuthError: class AuthError extends Error {},
   getWebSocket: () => fakeWs,
   useConnectionStore: () => ({ setConnected: () => { /* not under test */ } }),
-  api: {},
+  api: { upload: (...args: unknown[]) => uploadMock(...args) },
   getHost: () => '',
 }));
 
@@ -84,6 +89,7 @@ vi.mock('../api/policies', () => ({
 }));
 
 import { ConfigType } from '@chalie/shared';
+import type { ConversationTurnBlock } from '../api/conversation';
 
 /** A minimal but well-formed ConversationTurnBlock for the mocked thread() calls. */
 function stubBlock(turnId: number, working: boolean): unknown {
@@ -135,6 +141,7 @@ async function freshSession() {
 
 beforeEach(() => {
   sendMock.mockReset();
+  uploadMock.mockReset();
   threadMock.mockReset();
   stopMock.mockReset();
   stopMock.mockResolvedValue({ cancelled: true, reason: null });
@@ -307,15 +314,216 @@ describe('sendMessage — surface-scoped busy gate', () => {
     expect(queue.queuedFor(43)).toEqual([]);
     expect(sendMock).toHaveBeenCalledTimes(3);
 
-    // A second reply into the STILL-working thread 42 does queue — its own
-    // lane is the one thing that is genuinely busy.
+    // A second reply into the STILL-working thread 42 posts to that thread
+    // too — a text sent while its lane's turn works joins the turn.
     await session.sendMessage('second reply in thread 42', [], 42, ConfigType.USER);
-    expect(sendMock).toHaveBeenCalledTimes(3);
-    expect(queue.queuedFor(42)).toEqual([
-      { text: 'second reply in thread 42', files: [], thinkingLevel: null },
-    ]);
+    expect(sendMock).toHaveBeenCalledTimes(4);
+    expect(sendMock).toHaveBeenLastCalledWith(
+      'second reply in thread 42', expect.any(Function), [], 42, ConfigType.USER, null,
+    );
+    expect(queue.queuedFor(42)).toEqual([]);
 
     spineContainer.remove();
+  });
+});
+
+describe('sendMessage — a text sent while the lane\'s turn works joins it', () => {
+  /** A registered spine whose rendered DOM is exactly `html`. */
+  async function spineWith(html: string) {
+    const ctx = await freshSession();
+    const spine = document.body.appendChild(document.createElement('div'));
+    ctx.turnDom.registerSurface({
+      id: ctx.turnDom.SPINE_SURFACE_ID,
+      type: ConfigType.USER,
+      container: spine,
+      component: {},
+    });
+    spine.innerHTML = html;
+    return { ...ctx, spine };
+  }
+
+  const WORKING_7 = '<div data-working data-turn-id="7" data-type="user"></div>';
+  const JOINED_OK = { result: { turn_id: 7, type: ConfigType.USER } };
+
+  it('a spine follow-up POSTs join=1 to the unclaimed working turn: no lane claim, no echo, nothing queued, never the WS send', async () => {
+    // Turn 5 is a forked thread's work rendered on the spine (lane-claimed);
+    // turn 7 is the spine's own working turn. The join must pick 7.
+    const { session, queue, spine } = await spineWith(
+      '<div data-working data-turn-id="5" data-type="user" data-lane-type="user" data-lane-turn-id="5"></div>'
+      + WORKING_7,
+    );
+    uploadMock.mockResolvedValue(JOINED_OK);
+
+    await session.sendMessage('and add the chart too', [], null, ConfigType.USER, 'high');
+
+    expect(uploadMock).toHaveBeenCalledTimes(1);
+    const [path, form] = uploadMock.mock.calls[0] as [string, FormData];
+    expect(path).toBe('/api/threads/7');
+    expect(form.get('text')).toBe('and add the chart too');
+    expect(form.get('type')).toBe(ConfigType.USER);
+    expect(form.get('join')).toBe('1');
+    // Honoured by the backend only if the turn finished first and the text
+    // starts a new one instead — it must still ride along.
+    expect(form.get('thinking_level')).toBe('high');
+    expect(sendMock).not.toHaveBeenCalled();
+    expect(queue.queuedFor(null)).toEqual([]);
+    // The joined turn stays the spine's: only the pre-existing claim on 5.
+    expect(Array.from(spine.querySelectorAll('[data-lane-turn-id]')).map((e) => e.getAttribute('data-turn-id')))
+      .toEqual(['5']);
+    // No echo — the real row paints with the `updated` refetch the join triggers.
+    expect(spine.querySelector('[data-send-echo]')).toBeNull();
+  });
+
+  it('a failed join POST surfaces the error and leaves the lane free to join again (no stuck hold, nothing queued)', async () => {
+    const { session, queue } = await spineWith(WORKING_7);
+    uploadMock.mockRejectedValueOnce(new Error('network down'));
+
+    await session.sendMessage('lost in transit', [], null, ConfigType.USER);
+
+    expect(session.errorMessage).toBe('Chat request failed.');
+    expect(queue.queuedFor(null)).toEqual([]);
+
+    uploadMock.mockResolvedValue(JOINED_OK);
+    await session.sendMessage('try again', [], null, ConfigType.USER);
+    expect(uploadMock).toHaveBeenCalledTimes(2);
+    expect(queue.queuedFor(null)).toEqual([]);
+  });
+
+  it('two texts sent one after the other both join the working turn — the first join does not hold the lane', async () => {
+    const { session, queue } = await spineWith(WORKING_7);
+    uploadMock.mockResolvedValue(JOINED_OK);
+
+    await session.sendMessage('first follow-up', [], null, ConfigType.USER);
+    await session.sendMessage('second follow-up', [], null, ConfigType.USER);
+
+    expect(uploadMock).toHaveBeenCalledTimes(2);
+    expect((uploadMock.mock.calls[1] as [string, FormData])[1].get('text')).toBe('second follow-up');
+    expect(queue.queuedFor(null)).toEqual([]);
+  });
+
+  it('a text typed while the lane\'s own join POST is still in flight queues, even though a working turn is on screen', async () => {
+    const { session, queue } = await spineWith(WORKING_7);
+    let resolveFirst: (v: unknown) => void = () => { /* replaced below */ };
+    uploadMock.mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }));
+
+    const first = session.sendMessage('first follow-up', [], null, ConfigType.USER);
+    await session.sendMessage('typed before the first POST resolved', [], null, ConfigType.USER);
+
+    expect(uploadMock).toHaveBeenCalledTimes(1);
+    expect(sendMock).not.toHaveBeenCalled();
+    expect(queue.queuedFor(null)).toEqual([
+      { text: 'typed before the first POST resolved', files: [], thinkingLevel: null },
+    ]);
+
+    resolveFirst(JOINED_OK);
+    await first;
+  });
+
+  it('a spine text sent offline queues, even if a refetch repainted the working turn before the reconnect reconcile', async () => {
+    const { session, queue, spine } = await spineWith(WORKING_7);
+    session.init();
+    wsCallbacks.onDisconnect();
+    // The reconnect's first `updated` refetch re-renders the still-working
+    // turn before `_reconcileWorking` has dropped the offline flags.
+    spine.querySelector('[data-turn-id="7"]')?.setAttribute('data-working', 'true');
+
+    await session.sendMessage('typed while offline', [], null, ConfigType.USER);
+
+    expect(uploadMock).not.toHaveBeenCalled();
+    expect(sendMock).not.toHaveBeenCalled();
+    expect(queue.queuedFor(null)).toEqual([{ text: 'typed while offline', files: [], thinkingLevel: null }]);
+  });
+
+  it('a busy lane queues a message with files — a join refuses attachments — on the spine and in a thread alike', async () => {
+    const { session, queue } = await spineWith(
+      WORKING_7 + '<div data-working data-turn-id="42" data-type="user" data-lane-turn-id="42"></div>',
+    );
+    const file = new File(['bytes'], 'chart.png', { type: 'image/png' });
+
+    await session.sendMessage('see attached', [file], null, ConfigType.USER);
+    await session.sendMessage('and here, in the thread', [file], 42, ConfigType.USER);
+
+    expect(uploadMock).not.toHaveBeenCalled();
+    expect(sendMock).not.toHaveBeenCalled();
+    expect(queue.queuedFor(null)).toEqual([{ text: 'see attached', files: [file], thinkingLevel: null }]);
+    expect(queue.queuedFor(42)).toEqual([{ text: 'and here, in the thread', files: [file], thinkingLevel: null }]);
+  });
+
+  it('a spine whose only working marker names no turn has nothing to join, so the text queues', async () => {
+    const { session, queue } = await spineWith('<div data-working></div>');
+
+    await session.sendMessage('nothing to join yet', [], null, ConfigType.USER);
+
+    expect(uploadMock).not.toHaveBeenCalled();
+    expect(sendMock).not.toHaveBeenCalled();
+    expect(queue.queuedFor(null)).toEqual([{ text: 'nothing to join yet', files: [], thinkingLevel: null }]);
+  });
+
+  /** A thread panel registered over the spine, rendering turn 42 as `html`. */
+  async function panelOver(spineHtml: string, panelHtml: string) {
+    const ctx = await spineWith(spineHtml);
+    const panel = document.body.appendChild(document.createElement('div'));
+    panel.innerHTML = panelHtml;
+    ctx.turnDom.registerSurface({
+      id: 'panel', type: ConfigType.USER, container: panel, component: {}, accepts: (id) => id === 42,
+    });
+    return { ...ctx, panel };
+  }
+
+  it('a reply into a working thread goes to that thread over the wire — no join POST, no echo, nothing queued', async () => {
+    const claimed = '<div data-working data-turn-id="42" data-type="user" data-lane-type="user" data-lane-turn-id="42"></div>';
+    const { session, queue, panel } = await panelOver(claimed, claimed);
+    sendMock.mockResolvedValueOnce({ turn_id: 42, type: ConfigType.USER });
+
+    await session.sendMessage('one more thing for the thread', [], 42, ConfigType.USER);
+
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(sendMock).toHaveBeenCalledWith(
+      'one more thing for the thread', expect.any(Function), [], 42, ConfigType.USER, null,
+    );
+    expect(uploadMock).not.toHaveBeenCalled();
+    expect(queue.queuedFor(42)).toEqual([]);
+    expect(panel.querySelector('[data-send-echo]')).toBeNull();
+  });
+
+  it('a reply into a turn still working its opener joins that exchange: no lane claim, so the spine still reads the work as its own', async () => {
+    const working = '<div data-working data-turn-id="42" data-type="user"></div>';
+    const { session, turnDom, spine, panel } = await panelOver(working, working);
+    sendMock.mockResolvedValueOnce({ turn_id: 42, type: ConfigType.USER });
+
+    await session.sendMessage('a reply typed in the panel', [], 42, ConfigType.USER);
+
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(uploadMock).not.toHaveBeenCalled();
+    expect(panel.querySelector('[data-send-echo]')).toBeNull();
+    // A join is no fork: neither copy is claimed for a thread lane.
+    expect(spine.querySelector('[data-turn-id="42"]')?.hasAttribute('data-lane-turn-id')).toBe(false);
+    expect(panel.querySelector('[data-turn-id="42"]')?.hasAttribute('data-lane-turn-id')).toBe(false);
+    expect(turnDom.isLaneWorking(turnDom.SPINE_LANE_TYPE, turnDom.SPINE_LANE_TURN_ID)).toBe(true);
+  });
+
+  it('idle lanes start as before — a new spine turn and a thread reply go over the wire with an echo, never as a join', async () => {
+    const { session, queue, turnDom, spine } = await spineWith('');
+    const panel = document.body.appendChild(document.createElement('div'));
+    turnDom.registerSurface({
+      id: 'panel', type: ConfigType.USER, container: panel, component: {}, accepts: (id) => id === 555,
+    });
+    sendMock.mockResolvedValue({ turn_id: 20, type: ConfigType.USER });
+
+    await session.sendMessage('a fresh question', [], null, ConfigType.USER);
+    await session.sendMessage('reply into a settled thread', [], 555, ConfigType.USER);
+
+    expect(sendMock).toHaveBeenNthCalledWith(
+      1, 'a fresh question', expect.any(Function), [], null, ConfigType.USER, null,
+    );
+    expect(sendMock).toHaveBeenNthCalledWith(
+      2, 'reply into a settled thread', expect.any(Function), [], 555, ConfigType.USER, null,
+    );
+    expect(uploadMock).not.toHaveBeenCalled();
+    expect(queue.queuedFor(null)).toEqual([]);
+    expect(queue.queuedFor(555)).toEqual([]);
+    expect(spine.querySelector('[data-send-echo]')).not.toBeNull();
+    expect(panel.querySelector('[data-send-echo]')).not.toBeNull();
   });
 });
 
@@ -357,6 +565,188 @@ describe('requestStop — undo event', () => {
     // never be handed back to the user as literal draft content.
     await session.requestStop(null, ConfigType.USER, null, '[File attached]');
     expect(received[1]).toEqual({ text: '', turnId: null });
+  });
+});
+
+describe('requestStop — only a message the cancel removes goes back to the dock', () => {
+  // The real TurnView renders every copy, so the rows a cancel would drop carry
+  // the same `data-dropped-on-cancel` marker the app paints: the working turn's
+  // trailing user rows nothing has answered, stopping at one that joined it.
+  async function spineRendering(block: ConversationTurnBlock) {
+    const ctx = await freshSession();
+    const { default: TurnView } = await import('../components/conversation/TurnView.vue');
+    const spine = document.body.appendChild(document.createElement('div'));
+    ctx.turnDom.registerSurface({
+      id: ctx.turnDom.SPINE_SURFACE_ID, type: ConfigType.USER, container: spine, component: TurnView,
+    });
+    ctx.turnDom.upsertTurnToSurfaces(block, ConfigType.USER);
+    return { ...ctx, spine, TurnView };
+  }
+
+  function row(
+    id: number,
+    role: 'user' | 'assistant',
+    content: string,
+    extra: Partial<ConversationTurnBlock['messages'][number]> = {},
+  ): ConversationTurnBlock['messages'][number] {
+    return {
+      id: String(id), role, content, timestamp: '2026-01-01 00:00:00', day: '2026-01-01', turn_id: 12, ...extra,
+    };
+  }
+
+  function turn12(messages: ConversationTurnBlock['messages'], working: boolean): ConversationTurnBlock {
+    return {
+      turn_id: 12, gist: null, preview: 'turn 12', last_activity_at: null, working, duration_ms: 0,
+      type: ConfigType.USER, messages,
+    };
+  }
+
+  /** Collects every `session:turn-interrupted` the stop dispatches. */
+  function listenForRestores(): { received: Array<{ text: string; turnId: number | null }>; stop: () => void } {
+    const received: Array<{ text: string; turnId: number | null }> = [];
+    const onInterrupted = (e: Event): void => {
+      received.push((e as CustomEvent<{ text: string; turnId: number | null }>).detail);
+    };
+    document.addEventListener('session:turn-interrupted', onInterrupted);
+    return { received, stop: () => document.removeEventListener('session:turn-interrupted', onInterrupted) };
+  }
+
+  it('a message joined into the turn stays in the transcript after Stop, so it is NOT handed back to the dock', async () => {
+    const rows = [row(1, 'user', 'plan my trip to Rome'), row(2, 'user', 'make it three days', { joined: true })];
+    const { session, turnDom, spine } = await spineRendering(turn12(rows, true));
+    // What the dock hands over: the last user row, read off the DOM before the stop.
+    const restoreText = turnDom.lastUserText(spine);
+    expect(restoreText).toBe('make it three days');
+    // The cancel strands the joined row unread but keeps it, and the opener before it.
+    threadMock.mockResolvedValue(turn12(rows, false));
+    const { received, stop } = listenForRestores();
+
+    await session.requestStop(12, ConfigType.USER, null, restoreText);
+    stop();
+
+    expect(received).toEqual([]);
+    expect(Array.from(spine.querySelectorAll('[data-user-text]')).map((r) => (r as HTMLElement).dataset.userText))
+      .toEqual(['plan my trip to Rome', 'make it three days']);
+  });
+
+  it('a message the turn already answered stays too: a stop after an interim reply hands nothing back', async () => {
+    const rows = [row(1, 'user', 'plan my trip to Rome'), row(2, 'assistant', 'looking at flights first')];
+    const { session, turnDom, spine } = await spineRendering(turn12(rows, true));
+    threadMock.mockResolvedValue(turn12(rows, false));
+    const { received, stop } = listenForRestores();
+
+    await session.requestStop(12, ConfigType.USER, null, turnDom.lastUserText(spine));
+    stop();
+
+    expect(received).toEqual([]);
+  });
+
+  it('a cancelled opener the backend strips (nothing after it) IS handed back — once the server accepts the stop, never while it could still refuse it', async () => {
+    const { session, turnDom, spine } = await spineRendering(turn12([row(1, 'user', 'plan my trip to Rome')], true));
+    const restoreText = turnDom.lastUserText(spine);
+    // Nothing answered or joined after the opener: the cancel strips it, and a
+    // turn with no rows left is removed from every surface.
+    threadMock.mockResolvedValue(turn12([], false));
+    let accept: (ack: unknown) => void = () => { /* replaced below */ };
+    stopMock.mockImplementationOnce(() => new Promise((resolve) => { accept = resolve; }));
+    const { received, stop } = listenForRestores();
+
+    const stopping = session.requestStop(12, ConfigType.USER, null, restoreText);
+    await Promise.resolve();
+    expect(received).toEqual([]);
+    accept({ cancelled: true, reason: null });
+    await stopping;
+    stop();
+
+    expect(received).toEqual([{ text: 'plan my trip to Rome', turnId: null }]);
+    expect(turnDom.getTurnEl(12, ConfigType.USER, spine)).toBeNull();
+  });
+
+  it('what the cancel strips is judged from the copy as it stood before the stop: the cancelled frame that redraws the copy without it lands before the server answers', async () => {
+    const opener = [row(1, 'user', 'plan my trip to Rome'), row(2, 'assistant', 'Rome it is', { settled: true })];
+    const { session, turnDom, TurnView } = await spineRendering(turn12(opener, false));
+    const panel = document.body.appendChild(document.createElement('div'));
+    turnDom.registerSurface({
+      id: 'panel', type: ConfigType.USER, container: panel, component: TurnView,
+      props: { fullThread: true }, accepts: (id) => id === 12,
+    });
+    turnDom.upsertTurnToSurfaces(
+      turn12([...opener, row(3, 'user', 'what about Florence?', { thread_message: true })], true), ConfigType.USER,
+    );
+    const restoreText = turnDom.lastUserText(panel);
+    // The cancel strips the unanswered reply but keeps the opener, so the
+    // turn's copy survives the redraw — just without the reply.
+    threadMock.mockResolvedValue(turn12(opener, false));
+    const { reconcileCancelledTurn } = await import('../utils/cancelReconcile');
+    stopMock.mockImplementationOnce(async () => {
+      await reconcileCancelledTurn(12, ConfigType.USER);
+      expect(panel.querySelector('[data-user-text="what about Florence?"]')).toBeNull();
+      return { cancelled: true, reason: null };
+    });
+    const { received, stop } = listenForRestores();
+
+    await session.requestStop(12, ConfigType.USER, 12, restoreText);
+    stop();
+
+    expect(received).toEqual([{ text: 'what about Florence?', turnId: 12 }]);
+  });
+
+  it('a failed refetch after the cancel still leaves the opener handed back to the dock', async () => {
+    const { session, turnDom, spine } = await spineRendering(turn12([row(1, 'user', 'plan my trip to Rome')], true));
+    threadMock.mockRejectedValue(new Error('network down'));
+    const { received, stop } = listenForRestores();
+
+    await session.requestStop(12, ConfigType.USER, null, turnDom.lastUserText(spine));
+    stop();
+
+    expect(received).toEqual([{ text: 'plan my trip to Rome', turnId: null }]);
+  });
+
+  it('a thread reply\'s joined follow-up is kept by judging the thread panel\'s own copy, since the spine\'s copy hides thread rows', async () => {
+    const opener = [row(1, 'user', 'plan my trip to Rome'), row(2, 'assistant', 'Rome it is', { settled: true })];
+    const { session, turnDom, spine, TurnView } = await spineRendering(turn12(opener, false));
+    const panel = document.body.appendChild(document.createElement('div'));
+    turnDom.registerSurface({
+      id: 'panel', type: ConfigType.USER, container: panel, component: TurnView,
+      props: { fullThread: true }, accepts: (id) => id === 12,
+    });
+    const rows = [
+      ...opener,
+      row(3, 'user', 'what about Florence?', { thread_message: true }),
+      row(4, 'user', 'and Venice?', { thread_message: true, joined: true }),
+    ];
+    turnDom.upsertTurnToSurfaces(turn12(rows, true), ConfigType.USER);
+    // Only the panel shows the thread rows.
+    const restoreText = turnDom.lastUserText(panel);
+    expect(restoreText).toBe('and Venice?');
+    expect(spine.querySelectorAll('[data-user-text]')).toHaveLength(1);
+    // The reply's cancel keeps the joined 'and Venice?' row and what precedes it.
+    threadMock.mockResolvedValue(turn12(rows, false));
+    const { received, stop } = listenForRestores();
+
+    await session.requestStop(12, ConfigType.USER, 12, restoreText);
+    stop();
+
+    expect(received).toEqual([]);
+  });
+
+  it('a thread reply the turn has not answered is handed back from the panel\'s copy', async () => {
+    const opener = [row(1, 'user', 'plan my trip to Rome'), row(2, 'assistant', 'Rome it is', { settled: true })];
+    const { session, turnDom, TurnView } = await spineRendering(turn12(opener, false));
+    const panel = document.body.appendChild(document.createElement('div'));
+    turnDom.registerSurface({
+      id: 'panel', type: ConfigType.USER, container: panel, component: TurnView,
+      props: { fullThread: true }, accepts: (id) => id === 12,
+    });
+    const rows = [...opener, row(3, 'user', 'what about Florence?', { thread_message: true })];
+    turnDom.upsertTurnToSurfaces(turn12(rows, true), ConfigType.USER);
+    threadMock.mockResolvedValue(turn12(opener, false));
+    const { received, stop } = listenForRestores();
+
+    await session.requestStop(12, ConfigType.USER, 12, turnDom.lastUserText(panel));
+    stop();
+
+    expect(received).toEqual([{ text: 'what about Florence?', turnId: 12 }]);
   });
 });
 

@@ -20,7 +20,7 @@
  */
 import { defineStore } from 'pinia';
 import type { DelegateRef, WsPushEvent } from '@chalie/shared';
-import { AuthError, ConfigType, getWebSocket, useConnectionStore } from '@chalie/shared';
+import { api, AuthError, ConfigType, getWebSocket, useConnectionStore } from '@chalie/shared';
 import { extractText } from '../composables/useMarkup';
 import { conversation as convoApi } from '../api/conversation';
 import { dispatchDrift, refetchDelegate, registerSessionHooks } from '../utils/driftDispatcher';
@@ -29,15 +29,18 @@ import { clearDelegateFeeds, clearLiveTurn } from '../utils/liveActTrail';
 import { blockSpeechText } from '../utils/speech';
 import { clearSendEcho, mountSendEcho } from '../utils/sendEcho';
 import {
+  getTurnEl,
   isLaneWorking,
   isTurnWorking,
   liveWorkingKeys,
   markThreadLane,
+  resolveScopeContainer,
   setTurnDone,
   setTurnWorking,
   SPINE_LANE_TURN_ID,
   SPINE_LANE_TYPE,
   upsertTurnToSurfaces,
+  workingSpineTurnId,
 } from '../utils/turnDom';
 import { laneKey, useQueueStore } from './queue';
 import { useNotificationsStore } from './notifications';
@@ -58,7 +61,8 @@ export const useSessionStore = defineStore('session', {
      *  `_pendingByTurn` below), because the POST resolves as soon as the
      *  backend allocates the turn_id — execution proceeds in the background,
      *  so there is no ordering guarantee between the POST 200 and the WS
-     *  'working' frame that stamps the DOM. */
+     *  'working' frame that stamps the DOM. A join's turn is already working,
+     *  so its hold ends with its POST. */
     _pendingSends: new Set<string>(),
 
     /** `type:turnId` → laneKey for sends whose POST resolved but whose first
@@ -261,15 +265,24 @@ export const useSessionStore = defineStore('session', {
      * no turn id at all).
      */
     isSurfaceBusy(threadId: number | null, type: string = ConfigType.USER): boolean {
+      if (this._isLaneHeld(threadId, type)) return true;
+      return threadId == null
+        ? isLaneWorking(SPINE_LANE_TYPE, SPINE_LANE_TURN_ID)
+        : isLaneWorking(type, threadId);
+    },
+
+    /** True while a lane is busy for a reason a join cannot answer: its own
+     *  send's POST is still in flight (no turn to join until it resolves), or
+     *  it was mid-turn when the socket dropped. */
+    _isLaneHeld(threadId: number | null, type: string): boolean {
       if (this._pendingSends.has(laneKey(threadId))) return true;
       // Offline snapshots count as busy: the backend may still be mid-turn
       // behind the dead socket even though the visual markers were cleared —
       // a send now should queue (drained after `_reconcileWorking`), not
       // silently drop the draft on the disconnected transport.
-      if (threadId == null) {
-        return this._offlineSpineWorking || isLaneWorking(SPINE_LANE_TYPE, SPINE_LANE_TURN_ID);
-      }
-      return this._offlineWorking.has(`${type}:${threadId}`) || isLaneWorking(type, threadId);
+      return threadId == null
+        ? this._offlineSpineWorking
+        : this._offlineWorking.has(`${type}:${threadId}`);
     },
 
     /**
@@ -280,8 +293,16 @@ export const useSessionStore = defineStore('session', {
      * a transient, DOM-only echo of the submitted text (`utils/sendEcho.ts`) so
      * the first paint after submit is never empty — cleared the moment real
      * content lands, the dispatch fails (`_onSendFailure`), or the turn is
-     * interrupted (`requestStop`). The busy branch already gets a visible chip
-     * from the queue store, so it gets no echo here.
+     * interrupted (`requestStop`).
+     *
+     * A text sent while its lane's turn is working JOINS that turn — the
+     * backend folds it in once the current call and its tools return. A
+     * thread reply posts to the thread as always; a spine follow-up posts to
+     * the spine's own working turn with `join`, which joins only that turn's
+     * spine work. A join gets no echo: its real row lands with the `updated`
+     * refetch the join triggers. Everything else on a busy lane queues
+     * instead (the queue store shows its chip): files, which a join refuses,
+     * a lane that is held (`_isLaneHeld`), and spine work with no turn to join.
      */
     async sendMessage(
       text: string,
@@ -294,7 +315,12 @@ export const useSessionStore = defineStore('session', {
 
       const body = text || FILE_PLACEHOLDER;
 
-      if (this.isSurfaceBusy(threadId, type)) {
+      const busy = this.isSurfaceBusy(threadId, type);
+      const joinId =
+        busy && !files.length && !this._isLaneHeld(threadId, type)
+          ? (threadId ?? workingSpineTurnId())
+          : null;
+      if (busy && joinId == null) {
         useQueueStore().enqueue(threadId, body, type, files, thinkingLevel);
         return;
       }
@@ -303,19 +329,39 @@ export const useSessionStore = defineStore('session', {
       this._pendingSends.add(key);
       // A reply IS the fork: claim the turn for its thread lane now rather than
       // waiting for the refetch to re-derive it, so the spine never counts this
-      // reply's work as its own during the round-trip in between.
-      if (threadId != null) markThreadLane(threadId, type);
+      // reply's work as its own during the round-trip in between. A join is no
+      // fork — it lands in whatever work the turn is already doing.
+      if (threadId != null && joinId == null) markThreadLane(threadId, type);
       let heldForFrame = false;
       try {
-        mountSendEcho(body, threadId, type, files);
-        const result = await getWebSocket().send(
-          body, (m) => this._onSendFailure(m, threadId, type), files, threadId, type, thinkingLevel,
-        );
+        const onFailure = (m: string): void => this._onSendFailure(m, threadId, type);
+        let result: { turn_id: number; type: string } | null;
+        if (threadId == null && joinId != null) {
+          const form = new FormData();
+          form.append('text', body);
+          form.append('type', type);
+          form.append('join', '1');
+          // Ignored by a join; honoured if the turn finished first and the
+          // message starts a new one instead.
+          if (thinkingLevel) form.append('thinking_level', thinkingLevel);
+          result = await api
+            .upload<{ result: { turn_id: number; type: string } }>(`/api/threads/${joinId}`, form)
+            .then(
+              (resp) => resp.result,
+              () => {
+                onFailure('Chat request failed.');
+                return null;
+              },
+            );
+        } else {
+          if (joinId == null) mountSendEcho(body, threadId, type, files);
+          result = await getWebSocket().send(body, onFailure, files, threadId, type, thinkingLevel);
+        }
         // POST resolved with the allocated turn_id but execution runs in the
         // background — keep the busy hold until the dispatcher observes the
         // turn's first `turn_execution` frame (unless one already beat the
-        // POST response here). `null` result = local send failure; nothing
-        // will ever arrive, release now.
+        // POST response here; a join's turn is already working). `null`
+        // result = local send failure; nothing will ever arrive, release now.
         if (result && !isTurnWorking(result.turn_id, result.type)) {
           this._pendingByTurn.set(`${result.type}:${result.turn_id}`, key);
           heldForFrame = true;
@@ -385,7 +431,8 @@ export const useSessionStore = defineStore('session', {
 
     /**
      * Stop + undo the in-flight turn whose turn_id is `target`. Emits
-     * 'session:turn-interrupted' so InputDock can restore the textarea.
+     * 'session:turn-interrupted' so InputDock can restore the textarea —
+     * only for a message the cancel removes from the transcript.
      * `type` (default user) names the owning thread's ProcessorConfig —
      * DELETE resolves the channel from it server-side, and turn_id alone is
      * only unique per channel, so a non-user thread's stop must carry its
@@ -428,6 +475,20 @@ export const useSessionStore = defineStore('session', {
       // data-working marker) before firing the DELETE — a stale/late click
       // could otherwise target an already-settled turn.
       const stopId = target != null && isTurnWorking(target, type) ? target : null;
+
+      // Hand the text back only when the cancel takes its row out of the
+      // transcript — the turn's trailing user rows nothing has answered or
+      // joined after (TurnView marks them `data-dropped-on-cancel`). A joined
+      // message, or one the turn already answered, stays and must not be
+      // offered for sending a second time. Read off the dock's copy before
+      // the stop is sent: the DELETE fires the WS 'cancelled' frame before it
+      // answers, and that frame's refetch redraws the copy without those
+      // rows. With no copy to read, hand it back as before rather than risk
+      // losing it.
+      const dock = resolveScopeContainer(dockScope, type);
+      const copy = target != null && dock ? getTurnEl(target, type, dock) : null;
+      const handBack = copy == null || copy.querySelector('[data-dropped-on-cancel]') != null;
+
       if (stopId != null && !(await this._stop(stopId, type, "Couldn't stop and undo. Try again."))) return;
 
       const text = restoreText === FILE_PLACEHOLDER ? '' : restoreText;
@@ -442,9 +503,11 @@ export const useSessionStore = defineStore('session', {
         clearLiveTurn(type, stopId);
       }
 
-      document.dispatchEvent(
-        new CustomEvent('session:turn-interrupted', { detail: { text, turnId: dockScope } }),
-      );
+      if (handBack) {
+        document.dispatchEvent(
+          new CustomEvent('session:turn-interrupted', { detail: { text, turnId: dockScope } }),
+        );
+      }
       // A cancelled/failed dispatch must never leave a ghost echo
       // bubble behind; dockScope is this dock's own scope identity, the same
       // one `sendMessage` mounted the echo under.

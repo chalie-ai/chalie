@@ -604,6 +604,63 @@ describe('isLaneWorking — every lane independent, the spine included', () => {
   });
 });
 
+describe('workingSpineTurnId — the turn a spine follow-up joins', () => {
+  it('names the spine\'s own working turn, and is null while the spine is idle or has no surface', async () => {
+    const { registerSurface, upsertTurnToSurfaces, setTurnWorking, workingSpineTurnId, SPINE_SURFACE_ID } =
+      await freshTurnDom();
+    expect(workingSpineTurnId()).toBeNull();
+
+    const spine = document.body.appendChild(document.createElement('div'));
+    registerSurface({ id: SPINE_SURFACE_ID, type: 'user', container: spine, component: StubComponent });
+    upsertTurnToSurfaces(block(43, [1]), 'user');
+    expect(workingSpineTurnId()).toBeNull();
+
+    upsertTurnToSurfaces(block(43, [1], { working: true }), 'user');
+    expect(workingSpineTurnId()).toBe(43);
+
+    setTurnWorking(43, 'user', false);
+    expect(workingSpineTurnId()).toBeNull();
+    spine.remove();
+  });
+
+  it('skips a turn a thread lane has claimed, even when that forked turn renders first', async () => {
+    const { registerSurface, upsertTurnToSurfaces, workingSpineTurnId, SPINE_SURFACE_ID } = await freshTurnDom();
+    const spine = document.body.appendChild(document.createElement('div'));
+    registerSurface({ id: SPINE_SURFACE_ID, type: 'user', container: spine, component: StubComponent });
+
+    // Turn 42 is a thread reply's work (claimed by its own lane); 43 is the
+    // spine's. A follow-up typed on the spine must never join 42.
+    upsertTurnToSurfaces(block(42, [1, 2], { working: true, forked: true }), 'user');
+    expect(workingSpineTurnId()).toBeNull();
+    upsertTurnToSurfaces(block(43, [3], { working: true }), 'user');
+    expect(workingSpineTurnId()).toBe(43);
+    spine.remove();
+  });
+
+  it('gives null for a working marker that names no turn — there is nothing to join', async () => {
+    const { registerSurface, workingSpineTurnId, SPINE_SURFACE_ID } = await freshTurnDom();
+    const spine = document.body.appendChild(document.createElement('div'));
+    registerSurface({ id: SPINE_SURFACE_ID, type: 'user', container: spine, component: StubComponent });
+
+    spine.innerHTML = '<div data-working></div>';
+    expect(workingSpineTurnId()).toBeNull();
+    spine.remove();
+  });
+
+  it('with several working spine turns it picks the NEWEST: the last in document order, where turns sit in ascending id order', async () => {
+    const { registerSurface, upsertTurnToSurfaces, workingSpineTurnId, SPINE_SURFACE_ID } = await freshTurnDom();
+    const spine = document.body.appendChild(document.createElement('div'));
+    registerSurface({ id: SPINE_SURFACE_ID, type: 'user', container: spine, component: StubComponent });
+
+    // Landed newest-first; the surface still orders them by id.
+    upsertTurnToSurfaces(block(44, [5], { working: true }), 'user');
+    upsertTurnToSurfaces(block(43, [3], { working: true }), 'user');
+
+    expect(workingSpineTurnId()).toBe(44);
+    spine.remove();
+  });
+});
+
 describe('lastUserText', () => {
   it('reads the LAST [data-user-text] row within the supplied host, ignoring earlier rows', async () => {
     const { lastUserText } = await freshTurnDom();

@@ -105,6 +105,23 @@ const closingRowIds = computed<Set<string>>(() => {
   return ids;
 });
 
+/** Ids of the user rows a cancel of this working turn would remove: the
+ *  trailing run of user rows nothing has answered yet, stopping at a row that
+ *  joined the running turn — a cancel keeps that one and everything before it.
+ *  The same rule the backend trims a cancelled turn by. A stop hands the text
+ *  back to the dock only when its row is one of these. */
+const droppedOnCancel = computed<Set<string>>(() => {
+  const ids = new Set<string>();
+  if (!props.block.working) return ids;
+  const messages = props.block.messages;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (message.role !== 'user' || message.joined) break;
+    ids.add(message.id);
+  }
+  return ids;
+});
+
 const displayRows = computed<DisplayRow[]>(() => {
   const rows: DisplayRow[] = [];
   // One provider call is one assistant row, drawn on its own: its bubble when it
@@ -257,6 +274,7 @@ function onOpenThread(): void {
           v-if="(ar.row as MsgRow).message.role === 'user'"
           :message="(ar.row as MsgRow).message"
           :label="channel ? 'Task from Chalie' : null"
+          :data-dropped-on-cancel="droppedOnCancel.has((ar.row as MsgRow).message.id) || undefined"
         />
         <ChalieBubble v-else :message="(ar.row as MsgRow).message" />
       </template>
