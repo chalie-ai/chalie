@@ -37,8 +37,8 @@ const props = withDefaults(
 const emit = defineEmits<{ reply: [turnId: number]; openThread: [turnId: number] }>();
 
 /** Set when this block is a delegate (subagent) turn, read by its channel: the
- *  turn has no type, nobody can stop it from here, and its user-role rows are
- *  the task Chalie handed over. */
+ *  turn has no type, its stop undoes nothing, and its user-role rows are the
+ *  task Chalie handed over. */
 const channel = computed(() => props.block.channel ?? null);
 
 /** A forked thread carries at least one row past its settle0 (see
@@ -254,7 +254,7 @@ function onOpenThread(): void {
       <ActCycle
         v-else-if="ar.row.kind === 'live-act'"
         :pills="(ar.row as LiveActRow).pills"
-        :can-stop="channel == null"
+        :undoable="channel == null"
       />
 
       <!-- Completion-time footer — one per turn_exchange, below its act-trail.

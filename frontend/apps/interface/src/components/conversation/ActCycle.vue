@@ -10,24 +10,26 @@ import { delegatePillAttrs } from '../../composables/useDelegatePill';
 const props = withDefaults(
   defineProps<{
     pills: LiveToolPill[];
-    /** False where the turn can't be stopped from here (a delegate's transcript). */
-    canStop?: boolean;
+    /** False where a stop interrupts without handing anything back to undo (a
+     *  delegate's transcript). */
+    undoable?: boolean;
   }>(),
-  { canStop: true },
+  { undoable: true },
 );
 
 const session = useSessionStore();
 const rootRef = ref<HTMLElement | null>(null);
 
 async function onStop(): Promise<void> {
-  const { turnId, type, dockScope } = readDomContext(rootRef.value);
+  const { turnId, type, channel, dockScope } = readDomContext(rootRef.value);
   if (turnId == null) return; // Guard: never fire a stop without a target
   // The restore text (D6) must come from the SAME rendered copy this stop
   // button belongs to — the same turn_id can render different row sets on
   // different surfaces (see lastUserText's own doc comment).
   const turnHost = rootRef.value?.closest<HTMLElement>('[data-turn-id]') ?? null;
   const restoreText = turnHost ? lastUserText(turnHost) : '';
-  await session.requestStop(turnId, type, dockScope, restoreText);
+  const target = channel != null ? { channel, turn_id: turnId } : turnId;
+  await session.requestStop(target, type, dockScope, restoreText);
 }
 
 // Live timer: ticks ONLY while a pill is unresolved.
@@ -71,10 +73,9 @@ function pillSeconds(pill: LiveToolPill): string {
     <div class="act-row">
       <span class="act-logo" />
       <button
-        v-if="canStop"
         class="act-stop-btn"
-        aria-label="Stop and undo"
-        title="Stop & undo"
+        :aria-label="undoable ? 'Stop and undo' : 'Stop subagent'"
+        :title="undoable ? 'Stop & undo' : 'Stop subagent'"
         type="button"
         @click="onStop"
       >

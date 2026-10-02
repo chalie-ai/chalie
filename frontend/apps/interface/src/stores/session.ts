@@ -102,7 +102,7 @@ export const useSessionStore = defineStore('session', {
     /** ConfigType of the thread currently open in the panel (default user). */
     panelType: ConfigType.USER as string,
 
-    /** The delegate (subagent) turn shown read-only in the panel, or null.
+    /** The delegate (subagent) turn watched in the panel, or null.
      *  Exclusive with `panelThreadId`: the panel shows one or the other. */
     panelDelegate: null as DelegateRef | null,
 
@@ -385,7 +385,7 @@ export const useSessionStore = defineStore('session', {
     },
 
     /**
-     * Stop + undo the in-flight turn identified by `turnId`. Emits
+     * Stop + undo the in-flight turn whose turn_id is `target`. Emits
      * 'session:turn-interrupted' so InputDock can restore the textarea.
      * `type` (default user) names the owning thread's ProcessorConfig —
      * DELETE resolves the channel from it server-side, and turn_id alone is
@@ -397,17 +397,32 @@ export const useSessionStore = defineStore('session', {
      * from. `restoreText` is the exact text to hand back to that dock,
      * likewise read by the caller off the DOM (`data-user-text`, see
      * UserBubble.vue / turnDom's `lastUserText`) before this call.
+     *
+     * A delegate (subagent) turn is addressed by its DelegateRef instead of a
+     * turn_id. It has no type, dock, send echo or lane, and turnDom keeps no
+     * working marker for it, so `type`/`dockScope`/`restoreText` don't apply
+     * and nothing is undone: its stop is the same optimistic live-trail clear,
+     * the same DELETE, and a forced re-read of its post-cancel block — the
+     * read its WS 'cancelled' frame triggers too. Its stop control renders
+     * only while its block is working; a late click gets `no_active_turn`.
      */
     async requestStop(
-      turnId: number | null = null,
+      target: number | DelegateRef | null = null,
       type: string = ConfigType.USER,
       dockScope: number | null = null,
       restoreText: string = '',
     ): Promise<void> {
-      // D6: confirm turnId is genuinely still in flight (per the DOM's own
+      if (target != null && typeof target === 'object') {
+        clearLiveTurn(target.channel, target.turn_id);
+        await this._postInterrupt(target);
+        await refetchDelegate(target.turn_id, target.channel, { force: true });
+        return;
+      }
+
+      // D6: confirm the turn is genuinely still in flight (per the DOM's own
       // data-working marker) before firing the DELETE — a stale/late click
       // could otherwise target an already-settled turn.
-      const stopId = turnId != null && isTurnWorking(turnId, type) ? turnId : null;
+      const stopId = target != null && isTurnWorking(target, type) ? target : null;
 
       const text = restoreText === FILE_PLACEHOLDER ? '' : restoreText;
 
@@ -441,13 +456,21 @@ export const useSessionStore = defineStore('session', {
       }
     },
 
-    /** DELETE /api/threads/<turn_id>?type=<type> — best-effort interrupt, never throws. */
-    async _postInterrupt(turnId: number | null = null, type: string = ConfigType.USER): Promise<void> {
-      if (turnId == null) return;
+    /** DELETE /api/threads/<turn_id>?type=<type>, or ?channel=<channel> for a
+     *  delegate turn — best-effort interrupt, never throws. */
+    async _postInterrupt(
+      target: number | DelegateRef | null = null,
+      type: string = ConfigType.USER,
+    ): Promise<void> {
+      if (target == null) return;
+      const [turnId, scope] =
+        typeof target === 'number'
+          ? [target, 'type=' + encodeURIComponent(type)]
+          : [target.turn_id, 'channel=' + encodeURIComponent(target.channel)];
       try {
         const host = getHost();
         const base = host ? host.replace(/\/$/, '') : '';
-        await fetch(base + '/api/threads/' + turnId + '?type=' + encodeURIComponent(type), {
+        await fetch(base + '/api/threads/' + turnId + '?' + scope, {
           method: 'DELETE',
           credentials: 'same-origin',
         });
@@ -505,9 +528,10 @@ export const useSessionStore = defineStore('session', {
     },
 
     /**
-     * Open a delegate (subagent) turn read-only in the slide-over panel,
-     * replacing whatever it showed. ThreadPanel.vue watches panelDelegate and
-     * owns the fetch; a delegate turn has no type and no done marker.
+     * Open a delegate (subagent) turn in the slide-over panel to watch (and,
+     * while it runs, stop), replacing whatever it showed. ThreadPanel.vue
+     * watches panelDelegate and owns the fetch; a delegate turn has no type
+     * and no done marker.
      */
     openDelegatePanel(ref: DelegateRef): void {
       this.panelThreadId = null;

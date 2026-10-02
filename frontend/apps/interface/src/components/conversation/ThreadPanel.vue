@@ -1,5 +1,6 @@
 <!-- Slide-over thread panel: a focused, full-height view of one thread, or a
-     read-only view of one delegate (subagent) turn's transcript.
+     watch-only view of one delegate (subagent) turn's transcript (no reply,
+     only a stop while it runs).
      Registers its body as a DOM-contract surface (D14) and fetches its own
      turn via REST — no buffer read for rendering. -->
 <script setup lang="ts">
@@ -255,7 +256,7 @@ onBeforeUnmount(() => {
       <!-- Permission cards for the turn this panel shows: PermissionStack.vue
            teleports them here, in flow above this dock, while the panel is open
            on their turn. The target lives only with the open panel. A delegate
-           transcript is read-only: no dock, and its cards stay on the main
+           transcript takes no reply: no dock, and its cards stay on the main
            stack since no thread is open. -->
       <div id="permStackPanel" class="permission-stack permission-stack--panel"></div>
 
