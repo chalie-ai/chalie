@@ -497,8 +497,8 @@
   padding: 0 10px 0 11px;
   border-radius: var(--radius-full);
   cursor: pointer;
-  background: color-mix(in oklab, var(--violet) 5%, var(--bg-surface-2));
-  border: 1px solid color-mix(in oklab, var(--violet) 16%, var(--border));
+  background: var(--bg-surface-2);
+  border: 1px solid var(--border);
   color: var(--text-primary);
   font-size: 0.75rem;
   max-width: min(260px, 40%);
@@ -506,7 +506,7 @@
 }
 
 .thread-pill:hover {
-  border-color: color-mix(in oklab, var(--violet) 30%, var(--border));
+  border-color: var(--border-strong);
 }
 
 .thread-pill__dot {
