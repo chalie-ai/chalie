@@ -357,6 +357,29 @@ describe('tool-call trace placement — each row draws its own trace', () => {
     expect(wrapper.findAll(COPY)).toHaveLength(0);
   });
 
+  it('a message that joined the running turn stays inside its exchange: the step before it gets no timestamp or actions', () => {
+    const turnId = 219;
+    const b = settledTurn(turnId, [
+      row('2190', 'user', 'compare two cities', turnId),
+      row('2191', 'assistant', 'searching both', turnId, { tool_calls: calls('web_search') }),
+      row('2192', 'user', 'add a third', turnId, { joined: true }),
+      row('2193', 'assistant', 'all three compared', turnId, { settled: true }),
+    ]);
+
+    const wrapper = mount(TurnView, { props: { block: b, type: ConfigType.USER, fullThread: false } });
+
+    expect(layout(wrapper)).toEqual([
+      'user:compare two cities',
+      'bubble:searching both',
+      'strip',
+      'user:add a third',
+      'bubble:all three compared',
+      'footer',
+    ]);
+    expect(wrapper.findAll('.speech-form__timestamp')).toHaveLength(1);
+    expect(wrapper.findAll(COPY)).toHaveLength(1);
+  });
+
   it('a cancelled exchange keeps its timestamp on the last thing Chalie said, and a trailing step is only a strip', () => {
     const turnId = 206;
     // Stopped mid-turn: nothing was ever settled, and the last call died with

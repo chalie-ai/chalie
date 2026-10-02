@@ -8,7 +8,9 @@ the standalone idempotent script for operators applying the change manually.
 
 Backfill: mark settled=1 on every assistant row that the old NOT-EXISTS predicate
 would have considered settled — i.e. rows with no tool_calls entry carrying a
-non-internal tool name.
+non-internal tool name. Run it only against a database from before the column
+existed: on newer data the backfill would also mark settled an interim answer
+that a joined message kept open.
 
 Usage: `python backend/migrations/migration_006_transcript_settled.py`
 """

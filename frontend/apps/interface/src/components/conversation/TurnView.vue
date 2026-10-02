@@ -74,7 +74,8 @@ interface FooterRow {
 type DisplayRow = MsgRow | LiveActRow | FooterRow;
 
 /** Ids of the rows that close an exchange. An exchange opens at each user row
- *  and closes on its settled row. One that ended with none — cancelled, or
+ *  — except one that joined the running turn, which stays inside the exchange
+ *  it joined — and closes on its settled row. One that ended with none — cancelled, or
  *  crashed — closes on its last row with text, so its reply still gets a
  *  timestamp and actions, or on its last row when none said anything. The
  *  exchange a working turn is still running has no closing row yet. */
@@ -89,6 +90,7 @@ const closingRowIds = computed<Set<string>>(() => {
   };
   for (const message of props.block.messages) {
     if (message.role === 'user') {
+      if (message.joined) continue;
       closeUnsettled();
       settled = false;
       lastWithText = null;

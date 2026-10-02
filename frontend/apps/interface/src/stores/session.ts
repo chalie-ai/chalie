@@ -20,7 +20,7 @@
  */
 import { defineStore } from 'pinia';
 import type { DelegateRef, WsPushEvent } from '@chalie/shared';
-import { api, AuthError, ConfigType, getWebSocket, useConnectionStore } from '@chalie/shared';
+import { AuthError, ConfigType, getWebSocket, useConnectionStore } from '@chalie/shared';
 import { extractText } from '../composables/useMarkup';
 import { conversation as convoApi } from '../api/conversation';
 import { dispatchDrift, refetchDelegate, registerSessionHooks } from '../utils/driftDispatcher';
@@ -335,28 +335,16 @@ export const useSessionStore = defineStore('session', {
       let heldForFrame = false;
       try {
         const onFailure = (m: string): void => this._onSendFailure(m, threadId, type);
-        let result: { turn_id: number; type: string } | null;
-        if (threadId == null && joinId != null) {
-          const form = new FormData();
-          form.append('text', body);
-          form.append('type', type);
-          form.append('join', '1');
-          // Ignored by a join; honoured if the turn finished first and the
-          // message starts a new one instead.
-          if (thinkingLevel) form.append('thinking_level', thinkingLevel);
-          result = await api
-            .upload<{ result: { turn_id: number; type: string } }>(`/api/threads/${joinId}`, form)
-            .then(
-              (resp) => resp.result,
-              () => {
-                onFailure('Chat request failed.');
-                return null;
-              },
-            );
-        } else {
-          if (joinId == null) mountSendEcho(body, threadId, type, files);
-          result = await getWebSocket().send(body, onFailure, files, threadId, type, thinkingLevel);
-        }
+        if (joinId == null) mountSendEcho(body, threadId, type, files);
+        const result = await getWebSocket().send(
+          body,
+          onFailure,
+          files,
+          threadId ?? joinId,
+          type,
+          thinkingLevel,
+          threadId == null && joinId != null,
+        );
         // POST resolved with the allocated turn_id but execution runs in the
         // background — keep the busy hold until the dispatcher observes the
         // turn's first `turn_execution` frame (unless one already beat the

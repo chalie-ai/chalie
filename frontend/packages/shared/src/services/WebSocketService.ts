@@ -319,7 +319,11 @@ export class WebSocketService {
    *  no signal will ever arrive — so the surface can release its send guard.
    *
    *  Resolves with the POST body `{turn_id, type}` so the caller can bind the
-   *  lane handle the moment the server allocates it (no WS round-trip needed). */
+   *  lane handle the moment the server allocates it (no WS round-trip needed).
+   *
+   *  `join` sends a main-conversation follow-up into the still-working turn
+   *  `threadId`; the server starts a new thread instead if that turn's own
+   *  work already finished. */
   send(
     text: string,
     onSendFailure: (message: string) => void = () => {
@@ -329,12 +333,13 @@ export class WebSocketService {
     threadId: number | null = null,
     type: string = ConfigType.USER,
     thinkingLevel: string | null = null,
+    join = false,
   ): Promise<{ turn_id: number; type: string } | null> {
     if (!this.isConnected) {
       onSendFailure('Not connected. Please wait...');
       return Promise.resolve(null);
     }
-    return this.postChat(text, files, threadId, onSendFailure, type, thinkingLevel);
+    return this.postChat(text, files, threadId, onSendFailure, type, thinkingLevel, join);
   }
 
   private postChat(
@@ -344,10 +349,13 @@ export class WebSocketService {
     onSendFailure: (message: string) => void,
     type: string = ConfigType.USER,
     thinkingLevel: string | null = null,
+    join = false,
   ): Promise<{ turn_id: number; type: string } | null> {
     const form = new FormData();
     form.append('text', text);
     form.append('type', type);
+    if (join) form.append('join', '1');
+    // A join ignores it; a message that starts a new thread instead honours it.
     if (thinkingLevel) form.append('thinking_level', thinkingLevel);
     for (const file of files) form.append('files', file, file.name);
     // POST /api/threads/<turn_id> — -1 creates a new thread, a real id replies

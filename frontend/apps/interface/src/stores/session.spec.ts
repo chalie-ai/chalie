@@ -9,7 +9,7 @@
  * Real DOM (happy-dom — the project's established Vue-mounting environment,
  * see turnDom.spec.ts), real Pinia, real turnDom/queue modules. Only the
  * WS/network boundary is mocked: `getWebSocket` (send/abort are the only
- * stubbed calls, per convention), `api.upload` (the spine join's POST),
+ * stubbed calls, per convention),
  * `getHost`, and the REST `conversation` API
  * (`api/conversation.ts`) — the actual `fetch`/XHR transport this app would
  * otherwise hit.
@@ -28,18 +28,14 @@ import type { Component } from 'vue';
 // captures whatever onConnect/onDisconnect callbacks `session.init()`
 // registers so reconnect tests can fire them directly, the same way the real
 // WebSocketService would invoke them on an actual drop/restore.
-const { fakeWs, sendMock, uploadMock, wsCallbacks } = vi.hoisted(() => {
+const { fakeWs, sendMock, wsCallbacks } = vi.hoisted(() => {
   const sendMock = vi.fn();
-  // `api.upload` is the multipart POST a spine follow-up uses to join its
-  // working turn (the same network edge as the WS service's own POST).
-  const uploadMock = vi.fn();
   const wsCallbacks: { onConnect: () => void; onDisconnect: () => void } = {
     onConnect: () => { /* replaced by session.init() */ },
     onDisconnect: () => { /* replaced by session.init() */ },
   };
   return {
     sendMock,
-    uploadMock,
     wsCallbacks,
     fakeWs: {
       send: sendMock,
@@ -58,7 +54,6 @@ vi.mock('@chalie/shared', () => ({
   AuthError: class AuthError extends Error {},
   getWebSocket: () => fakeWs,
   useConnectionStore: () => ({ setConnected: () => { /* not under test */ } }),
-  api: { upload: (...args: unknown[]) => uploadMock(...args) },
   getHost: () => '',
 }));
 
@@ -141,7 +136,6 @@ async function freshSession() {
 
 beforeEach(() => {
   sendMock.mockReset();
-  uploadMock.mockReset();
   threadMock.mockReset();
   stopMock.mockReset();
   stopMock.mockResolvedValue({ cancelled: true, reason: null });
@@ -264,7 +258,7 @@ describe('sendMessage — surface-scoped busy gate', () => {
     await session.sendMessage('thread message', [], 555, ConfigType.USER);
     expect(sendMock).toHaveBeenCalledTimes(2);
     expect(sendMock).toHaveBeenLastCalledWith(
-      'thread message', expect.any(Function), [], 555, ConfigType.USER, null,
+      'thread message', expect.any(Function), [], 555, ConfigType.USER, null, false,
     );
     expect(queue.queuedFor(555)).toEqual([]);
 
@@ -305,7 +299,7 @@ describe('sendMessage — surface-scoped busy gate', () => {
     await session.sendMessage('a new top-level message', [], null, ConfigType.USER);
     expect(queue.queuedFor(null)).toEqual([]);
     expect(sendMock).toHaveBeenLastCalledWith(
-      'a new top-level message', expect.any(Function), [], null, ConfigType.USER, null,
+      'a new top-level message', expect.any(Function), [], null, ConfigType.USER, null, false,
     );
 
     // ...and so does a second thread, in parallel with the first.
@@ -319,7 +313,7 @@ describe('sendMessage — surface-scoped busy gate', () => {
     await session.sendMessage('second reply in thread 42', [], 42, ConfigType.USER);
     expect(sendMock).toHaveBeenCalledTimes(4);
     expect(sendMock).toHaveBeenLastCalledWith(
-      'second reply in thread 42', expect.any(Function), [], 42, ConfigType.USER, null,
+      'second reply in thread 42', expect.any(Function), [], 42, ConfigType.USER, null, false,
     );
     expect(queue.queuedFor(42)).toEqual([]);
 
@@ -343,29 +337,25 @@ describe('sendMessage — a text sent while the lane\'s turn works joins it', ()
   }
 
   const WORKING_7 = '<div data-working data-turn-id="7" data-type="user"></div>';
-  const JOINED_OK = { result: { turn_id: 7, type: ConfigType.USER } };
+  const JOINED_OK = { turn_id: 7, type: ConfigType.USER };
 
-  it('a spine follow-up POSTs join=1 to the unclaimed working turn: no lane claim, no echo, nothing queued, never the WS send', async () => {
+  it('a spine follow-up is sent as a join of the unclaimed working turn: no lane claim, no echo, nothing queued', async () => {
     // Turn 5 is a forked thread's work rendered on the spine (lane-claimed);
     // turn 7 is the spine's own working turn. The join must pick 7.
     const { session, queue, spine } = await spineWith(
       '<div data-working data-turn-id="5" data-type="user" data-lane-type="user" data-lane-turn-id="5"></div>'
       + WORKING_7,
     );
-    uploadMock.mockResolvedValue(JOINED_OK);
+    sendMock.mockResolvedValue(JOINED_OK);
 
     await session.sendMessage('and add the chart too', [], null, ConfigType.USER, 'high');
 
-    expect(uploadMock).toHaveBeenCalledTimes(1);
-    const [path, form] = uploadMock.mock.calls[0] as [string, FormData];
-    expect(path).toBe('/api/threads/7');
-    expect(form.get('text')).toBe('and add the chart too');
-    expect(form.get('type')).toBe(ConfigType.USER);
-    expect(form.get('join')).toBe('1');
     // Honoured by the backend only if the turn finished first and the text
-    // starts a new one instead — it must still ride along.
-    expect(form.get('thinking_level')).toBe('high');
-    expect(sendMock).not.toHaveBeenCalled();
+    // starts a new one instead — the thinking level must still ride along.
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(sendMock).toHaveBeenCalledWith(
+      'and add the chart too', expect.any(Function), [], 7, ConfigType.USER, 'high', true,
+    );
     expect(queue.queuedFor(null)).toEqual([]);
     // The joined turn stays the spine's: only the pre-existing claim on 5.
     expect(Array.from(spine.querySelectorAll('[data-lane-turn-id]')).map((e) => e.getAttribute('data-turn-id')))
@@ -376,41 +366,48 @@ describe('sendMessage — a text sent while the lane\'s turn works joins it', ()
 
   it('a failed join POST surfaces the error and leaves the lane free to join again (no stuck hold, nothing queued)', async () => {
     const { session, queue } = await spineWith(WORKING_7);
-    uploadMock.mockRejectedValueOnce(new Error('network down'));
+    sendMock.mockImplementationOnce((_text: string, onSendFailure: (m: string) => void) => {
+      onSendFailure('Chat request failed.');
+      return Promise.resolve(null);
+    });
 
     await session.sendMessage('lost in transit', [], null, ConfigType.USER);
 
     expect(session.errorMessage).toBe('Chat request failed.');
     expect(queue.queuedFor(null)).toEqual([]);
 
-    uploadMock.mockResolvedValue(JOINED_OK);
+    sendMock.mockResolvedValue(JOINED_OK);
     await session.sendMessage('try again', [], null, ConfigType.USER);
-    expect(uploadMock).toHaveBeenCalledTimes(2);
+    expect(sendMock).toHaveBeenCalledTimes(2);
+    expect(sendMock).toHaveBeenLastCalledWith(
+      'try again', expect.any(Function), [], 7, ConfigType.USER, null, true,
+    );
     expect(queue.queuedFor(null)).toEqual([]);
   });
 
   it('two texts sent one after the other both join the working turn — the first join does not hold the lane', async () => {
     const { session, queue } = await spineWith(WORKING_7);
-    uploadMock.mockResolvedValue(JOINED_OK);
+    sendMock.mockResolvedValue(JOINED_OK);
 
     await session.sendMessage('first follow-up', [], null, ConfigType.USER);
     await session.sendMessage('second follow-up', [], null, ConfigType.USER);
 
-    expect(uploadMock).toHaveBeenCalledTimes(2);
-    expect((uploadMock.mock.calls[1] as [string, FormData])[1].get('text')).toBe('second follow-up');
+    expect(sendMock).toHaveBeenCalledTimes(2);
+    expect(sendMock).toHaveBeenLastCalledWith(
+      'second follow-up', expect.any(Function), [], 7, ConfigType.USER, null, true,
+    );
     expect(queue.queuedFor(null)).toEqual([]);
   });
 
   it('a text typed while the lane\'s own join POST is still in flight queues, even though a working turn is on screen', async () => {
     const { session, queue } = await spineWith(WORKING_7);
     let resolveFirst: (v: unknown) => void = () => { /* replaced below */ };
-    uploadMock.mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }));
+    sendMock.mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }));
 
     const first = session.sendMessage('first follow-up', [], null, ConfigType.USER);
     await session.sendMessage('typed before the first POST resolved', [], null, ConfigType.USER);
 
-    expect(uploadMock).toHaveBeenCalledTimes(1);
-    expect(sendMock).not.toHaveBeenCalled();
+    expect(sendMock).toHaveBeenCalledTimes(1);
     expect(queue.queuedFor(null)).toEqual([
       { text: 'typed before the first POST resolved', files: [], thinkingLevel: null },
     ]);
@@ -429,7 +426,6 @@ describe('sendMessage — a text sent while the lane\'s turn works joins it', ()
 
     await session.sendMessage('typed while offline', [], null, ConfigType.USER);
 
-    expect(uploadMock).not.toHaveBeenCalled();
     expect(sendMock).not.toHaveBeenCalled();
     expect(queue.queuedFor(null)).toEqual([{ text: 'typed while offline', files: [], thinkingLevel: null }]);
   });
@@ -443,7 +439,6 @@ describe('sendMessage — a text sent while the lane\'s turn works joins it', ()
     await session.sendMessage('see attached', [file], null, ConfigType.USER);
     await session.sendMessage('and here, in the thread', [file], 42, ConfigType.USER);
 
-    expect(uploadMock).not.toHaveBeenCalled();
     expect(sendMock).not.toHaveBeenCalled();
     expect(queue.queuedFor(null)).toEqual([{ text: 'see attached', files: [file], thinkingLevel: null }]);
     expect(queue.queuedFor(42)).toEqual([{ text: 'and here, in the thread', files: [file], thinkingLevel: null }]);
@@ -454,7 +449,6 @@ describe('sendMessage — a text sent while the lane\'s turn works joins it', ()
 
     await session.sendMessage('nothing to join yet', [], null, ConfigType.USER);
 
-    expect(uploadMock).not.toHaveBeenCalled();
     expect(sendMock).not.toHaveBeenCalled();
     expect(queue.queuedFor(null)).toEqual([{ text: 'nothing to join yet', files: [], thinkingLevel: null }]);
   });
@@ -470,7 +464,7 @@ describe('sendMessage — a text sent while the lane\'s turn works joins it', ()
     return { ...ctx, panel };
   }
 
-  it('a reply into a working thread goes to that thread over the wire — no join POST, no echo, nothing queued', async () => {
+  it('a reply into a working thread goes to that thread over the wire — never a spine join, no echo, nothing queued', async () => {
     const claimed = '<div data-working data-turn-id="42" data-type="user" data-lane-type="user" data-lane-turn-id="42"></div>';
     const { session, queue, panel } = await panelOver(claimed, claimed);
     sendMock.mockResolvedValueOnce({ turn_id: 42, type: ConfigType.USER });
@@ -479,9 +473,8 @@ describe('sendMessage — a text sent while the lane\'s turn works joins it', ()
 
     expect(sendMock).toHaveBeenCalledTimes(1);
     expect(sendMock).toHaveBeenCalledWith(
-      'one more thing for the thread', expect.any(Function), [], 42, ConfigType.USER, null,
+      'one more thing for the thread', expect.any(Function), [], 42, ConfigType.USER, null, false,
     );
-    expect(uploadMock).not.toHaveBeenCalled();
     expect(queue.queuedFor(42)).toEqual([]);
     expect(panel.querySelector('[data-send-echo]')).toBeNull();
   });
@@ -493,8 +486,9 @@ describe('sendMessage — a text sent while the lane\'s turn works joins it', ()
 
     await session.sendMessage('a reply typed in the panel', [], 42, ConfigType.USER);
 
-    expect(sendMock).toHaveBeenCalledTimes(1);
-    expect(uploadMock).not.toHaveBeenCalled();
+    expect(sendMock).toHaveBeenCalledWith(
+      'a reply typed in the panel', expect.any(Function), [], 42, ConfigType.USER, null, false,
+    );
     expect(panel.querySelector('[data-send-echo]')).toBeNull();
     // A join is no fork: neither copy is claimed for a thread lane.
     expect(spine.querySelector('[data-turn-id="42"]')?.hasAttribute('data-lane-turn-id')).toBe(false);
@@ -514,12 +508,11 @@ describe('sendMessage — a text sent while the lane\'s turn works joins it', ()
     await session.sendMessage('reply into a settled thread', [], 555, ConfigType.USER);
 
     expect(sendMock).toHaveBeenNthCalledWith(
-      1, 'a fresh question', expect.any(Function), [], null, ConfigType.USER, null,
+      1, 'a fresh question', expect.any(Function), [], null, ConfigType.USER, null, false,
     );
     expect(sendMock).toHaveBeenNthCalledWith(
-      2, 'reply into a settled thread', expect.any(Function), [], 555, ConfigType.USER, null,
+      2, 'reply into a settled thread', expect.any(Function), [], 555, ConfigType.USER, null, false,
     );
-    expect(uploadMock).not.toHaveBeenCalled();
     expect(queue.queuedFor(null)).toEqual([]);
     expect(queue.queuedFor(555)).toEqual([]);
     expect(spine.querySelector('[data-send-echo]')).not.toBeNull();
@@ -544,7 +537,7 @@ describe('_drainLane — queued sends replay their files, not just their text', 
 
     expect(sendMock).toHaveBeenCalledTimes(1);
     expect(sendMock).toHaveBeenCalledWith(
-      'queued while the thread was busy', expect.any(Function), [file], 77, ConfigType.USER, null,
+      'queued while the thread was busy', expect.any(Function), [file], 77, ConfigType.USER, null, false,
     );
   });
 });
@@ -931,7 +924,7 @@ describe('reconnect reconcile', () => {
     expect(turnDom.isTurnWorking(6, ConfigType.USER)).toBe(true); // restored
     expect(threadPhase(6, ConfigType.USER)).toBe('working');
     expect(sendMock).toHaveBeenCalledWith(
-      'queued while offline', expect.any(Function), [], 909, ConfigType.USER, null,
+      'queued while offline', expect.any(Function), [], 909, ConfigType.USER, null, false,
     );
   });
 
