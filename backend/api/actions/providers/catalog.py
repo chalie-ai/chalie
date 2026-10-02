@@ -15,7 +15,6 @@ from flask.typing import ResponseReturnValue
 
 from api.action import Action
 from api.endpoint import DocumentedResponse
-from exceptions import NotFoundError
 from api.response.provider_catalog import CatalogEntry
 from services.provider_catalog_service import get_catalog
 
@@ -27,8 +26,7 @@ class ProviderCatalog(Action):
     response_dto = {"get": DocumentedResponse(CatalogEntry, listing=True)}
 
     def get(self, id: int | str) -> ResponseReturnValue:
-        if not self.is_create(id):
-            raise NotFoundError("Not found")
+        self.require_create_sentinel(id)
         items = [
             CatalogEntry(
                 id=cast(str, entry["id"]),
