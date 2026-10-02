@@ -345,9 +345,16 @@
   transition: border-color var(--duration-fast), color var(--duration-fast), background var(--duration-fast);
 }
 
-.trace-pill:hover,
-.trace-pill--open {
+.trace-pill:hover {
   border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+// Open, the pill takes the trace card's violet tint so pill and panel read as
+// one unit. Doubled class so the tint outranks `:hover` while open.
+.trace-pill.trace-pill--open {
+  border-color: color-mix(in oklab, var(--violet) 16%, var(--border));
+  background: color-mix(in oklab, var(--violet) 5%, var(--bg-surface-2));
   color: var(--text-primary);
 }
 
@@ -378,40 +385,71 @@
   min-height: 0;
 }
 
+// Activity-log card. Rows run edge to edge and stay square so the dividers are
+// full-width straight rules — a rounded row tapers its border-top at both ends.
 .calls {
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--bg-surface-2);
-  padding: 5px;
+  overflow: hidden;
   max-width: 100%;
-  font-family: var(--font-mono);
-  font-size: 0.72rem;
+  border: 1px solid color-mix(in oklab, var(--violet) 16%, var(--border));
+  border-radius: 12px;
+  background: color-mix(in oklab, var(--violet) 5%, var(--bg-surface-2));
   line-height: 1.5;
 }
 
+// The left gutter holds the status dot, drawn off the name chip so it always
+// centres on the first line however the summary wraps.
 .call {
-  padding: 8px 10px;
-  border-radius: 8px;
   display: flex;
-  gap: 8px;
   flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  padding: 9px 12px 9px 26px;
+  overflow-wrap: anywhere;
 }
 
 .call + .call {
-  border-top: 1px solid var(--border);
+  border-top: 1px solid color-mix(in oklab, var(--violet) 10%, var(--border));
 }
 
+// Chip text mixes toward --text-primary (lighter on dark, deeper on paper) so it
+// clears AA on its tint in both themes — plain --violet-light / --error do not
+// on light.
 .call__fn {
-  color: var(--accent-primary);
+  position: relative;
+  padding: 1px 7px;
+  border-radius: 6px;
+  background: color-mix(in oklab, var(--violet) 12%, transparent);
+  color: color-mix(in oklab, var(--violet-light) 75%, var(--text-primary));
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
   font-weight: 600;
 }
 
+.call__fn::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  right: calc(100% + 8px);
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-primary);
+  transform: translateY(-50%);
+}
+
 .call__summary {
+  min-width: 0;
+  font-size: 0.78rem;
   color: var(--text-secondary);
 }
 
 .call--error .call__fn {
-  color: var(--error);
+  background: color-mix(in oklab, var(--error) 12%, transparent);
+  color: color-mix(in oklab, var(--error) 75%, var(--text-primary));
+}
+
+.call--error .call__fn::before {
+  background: var(--error);
 }
 
 // --------------------------------------------------------------------------
