@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, cast
 
 from abilities._ability import Ability, B
 from abilities._result import ToolResult
+from models.turn_execution import TurnExecution
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -60,7 +61,12 @@ class DelegateAbility(Ability[B], ABC):
         written in the same transaction that opens the turn, so the parent's
         pill can be followed to the child's transcript. The parent's frame is
         sent again once that row exists — the earlier ``started`` frame went out
-        before there was a child turn to point at."""
+        before there was a child turn to point at.
+
+        A child the user stopped from its transcript panel ends CANCELLED; that
+        is reported as ``delegate-stopped`` — read from the child's execution
+        row, never inferred from its text — so the caller does not re-run work
+        the user chose to stop."""
         from controllers.message_processor import MessageProcessor  # noqa: PLC0415
 
         mp = self.mp
@@ -75,7 +81,15 @@ class DelegateAbility(Ability[B], ABC):
             metadata={"origin": mp.origin, "tool_call_id": self.tool_call_id},
         )
         mp.tool_call_service.reemit(self.tool_call_id)
-        return delegate_result(child.result(), hint=hint)
+        answer = child.result()
+        if child.execution is not None and child.execution.state == TurnExecution.CANCELLED:
+            return ToolResult.err(
+                "The user stopped this subagent before it finished. Do not retry it or "
+                "delegate the same task again; answer with what you already have, or tell "
+                "the user it was stopped.",
+                code="delegate-stopped",
+            )
+        return delegate_result(answer, hint=hint)
 
 
 def delegate_result(result: str, *, hint: str) -> ToolResult:

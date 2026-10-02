@@ -223,17 +223,29 @@ class MessageProcessor:
     def push_websocket(self, instance: "JsonSerializable | None") -> None:
         """Emit ``instance`` to the frontend, gated by this turn's channel and
         config — the one pre-flight every spine service shares, so no emit site
-        re-inlines it. A watchable delegate turn (``WATCHABLE_DELEGATE_CHANNELS``)
-        broadcasts addressed by its channel, so a surface following it can stream
-        it live. Any other turn broadcasts only when its config opts in
+        re-inlines it (see :meth:`broadcast_as`)."""
+        self.broadcast_as(instance, self.channel, self.config)
+
+    @staticmethod
+    def broadcast_as(
+        instance: "JsonSerializable | None", channel: str, config: "ProcessorConfig | None",
+    ) -> None:
+        """Emit ``instance`` the way a turn on ``channel`` driven by ``config``
+        does — the one place that decides it, shared by :meth:`push_websocket`
+        and a cancel addressed to a turn this process does not hold (which knows
+        only the row's channel and the config its type resolves to, if any).
+
+        A watchable delegate turn (``WATCHABLE_DELEGATE_CHANNELS``) broadcasts
+        addressed by its channel, so a surface following it can stream it live.
+        Any other turn broadcasts only when its config opts in
         (``BROADCASTS_STATE`` — the ``user`` and ``scheduled`` types) AND carries
-        an addressable routing type; an internal channel (``type_value() is
-        None``) never reaches the wire. Past the gate this is a thin pass to
-        ``Websocket.broadcast`` (itself a no-op on ``None`` and when nobody is
-        listening)."""
-        if self.channel in WATCHABLE_DELEGATE_CHANNELS:
-            Websocket.broadcast(instance, channel=self.channel)
-        elif self.config.BROADCASTS_STATE and self.config.type_value() is not None:
+        an addressable routing type; an internal channel (no config, or
+        ``type_value() is None``) never reaches the wire. Past the gate this is
+        a thin pass to ``Websocket.broadcast`` (itself a no-op on ``None`` and
+        when nobody is listening)."""
+        if channel in WATCHABLE_DELEGATE_CHANNELS:
+            Websocket.broadcast(instance, channel=channel)
+        elif config is not None and config.BROADCASTS_STATE and config.type_value() is not None:
             Websocket.broadcast(instance)
 
     # ── entrypoint ─────────────────────────────────────────────────────────────
