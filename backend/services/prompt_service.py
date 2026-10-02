@@ -293,7 +293,8 @@ class PromptService:
         ``[interim_response] <row content with newlines flattened to spaces>``.
         Calls anchored directly to the input row (``transcript_id == mp.uid``)
         render without an interim prefix; an assistant row anchoring no calls
-        (the final synthesis) never triggers an interim line; assistant rows
+        (the final synthesis) never triggers an interim line unless a joined
+        message was taken in after it (below); assistant rows
         from a prior exchange never surface — ``exchange_assistant_rows``
         floors at ``mp.uid`` so only this exchange's steps are in the lookup.
         A chat-history compaction anchors to one assistant row and becomes the
@@ -310,7 +311,18 @@ class PromptService:
         input row, or a trace-only exchange) are emitted before the call trail —
         chronologically they precede every call-bearing anchor — so no step's
         trace is dropped and the prompt-level guard still renders a trace-only
-        trail."""
+        trail.
+
+        Joined messages: each message the loop has taken in
+        (``mp.consumed_joins``) renders as a stamped ``user:`` line — the same
+        shape as this turn's own input line — right after the last line of the
+        assistant row it was filed under (that row's thinking and prose lead
+        in when no call did). That is the order the model saw them in, not
+        the order they arrived: a message sent while a call was in flight
+        follows that call's reply and tool results. A message taken in before
+        a compaction still renders — the compaction folds earlier turns, never
+        this exchange — and one not yet taken in does not. With nothing
+        joined the trail is unchanged."""
         calls = self.mp.tool_call_service.by_exchange()
         last_compaction = max(
             (cast("int", call.id) for call in calls if call.tool_name == "chat_history_compactor"),
@@ -337,28 +349,38 @@ class PromptService:
             if not trace or not trace.strip():
                 continue
             thinking.setdefault(tid, []).append(trace)
+        joins = self.mp.consumed_joins
         emitted: set[int] = set()
         parts: list[str] = []
+
+        def lead_in(tid: int) -> None:
+            if tid not in emitted and tid > cutoff:
+                parts.extend(f"[thinking]{trace}[end_thinking]" for trace in thinking.get(tid, ()))
+                if tid in interim:
+                    parts.append(f"[interim_response] {interim[tid]}")
+                emitted.add(tid)
+
+        def joined_after(tid: int) -> None:
+            lead_in(tid)
+            parts.extend(f"[{self._format_ts(row.created_at)}] user: {row.content}" for row in joins[tid])
+
         # Traces anchored to rows that never got a call (an empty-completion
         # steer at the exchange input row) precede every call-bearing anchor
         # chronologically — emit them first so no step's trace is dropped.
         called_tids = {call.transcript_id for call in calls}
-        for tid in sorted(t for t in thinking if t not in called_tids):
+        for tid in sorted(t for t in thinking if t not in called_tids and t not in joins):
             for trace in thinking[tid]:
                 parts.append(f"[thinking]{trace}[end_thinking]")
             emitted.add(tid)
+        pending = sorted(joins, reverse=True)
         for call in calls:
             if call.tool_name == "chat_history_compactor" or cast("int", call.id) <= last_compaction:
                 continue
             result = call.result
             tid = call.transcript_id
-            if tid not in emitted and tid > cutoff:
-                if tid in thinking:
-                    for trace in thinking[tid]:
-                        parts.append(f"[thinking]{trace}[end_thinking]")
-                if tid in interim:
-                    parts.append(f"[interim_response] {interim[tid]}")
-                emitted.add(tid)
+            while pending and pending[-1] < tid:
+                joined_after(pending.pop())
+            lead_in(tid)
             if call.tool_name == Recall.NAME and '"_auto": true' in call.params:
                 body = result.split("\n", 1)[1] if "\n" in result else result
                 parts.append(
@@ -366,6 +388,8 @@ class PromptService:
                 )
                 continue
             parts.append(f"[{call.tool_name}] {call.params} → {result}")
+        while pending:
+            joined_after(pending.pop())
         return "\n".join(parts)
 
     # ── dispatch + safe-fragment helpers ─────────────────────────────────────

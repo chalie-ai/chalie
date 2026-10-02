@@ -9,8 +9,9 @@ settle0 is a turn's first ``role='assistant' AND settled=1`` row; a FORK view
 (a reply into an already-settled turn) reads the WHOLE turn above the
 compaction watermark, unfloored; a MAIN view (a fresh turn) reads every prior
 turn above the watermark, each floored at its own settle0. A write that
-changes the visible transcript (``append_assistant``) pokes every open
-surface with ``TurnSignal(updated)`` via ``mp.push_websocket`` (Rule 7/9).
+changes the visible transcript (``append_assistant``, a joined
+``append_input``) pokes every open surface with ``TurnSignal(updated)`` via
+``mp.push_websocket`` (Rule 7/9).
 """
 
 from __future__ import annotations
@@ -119,7 +120,7 @@ class TranscriptService:
                     # trailing input rows a cancel discarded, on the same rule
                     # the rendered thread trims itself with.
                     rows.extend(turn_rows[:TurnExecution.cancelled_orphan_cutoff(
-                        [r.role for r in turn_rows], TurnExecution.latest(channel, tid),
+                        [(r.role, bool(r.joined)) for r in turn_rows], TurnExecution.latest(channel, tid),
                     )])
         # A call that only asked for tools left an empty row: it said nothing,
         # so it is not history and must not take a slot under the cap.
@@ -155,6 +156,19 @@ class TranscriptService:
         if self.mp.uid is not None:
             q = q.filter("id", self.mp.uid, ">")
         return q.get()
+
+    def joined_since(self, after_id: int) -> list[Transcript]:
+        """This turn's joined input rows written after ``after_id``, oldest-
+        first — the messages sent into the working turn that the running
+        exchange has not read yet."""
+        return (
+            Transcript.filter("channel", self.mp.channel)
+            .filter("turn_id", self.mp.turn_id)
+            .filter("joined", 1)
+            .filter("id", after_id, ">")
+            .order_by("id ASC")
+            .get()
+        )
 
     def anchor_row(self) -> Transcript | None:
         """This turn's anchoring input row, or ``None`` before it exists
@@ -198,17 +212,25 @@ class TranscriptService:
 
     def append_input(
         self, content: str, *, thinking_level: str | None = None, tool_call_id: int | None = None,
+        joined: bool = False,
     ) -> int:
-        """Write this turn's anchoring input row (unsettled) and return its id.
+        """Write an input row (settled=0) for this turn and return its id.
         ``thinking_level`` is persisted only when one of {auto, medium, high};
-        otherwise NULL is stored. ``tool_call_id`` is the caller's ``tool_calls``
-        row when this turn is a delegate's — stored on the row as the link from
-        the caller's tool call to this turn."""
+        otherwise NULL is stored. Plain, it is the exchange's anchoring row,
+        announced by the ``working`` frame its execution opens with.
+        ``tool_call_id`` is the caller's ``tool_calls`` row when this turn is a
+        delegate's — stored on the row as the link from the caller's tool call to
+        this turn. ``joined`` marks a message sent into the turn while it is
+        still working: no frame announces that one, so it pokes every open
+        surface to refetch the turn block itself."""
         valid = thinking_level if thinking_level in {"auto", "medium", "high"} else None
-        return self._append(
+        row_id = self._append(
             content, role=self.mp.config.role, settled=0, thinking_level=valid,
-            tool_call_id=str(tool_call_id) if tool_call_id is not None else None,
+            tool_call_id=str(tool_call_id) if tool_call_id is not None else None, joined=joined,
         )
+        if joined:
+            self.mp.push_websocket(TurnSignal.updated(self.mp))
+        return row_id
 
     def append_assistant(self, content: str, *, settled: bool) -> int:
         """Write one provider call's assistant row for this turn and poke
@@ -245,7 +267,7 @@ class TranscriptService:
 
     def _append(
         self, content: str, *, role: str, settled: int,
-        thinking_level: str | None = None, tool_call_id: str | None = None,
+        thinking_level: str | None = None, tool_call_id: str | None = None, joined: bool = False,
     ) -> int:
         """Write one transcript row for this turn and return its id."""
         loc = self._location()
@@ -255,7 +277,7 @@ class TranscriptService:
             deliberation_score=0.0,
             location_lat=loc.get("lat"), location_lon=loc.get("lon"),
             location_name=loc.get("name"),
-            thinking_level=thinking_level, tool_call_id=tool_call_id,
+            thinking_level=thinking_level, tool_call_id=tool_call_id, joined=int(joined),
         ).save()
         return cast("int", row.id)
 

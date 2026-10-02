@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 
 from configs.channels import config_for
 from models.turn_execution import TurnExecution
+from services.database import Database
 from services.time_utils import utc_now
 
 if TYPE_CHECKING:
@@ -116,17 +117,20 @@ class TurnExecutionService:
         (:meth:`MessageProcessor.broadcast_as`). :meth:`finish` becomes a
         no-op once it observes this row already terminal — the row closed here
         always wins, never resurrected or overwritten by the doomed turn's own
-        eventual finish()."""
+        eventual finish(). The read and the write share one ``BEGIN
+        IMMEDIATE`` transaction, so a turn settling or a message joining on
+        another thread lands wholly before or wholly after it."""
         from controllers.message_processor import MessageProcessor  # noqa: PLC0415 — the MP imports this module
 
         try:
-            execution = TurnExecution.open_turn(channel, turn_id)
-            if execution is None:
-                return None
-            execution.cancel_requested = True
-            execution.state = TurnExecution.CANCELLED
-            execution.ended_at = utc_now().isoformat()
-            execution.save()
+            with Database.transaction():
+                execution = TurnExecution.open_turn(channel, turn_id)
+                if execution is None:
+                    return None
+                execution.cancel_requested = True
+                execution.state = TurnExecution.CANCELLED
+                execution.ended_at = utc_now().isoformat()
+                execution.save()
         except Exception as exc:
             logger.warning(
                 "[TurnExecutionService] cancel failed for channel=%s turn_id=%s: %s",

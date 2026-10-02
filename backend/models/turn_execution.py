@@ -69,6 +69,22 @@ class TurnExecution(Model):
         )
 
     @classmethod
+    def joinable(cls, channel: str, turn_id: int, *, spine_only: bool) -> "TurnExecution | None":
+        """The live execution a message sent to (channel, turn_id) joins
+        instead of opening one of its own — :meth:`open_turn`'s row unless a
+        stop was requested on it. ``spine_only`` narrows it to the turn's
+        first execution: a follow-up on the thread's opener must never land
+        inside a reply that happens to be running."""
+        execution = cls.open_turn(channel, turn_id)
+        if execution is None or execution.cancel_requested:
+            return None
+        if spine_only:
+            first = cls.filter("channel", channel).filter("turn_id", turn_id).order_by("id ASC").first()
+            if first is None or first.id != execution.id:
+                return None
+        return execution
+
+    @classmethod
     def open_rows(cls) -> Sequence["TurnExecution"]:
         """Every row a killed process left open (``ended_at IS NULL``) — the boot
         orphan sweep reads these and stamps each ``crashed`` (§6.6: a real DB read,
@@ -79,32 +95,37 @@ class TurnExecution(Model):
         return cls.filter("ended_at", None, "IS").get()
 
     @classmethod
-    def cancelled_orphan_cutoff(cls, roles: Sequence[str], latest: "TurnExecution | None") -> int:
-        """How many of a turn's rows (given in order, oldest first) are real
-        content once a cancel is accounted for — everything from this index on
-        is a trailing, reply-less input row the user was shown nothing for.
+    def cancelled_orphan_cutoff(cls, rows: Sequence[tuple[str, bool]], latest: "TurnExecution | None") -> int:
+        """How many of a turn's rows (given in order, oldest first, as
+        ``(role, joined)`` pairs) are real content once a cancel is accounted
+        for — everything from this index on is a trailing, reply-less input
+        row the user was shown nothing for.
 
         A cancel observed at ``MessageProcessor._step``'s checkpoint discards
         the in-flight response before any reply row is stored (§2.7), leaving
         one or more trailing input rows behind. Every CONSECUTIVE trailing one
-        is dropped, not just the last: a direct API POST into an open turn_id
-        can append a second before the cancel lands. The loop stops at the
-        first non-input row, since a cancel observed after real assistant or
-        tool content was already written leaves that content in place ('every
-        row it already wrote stays'). A provider call's own assistant row is
-        such content even when it is empty and only carries that call's tool
-        calls: once a call has returned and its row is stored, a later cancel
-        keeps the row and its calls. Dropped only when the turn's own most
-        recent execution actually ended cancelled, never on role alone.
+        is dropped, not just the last: two replies sent into a closed turn at
+        the same moment can each append one before the cancel lands. The loop
+        stops at the first non-input row, since a cancel observed after real
+        assistant or tool content was already written leaves that content in
+        place ('every row it already wrote stays'). A provider call's own
+        assistant row is such content even when it is empty and only carries
+        that call's tool calls: once a call has returned and its row is
+        stored, a later cancel keeps the row and its calls. A joined input row
+        (a message sent into the turn while it was working) stops the loop
+        too: the cancel strands it unread, but the user sent it into a turn
+        they were watching, so it stays visible along with everything before
+        it. Dropped only when the turn's own most recent execution actually
+        ended cancelled, never on role alone.
 
         The one place this rule lives: the thread-expand serializer trims the
         rows it renders with it, and ``TranscriptService.read()`` trims the
         history it hands the model with it, so what the user sees and what the
         model sees cannot drift apart."""
         if latest is None or latest.state != cls.CANCELLED:
-            return len(roles)
-        cutoff = len(roles)
-        while cutoff > 0 and roles[cutoff - 1] == "user":
+            return len(rows)
+        cutoff = len(rows)
+        while cutoff > 0 and rows[cutoff - 1] == ("user", False):
             cutoff -= 1
         return cutoff
 

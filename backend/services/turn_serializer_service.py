@@ -246,9 +246,11 @@ def _rows_to_messages(rows: list[dict[str, object]]) -> list[dict[str, object]]:
     # both carry ``image_preview_1``; resolving an assistant row's span against
     # the FLAT turn scope returns the turn's FIRST such call for every card
     # (every image card rendered the first image). Scope each assistant
-    # row to its cycle instead: reset at every user row (the cycle boundary),
-    # accumulate any assistant-anchored calls, and resolve the span within that
-    # window — the one scope where the per-request ordinal is unique.
+    # row to its cycle instead: reset at every user row that opens a request
+    # (the cycle boundary) — a joined row is read by the request already
+    # running, so it continues that cycle — accumulate any assistant-anchored
+    # calls, and resolve the span within that window — the one scope where the
+    # per-request ordinal is unique.
     voice_states = _voice_states(rows)
     thinking_states = _thinking_states(rows)
     cycle_calls: list[dict[str, object]] = []
@@ -266,7 +268,7 @@ def _rows_to_messages(rows: list[dict[str, object]]) -> list[dict[str, object]]:
                 "tokens": sum(cast("int", t["tokens"]) for t in own_thinking),
             }
         if r['role'] == 'user':
-            cycle_calls = list(own)
+            cycle_calls = cycle_calls + own if r['joined'] else list(own)
             _apply_user_fields(msg, r, attachments_by_id)
         else:
             cycle_calls = cycle_calls + own
@@ -300,7 +302,7 @@ def _drop_trailing_cancelled_orphan(
     thread and the model's view of it cannot disagree. ``latest`` is fetched
     once by the caller."""
     return rows[:TurnExecution.cancelled_orphan_cutoff(
-        [cast("str", r["role"]) for r in rows], latest,
+        [(cast("str", r["role"]), bool(r["joined"])) for r in rows], latest,
     )]
 
 
@@ -360,17 +362,19 @@ class TurnSerializerService:
         caller handed over — so it renders as a ``user`` message.
 
         Returns the WHOLE turn (no floor) projected into messages, with every row
-        from the turn's SECOND user-role row onward tagged ``thread_message: true``
+        from the turn's SECOND non-joined user-role row onward tagged
+        ``thread_message: true``
         — the reply continuation the main spine drops (it renders only the opener)
         and whose mere presence makes the turn a thread (the feed shows the
         opener). The opener is one user row plus every assistant row that follows
         it (each provider call's row — "let me check…" prose, an empty tool-only
-        step AND the final settled reply alike) up to (not including) the next
-        user row a reply appends — so the boundary keys
-        on the second user row's id, the one thing about a reply that is both
-        structural (a fresh input row, not a column flip) and immutable once
-        written. Neither ``Transcript.settle0`` NOR "first assistant row" work
-        here: settle0 names only the terminal row of whichever exchange settled
+        step AND the final settled reply alike), plus any joined user row (a
+        message sent into the opener while it was working, read by that same
+        exchange), up to (not including) the next user row a reply appends — so
+        the boundary keys on the second non-joined user row's id, the one thing
+        about a reply that is both structural (a fresh input row, not a column
+        flip) and immutable once written. Neither ``Transcript.settle0`` NOR
+        "first assistant row" work here: settle0 names only the terminal row of whichever exchange settled
         first, so an opener that crashed or was cancelled before settling hands it
         to a reply's terminal row and leaves the reply's own rows untagged; and
         "first assistant row" wrongly tags a single-exchange turn's own final reply
@@ -394,7 +398,7 @@ class TurnSerializerService:
                 r["role"] = "user"
         messages = _rows_to_messages(rows)
 
-        user_ids = [cast("int", r["id"]) for r in rows if r["role"] == "user"]
+        user_ids = [cast("int", r["id"]) for r in rows if r["role"] == "user" and not r["joined"]]
         boundary = user_ids[1] if len(user_ids) > 1 else None
         for m in messages:
             if boundary is not None and int(cast("str", m["id"])) >= boundary:

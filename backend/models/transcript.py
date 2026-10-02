@@ -46,7 +46,7 @@ class Transcript(Model):
         "id", "channel", "role", "content", "tool_call_id", "tool_name",
         "internal", "deliberation_score", "created_at", "xml_migrated",
         "location_lat", "location_lon", "location_name", "turn_id", "settled",
-        "thinking_level",
+        "thinking_level", "joined",
     )
 
     @classmethod
@@ -68,6 +68,7 @@ class Transcript(Model):
     turn_id: int | None
     settled: int
     thinking_level: str | None
+    joined: int
 
     # settle0 — the FIRST assistant row of a turn with settled=1: the boundary
     # between a turn's main exchange and its fork continuation. Each provider
@@ -441,15 +442,15 @@ class Transcript(Model):
     # row ended cancelled (MessageProcessor._step's cancel checkpoint discards
     # the in-flight response before any reply row is stored, §2.7) — excluded
     # from the feed so it never surfaces as a dangling, unanswered thread.
-    # ``MAX(CASE WHEN role != 'user' THEN 1 ELSE 0 END) = 0`` means NO row in
-    # the turn-group is non-user — i.e. every row is role='user', zero
-    # assistant/tool content — deliberately generalized from an earlier
-    # ``COUNT(*) = 1`` (a lone reply-less row only ever gated by the FE) since
-    # a direct API/automation POST into an open turn_id can append a second
-    # (or third) reply-less user row before the cancel lands, and this still
-    # correctly leaves a partially-completed turn (any real assistant/tool
-    # content already written — including a provider call's empty assistant
-    # row carrying its tool calls) alone per existing doctrine. The correlated
+    # ``MAX(CASE WHEN role != 'user' OR joined = 1 THEN 1 ELSE 0 END) = 0``
+    # means every row in the turn-group is a plain role='user' input — zero
+    # assistant/tool content and nothing joined mid-turn. A message joined
+    # into the turn before the cancel landed keeps the thread visible, the
+    # same rule as ``TurnExecution.cancelled_orphan_cutoff``: the cancel
+    # strands it unanswered, and hiding it would lose the user's own words.
+    # Any real assistant/tool content already written — including a provider
+    # call's empty assistant row carrying its tool calls — likewise leaves a
+    # partially-completed turn alone per existing doctrine. The correlated
     # subquery mirrors ``recent_threads``' own
     # ``MIN(CASE WHEN {predicate} THEN id END) IS NULL AS working`` idiom —
     # an aggregate over a per-row expression, not a join, so it costs nothing
@@ -459,7 +460,7 @@ class Transcript(Model):
     # FALSE, and HAVING drops NULL rows just like FALSE ones — silently
     # excluding every legacy singleton thread from the feed.
     _CANCELLED_ORPHAN_HAVING: ClassVar[str] = (
-        "NOT (MAX(CASE WHEN role != 'user' THEN 1 ELSE 0 END) = 0 "
+        "NOT (MAX(CASE WHEN role != 'user' OR joined = 1 THEN 1 ELSE 0 END) = 0 "
         "AND MAX(COALESCE((SELECT te.state FROM turn_executions te "
         "WHERE te.channel = transcript.channel AND te.turn_id = transcript.turn_id "
         "ORDER BY te.id DESC LIMIT 1), '')) = 'cancelled')"
