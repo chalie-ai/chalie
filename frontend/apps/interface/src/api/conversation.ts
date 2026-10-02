@@ -133,6 +133,9 @@ export interface ConversationTurnBlock {
    * a bare tool-trace footer. Absent (undefined) on legacy/non-crashed blocks.
    */
   crashed?: boolean;
+  /** True when the turn's most recent execution was stopped — drives the
+   *  "stopped" note on a subagent's transcript panel. */
+  cancelled?: boolean;
   /** Row-span duration in ms (0 for a single-row turn). */
   duration_ms: number;
   messages: ConversationMessage[];

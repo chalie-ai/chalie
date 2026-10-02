@@ -57,6 +57,9 @@ class TurnBlock(Response):
     #: exception or a swept process death). Drives the FE "ended unexpectedly"
     #: note so a reply-less crash isn't mistaken for a normal empty turn.
     crashed: bool = False
+    #: True when the turn's most recent execution was stopped. Drives the
+    #: "stopped" note on a subagent's transcript panel.
+    cancelled: bool = False
 
 
 class ThreadBatch(Response):

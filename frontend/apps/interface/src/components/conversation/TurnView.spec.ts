@@ -487,6 +487,20 @@ describe('delegate (subagent) turns', () => {
     expect(stopButtons(user).map((b) => b.getAttribute('aria-label'))).toEqual(['Stop and undo']);
   });
 
+  it('notes a stopped delegate transcript as stopped, but never one that ran to its answer nor a cancelled user turn', () => {
+    const turnId = 405;
+    const rows = [msg('4050', 'user', 'look up the museum hours', turnId)];
+    const stopped = { ...delegateBlock(turnId, false, rows), cancelled: true };
+
+    const delegate = mount(TurnView, { props: { block: stopped, fullThread: true } });
+    const finished = mount(TurnView, { props: { block: delegateBlock(turnId, false, rows), fullThread: true } });
+    const user = mount(TurnView, { props: { block: { ...block(turnId, rows), working: false, cancelled: true }, type: ConfigType.USER } });
+
+    expect(delegate.text()).toContain('This subagent was stopped.');
+    expect(finished.text()).not.toContain('stopped');
+    expect(user.text()).not.toContain('stopped');
+  });
+
   it('offers no stop control and no live working row once a delegate transcript has settled', () => {
     const turnId = 404;
     const rows = [

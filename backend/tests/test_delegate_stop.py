@@ -19,6 +19,7 @@ model call on a ``threading.Event`` so the stop lands while it is running.
 import re
 import sqlite3
 import threading
+from typing import cast
 from unittest.mock import patch
 
 import pytest
@@ -36,6 +37,7 @@ from tests.test_delegate_transcript_watch import (
     _CHILD_CHANNEL,
     _INSTRUCTIONS,
     _assert_parent_turn_completed_with_its_answer,
+    _block,
     _drain_background_turns,
     _HeldChildProvider,
     _listening,
@@ -63,7 +65,8 @@ def test_stopped_subagent_is_reported_as_stopped_and_its_caller_still_answers(
 ) -> None:
     """Stopping the running ``web_search`` child by its channel ends it: the
     answer its in-flight model call comes back with is never stored, its last
-    lifecycle frame says cancelled, and its execution row stays cancelled. The
+    lifecycle frame says cancelled, its execution row stays cancelled, and its
+    transcript reads back as stopped with only its task in it. The
     caller's call fails as ``delegate-stopped`` with no retry hint — the user
     chose to stop that work — and the caller's own turn still completes with its
     reply."""
@@ -100,6 +103,9 @@ def test_stopped_subagent_is_reported_as_stopped_and_its_caller_still_answers(
     ).fetchone()[0] == 0
     lifecycle = [f for f in listener.frames if f.get("channel") == _CHILD_CHANNEL and "tool_name" not in f]
     assert lifecycle and lifecycle[-1]["state"] == TurnExecution.CANCELLED
+    block = _block(client, f"/api/threads/{child_turn}?channel={_CHILD_CHANNEL}")
+    assert (block["cancelled"], block["crashed"], block["working"]) == (True, False, False)
+    assert [m["content"] for m in cast("list[dict[str, object]]", block["messages"])] == [_INSTRUCTIONS]
     call = _web_search_call(db)
     assert call["state"] == "error"
     assert _error_code(call["result"]) == "delegate-stopped"

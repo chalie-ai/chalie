@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue';
-import { Bot, Undo2 } from '@lucide/vue';
+import { Bot, Square, Undo2 } from '@lucide/vue';
 import { readDomContext } from '../../utils/domContext';
 import { lastUserText } from '../../utils/turnDom';
 import type { LiveToolPill } from '../../utils/liveActTrail';
@@ -79,7 +79,8 @@ function pillSeconds(pill: LiveToolPill): string {
         type="button"
         @click="onStop"
       >
-        <Undo2 :size="14" />
+        <Undo2 v-if="undoable" :size="14" />
+        <Square v-else :size="12" fill="currentColor" aria-hidden="true" />
       </button>
     </div>
 

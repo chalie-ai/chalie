@@ -416,6 +416,10 @@ class TurnSerializerService:
             # stop_reason is deliberately NOT exposed: it is raw str(exc)/"process
             # death", never user-displayable, so the FE renders a fixed message.
             "crashed": bool(latest and latest.state == TurnExecution.CRASHED),
+            # True when the turn's most recent execution was stopped. A stopped
+            # subagent's transcript otherwise just ends after its task, which
+            # reads as an empty answer, so its panel needs this to say "stopped".
+            "cancelled": bool(latest and latest.state == TurnExecution.CANCELLED),
         }
 
     def bulk_gists(self, channel: str, turn_ids: list[int]) -> dict[int, str]:

@@ -218,6 +218,10 @@ const showCrashNote = computed<boolean>(() =>
   ),
 );
 
+// A subagent the user stopped ends with nothing after its task — say so, or
+// the panel reads as an empty answer.
+const showStoppedNote = computed<boolean>(() => channel.value != null && (props.block.cancelled ?? false));
+
 function onReply(): void {
   emit('reply', props.block.turn_id);
 }
@@ -287,6 +291,9 @@ function onOpenThread(): void {
     <div v-if="showCrashNote" class="msg-row msg-row--chalie msg-row--lead">
       <p class="turn-crashed">This turn ended unexpectedly.</p>
     </div>
+    <div v-if="showStoppedNote" class="msg-row msg-row--chalie msg-row--lead">
+      <p class="turn-stopped">This subagent was stopped.</p>
+    </div>
   </div>
 </template>
 
@@ -316,10 +323,11 @@ function onOpenThread(): void {
   margin-top: 6px;
 }
 
-// A settled turn that failed with no reply — a muted, unobtrusive note (not an
-// alarm banner); it explains an otherwise-blank exchange, matching the feed's
-// restrained tone.
-.turn-crashed {
+// A settled turn that failed with no reply, or a stopped subagent — a muted,
+// unobtrusive note (not an alarm banner); it explains an otherwise-blank
+// exchange, matching the feed's restrained tone.
+.turn-crashed,
+.turn-stopped {
   margin: 0;
   font-size: 13px;
   font-style: italic;

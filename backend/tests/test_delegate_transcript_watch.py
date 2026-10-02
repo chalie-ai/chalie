@@ -367,13 +367,15 @@ def test_child_turn_reads_by_channel_with_its_instruction_as_a_user_message(
 ) -> None:
     """The child turn is read by channel: its block is addressed by that channel
     with no type, its stamped input row (role ``web_search`` in storage) reads as
-    the user's message, and the child's answer follows as an assistant message.
+    the user's message, and the child's answer follows as an assistant message;
+    a child that ran to its answer never reads as stopped.
     The user thread sharing the same numeric turn id is a different block."""
     client, _db, _store = authed_client
 
     block = _block(client, f"/api/threads/{delegate_run.child_turn_id}?channel={_CHILD_CHANNEL}")
 
     assert block["channel"] == _CHILD_CHANNEL and block["type"] is None
+    assert block["cancelled"] is False
     messages = cast("list[dict[str, object]]", block["messages"])
     assert (messages[0]["role"], messages[0]["content"]) == ("user", _INSTRUCTIONS)
     assert [m["content"] for m in messages if m["role"] == "assistant"] == [_CHILD_ANSWER]
