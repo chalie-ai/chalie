@@ -1,20 +1,25 @@
-"""Feature test: which threads a client may read by channel, and which it may not.
+"""Feature test: which threads a client may read or stop by channel, and which it may not.
 
 A delegate turn has no routing ``type`` of its own, so the single-turn read
-(``GET /api/threads/<id>``) also accepts a ``channel`` — but only for the
-delegates whose child turn writes a transcript worth watching. Everything else
-must stay refused loudly: reading an arbitrary channel would expose internal
-transcripts (the vision and thread-gist passes, the user spine addressed
-sideways, a typo), and neither a send nor a stop may be steerable by channel: a
-delegate turn shares its numeric turn id with a user turn, so a stop that quietly
-ignored the channel would cancel the user's own running turn.
+(``GET /api/threads/<id>``) and the stop (``DELETE /api/threads/<id>``) also
+accept a ``channel`` — but only for the delegates whose child turn writes a
+transcript worth watching. Everything else must stay refused loudly: reading an
+arbitrary channel would expose internal transcripts (the vision and thread-gist
+passes, the user spine addressed sideways, a typo), a send may never land on a
+channel only a delegate's caller drives, and the feed and the per-turn actions
+are addressed by type alone. A delegate turn shares its numeric turn id with a
+user turn, so a stop by channel must reach that delegate's turn and never the
+user's own running turn of the same number.
 
 Drives the real Flask routes (``authed_client``: real blueprints, real SQLite,
-real ``TurnSerializerService`` and ``TurnExecutionService``) — no collaborator is
-substituted. The send tests use an empty message as the control, which the
-handler rejects before any turn (and so any LLM call) can start, proving the
-request got past scope resolution. One more test keeps the readable-channel
-allowlist in step with the delegate abilities the registry actually holds.
+real ``TurnSerializerService`` and ``TurnExecutionService``) and observes the
+stop's frames through the REAL socket registry — no collaborator is substituted.
+Running turns are opened through the real ``TurnExecutionService`` of an inert
+processor, so no model is ever called. The send tests use an empty message as the
+control, which the handler rejects before any turn (and so any LLM call) can
+start, proving the request got past scope resolution. One more test keeps the
+watchable-channel allowlist in step with the delegate abilities the registry
+actually holds.
 """
 
 import sqlite3
@@ -27,14 +32,19 @@ from flask.testing import FlaskClient
 from abilities._delegate import DelegateAbility
 from abilities._registry import AbilityRegistry
 from configs.channels.user import UserConfig
+from configs.channels.web_search import WebSearchConfig
 from configs.enums.channels import WATCHABLE_DELEGATE_CHANNELS
+from configs.enums.policy_channel import PolicyChannel
 from controllers.message_processor import MessageProcessor
 from models.turn_execution import TurnExecution
+from tests.test_delegate_transcript_watch import _listening
 
 pytestmark = pytest.mark.unit
 
 _MULTIPART = "multipart/form-data"
 _DELEGATE_CHANNEL_PREFIX = "delegate:"
+_DELEGATE_CHANNEL = "delegate:web_search"
+_TURN = 7
 
 
 def _join_turn_threads(timeout_s: float = 10.0) -> None:
@@ -47,22 +57,40 @@ def _join_turn_threads(timeout_s: float = 10.0) -> None:
             thread.join(timeout=max(0.0, deadline - time.monotonic()))
 
 
+def _open_user_and_delegate_turns() -> None:
+    """Open a running user turn and a running ``web_search`` delegate turn that
+    share one numeric turn id — exactly the collision a channel must resolve."""
+    for config in (UserConfig(), WebSearchConfig(PolicyChannel.CHAT)):
+        assert MessageProcessor(config, _TURN).turn_execution_service.open() is not None
+
+
+def _assert_still_running(channel: str) -> None:
+    running = TurnExecution.latest(channel, _TURN)
+    assert running is not None and running.state == TurnExecution.WORKING
+    assert running.ended_at is None and not running.cancel_requested
+
+
+@pytest.mark.parametrize("method", ["GET", "DELETE"], ids=["read", "stop"])
 @pytest.mark.parametrize(
     "query",
     ["channel=user", "channel=delegate:vision", "channel=delegate:thread_gist", "channel=bogus", "channel="],
     ids=["user-spine", "vision-delegate", "gist-delegate", "unknown", "empty"],
 )
-def test_read_by_channel_refuses_everything_but_a_watchable_delegate(
-    authed_client: tuple[FlaskClient, sqlite3.Connection, object], query: str,
+def test_read_or_stop_by_channel_refuses_everything_but_a_watchable_delegate(
+    authed_client: tuple[FlaskClient, sqlite3.Connection, object], method: str, query: str,
 ) -> None:
     """A channel that is not one of the watchable delegates — including the user
     channel itself, the delegates that write no transcript, a typo and an empty
-    value — is a 400, never a read."""
+    value — is a 400, never a read and never a stop: both running turns of that
+    number keep running."""
     client, _db, _store = authed_client
+    _open_user_and_delegate_turns()
 
-    response = client.get(f"/api/threads/1?{query}")
+    response = client.open(f"/api/threads/{_TURN}?{query}", method=method)
 
     assert response.status_code == 400
+    _assert_still_running(UserConfig().channel)
+    _assert_still_running(_DELEGATE_CHANNEL)
 
 
 @pytest.mark.parametrize(
@@ -86,16 +114,22 @@ def test_watchable_delegate_channel_reads_as_a_quiet_empty_block_when_the_turn_i
     assert block["messages"] == []
 
 
-def test_read_naming_both_type_and_channel_is_refused(
+def test_read_or_stop_naming_both_type_and_channel_is_refused(
     authed_client: tuple[FlaskClient, sqlite3.Connection, object],
 ) -> None:
-    """Addressing a turn by type AND channel is ambiguous, so it is a 400 — while
-    each form alone is accepted."""
+    """Addressing a turn by type AND channel is ambiguous, so a read or a stop
+    naming both is a 400 that stops neither running turn — while each form alone
+    is accepted for a read."""
     client, _db, _store = authed_client
+    _open_user_and_delegate_turns()
+    both = f"/api/threads/{_TURN}?type=user&channel={_DELEGATE_CHANNEL}"
 
-    assert client.get("/api/threads/1?type=user&channel=delegate:web_search").status_code == 400
-    assert client.get("/api/threads/1?type=user").status_code == 200
-    assert client.get("/api/threads/1?channel=delegate:web_search").status_code == 200
+    assert client.get(both).status_code == 400
+    assert client.delete(both).status_code == 400
+    _assert_still_running(UserConfig().channel)
+    _assert_still_running(_DELEGATE_CHANNEL)
+    assert client.get(f"/api/threads/{_TURN}?type=user").status_code == 200
+    assert client.get(f"/api/threads/{_TURN}?channel={_DELEGATE_CHANNEL}").status_code == 200
 
 
 @pytest.mark.parametrize("where", ["form", "query"])
@@ -122,29 +156,66 @@ def test_send_cannot_be_addressed_by_channel(
         _join_turn_threads()
 
 
-def test_stop_cannot_be_addressed_by_channel(
+@pytest.mark.parametrize(
+    ("path", "joiner"),
+    [("/api/threads/all", "?"), (f"/api/threads/batch?id[]={_TURN}", "&"), (f"/api/threads/thinking-level/{_TURN}", "?")],
+    ids=["feed", "batch", "thinking-level"],
+)
+def test_feed_and_per_turn_actions_cannot_be_addressed_by_channel(
+    authed_client: tuple[FlaskClient, sqlite3.Connection, object], path: str, joiner: str,
+) -> None:
+    """Only the single-turn read and the stop name a channel. The feed and the
+    per-turn actions are addressed by type, so naming a delegate channel there is
+    a 400 — while the same request without it succeeds."""
+    client, _db, _store = authed_client
+
+    assert client.get(path).status_code == 200
+    assert client.get(f"{path}{joiner}channel={_DELEGATE_CHANNEL}").status_code == 400
+
+
+def test_stop_by_channel_cancels_the_delegate_turn_never_the_users_same_numbered_turn(
     authed_client: tuple[FlaskClient, sqlite3.Connection, object],
 ) -> None:
-    """A stop is addressed by type. A delegate turn shares its numeric id with a
-    user turn, so a stop that ignored ``channel=`` would cancel the USER's running
-    turn 7 while the caller believed it was stopping a delegate. It is a 400 and
-    the user turn keeps running; the same stop without a channel does reach it."""
+    """A delegate turn shares its numeric id with a user turn. Stopping it by its
+    channel cancels THAT turn — stamped cancelled and closed — and sends exactly
+    one frame, addressed by the channel with no ``type`` (a ``type`` would land
+    it in the user's thread), while the user's running turn of the same number
+    is left untouched."""
     client, _db, _store = authed_client
-    channel = UserConfig().channel
-    assert MessageProcessor(UserConfig(), 7).turn_execution_service.open() is not None
+    _open_user_and_delegate_turns()
 
-    steered = client.delete("/api/threads/7?channel=delegate:web_search")
+    with _listening() as listener:
+        response = client.delete(f"/api/threads/{_TURN}?channel={_DELEGATE_CHANNEL}")
 
-    assert steered.status_code == 400
-    running = TurnExecution.latest(channel, 7)
-    assert running is not None and running.state == TurnExecution.WORKING
-    assert running.ended_at is None and not running.cancel_requested
-
-    plain = client.delete("/api/threads/7")
-
-    assert plain.status_code == 200 and (plain.get_json() or {})["result"]["cancelled"] is True
-    stopped = TurnExecution.latest(channel, 7)
+    assert response.status_code == 200
+    assert (response.get_json() or {})["result"]["cancelled"] is True
+    stopped = TurnExecution.latest(_DELEGATE_CHANNEL, _TURN)
     assert stopped is not None and stopped.state == TurnExecution.CANCELLED
+    assert stopped.cancel_requested and stopped.ended_at is not None
+    _assert_still_running(UserConfig().channel)
+    assert len(listener.frames) == 1
+    frame = listener.frames[0]
+    assert "type" not in frame
+    assert (frame["channel"], frame["turn_id"], frame["state"]) == (_DELEGATE_CHANNEL, _TURN, TurnExecution.CANCELLED)
+
+
+def test_stop_by_channel_with_no_running_delegate_turn_is_a_quiet_ack(
+    authed_client: tuple[FlaskClient, sqlite3.Connection, object],
+) -> None:
+    """A delegate that already finished (or never ran) is a harmless
+    ``no_active_turn`` ack with no frame — and never falls through to the user's
+    running turn of the same number."""
+    client, _db, _store = authed_client
+    assert MessageProcessor(UserConfig(), _TURN).turn_execution_service.open() is not None
+
+    with _listening() as listener:
+        response = client.delete(f"/api/threads/{_TURN}?channel={_DELEGATE_CHANNEL}")
+
+    assert response.status_code == 200
+    result = (response.get_json() or {})["result"]
+    assert result["reason"] == "no_active_turn" and not result["cancelled"]
+    assert listener.frames == []
+    _assert_still_running(UserConfig().channel)
 
 
 def test_readable_delegate_channels_are_exactly_the_registered_delegate_abilities() -> None:

@@ -101,9 +101,11 @@ class _HeldChildProvider(_ScriptedProvider):
     The child is otherwise free to finish before the parent has even tried to
     announce it, which would make a fault injected "between the announcement and
     the finish" land in a different place on every run. Holding the child on a
-    ``threading.Event`` pins the order. ``gate_opened`` records whether the wait
-    ended because the gate opened (not because it timed out) so a test can fail
-    on a gate that never opened instead of on its downstream symptom."""
+    ``threading.Event`` pins the order. ``entered`` is set the moment the child's
+    call arrives, so a test can act on the running child; ``gate_opened`` records
+    whether the wait ended because the gate opened (not because it timed out) so
+    a test can fail on a gate that never opened instead of on its downstream
+    symptom."""
 
     _GATE_TIMEOUT_S = 10.0
 
@@ -112,6 +114,7 @@ class _HeldChildProvider(_ScriptedProvider):
         self._gate = gate
         self._then = then
         self._calls = 0
+        self.entered = threading.Event()
         self.gate_opened = False
 
     def send(self, dto: object) -> ProviderResponse:
@@ -119,6 +122,7 @@ class _HeldChildProvider(_ScriptedProvider):
             self._calls += 1
             is_child_first_call = self._calls == 2
         if is_child_first_call:
+            self.entered.set()
             self.gate_opened = self._gate.wait(timeout=self._GATE_TIMEOUT_S)
             self._then()
         return super().send(dto)
@@ -143,14 +147,16 @@ class _WarningWatch(logging.Handler):
 
 
 @contextmanager
-def _watching_warnings(gate: threading.Event | None = None) -> Iterator[_WarningWatch]:
-    """Watch the warnings of the service that owns the call's frames — and only
-    them. Unrelated services warn on their own (the on-device model loaders do
-    whenever their files are absent, as on a fresh checkout), and such a warning
-    must neither release the held child early nor count as a report of the
-    failure under test."""
+def _watching_warnings(
+    gate: threading.Event | None = None, source_name: str = ToolCallService.__module__,
+) -> Iterator[_WarningWatch]:
+    """Watch the warnings of one service — by default the one that owns the
+    call's frames — and only them. Unrelated services warn on their own (the
+    on-device model loaders do whenever their files are absent, as on a fresh
+    checkout), and such a warning must neither release the held child early nor
+    count as a report of the failure under test."""
     watch = _WarningWatch(gate)
-    source = logging.getLogger(ToolCallService.__module__)
+    source = logging.getLogger(source_name)
     source.addHandler(watch)
     try:
         yield watch
@@ -190,22 +196,30 @@ def _drain_background_turns(timeout_s: float = 15.0) -> None:
             t.join(timeout=max(0.0, deadline - time.monotonic()))
 
 
+@contextmanager
+def _listening(on_frame: Callable[[dict[str, object]], None] | None = None) -> Iterator[_RecordingClient]:
+    """A client connected to the real socket registry for the duration of the
+    block, recording every frame broadcast meanwhile."""
+    listener = _RecordingClient(on_frame)
+    Websocket._connect(listener)
+    try:
+        yield listener
+    finally:
+        Websocket._disconnect(listener)
+
+
 def _run(
     provider: _ScriptedProvider, raw_input: str, on_frame: Callable[[dict[str, object]], None] | None = None,
 ) -> tuple[MessageProcessor, list[dict[str, object]]]:
     """Drive a real user turn to termination against *provider*, returning the
     processor and every WS frame the registry saw while it ran (each also handed
     to *on_frame* as it arrives, on the thread that broadcast it)."""
-    listener = _RecordingClient(on_frame)
-    Websocket._connect(listener)
-    try:
+    with _listening(on_frame) as listener:
         mp = MessageProcessor(UserConfig(), raw_input=raw_input)  # inert (I2)
         with patch(_BUILD_CLIENT, return_value=provider):
             mp.begin()
             mp.result()
             _drain_background_turns()
-    finally:
-        Websocket._disconnect(listener)
     return mp, listener.frames
 
 
@@ -426,14 +440,16 @@ def _assert_child_answered_and_closed_before_the_call_ended(db: sqlite3.Connecti
     assert execution.ended_at is not None and execution.ended_at <= call["ended_at"]
 
 
-def _assert_parent_turn_completed_with_its_answer(db: sqlite3.Connection, parent: MessageProcessor) -> None:
+def _assert_parent_turn_completed_with_its_answer(
+    db: sqlite3.Connection, parent: MessageProcessor, reply: str = "It is Paris.",
+) -> None:
     execution = TurnExecution.latest(UserConfig().channel, parent.turn_id)
     assert execution is not None and execution.state == TurnExecution.COMPLETED
     replies = db.execute(
         "SELECT content FROM transcript WHERE channel = ? AND turn_id = ? AND role = 'assistant'",
         (UserConfig().channel, parent.turn_id),
     ).fetchall()
-    assert [r["content"] for r in replies] == ["It is Paris."]
+    assert [r["content"] for r in replies] == [reply]
 
 
 def test_failed_announcement_does_not_fail_the_delegate_call(db: sqlite3.Connection) -> None:
