@@ -389,9 +389,10 @@
   min-height: 0;
 }
 
-// Tool-call card (ToolCallList), the same neutral surface whether its exchange
-// has settled or is still streaming. Rows run edge to edge and stay square so the
-// dividers are full-width straight rules — a rounded row tapers its border-top.
+// Tool-call card (ToolCallList) under each row that called tools, the same
+// neutral surface whether its turn has finished or is still running. Rows run edge
+// to edge and stay square so the dividers are full-width straight rules — a
+// rounded row tapers its border-top.
 .calls {
   overflow: hidden;
   max-width: 100%;
@@ -751,19 +752,6 @@
 .act-tool__elapsed {
   margin-left: 6px;
   font-variant-numeric: tabular-nums;
-}
-
-// A footerless exchange's calls, laid out like the footer: the pill keeps its own
-// width, the card spans the row, and `.trace-body--open` alone sets the gap.
-.act-group {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  width: 100%;
-}
-
-.act-group .trace-body {
-  align-self: stretch;
 }
 
 @keyframes act-logo-pulse {

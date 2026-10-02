@@ -414,7 +414,7 @@ export function upsertTurnToSurfaces(
   // live). Fired here, the one shared upsert path every fetched block passes
   // through — the DOM-contract port of the retired buffer's `_writeTurn`
   // call, without which a mid-turn refetch renders the frozen pill AND its
-  // collapsed chip side by side until the turn settles.
+  // persisted chip side by side until the turn settles.
   clearLiveTurnsForToolCallsResolved(
     type,
     block.turn_id,

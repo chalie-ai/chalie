@@ -11,14 +11,14 @@ import ToolCallList from './ToolCallList.vue';
 const props = withDefaults(defineProps<{
   message: ConversationMessage;
   canReply?: boolean;
-  toolCalls?: NonNullable<ConversationMessage['tool_calls']>;
-  thinking?: { traces: string[]; duration_ms: number; tokens: number };
+  // Only this row's trace (tools pill, reasoning link) — for a row that does
+  // not close its exchange; the timestamp and actions ride the row that does.
+  traceOnly?: boolean;
   threadPill?: { status: 'working' | 'done' | 'thread' | 'idle'; label: string } | null;
 }>(), {
   canReply: false,
-  toolCalls: () => [],
+  traceOnly: false,
   threadPill: null,
-  thinking: undefined,
 });
 
 const emit = defineEmits<{ reply: []; openThread: [] }>();
@@ -29,6 +29,8 @@ const thinkingExpanded = ref(false);
 
 const voiceStore = useVoiceTranscriptsStore();
 
+const toolCalls = computed(() => props.message.tool_calls ?? []);
+
 // Only the row that CLOSES a turn is spoken, so only it gets a button — the
 // mid-turn "let me check…" rows have no audio and never will.
 const transcriptId = computed(() => Number(props.message.id));
@@ -36,8 +38,8 @@ const canSpeak = computed(() => !!props.message.settled && Number.isFinite(trans
 
 // Format the thinking duration as "thought for {S}s" or "thought for {M}m {S}s".
 const thinkingLabel = computed(() => {
-  if (!props.thinking) return '';
-  const seconds = Math.round(props.thinking.duration_ms / 1000);
+  if (!props.message.thinking) return '';
+  const seconds = Math.round(props.message.thinking.duration_ms / 1000);
   const mins = Math.floor(seconds / 60);
   const rem = seconds % 60;
   if (mins === 0) return `thought for ${seconds}s`;
@@ -101,7 +103,7 @@ function onCopy(): void {
 <template>
   <div ref="rootRef" class="speech-form__meta-wrap">
     <div class="speech-form__meta">
-      <span class="speech-form__timestamp">{{ message.timestamp }}</span>
+      <span v-if="!traceOnly" class="speech-form__timestamp">{{ message.timestamp }}</span>
 
       <button
         v-if="toolCalls.length > 0"
@@ -116,7 +118,7 @@ function onCopy(): void {
       </button>
 
       <a
-        v-if="thinking"
+        v-if="message.thinking"
         class="thinking-link"
         :class="{ 'thinking-link--open': thinkingExpanded }"
         href="#"
@@ -139,7 +141,7 @@ function onCopy(): void {
         <span class="thread-pill__chevron" aria-hidden="true">›</span>
       </button>
 
-      <span class="speech-form__acts">
+      <span v-if="!traceOnly" class="speech-form__acts">
         <button
           v-if="canSpeak"
           class="speech-form__act-btn speech-form__act-btn--speak"
@@ -190,14 +192,14 @@ function onCopy(): void {
       </div>
     </div>
     <div
-      v-if="thinking"
+      v-if="message.thinking"
       class="trace-body"
       :class="{ 'trace-body--open': thinkingExpanded }"
     >
       <div class="trace-body__inner">
         <div class="thinking-traces">
           <div
-            v-for="(trace, i) in thinking.traces"
+            v-for="(trace, i) in message.thinking.traces"
             :key="i"
             class="thinking-trace"
           >

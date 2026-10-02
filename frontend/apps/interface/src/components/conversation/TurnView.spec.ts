@@ -17,19 +17,24 @@
  * m.thread_message))`), no store/composable involved, so the block is just
  * mounted straight in, exactly as it's fetched off the wire.
  *
- * Real component tree throughout (TurnView → ActCycle/ActCycleGroup/
+ * Real component tree throughout (TurnView → ActCycle/BubbleFooter/
  * UserBubble/ChalieBubble), real Pinia, real `@chalie/shared` barrel — the
  * only thing given a DOM stand-in is happy-dom itself (this file opts in via
  * the docblock above; the suite's default `environment: 'node'` is
  * untouched elsewhere).
+ *
+ * The second half pins how a turn's rows are drawn: one provider call is one
+ * assistant row, with its own bubble (only when it said something) and its own
+ * trace strip (its tool calls and reasoning); only the row that closes an
+ * exchange adds the timestamp and actions.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
 import { mount } from '@vue/test-utils';
+import type { VueWrapper } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import { ConfigType } from '@chalie/shared';
 import TurnView from './TurnView.vue';
 import ActCycle from './ActCycle.vue';
-import ActCycleGroup from './ActCycleGroup.vue';
 import type { ConversationMessage, ConversationTurnBlock, DelegateTurnBlock } from '../../api/conversation';
 
 function msg(
@@ -63,6 +68,63 @@ function block(turnId: number, messages: ConversationMessage[]): ConversationTur
     messages,
     type: 'user',
   };
+}
+
+/** Any row, with the optional fields a stored row can carry. */
+function row(
+  id: string,
+  role: ConversationMessage['role'],
+  content: string,
+  turnId: number,
+  extra: Partial<ConversationMessage> = {},
+): ConversationMessage {
+  return { ...msg(id, role, content, turnId), ...extra };
+}
+
+type ToolCalls = NonNullable<ConversationMessage['tool_calls']>;
+
+/** One finished call per name, as the backend sends a row's chips. */
+function calls(...names: string[]): ToolCalls {
+  return names.map((tool_name) => ({
+    tool_name, summary: `ran ${tool_name}`, state: 'done' as const, ended_at: null, delegate: null,
+  }));
+}
+
+/** A turn that is no longer working. */
+function settledTurn(turnId: number, messages: ConversationMessage[]): ConversationTurnBlock {
+  return { ...block(turnId, messages), working: false };
+}
+
+/** Three provider calls in one exchange: an interim reply, a silent step that
+ *  also reasoned, and the settled answer — each with a call of its own. */
+function threeCallTurn(): ConversationTurnBlock {
+  const turnId = 210;
+  return settledTurn(turnId, [
+    row('2100', 'user', 'research the museum', turnId),
+    row('2101', 'assistant', 'interim', turnId, { tool_calls: calls('web_search') }),
+    row('2102', 'assistant', '', turnId, {
+      tool_calls: calls('read'),
+      thinking: { traces: ['which file has it?'], duration_ms: 2000, tokens: 12 },
+    }),
+    row('2103', 'assistant', 'final', turnId, { tool_calls: calls('memory_recall'), settled: true }),
+  ]);
+}
+
+const COPY = 'button[aria-label="Copy message"]';
+const SPEAK = 'button[aria-label="Read this message aloud"]';
+const REPLY = 'button[aria-label="Reply in a thread"]';
+
+/** The rendered turn read top to bottom, one entry per row: a user bubble, a
+ *  Chalie bubble, a strip (a trace with no timestamp), a footer (a timestamp,
+ *  with or without a trace) or the live indicator. */
+function layout(wrapper: VueWrapper): string[] {
+  return wrapper.findAll('.msg-row').map((r) => {
+    if (r.find('.user-message').exists()) return `user:${r.find('.user-message').attributes('data-user-text')}`;
+    if (r.find('.speech-form--chalie').exists()) return `bubble:${r.find('.speech-form__text').text()}`;
+    if (r.find('.speech-form__meta').exists()) return r.find('.speech-form__timestamp').exists() ? 'footer' : 'strip';
+    if (r.findComponent(ActCycle).exists()) return 'live';
+    return 'other';
+  });
 }
 
 beforeEach(() => {
@@ -160,223 +222,302 @@ describe('live act-trail visibility — working turn in the thread panel', () =>
   });
 });
 
-describe('tool-call trace placement', () => {
-  const toolCalls: NonNullable<ConversationMessage['tool_calls']> = [
-    { tool_name: 'memory_recall', summary: 'recalled a memory', state: 'done', ended_at: null, delegate: null },
-  ];
 
-  it('rides a settled exchange\'s pre-turn tool call on the footer trace, not a separate group row', () => {
+// One provider call is one assistant row, drawn on its own: its bubble when it
+// said something, and under it that row's OWN tool calls and reasoning. Only the
+// row that closes an exchange adds the timestamp and actions.
+describe('tool-call trace placement — each row draws its own trace', () => {
+  it('a call stored on the user\'s own row draws a strip right under the question, apart from the answer\'s footer', () => {
     const turnId = 201;
-    const b = block(turnId, [
-      msg('2010', 'user', 'user question with pre-turn tools', turnId, false, toolCalls),
-      msg('2011', 'assistant', 'assistant answer', turnId),
+    const b = settledTurn(turnId, [
+      row('2010', 'user', 'user question with pre-turn tools', turnId, { tool_calls: calls('memory_recall') }),
+      row('2011', 'assistant', 'assistant answer', turnId, { settled: true }),
     ]);
-    b.working = false;
 
-    const wrapper = mount(TurnView, {
-      props: { block: b, type: ConfigType.USER, fullThread: false },
-    });
+    const wrapper = mount(TurnView, { props: { block: b, type: ConfigType.USER, fullThread: false } });
 
+    expect(layout(wrapper)).toEqual([
+      'user:user question with pre-turn tools',
+      'strip',
+      'bubble:assistant answer',
+      'footer',
+    ]);
     const rows = wrapper.findAll('.msg-row');
-    const kinds = rows.map((r) =>
-      r.find('.speech-form__meta').exists()
-        ? 'footer'
-        : r.findComponent(ActCycleGroup).exists()
-          ? 'group'
-          : r.text().includes('assistant answer')
-            ? 'assistant'
-            : r.text().includes('user question')
-              ? 'user'
-              : 'other',
-    );
+    // The strip carries the call and nothing else...
+    expect(rows[1]!.find('.trace-pill').text()).toContain('1 tool used');
+    expect(rows[1]!.find('.call__fn').text()).toBe('memory_recall');
+    expect(rows[1]!.find('.speech-form__timestamp').exists()).toBe(false);
+    // ...and the answer's footer carries the timestamp but not that call.
+    expect(rows[3]!.find('.speech-form__timestamp').exists()).toBe(true);
+    expect(rows[3]!.find('.trace-pill').exists()).toBe(false);
+  });
 
-    // Settled exchange: the pre-turn tool call is aggregated onto that
-    // exchange's footer as its inline "N tools used" trace — NO separate
-    // collapsed-group row is emitted once there's a footer to carry it.
-    expect(kinds).toEqual(['user', 'assistant', 'footer']);
-    // The call is not dropped — it rides the footer's expandable trace.
-    expect(wrapper.find('.trace-pill').text()).toContain('1 tool used');
+  it('a working turn whose only row is the user\'s shows that row\'s calls right under the question, ahead of the live indicator', async () => {
+    const turnId = 203;
+    const b = block(turnId, [
+      row('2030', 'user', 'user question, still working', turnId, { tool_calls: calls('memory_recall') }),
+    ]);
+
+    const wrapper = mount(TurnView, { props: { block: b, type: ConfigType.USER, fullThread: false } });
+
+    expect(layout(wrapper)).toEqual(['user:user question, still working', 'strip', 'live']);
+    const pill = wrapper.find('.trace-pill');
+    expect(pill.attributes('aria-expanded')).toBe('false');
+    await pill.trigger('click');
+    expect(pill.attributes('aria-expanded')).toBe('true');
     expect(wrapper.find('.call__fn').text()).toBe('memory_recall');
   });
 
-  it('rides a settled exchange\'s assistant-step tool call on the footer trace', () => {
-    const turnId = 202;
-    const b = block(turnId, [
-      msg('2020', 'user', 'plain user question', turnId),
-      msg('2021', 'assistant', 'assistant answer with tools', turnId, false, toolCalls),
+  it('a step row that only asked for tools draws its trace and no bubble', () => {
+    const turnId = 211;
+    const b = settledTurn(turnId, [
+      row('2110', 'user', 'what is the weather', turnId),
+      row('2111', 'assistant', '', turnId, { tool_calls: calls('web_search') }),
+      row('2112', 'assistant', 'answer', turnId, { settled: true }),
     ]);
-    b.working = false;
 
-    const wrapper = mount(TurnView, {
-      props: { block: b, type: ConfigType.USER, fullThread: false },
-    });
+    const wrapper = mount(TurnView, { props: { block: b, type: ConfigType.USER, fullThread: false } });
 
-    const rows = wrapper.findAll('.msg-row');
-    const kinds = rows.map((r) =>
-      r.find('.speech-form__meta').exists()
-        ? 'footer'
-        : r.findComponent(ActCycleGroup).exists()
-          ? 'group'
-          : r.text().includes('assistant answer')
-            ? 'assistant'
-            : r.text().includes('plain user question')
-              ? 'user'
-              : 'other',
-    );
-
-    expect(kinds).toEqual(['user', 'assistant', 'footer']);
-    expect(wrapper.find('.trace-pill').text()).toContain('1 tool used');
+    // One bubble for the whole exchange: the answer. The step row left nothing
+    // behind but its trace, sitting before the answer it led to.
+    const bubbles = wrapper.findAll('.speech-form--chalie');
+    expect(bubbles).toHaveLength(1);
+    expect(bubbles[0]!.text()).toBe('answer');
+    expect(wrapper.find('[data-transcript-row-id="2111"]').exists()).toBe(false);
+    expect(layout(wrapper)).toEqual(['user:what is the weather', 'strip', 'bubble:answer', 'footer']);
+    expect(wrapper.findAll('.msg-row')[1]!.find('.trace-pill').text()).toContain('1 tool used');
   });
 
-  it('flushes a pending trail at the end when the block has no assistant row yet', () => {
-    const turnId = 203;
-    const b = block(turnId, [
-      msg('2030', 'user', 'user question, still working', turnId, false, toolCalls),
-    ]);
-    b.working = true;
+  it('every row of a multi-call exchange owns its trace: each pill lists only that row\'s calls and reasoning', () => {
+    const wrapper = mount(TurnView, { props: { block: threeCallTurn(), type: ConfigType.USER, fullThread: false } });
 
-    const wrapper = mount(TurnView, {
-      props: { block: b, type: ConfigType.USER, fullThread: false },
-    });
-
-    const rows = wrapper.findAll('.msg-row');
-    const userIdx = rows.findIndex((r) => r.text().includes('user question, still working'));
-    const groupIdx = rows.findIndex((r) => r.findComponent(ActCycleGroup).exists());
-
-    expect(userIdx).toBeGreaterThanOrEqual(0);
-    expect(groupIdx).toBeGreaterThan(userIdx);
-  });
-
-  const stepTools: NonNullable<ConversationMessage['tool_calls']> = [
-    { tool_name: 'web_search', summary: 'searched the web', state: 'done', ended_at: null, delegate: null },
-  ];
-
-  it('aggregates every tool call of a multi-step exchange onto its ONE footer trace', () => {
-    // The turn_exchange contract: when one user question yields several assistant
-    // steps that each ran tools, every call gathers onto that exchange's single
-    // footer trace — never interleaved between an interim step and the reply,
-    // never split across rows.
-    const turnId = 204;
-    const b = block(turnId, [
-      msg('2040', 'user', 'the multi-step question', turnId),
-      msg('2041', 'assistant', 'interim step', turnId, false, stepTools),
-      msg('2042', 'assistant', 'final answer', turnId, false, toolCalls),
-    ]);
-    b.working = false;
-
-    const wrapper = mount(TurnView, {
-      props: { block: b, type: ConfigType.USER, fullThread: false },
-    });
-
-    const rows = wrapper.findAll('.msg-row');
-    const kinds = rows.map((r) =>
-      r.find('.speech-form__meta').exists()
-        ? 'footer'
-        : r.findComponent(ActCycleGroup).exists()
-          ? 'group'
-          : r.text().includes('final answer')
-            ? 'assistant-final'
-            : r.text().includes('interim step')
-              ? 'assistant-interim'
-              : r.text().includes('multi-step question')
-                ? 'user'
-                : 'other',
-    );
-
-    // Both steps' calls aggregate onto the single footer for this exchange,
-    // which sits below the final reply — no separate chip rows.
-    expect(kinds).toEqual([
-      'user',
-      'assistant-interim',
-      'assistant-final',
+    expect(layout(wrapper)).toEqual([
+      'user:research the museum',
+      'bubble:interim',
+      'strip',
+      'strip',
+      'bubble:final',
       'footer',
     ]);
-    // The footer trace counts BOTH calls (interim + final).
-    expect(wrapper.find('.trace-pill').text()).toContain('2 tools used');
-    expect(wrapper.findAll('.call__fn').map((c) => c.text())).toEqual(['web_search', 'memory_recall']);
+    const traces = wrapper.findAll('.speech-form__meta-wrap');
+    expect(traces.map((t) => t.find('.trace-pill').text().includes('1 tool used'))).toEqual([true, true, true]);
+    expect(traces.map((t) => t.findAll('.call__fn').map((c) => c.text()))).toEqual([
+      ['web_search'],
+      ['read'],
+      ['memory_recall'],
+    ]);
+    // The reasoning belongs to the one row that did it.
+    expect(traces.map((t) => t.text().includes('thought for 2s'))).toEqual([false, true, false]);
   });
 
-  it('gives each exchange its OWN footer trace across a multi-exchange thread', () => {
-    // Two turn_exchanges in one block (thread panel): exchange one's calls ride
-    // its own footer right after its reply and BEFORE exchange two opens;
-    // exchange two's calls ride its own footer at the bottom.
-    const turnId = 205;
-    const b = block(turnId, [
-      msg('2050', 'user', 'first question', turnId),
-      msg('2051', 'assistant', 'first answer', turnId, false, stepTools),
-      msg('2052', 'user', 'second question', turnId, true),
-      msg('2053', 'assistant', 'second answer', turnId, true, toolCalls),
-    ]);
-    b.working = false;
-
-    const wrapper = mount(TurnView, {
-      props: { block: b, type: ConfigType.USER, fullThread: true },
-    });
+  it('only the row that closes the exchange carries the timestamp and actions', () => {
+    const wrapper = mount(TurnView, { props: { block: threeCallTurn(), type: ConfigType.USER, fullThread: false } });
 
     const rows = wrapper.findAll('.msg-row');
-    const kinds = rows.map((r) =>
-      r.find('.speech-form__meta').exists()
-        ? 'footer'
-        : r.findComponent(ActCycleGroup).exists()
-          ? 'group'
-          : r.text().includes('first answer')
-            ? 'a1'
-            : r.text().includes('second answer')
-              ? 'a2'
-              : r.text().includes('first question')
-                ? 'u1'
-                : r.text().includes('second question')
-                  ? 'u2'
-                  : 'other',
-    );
-
-    // Each exchange gets its OWN footer, right after its own reply — the
-    // second exchange's footer never merges into or replaces the first's.
-    expect(kinds).toEqual(['u1', 'a1', 'footer', 'u2', 'a2', 'footer']);
-    expect(wrapper.findAll('.speech-form__meta')).toHaveLength(2);
-    // Each footer carries exactly its own exchange's single call.
-    expect(wrapper.findAll('.trace-pill').map((p) => p.text().includes('1 tool used'))).toEqual([true, true]);
+    const last = rows[rows.length - 1]!;
+    expect(wrapper.findAll('.speech-form__timestamp')).toHaveLength(1);
+    expect(last.find('.speech-form__timestamp').exists()).toBe(true);
+    expect(wrapper.findAll(COPY)).toHaveLength(1);
+    expect(last.findAll(COPY)).toHaveLength(1);
+    expect(wrapper.findAll(SPEAK)).toHaveLength(1);
+    expect(last.findAll(SPEAK)).toHaveLength(1);
+    expect(wrapper.findAll(REPLY)).toHaveLength(1);
+    expect(last.findAll(REPLY)).toHaveLength(1);
   });
 
-  it('renders exactly ONE footer for a forked spine turn — the openers, carrying its trace', () => {
-    // The other half of the cardinality fix: on the spine (fullThread=false)
-    // only the opener exchange survives the thread_message drop, so exactly
-    // one footer renders — the thread's continuation carries no footer of
-    // its own here (it isn't even rendered on the spine).
-    const turnId = 206;
+  it('the settled answer keeps its timestamp and actions while the turn is still working', () => {
+    const turnId = 214;
+    // The backend can mark the answer settled before the turn itself is done.
     const b = block(turnId, [
-      msg('2060', 'user', 'opener question', turnId, false, toolCalls),
-      msg('2061', 'assistant', 'opener reply', turnId),
-      msg('2062', 'user', 'thread continuation question', turnId, true),
-      msg('2063', 'assistant', 'thread continuation reply', turnId, true, stepTools),
+      row('2140', 'user', 'summarise it', turnId),
+      row('2141', 'assistant', '', turnId, { tool_calls: calls('read') }),
+      row('2142', 'assistant', 'answer', turnId, { settled: true }),
     ]);
-    b.working = false;
 
-    const wrapper = mount(TurnView, {
-      props: { block: b, type: ConfigType.USER, fullThread: false },
-    });
+    const wrapper = mount(TurnView, { props: { block: b, type: ConfigType.USER, fullThread: false } });
+
+    expect(layout(wrapper)).toEqual(['user:summarise it', 'strip', 'bubble:answer', 'footer', 'live']);
+    const footer = wrapper.findAll('.msg-row')[3]!;
+    expect(footer.find('.speech-form__timestamp').exists()).toBe(true);
+    expect(footer.findAll(SPEAK)).toHaveLength(1);
+  });
+
+  it('a running exchange has no timestamp or actions yet, only its calls so far', () => {
+    const turnId = 218;
+    const b = block(turnId, [
+      row('2180', 'user', 'find the file', turnId),
+      row('2181', 'assistant', 'let me check', turnId, { tool_calls: calls('read') }),
+    ]);
+
+    const wrapper = mount(TurnView, { props: { block: b, type: ConfigType.USER, fullThread: false } });
+
+    expect(layout(wrapper)).toEqual(['user:find the file', 'bubble:let me check', 'strip', 'live']);
+    expect(wrapper.find('.trace-pill').text()).toContain('1 tool used');
+    expect(wrapper.findAll('.speech-form__timestamp')).toHaveLength(0);
+    expect(wrapper.findAll(COPY)).toHaveLength(0);
+  });
+
+  it('a cancelled exchange keeps its timestamp on the last thing Chalie said, and a trailing step is only a strip', () => {
+    const turnId = 206;
+    // Stopped mid-turn: nothing was ever settled, and the last call died with
+    // no text.
+    const b = settledTurn(turnId, [
+      row('2060', 'user', 'dig into it', turnId),
+      row('2061', 'assistant', 'partial', turnId, { tool_calls: calls('web_search') }),
+      row('2062', 'assistant', '', turnId, { tool_calls: calls('read') }),
+    ]);
+
+    const wrapper = mount(TurnView, { props: { block: b, type: ConfigType.USER, fullThread: false } });
+
+    expect(layout(wrapper)).toEqual(['user:dig into it', 'bubble:partial', 'footer', 'strip']);
+    expect(wrapper.findAll('.speech-form__timestamp')).toHaveLength(1);
+    expect(wrapper.findAll('.msg-row')[2]!.find('.speech-form__timestamp').exists()).toBe(true);
+    // Nothing settled, so nothing was spoken: no read-aloud button anywhere.
+    expect(wrapper.findAll(SPEAK)).toHaveLength(0);
+  });
+
+  it('each exchange of a thread keeps its own footer and trace — one abandoned without a settled reply is closed when the next opens', () => {
+    const turnId = 205;
+    const b = settledTurn(turnId, [
+      row('2050', 'user', 'first question', turnId),
+      row('2051', 'assistant', 'first answer', turnId, { tool_calls: calls('web_search') }),
+      row('2052', 'user', 'second question', turnId, { thread_message: true }),
+      row('2053', 'assistant', 'second answer', turnId, { thread_message: true, settled: true, tool_calls: calls('memory_recall') }),
+    ]);
+
+    const wrapper = mount(TurnView, { props: { block: b, type: ConfigType.USER, fullThread: true } });
+
+    expect(layout(wrapper)).toEqual([
+      'user:first question',
+      'bubble:first answer',
+      'footer',
+      'user:second question',
+      'bubble:second answer',
+      'footer',
+    ]);
+    // Each footer carries exactly its own exchange's single call.
+    expect(wrapper.findAll('.speech-form__meta-wrap').map((t) => t.findAll('.call__fn').map((c) => c.text()))).toEqual([
+      ['web_search'],
+      ['memory_recall'],
+    ]);
+  });
+
+  it('a forked spine turn shows the opener exchange only: one footer, the opener\'s own trace, none of the dropped continuation\'s calls', () => {
+    const turnId = 207;
+    const b = settledTurn(turnId, [
+      row('2070', 'user', 'opener question', turnId, { tool_calls: calls('memory_recall') }),
+      row('2071', 'assistant', 'opener reply', turnId),
+      row('2072', 'user', 'thread continuation question', turnId, { thread_message: true }),
+      row('2073', 'assistant', 'thread continuation reply', turnId, { thread_message: true, tool_calls: calls('web_search') }),
+    ]);
+
+    const wrapper = mount(TurnView, { props: { block: b, type: ConfigType.USER, fullThread: false } });
 
     expect(wrapper.attributes('data-forked')).toBe('true');
     expect(wrapper.text()).not.toContain('thread continuation');
+    // The opener's pre-turn call is its strip; the reply's footer is the one
+    // and only timestamp.
+    expect(layout(wrapper)).toEqual(['user:opener question', 'strip', 'bubble:opener reply', 'footer']);
+    expect(wrapper.findAll('.speech-form__timestamp')).toHaveLength(1);
+    expect(wrapper.findAll('.call__fn').map((c) => c.text())).toEqual(['memory_recall']);
+  });
 
-    const rows = wrapper.findAll('.msg-row');
-    const kinds = rows.map((r) =>
-      r.find('.speech-form__meta').exists()
-        ? 'footer'
-        : r.findComponent(ActCycleGroup).exists()
-          ? 'group'
-          : r.text().includes('opener reply')
-            ? 'assistant'
-            : r.text().includes('opener question')
-              ? 'user'
-              : 'other',
-    );
+  it('the thread pill rides the closing footer, never a step\'s strip', () => {
+    const turnId = 209;
+    const b = settledTurn(turnId, [
+      row('2090', 'user', 'opener question', turnId),
+      row('2091', 'assistant', 'opener', turnId, { settled: true }),
+      row('2092', 'assistant', '', turnId, { tool_calls: calls('read') }),
+      row('2093', 'user', 'a reply inside the thread', turnId, { thread_message: true }),
+    ]);
 
-    expect(kinds).toEqual(['user', 'assistant', 'footer']);
-    expect(wrapper.findAll('.speech-form__meta')).toHaveLength(1);
-    // The opener's own pre-turn call rides the single footer trace; the
-    // spine-dropped continuation's tools never leak onto it.
-    expect(wrapper.find('.trace-pill').text()).toContain('1 tool used');
+    const wrapper = mount(TurnView, {
+      props: { block: b, type: ConfigType.USER, fullThread: false, threadPill: { status: 'working', label: 'museum hours' } },
+    });
+
+    expect(layout(wrapper)).toEqual(['user:opener question', 'bubble:opener', 'footer', 'strip']);
+    expect(wrapper.findAll('.thread-pill')).toHaveLength(1);
+    const withTimestamp = wrapper.findAll('.msg-row').filter((r) => r.find('.speech-form__timestamp').exists());
+    expect(withTimestamp).toHaveLength(1);
+    expect(withTimestamp[0]!.find('.thread-pill').exists()).toBe(true);
+  });
+
+  /** A fork whose opener's only row is a silent step that never settled, then a
+   *  thread continuation that did answer. */
+  function forkedUnsettledOpener(turnId: number): ConversationTurnBlock {
+    return settledTurn(turnId, [
+      row(`${turnId}0`, 'user', 'opener question', turnId),
+      row(`${turnId}1`, 'assistant', '', turnId, { settled: false, tool_calls: calls('read') }),
+      row(`${turnId}2`, 'user', 'a question inside the thread', turnId, { thread_message: true }),
+      row(`${turnId}3`, 'assistant', 'thread answer', turnId, { settled: true, thread_message: true }),
+    ]);
+  }
+
+  it('a forked spine turn whose opener never settled keeps its timestamp and thread pill on the opener, not on the thread answer it hides', () => {
+    const wrapper = mount(TurnView, {
+      props: {
+        block: forkedUnsettledOpener(220),
+        type: ConfigType.USER,
+        fullThread: false,
+        threadPill: { status: 'done', label: 'museum hours' },
+      },
+    });
+
+    expect(wrapper.text()).not.toContain('thread answer');
+    expect(layout(wrapper)).toEqual(['user:opener question', 'footer']);
+    const footer = wrapper.findAll('.msg-row')[1]!;
+    expect(footer.find('.thread-pill').exists()).toBe(true);
+    expect(wrapper.findAll('.thread-pill')).toHaveLength(1);
+  });
+
+  it('the thread panel closes both exchanges of a fork whose opener never settled: the silent opener step and the thread answer each keep a timestamp', () => {
+    const wrapper = mount(TurnView, {
+      props: { block: forkedUnsettledOpener(221), type: ConfigType.USER, fullThread: true },
+    });
+
+    expect(layout(wrapper)).toEqual([
+      'user:opener question',
+      'footer',
+      'user:a question inside the thread',
+      'bubble:thread answer',
+      'footer',
+    ]);
+  });
+
+  it('a cancelled exchange where every row only called tools still closes on its last row, with a timestamp and actions, and says the turn ended', () => {
+    const turnId = 222;
+    const b = settledTurn(turnId, [
+      row('2220', 'user', 'dig into it', turnId),
+      row('2221', 'assistant', '', turnId, { settled: false, tool_calls: calls('web_search') }),
+      row('2222', 'assistant', '', turnId, { settled: false, tool_calls: calls('read') }),
+    ]);
+    b.crashed = true;
+
+    const wrapper = mount(TurnView, { props: { block: b, type: ConfigType.USER, fullThread: false } });
+
+    // The first step is only a strip; the last row carries the footer (the
+    // crash note is a row after them).
+    expect(layout(wrapper).slice(0, 3)).toEqual(['user:dig into it', 'strip', 'footer']);
+    const closing = wrapper.findAll('.msg-row')[2]!;
+    expect(closing.find(COPY).exists()).toBe(true);
+    expect(closing.find(REPLY).exists()).toBe(true);
+    expect(wrapper.find('.turn-crashed').exists()).toBe(true);
+  });
+
+  it('a still-working exchange of tool-only rows stays open: no timestamp or actions on any row yet', () => {
+    const turnId = 223;
+    const b = block(turnId, [
+      row('2230', 'user', 'dig into it', turnId),
+      row('2231', 'assistant', '', turnId, { settled: false, tool_calls: calls('web_search') }),
+      row('2232', 'assistant', '', turnId, { settled: false, tool_calls: calls('read') }),
+    ]);
+
+    const wrapper = mount(TurnView, { props: { block: b, type: ConfigType.USER, fullThread: false } });
+
+    expect(layout(wrapper)).toEqual(['user:dig into it', 'strip', 'strip', 'live']);
+    expect(wrapper.findAll('.speech-form__timestamp')).toHaveLength(0);
+    expect(wrapper.findAll(COPY)).toHaveLength(0);
+    expect(wrapper.findAll(REPLY)).toHaveLength(0);
   });
 });
 
@@ -424,6 +565,23 @@ describe('crashed-turn note', () => {
     });
 
     expect(wrapper.find('.turn-crashed').exists()).toBe(false);
+  });
+
+  it('still says so when the only rows that came back were tool-only steps', () => {
+    const turnId = 304;
+    const b = settledTurn(turnId, [
+      row('3040', 'user', 'a question that crashed the turn', turnId),
+      row('3041', 'assistant', '', turnId, { tool_calls: calls('web_search') }),
+    ]);
+    b.crashed = true;
+
+    const wrapper = mount(TurnView, { props: { block: b, type: ConfigType.USER, fullThread: false } });
+
+    // The step's trace stays visible, but it is not a reply: no bubble, and the
+    // note names the absence.
+    expect(wrapper.find('.turn-crashed').exists()).toBe(true);
+    expect(wrapper.findAll('.speech-form--chalie')).toHaveLength(0);
+    expect(wrapper.find('.trace-pill').text()).toContain('1 tool used');
   });
 });
 

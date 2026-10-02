@@ -10,7 +10,7 @@
  * real TurnView the conversation uses:
  *   - live, while the turn works         (ActCycle)
  *   - settled, folded into the footer    (BubbleFooter trace)
- *   - settled mid-stream, in a fold      (ActCycleGroup)
+ *   - settled mid-stream, on a step row  (the row's own BubbleFooter strip)
  *
  * Real components, real Pinia session store, real live act-trail feed. A click
  * is asserted by what it does to the session (`panelDelegate`), the thing the
@@ -241,15 +241,17 @@ describe('settled pills on the footer trace (BubbleFooter)', () => {
   });
 });
 
-describe('settled pills still in a fold mid-stream (ActCycleGroup)', () => {
-  it('a delegate step opens its transcript from the expanded fold; a plain step in the same fold is not a button', async () => {
-    // A working turn whose last row is the still-streaming reply: its finished
-    // calls ride a collapsed fold instead of a footer.
-    const wrapper = track(mount(TurnView, {
-      props: { block: turnWith(true, [DELEGATE_CALL, PLAIN_CALL]), type: ConfigType.USER },
-    }));
+describe('settled pills on a working turn\'s step row (its own trace strip)', () => {
+  it('a step row that only called tools draws its delegate call as a button in its own strip; a plain call in the same strip is not a button', async () => {
+    // A working turn whose provider call asked for tools and said nothing: no
+    // bubble, just that call's own strip under the question.
+    const turn = turnWith(true, [DELEGATE_CALL, PLAIN_CALL]);
+    turn.messages[1] = { ...turn.messages[1]!, content: '' };
+    const wrapper = track(mount(TurnView, { props: { block: turn, type: ConfigType.USER } }));
     const session = useSessionStore();
+    expect(wrapper.find('[data-transcript-row-id="3011"]').exists()).toBe(false);
     const [folded] = delegateButtons(wrapper);
+    expect(folded).toBeDefined();
     expect(folded!.closest('[inert]')).not.toBeNull();
 
     traceToggle(wrapper).click();
