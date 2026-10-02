@@ -367,8 +367,9 @@ def test_child_turn_reads_by_channel_with_its_instruction_as_a_user_message(
 ) -> None:
     """The child turn is read by channel: its block is addressed by that channel
     with no type, its stamped input row (role ``web_search`` in storage) reads as
-    the user's message, and the child's answer follows as an assistant message;
-    a child that ran to its answer never reads as stopped.
+    the user's message, and the child's calls follow as assistant messages — its
+    tool-only step as an empty one, then its answer; a child that ran to its
+    answer never reads as stopped.
     The user thread sharing the same numeric turn id is a different block."""
     client, _db, _store = authed_client
 
@@ -378,7 +379,7 @@ def test_child_turn_reads_by_channel_with_its_instruction_as_a_user_message(
     assert block["cancelled"] is False
     messages = cast("list[dict[str, object]]", block["messages"])
     assert (messages[0]["role"], messages[0]["content"]) == ("user", _INSTRUCTIONS)
-    assert [m["content"] for m in messages if m["role"] == "assistant"] == [_CHILD_ANSWER]
+    assert [m["content"] for m in messages if m["role"] == "assistant"] == ["", _CHILD_ANSWER]
     user_block = _block(client, f"/api/threads/{delegate_run.child_turn_id}")
     assert user_block["type"] == "user" and user_block["channel"] is None
     assert _INSTRUCTIONS not in [m["content"] for m in cast("list[dict[str, object]]", user_block["messages"])]
@@ -451,7 +452,8 @@ def _assert_parent_turn_completed_with_its_answer(
         "SELECT content FROM transcript WHERE channel = ? AND turn_id = ? AND role = 'assistant'",
         (UserConfig().channel, parent.turn_id),
     ).fetchall()
-    assert [r["content"] for r in replies] == [reply]
+    # The call that ran the delegate stored an empty row; the answer is the next.
+    assert [r["content"] for r in replies] == ["", reply]
 
 
 def test_failed_announcement_does_not_fail_the_delegate_call(db: sqlite3.Connection) -> None:
