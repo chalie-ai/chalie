@@ -77,7 +77,7 @@ def test_reopened_turn_with_prior_settle_is_working(db: sqlite3.Connection) -> N
 
     first_tick = MessageProcessor(ScheduledConfig(), turn_id)  # inert (I2)
     assert first_tick.turn_execution_service.open() is not None
-    first_tick.transcript_service.append_assistant("First tick settled.")
+    first_tick.transcript_service.append_assistant("First tick settled.", settled=True)
     assert first_tick.turn_execution_service.finish(TurnExecution.COMPLETED) is not None
 
     later_tick = MessageProcessor(ScheduledConfig(), turn_id)  # inert (I2)
@@ -104,7 +104,7 @@ def test_finished_execution_with_settled_reply_is_not_working(db: sqlite3.Connec
 
     execution = mp.turn_execution_service.open()
     assert execution is not None
-    mp.transcript_service.append_assistant("Standup reminder: 9am daily sync.")
+    mp.transcript_service.append_assistant("Standup reminder: 9am daily sync.", settled=True)
     finished = mp.turn_execution_service.finish(TurnExecution.COMPLETED)
     assert finished is not None and finished.ended_at is not None  # sanity: real close
 
@@ -164,7 +164,7 @@ def test_completed_execution_is_not_crashed(db: sqlite3.Connection) -> None:
     mp.current_transcript_id = uid
 
     assert mp.turn_execution_service.open() is not None
-    mp.transcript_service.append_assistant("Done.")
+    mp.transcript_service.append_assistant("Done.", settled=True)
     assert mp.turn_execution_service.finish(TurnExecution.COMPLETED) is not None
 
     result = _serializer().serialize(_USER_CHANNEL, turn_id)
@@ -204,13 +204,13 @@ def test_single_exchange_with_interim_tool_step_has_no_thread_replies(db: sqlite
     mp.uid = uid
     mp.current_transcript_id = uid
 
-    interim_id = mp.transcript_service.append_assistant("Let me check the docs for that.")
+    interim_id = mp.transcript_service.append_assistant("Let me check the docs for that.", settled=False)
     mp.current_transcript_id = interim_id  # mirrors MessageProcessor._store's real wiring
     call_id = mp.tool_call_service.start("web_search", {"query": "connected tools"})
     assert call_id is not None  # sanity: the real tool-call write succeeded
     mp.tool_call_service.finish(call_id, "no direct hit", ToolCall.DONE)
 
-    final_id = mp.transcript_service.append_assistant("Here's what I found connected.")
+    final_id = mp.transcript_service.append_assistant("Here's what I found connected.", settled=True)
 
     result = _serializer().serialize(_USER_CHANNEL, turn_id)
     messages = cast("list[dict[str, object]]", result["messages"])
@@ -233,7 +233,7 @@ def test_reply_with_tool_call_tags_only_the_reply_rows(db: sqlite3.Connection) -
     opener_uid = opener.transcript_service.append_input(opener.raw_input)
     opener.uid = opener_uid
     opener.current_transcript_id = opener_uid
-    opener_answer_id = opener.transcript_service.append_assistant("You have no events today.")
+    opener_answer_id = opener.transcript_service.append_assistant("You have no events today.", settled=True)
     assert Transcript.settle0(_USER_CHANNEL, turn_id) == opener_answer_id  # sanity: opener settled
 
     reply = MessageProcessor(UserConfig(), turn_id, "Actually, add a 3pm meeting.")  # forked reply, inert (I2)
@@ -252,7 +252,7 @@ def test_reply_with_tool_call_tags_only_the_reply_rows(db: sqlite3.Connection) -
     assert Transcript.settle0(_USER_CHANNEL, turn_id) == opener_answer_id
 
     reply.tool_call_service.finish(call_id, "created", ToolCall.DONE)
-    reply_answer_id = reply.transcript_service.append_assistant("Added a 3pm meeting to your calendar.")
+    reply_answer_id = reply.transcript_service.append_assistant("Added a 3pm meeting to your calendar.", settled=True)
 
     result = _serializer().serialize(_USER_CHANNEL, turn_id)
     messages = cast("list[dict[str, object]]", result["messages"])
@@ -318,7 +318,7 @@ def test_same_tool_rich_cards_in_one_turn_resolve_per_cycle(db: sqlite3.Connecti
         ToolCall.DONE,
     )
     a1 = c1.transcript_service.append_assistant(
-        "Here you go: <span id='image_preview_1'>Northern lights.</span>"
+        "Here you go: <span id='image_preview_1'>Northern lights.</span>", settled=True
     )
 
     # Cycle 2 (same turn) — "southern lights" → image_preview #1 AGAIN: the fresh
@@ -335,7 +335,7 @@ def test_same_tool_rich_cards_in_one_turn_resolve_per_cycle(db: sqlite3.Connecti
         ToolCall.DONE,
     )
     a2 = c2.transcript_service.append_assistant(
-        "And these: <span id='image_preview_1'>Southern lights.</span>"
+        "And these: <span id='image_preview_1'>Southern lights.</span>", settled=True
     )
 
     result = _serializer().serialize(_USER_CHANNEL, turn_id)
@@ -383,7 +383,7 @@ def test_serialize_turn_stamps_the_config_type_it_was_called_with(db: sqlite3.Co
     scheduled_turn_id = 9101
     scheduled_mp = MessageProcessor(ScheduledConfig(), scheduled_turn_id)  # inert (I2)
     assert scheduled_mp.turn_execution_service.open() is not None
-    scheduled_mp.transcript_service.append_assistant("Standup reminder: 9am daily sync.")
+    scheduled_mp.transcript_service.append_assistant("Standup reminder: 9am daily sync.", settled=True)
     assert scheduled_mp.turn_execution_service.finish(TurnExecution.COMPLETED) is not None
 
     scheduled_result = _serializer().serialize(_CHANNEL, scheduled_turn_id, config_type=_SCHEDULED_TYPE)
@@ -394,7 +394,7 @@ def test_serialize_turn_stamps_the_config_type_it_was_called_with(db: sqlite3.Co
     uid = user_mp.transcript_service.append_input(user_mp.raw_input)
     user_mp.uid = uid
     user_mp.current_transcript_id = uid
-    user_mp.transcript_service.append_assistant("Sunny, 22C.")
+    user_mp.transcript_service.append_assistant("Sunny, 22C.", settled=True)
 
     user_result = _serializer().serialize(_USER_CHANNEL, user_turn_id)  # default config_type
 
@@ -414,7 +414,7 @@ def test_thread_feed_stamps_every_summary_with_the_requested_type(
     scheduled_turn_id = 9104
     scheduled_mp = MessageProcessor(ScheduledConfig(), scheduled_turn_id)  # inert (I2)
     assert scheduled_mp.turn_execution_service.open() is not None
-    scheduled_mp.transcript_service.append_assistant("Weekly digest is ready.")
+    scheduled_mp.transcript_service.append_assistant("Weekly digest is ready.", settled=True)
     assert scheduled_mp.turn_execution_service.finish(TurnExecution.COMPLETED) is not None
 
     user_turn_id = 7104
@@ -422,7 +422,7 @@ def test_thread_feed_stamps_every_summary_with_the_requested_type(
     uid = user_mp.transcript_service.append_input(user_mp.raw_input)
     user_mp.uid = uid
     user_mp.current_transcript_id = uid
-    user_mp.transcript_service.append_assistant("Nothing scheduled.")
+    user_mp.transcript_service.append_assistant("Nothing scheduled.", settled=True)
 
     resp = client.get(f"/api/threads/all?type={_SCHEDULED_TYPE}")
     assert resp.status_code == 200
@@ -448,7 +448,7 @@ def test_scheduled_turn_fetched_with_wrong_type_renders_empty_but_right_type_ren
     turn_id = 9103
     mp = MessageProcessor(ScheduledConfig(), turn_id)  # inert (I2)
     assert mp.turn_execution_service.open() is not None
-    mp.transcript_service.append_assistant("Standup reminder: 9am daily sync.")
+    mp.transcript_service.append_assistant("Standup reminder: 9am daily sync.", settled=True)
     assert mp.turn_execution_service.finish(TurnExecution.COMPLETED) is not None
 
     wrong_type_resp = client.get(f"/api/threads/{turn_id}")  # default type=user

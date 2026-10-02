@@ -522,7 +522,7 @@ class MessageProcessor:
         formatted = self._format(text or "")
         if self.config.skip_transcript:
             return formatted
-        self.current_transcript_id = self.transcript_service.append_assistant(formatted, settled)
+        self.current_transcript_id = self.transcript_service.append_assistant(formatted, settled=settled)
         return formatted
 
     def _capture_thinking_trace(self, response: "ProviderResponse") -> None:

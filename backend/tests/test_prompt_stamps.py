@@ -107,7 +107,7 @@ def test_history_rows_carry_the_same_stamp_shape(db: sqlite3.Connection) -> None
     prior_content = "what's the weather like today"
 
     prior = _open_turn(UserConfig(), prior_content)
-    prior.transcript_service.append_assistant("Sunny, 28C.")  # settles the prior turn
+    prior.transcript_service.append_assistant("Sunny, 28C.", settled=True)  # settles the prior turn
     db.execute("UPDATE transcript SET created_at = ? WHERE id = ?", ("2026-06-14 09:00:00", prior.uid))
     db.commit()
 

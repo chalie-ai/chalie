@@ -4,8 +4,8 @@ Pure CRUD (Rule-3 depth): holds no ``mp``, imports no service, never emits WS,
 never reaches upstream. It only stores its fields, projects itself, and runs its
 own table's SQL on the connection bound onto the :class:`Model` base.
 
-A tool call anchors ONLY to the transcript input row that drove it
-(``transcript_id``); its logical turn is derived by joining ``transcript`` on
+A tool call anchors ONLY to the transcript row of the provider call that asked
+for it (``transcript_id``); its logical turn is derived by joining ``transcript`` on
 (channel, turn_id), so this table carries no turn_id / channel column of its own
 — hence :meth:`by_turn` holds that join SQL (§2.6, a multi-table read the generic
 builder can't express).
@@ -136,15 +136,15 @@ class ToolCall(Model):
 
     @classmethod
     def by_transcript(cls, transcript_id: int) -> list[Self]:
-        """All tool calls anchored to one input row, ordered by autoincrement id
-        — the narrow single-anchor read. Equivalent to :meth:`by_turn` for a turn
-        with a single input row; the turn-keyed read is preferred in the loop
-        because it also spans async / delegate re-entries."""
+        """All tool calls anchored to one transcript row, ordered by
+        autoincrement id — the narrow single-anchor read; the turn-keyed
+        :meth:`by_turn` is preferred in the loop because it spans every row of
+        the turn."""
         return cls.filter("transcript_id", transcript_id).order_by("id").get()
 
     @classmethod
     def by_transcripts(cls, transcript_ids: list[int]) -> list[Self]:
-        """All tool calls anchored to any of the given input rows, ordered by
+        """All tool calls anchored to any of the given transcript rows, ordered by
         autoincrement id — the batch-anchor read. Empty input short-circuits to
         ``[]``."""
         return cls.filter_in("transcript_id", transcript_ids).order_by("id").get()

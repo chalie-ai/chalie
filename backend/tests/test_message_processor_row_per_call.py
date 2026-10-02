@@ -31,12 +31,14 @@ from unittest.mock import patch
 
 import pytest
 
+from configs.channels.memory_step import HISTORY_LIMIT
 from configs.channels.user import UserConfig
 from controllers.message_processor import MessageProcessor
 from models.provider_response import ProviderResponse
 from models.transcript import Transcript
 from models.transcript_thinking import TranscriptThinking
 from models.turn_execution import TurnExecution
+from services.memory_step_service import memory_step_config
 from services.turn_serializer_service import get_service as _serializer
 from services.websocket import Websocket
 
@@ -188,29 +190,57 @@ def test_the_live_surface_is_told_about_every_row_a_turn_stores(
 def test_replaying_history_skips_the_blank_step_row(db: sqlite3.Connection) -> None:
     """The model reads the previous turn back as conversation. A tool-only step
     stored an empty assistant row; replaying it would show the model a blank
-    ``Assistant:`` line it never wrote. The next turn's history carries one line
-    per row that SAID something — the question and the answer — and the blank
-    step row, though present in the history view, adds none."""
+    ``Assistant:`` line it never wrote. The stored turn keeps the blank step
+    row, but the next turn's history view holds only the rows that SAID
+    something — the question and the answer — one rendered line each."""
     assert db is not None
     first = _run(
         _ScriptedProvider(_tool_step("", "probe"), _final("The sky is blue.")),
         "what colour is the sky",
     )
+    assert [r["content"] for r in _assistant_rows(first)] == ["", "The sky is blue."], (
+        "precondition: the stored turn holds the blank step row"
+    )
     second = MessageProcessor(UserConfig(), raw_input="and the sea?")  # inert (I2)
 
     history = second.transcript_service.read()
-    assert any(
-        r.role == "assistant" and not (r.content or "").strip() for r in history
-    ), "precondition: the history view contains the blank step row"
-    said_something = [
-        r for r in history if r.role != "assistant" or (r.content or "").strip()
+
+    assert [(r.role, r.content) for r in history] == [
+        ("user", "what colour is the sky"),
+        ("assistant", "The sky is blue."),
     ]
-    assert [r.turn_id for r in said_something] == [first.turn_id, first.turn_id]
-
     rendered = second.prompt_service.previous_messages()
-
-    assert len(rendered.splitlines()) == len(said_something)
+    assert len(rendered.splitlines()) == len(history)
     assert "The sky is blue." in rendered
+
+
+def test_a_capped_history_is_not_crowded_out_by_blank_step_rows(
+    db: sqlite3.Connection,
+) -> None:
+    """A capped history view keeps the newest N rows. A turn that ran as many
+    tool-only steps as the cap stores that many blank rows between the question
+    and the answer; counted against the cap they would push the question out,
+    leaving a reader that sees an answer with no question. The cap counts only
+    rows that said something, so the question survives."""
+    assert db is not None
+    first = _run(
+        _ScriptedProvider(
+            *[_tool_step("", f"probe {n}") for n in range(HISTORY_LIMIT)],
+            _final("Both are blue."),
+        ),
+        "what colour are the sky and the sea",
+    )
+    assert len(_assistant_rows(first)) == HISTORY_LIMIT + 1, (
+        "precondition: one blank row per tool-only step, then the answer"
+    )
+    reader = MessageProcessor(memory_step_config(UserConfig(), []), raw_input="")  # inert (I2)
+
+    history = reader.transcript_service.read()
+
+    assert [(r.role, r.content) for r in history] == [
+        ("user", "what colour are the sky and the sea"),
+        ("assistant", "Both are blue."),
+    ]
 
 
 def test_the_rendered_thread_shows_the_step_row_with_its_tool_chips(

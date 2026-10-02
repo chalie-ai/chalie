@@ -255,9 +255,7 @@ class PromptService:
     def previous_messages(self, drop_oldest: int = 0) -> str:
         """The ``## Previous Messages`` block body (no header): this turn's
         history view (``self.mp.transcript_service.read()``), each row formatted
-        ``[local-ts] Role: content``. An assistant row with no text — a
-        provider call that only made tool calls — says nothing and is skipped.
-        ``drop_oldest`` lets a caller (e.g. the history compactor, shrinking its
+        ``[local-ts] Role: content``. ``drop_oldest`` lets a caller (e.g. the history compactor, shrinking its
         own input) drop the N oldest rows — a genuine external count, not
         mp-reachable."""
         rows = self.mp.transcript_service.read()[drop_oldest:]
@@ -268,8 +266,6 @@ class PromptService:
             fields = row.to_dict()
             raw_role = cast("str", fields.get("role") or "unknown")
             content = cast("str", fields.get("content") or "").replace("\n", " ").strip()
-            if raw_role == "assistant" and not content:
-                continue
             ts = self._format_ts(cast("str | None", fields.get("created_at")))
             role_label = "Assistant" if raw_role == "assistant" else raw_role
             lines.append(f"[{ts}] {role_label}: {content}")

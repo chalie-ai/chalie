@@ -72,9 +72,11 @@ class TranscriptService:
         are per-channel, so resolving ``read_channel`` on a FORK would cross
         namespaces and return another channel's unrelated turn.
 
-        Finally, a config declaring ``history_limit`` keeps only the newest N
-        rows of whichever view it is on (the memory step pins 10); ``None``
-        leaves the view uncapped, which is every conversation channel."""
+        Finally, an assistant row with no text (a provider call that only made
+        tool calls) is dropped, and a config declaring ``history_limit`` keeps
+        only the newest N of the remaining rows of whichever view it is on (the
+        memory step pins 10); ``None`` leaves the view uncapped, which is every
+        conversation channel."""
         if self.mp.config.suppress_history:
             return []
         watermark = self.mp.compaction_service.watermark()
@@ -119,6 +121,9 @@ class TranscriptService:
                     rows.extend(turn_rows[:TurnExecution.cancelled_orphan_cutoff(
                         [r.role for r in turn_rows], TurnExecution.latest(channel, tid),
                     )])
+        # A call that only asked for tools left an empty row: it said nothing,
+        # so it is not history and must not take a slot under the cap.
+        rows = [r for r in rows if r.role != "assistant" or r.content.strip()]
         limit = self.mp.config.history_limit
         return rows[-limit:] if limit is not None and limit > 0 else rows
 
@@ -205,7 +210,7 @@ class TranscriptService:
             tool_call_id=str(tool_call_id) if tool_call_id is not None else None,
         )
 
-    def append_assistant(self, content: str, settled: bool = True) -> int:
+    def append_assistant(self, content: str, *, settled: bool) -> int:
         """Write one provider call's assistant row for this turn and poke
         every open surface to refetch the turn block — the visible-transcript
         write every step lands through. ``settled`` only for the turn's
