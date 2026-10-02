@@ -1,12 +1,22 @@
-<!-- Slide-over thread panel: a focused, full-height view of one thread.
+<!-- Slide-over thread panel: a focused, full-height view of one thread, or a
+     watch-only view of one delegate (subagent) turn's transcript (no reply,
+     only a stop while it runs).
      Registers its body as a DOM-contract surface (D14) and fetches its own
      turn via REST — no buffer read for rendering. -->
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { ArrowLeft } from '@lucide/vue';
+import { ArrowLeft, Bot } from '@lucide/vue';
+import type { DelegateRef } from '@chalie/shared';
 import { useSessionStore } from '../../stores/session';
 import { conversation as convoApi } from '../../api/conversation';
-import { registerSurface, unregisterSurface, clearSurfaceContainer, upsertTurnToSurfaces } from '../../utils/turnDom';
+import {
+  registerSurface,
+  unregisterSurface,
+  clearSurfaceContainer,
+  upsertDelegateTurn,
+  upsertTurnToSurfaces,
+} from '../../utils/turnDom';
+import { delegateName } from '../../utils/delegateChannel';
 import TurnView from './TurnView.vue';
 import InputDock from '../layout/InputDock.vue';
 
@@ -14,10 +24,13 @@ const PANEL_SURFACE_ID = 'thread-panel';
 
 const session = useSessionStore();
 
-const open = computed(() => session.panelThreadId != null);
+const delegateMode = computed(() => session.panelDelegate != null);
+const open = computed(() => session.panelThreadId != null || delegateMode.value);
 
 const heading = ref('Thread');
 const hydrated = ref(false);
+/** The open delegate turn came back with no rows: its transcript is gone. */
+const expired = ref(false);
 
 // `bodyRef` is the scrollable wrapper (kept for scrollTop pinning);
 // `turnsRef` is the DEDICATED surface container — kept separate from the
@@ -25,6 +38,9 @@ const hydrated = ref(false);
 // never share a parent with vdom-owned siblings.
 const bodyRef = ref<HTMLElement | null>(null);
 const turnsRef = ref<HTMLElement | null>(null);
+const backRef = ref<HTMLButtonElement | null>(null);
+/** What had focus when the panel opened; it gets focus back on close. */
+let opener: HTMLElement | null = null;
 
 function close(): void {
   session.closeThreadPanel();
@@ -35,6 +51,7 @@ function _teardownSurface(): void {
   unregisterSurface(PANEL_SURFACE_ID);
   if (turnsRef.value) clearSurfaceContainer(turnsRef.value);
   hydrated.value = false;
+  expired.value = false;
 }
 
 /** (Re-)register the surface for the currently-open turn and fetch it. */
@@ -42,6 +59,7 @@ async function _openTurn(turnId: number, type: string): Promise<void> {
   _teardownSurface();
   await nextTick(); // let `v-if="open"` mount <aside> so turnsRef exists.
   if (!turnsRef.value || session.panelThreadId !== turnId || session.panelType !== type) return;
+  backRef.value?.focus();
 
   registerSurface({
     id: PANEL_SURFACE_ID,
@@ -78,9 +96,60 @@ async function _openTurn(turnId: number, type: string): Promise<void> {
   }
 }
 
+/** True while `target` is still the delegate turn the panel is open on. */
+function isOpenDelegate(target: DelegateRef): boolean {
+  const current = session.panelDelegate;
+  return current != null && current.channel === target.channel && current.turn_id === target.turn_id;
+}
+
+/** (Re-)register the surface for a delegate turn — addressed by its channel,
+ *  never by a type — and fetch it. */
+async function _openDelegate(target: DelegateRef): Promise<void> {
+  _teardownSurface();
+  heading.value = delegateName(target.channel);
+  await nextTick(); // let `v-if="open"` mount <aside> so turnsRef exists.
+  if (!turnsRef.value || !isOpenDelegate(target)) return;
+  backRef.value?.focus();
+
+  registerSurface({
+    id: PANEL_SURFACE_ID,
+    channel: target.channel,
+    container: turnsRef.value,
+    component: TurnView,
+    props: { canReply: false, fullThread: true },
+    accepts: (id) => id === target.turn_id,
+  });
+
+  try {
+    const block = await convoApi.delegateThread(target.turn_id, target.channel);
+    if (!isOpenDelegate(target)) return; // superseded
+    hydrated.value = true;
+    expired.value = block.messages.length === 0;
+    if (!expired.value) upsertDelegateTurn(block);
+  } catch (err) {
+    if (!isOpenDelegate(target)) return; // superseded
+    console.warn('[ThreadPanel] delegate turn', target.turn_id, 'on', target.channel, 'failed to load', err);
+    hydrated.value = true; // stop the spinner — nothing more is coming
+    session.errorMessage = 'Failed to load this transcript';
+  }
+}
+
+watch(open, (isOpen) => {
+  if (isOpen) {
+    opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    return;
+  }
+  if (opener?.isConnected) opener.focus();
+  opener = null;
+});
+
 watch(
-  () => [session.panelThreadId, session.panelType] as const,
-  ([turnId, type]) => {
+  () => [session.panelThreadId, session.panelType, session.panelDelegate] as const,
+  ([turnId, type, delegate]) => {
+    if (delegate != null) {
+      void _openDelegate(delegate);
+      return;
+    }
     if (turnId == null) {
       _teardownSurface();
       return;
@@ -89,13 +158,22 @@ watch(
   },
 );
 
+/** True when a 'turn-upserted' detail names the turn this panel is open on —
+ *  a delegate turn by its channel, a thread by its type. */
+function isPanelTurn(detail: { turnId: number; type?: string; channel?: string }): boolean {
+  const target = session.panelDelegate;
+  if (target != null) return detail.channel === target.channel && detail.turnId === target.turn_id;
+  return detail.turnId === session.panelThreadId && detail.type === session.panelType;
+}
+
 // Follow live reply growth: pin the body to its bottom whenever the open
 // turn re-renders (turnDom's 'turn-upserted' signal, dispatched after every
 // DOM write — replaces the old watch on the buffer's block).
 function onTurnUpserted(e: Event): void {
   if (!open.value) return;
-  const detail = (e as CustomEvent<{ turnId: number; type: string }>).detail;
-  if (detail.turnId !== session.panelThreadId || detail.type !== session.panelType) return;
+  const detail = (e as CustomEvent<{ turnId: number; type?: string; channel?: string }>).detail;
+  if (!isPanelTurn(detail)) return;
+  expired.value = false;
   nextTick(() => {
     const el = bodyRef.value;
     if (el) el.scrollTop = el.scrollHeight;
@@ -109,7 +187,8 @@ function onKeydown(e: KeyboardEvent): void {
 onMounted(() => {
   document.addEventListener('keydown', onKeydown);
   document.addEventListener('turn-upserted', onTurnUpserted);
-  if (session.panelThreadId != null) void _openTurn(session.panelThreadId, session.panelType);
+  if (session.panelDelegate != null) void _openDelegate(session.panelDelegate);
+  else if (session.panelThreadId != null) void _openTurn(session.panelThreadId, session.panelType);
 });
 
 onBeforeUnmount(() => {
@@ -124,13 +203,15 @@ onBeforeUnmount(() => {
     <aside
       v-if="open"
       class="thread-panel"
+      :class="{ 'thread-panel--delegate': delegateMode }"
       role="dialog"
       aria-modal="true"
-      :aria-label="heading"
+      :aria-label="delegateMode ? `${heading} subagent transcript` : heading"
       :data-dock-scope="session.panelThreadId"
     >
       <header class="thread-panel__header">
         <button
+          ref="backRef"
           class="thread-panel__back"
           type="button"
           aria-label="Back to conversation"
@@ -140,7 +221,9 @@ onBeforeUnmount(() => {
           <span>Chalie</span>
         </button>
         <div class="thread-panel__divider" aria-hidden="true" />
+        <Bot v-if="delegateMode" class="thread-panel__fork-glyph thread-panel__bot-glyph" :size="14" aria-hidden="true" />
         <svg
+          v-else
           class="thread-panel__fork-glyph"
           width="14"
           height="14"
@@ -163,12 +246,18 @@ onBeforeUnmount(() => {
         <div v-if="!hydrated" class="thread-panel__loader">
           <output class="thread-panel__spinner" aria-label="Loading thread" />
         </div>
+        <div v-else-if="expired" class="thread-panel__expired">
+          <p class="thread-panel__expired-title">Transcript expired</p>
+          <p class="thread-panel__expired-note">This subagent's transcript is no longer kept.</p>
+        </div>
         <div ref="turnsRef" class="thread-panel__turns" />
       </div>
 
       <!-- Permission cards for the turn this panel shows: PermissionStack.vue
            teleports them here, in flow above this dock, while the panel is open
-           on their turn. The target lives only with the open panel. -->
+           on their turn. The target lives only with the open panel. A delegate
+           transcript takes no reply: no dock, and its cards stay on the main
+           stack since no thread is open. -->
       <div id="permStackPanel" class="permission-stack permission-stack--panel"></div>
 
       <InputDock
@@ -249,6 +338,23 @@ onBeforeUnmount(() => {
   flex-shrink: 0;
 }
 
+.thread-panel__bot-glyph {
+  color: var(--violet-light);
+}
+
+// A delegate transcript is a side read, not a working thread: narrower, so the
+// conversation it came from stays in view, and full width on small screens.
+.thread-panel--delegate {
+  width: min(760px, 95%);
+}
+
+@media (max-width: 640px) {
+  .thread-panel--delegate {
+    width: 100%;
+    border-radius: 0;
+  }
+}
+
 .thread-panel__title {
   font:
     600 14px Inter,
@@ -273,6 +379,23 @@ onBeforeUnmount(() => {
   display: flex;
   justify-content: center;
   padding: 32px 0;
+}
+
+.thread-panel__expired {
+  padding: 32px 26px;
+  text-align: center;
+}
+
+.thread-panel__expired-title {
+  margin: 0 0 6px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.thread-panel__expired-note {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
 }
 
 .thread-panel__spinner {

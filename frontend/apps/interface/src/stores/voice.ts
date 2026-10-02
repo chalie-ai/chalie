@@ -10,7 +10,7 @@
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
 import type { WakeLockHandle } from '@chalie/shared';
-import { platform as adapter } from '@chalie/shared';
+import { webPlatformAdapter as adapter } from '@chalie/shared';
 import { voice } from '../api/voice';
 import { emit } from '../composables/useEventBus';
 import { useSessionStore } from './session';
@@ -71,41 +71,13 @@ export const useVoiceStore = defineStore('voice', () => {
     }
   }
 
-  /** True while a native on-device STT capture is in flight (Tauri only). */
-  let _nativeSTT = false;
-
   /** Single entry point for the mic button. */
   async function toggleRecording(): Promise<void> {
-    if (_nativeSTT) {
-      _nativeSTT = false;
-      recorderState.value = 'idle';
-      try {
-        await adapter.stopSTT();
-      } catch (err) {
-        console.debug('[voice] stopSTT:', err);
-      }
-      return;
-    }
     if (recorderState.value === 'recording') {
       await _stopAndUpload();
       return;
     }
     if (recorderState.value !== 'idle') return; // 'uploading' — ignore clicks.
-
-    // On the native runtime, capture on-device (server /voice/transcribe is
-    // bypassed). Native partial/final results arrive as chalie:voice-transcript
-    // window events emitted by the plugin, so we do NOT re-emit here.
-    try {
-      await adapter.startSTT();
-      _nativeSTT = true;
-      useSessionStore().errorMessage = null;
-      recorderState.value = 'recording';
-      return;
-    } catch (err) {
-      // STT_UNSUPPORTED (web) / permission-denied / no on-device model →
-      // fall back to the MediaRecorder + /voice/transcribe path.
-      console.debug('[voice] native STT unavailable, falling back:', err);
-    }
     await _startRecording();
   }
 

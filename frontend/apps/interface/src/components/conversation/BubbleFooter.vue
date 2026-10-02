@@ -6,6 +6,7 @@ import { emit as busEmit } from '../../composables/useEventBus';
 import { useVoiceTranscriptsStore } from '../../stores/voiceTranscripts';
 import { voice } from '../../api/voice';
 import { Copy, Reply, Volume2 } from '@lucide/vue';
+import ToolCallList from './ToolCallList.vue';
 
 const props = withDefaults(defineProps<{
   message: ConversationMessage;
@@ -176,23 +177,16 @@ function onCopy(): void {
       </span>
     </div>
 
+    <!-- inert while folded: a delegate call row is a button, and the fold only
+         collapses its height, so it would stay reachable by Tab unseen. -->
     <div
       v-if="toolCalls.length > 0"
       class="trace-body"
       :class="{ 'trace-body--open': expanded }"
+      :inert="!expanded"
     >
       <div class="trace-body__inner">
-        <div class="calls">
-          <div
-            v-for="(c, i) in toolCalls"
-            :key="i"
-            class="call"
-            :class="{ 'call--error': c.state === 'error' }"
-          >
-            <span class="call__fn">{{ c.tool_name }}</span>
-            <span class="call__summary">{{ c.summary }}</span>
-          </div>
-        </div>
+        <ToolCallList :calls="toolCalls" />
       </div>
     </div>
     <div

@@ -53,7 +53,6 @@ vi.mock('@chalie/shared', () => ({
   AuthError: class AuthError extends Error {},
   getWebSocket: () => fakeWs,
   useConnectionStore: () => ({ setConnected: () => { /* not under test */ } }),
-  platform: {},
   api: {},
   getHost: () => '',
 }));
@@ -452,6 +451,22 @@ describe('reconnect reconcile', () => {
     expect(turnDom.isTurnWorking(6, ConfigType.USER)).toBe(false);
   });
 
+  it('onDisconnect drops every delegate call\'s live pills, whose settling frame died with the socket, and leaves a user turn\'s pills for the reconcile', async () => {
+    const { session } = await freshSession();
+    const { liveTrailsFor, startLiveTool } = await import('../utils/liveActTrail');
+    session.init();
+    startLiveTool('delegate:web_search', 12, 31, 'fetch_url', 'museum.example/hours');
+    startLiveTool('delegate:code_agent', 4, 32, 'read_file');
+    startLiveTool(ConfigType.USER, 12, 33, 'web_search', 'museum hours');
+
+    wsCallbacks.onDisconnect();
+
+    expect(liveTrailsFor('delegate:web_search', 12)).toEqual([]);
+    expect(liveTrailsFor('delegate:code_agent', 4)).toEqual([]);
+    // Same turn id on the user channel: a different turn, not swept up.
+    expect(liveTrailsFor(ConfigType.USER, 12)[0]?.pills.map((p) => p.id)).toEqual(['33']);
+  });
+
   it('_reconcileWorking settles a snapshotted turn whose refetch says it is no longer working (drains queues), and restores the spinner for one still working', async () => {
     const { session, turnDom, threadPhase, queue } = await freshSession();
     session._offlineWorking.add('user:5'); // will refetch as settled
@@ -528,5 +543,72 @@ describe('reconnect reconcile', () => {
     expect(spineContainer.querySelector('[data-send-echo]')).toBeNull();
 
     spineContainer.remove();
+  });
+});
+
+describe('the slide-over panel target — a thread (turn id + type) or a delegate transcript (channel + turn id)', () => {
+  const SEARCH = { channel: 'delegate:web_search', turn_id: 12 };
+  const AGENT = { channel: 'delegate:code_agent', turn_id: 3 };
+
+  it('opening a delegate transcript replaces an open thread: the delegate is the target and no thread id is left behind', async () => {
+    const { session } = await freshSession();
+    session.openThreadPanel(5, ConfigType.USER);
+    expect(session.panelThreadId).toBe(5);
+    expect(session.panelType).toBe(ConfigType.USER);
+    expect(session.panelDelegate).toBeNull();
+
+    session.openDelegatePanel(SEARCH);
+
+    expect(session.panelDelegate).toEqual(SEARCH);
+    expect(session.panelThreadId).toBeNull();
+  });
+
+  it('opening a thread replaces an open delegate transcript and takes the thread\'s own type', async () => {
+    const { session } = await freshSession();
+    session.openDelegatePanel(SEARCH);
+
+    session.openThreadPanel(9, ConfigType.SCHEDULED);
+
+    expect(session.panelDelegate).toBeNull();
+    expect(session.panelThreadId).toBe(9);
+    expect(session.panelType).toBe(ConfigType.SCHEDULED);
+  });
+
+  it('a second delegate click replaces the first, even for the same turn id on another channel', async () => {
+    const { session } = await freshSession();
+    session.openDelegatePanel(SEARCH);
+    session.openDelegatePanel(AGENT);
+    expect(session.panelDelegate).toEqual(AGENT);
+
+    session.openDelegatePanel({ channel: 'delegate:code_agent', turn_id: SEARCH.turn_id });
+    expect(session.panelDelegate).toEqual({ channel: 'delegate:code_agent', turn_id: 12 });
+    expect(session.panelThreadId).toBeNull();
+  });
+
+  it('closing clears whichever target was open, thread or delegate', async () => {
+    const { session } = await freshSession();
+
+    session.openThreadPanel(5, ConfigType.USER);
+    session.closeThreadPanel();
+    expect(session.panelThreadId).toBeNull();
+    expect(session.panelDelegate).toBeNull();
+
+    session.openDelegatePanel(SEARCH);
+    session.closeThreadPanel();
+    expect(session.panelThreadId).toBeNull();
+    expect(session.panelDelegate).toBeNull();
+  });
+
+  it('opening a thread clears its standing "done" marker, but opening a delegate transcript with the same turn id leaves the user turn\'s marker alone', async () => {
+    const { session, turnDom } = await freshSession();
+    turnDom.setTurnDone(12, ConfigType.USER, true);
+    expect(turnDom.isTurnDone(12, ConfigType.USER)).toBe(true);
+
+    // A delegate's turn 12 is not the user's turn 12.
+    session.openDelegatePanel(SEARCH);
+    expect(turnDom.isTurnDone(12, ConfigType.USER)).toBe(true);
+
+    session.openThreadPanel(12, ConfigType.USER);
+    expect(turnDom.isTurnDone(12, ConfigType.USER)).toBe(false);
   });
 });

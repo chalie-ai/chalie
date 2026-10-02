@@ -11,7 +11,6 @@ import PoliciesView from './views/PoliciesView.vue';
 import SkillsView from './views/SkillsView.vue';
 import McpView from './views/McpView.vue';
 import ImportExportView from './views/ImportExportView.vue';
-import LinkDeviceView from './views/LinkDeviceView.vue';
 import SystemView from './views/SystemView.vue';
 
 import MemorySub from './views/cognition/MemorySub.vue';
@@ -70,7 +69,6 @@ export const router = createRouter({
     { path: '/skills', name: 'skills', component: SkillsView },
     { path: '/mcp', name: 'mcp', component: McpView },
     { path: '/import-export', name: 'import-export', component: ImportExportView },
-    { path: '/link-device', name: 'link-device', component: LinkDeviceView },
     { path: '/system', name: 'system', component: SystemView },
 
     // Catch-all → providers.
@@ -111,8 +109,7 @@ router.beforeEach(async (to) => {
     return true;
   }
 
-  const { has_master_account, has_session, has_providers, internal_dev } = status;
-  shell.internalDev = internal_dev;
+  const { has_master_account, has_session, has_providers } = status;
 
   if (!has_master_account) {
     return hardRedirect('/on-boarding/');
@@ -132,11 +129,6 @@ router.beforeEach(async (to) => {
     if (to.name !== 'providers') {
       return { name: 'providers' };
     }
-  }
-
-  // Link-device is an in-development feature; divert direct navigation when off.
-  if (!internal_dev && to.name === 'link-device') {
-    return { name: 'providers' };
   }
 
   return true;

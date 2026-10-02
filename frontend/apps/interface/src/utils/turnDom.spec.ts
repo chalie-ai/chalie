@@ -152,7 +152,7 @@ describe('upsertTurnToSurfaces — fan-out', () => {
 
     const b = block(1, [10]);
     b.messages[0].tool_calls = [
-      { tool_name: 'search', summary: 's', state: 'done', ended_at: null },
+      { tool_name: 'search', summary: 's', state: 'done', ended_at: null, delegate: null },
     ];
     upsertTurnToSurfaces(b, 'user');
 

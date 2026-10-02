@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { Brain, CalendarClock, Clock, Moon, Search, Sun } from '@lucide/vue';
 import { useSessionStore } from '../../stores/session';
 import { useTasksStore } from '../../stores/tasks';
-import { ConfigType, platform, useTheme } from '@chalie/shared';
+import { ConfigType, webPlatformAdapter, useTheme } from '@chalie/shared';
 import { emit } from '../../composables/useEventBus';
 import { useDockBusy } from '../../composables/useDockBusy';
 import { useThreadActivity } from '../../utils/threadActivity';
@@ -37,7 +37,7 @@ function handleThemeToggle(): void {
 
 /** Settings button → open the Brain admin dashboard via the platform adapter. */
 function handleSettings(): void {
-  platform.openBrain();
+  webPlatformAdapter.openBrain();
 }
 
 onMounted(() => {

@@ -119,6 +119,12 @@ _cli_bin_dir() {
 }
 
 # ─── Python 3.11+ Check ─────────────────────────────────────────────────────
+# The interpreter the virtualenv is built from: the host's python3 when it is
+# new enough, otherwise the managed build uv fetches. Either way _choose_python
+# leaves a concrete interpreter path here before anything uses it.
+PYTHON=""
+_MANAGED_PYTHON="3.12"
+
 _python_version_ok() {
   local py="${1:-python3}"
   if ! command -v "$py" >/dev/null 2>&1; then
@@ -152,27 +158,6 @@ _run_privileged() {
   else
     "$@"
   fi
-}
-
-_check_python() {
-  _section "Python"
-  if _python_version_ok python3; then
-    local ver
-    ver="$(python3 --version 2>&1)"
-    _ok "Found $ver"
-    PYTHON="$(command -v python3)"
-    return
-  fi
-
-  _error "Python 3.11+ is required but was not found."
-  _error "Please install Python 3.11+ and re-run the installer."
-  _error ""
-  _error "Install options:"
-  _error "  • macOS:         brew install python@3.12"
-  _error "  • Debian/Ubuntu: sudo apt-get install python3 python3-pip python3-venv"
-  _error "  • Fedora/RHEL:   sudo dnf install python3 python3-pip"
-  _error "  • Download:      https://www.python.org/downloads/"
-  exit 1
 }
 
 # ─── System Build Dependencies (Linux) ──────────────────────────────────────
@@ -212,6 +197,29 @@ _install_build_deps() {
       ;;
   esac
   _ok "Build dependencies ready"
+}
+
+# ─── Interpreter Decision ───────────────────────────────────────────────────
+# Deliberately runs AFTER the build deps: on Debian/Ubuntu that step installs
+# python3-venv, which supplies a python3 the host did not have, and a managed
+# download is worth skipping whenever a package manager already did the job.
+# Probing here and only here also keeps one answer on screen — a probe before
+# the build deps could only contradict itself afterwards. Desktop launches
+# inherit a minimal PATH whose only python3 is the system one (macOS ships 3.9),
+# so refusing here would make the supported install path unreachable.
+_choose_python() {
+  _section "Python"
+  if _python_version_ok python3; then
+    _ok "Found $(python3 --version 2>&1)"
+    PYTHON="$(command -v python3)"
+    return 0
+  fi
+  _info "No Python 3.11+ found; installing a managed Python $_MANAGED_PYTHON with uv"
+  # Swallow the uv failure so _install_managed_python can report the real
+  # problem: with no interpreter on the host, a missing uv is fatal rather
+  # than a fall back to pip.
+  _ensure_uv || true
+  _install_managed_python
 }
 
 # ─── Download Latest Release ────────────────────────────────────────────────
@@ -317,13 +325,55 @@ _ensure_uv() {
     return
   fi
   _info "Installing uv (fast Python package manager)…"
-  curl -LsSf https://astral.sh/uv/install.sh | sh
+  if ! curl -LsSf https://astral.sh/uv/install.sh | sh; then
+    _error "uv could not be installed — its installer from astral.sh failed to download or run."
+    return 1
+  fi
   export PATH="$HOME/.local/bin:$PATH"
   if ! command -v uv >/dev/null 2>&1; then
-    _error "uv installation failed. Falling back to pip."
+    _error "uv installation failed."
     return 1
   fi
   _ok "uv installed"
+}
+
+# Reached only when the host has no acceptable interpreter AND uv cannot supply
+# one. There is no pip fallback to take — pip needs a Python to run — so stop
+# with the guidance the version check used to print.
+_managed_python_unavailable() {
+  _error "$1"
+  _error "Python 3.11+ is required. Please install it and re-run the installer."
+  _error ""
+  _error "Install options:"
+  _error "  • macOS:         brew install python@3.12"
+  _error "  • Debian/Ubuntu: sudo apt-get install python3 python3-pip python3-venv"
+  _error "  • Fedora/RHEL:   sudo dnf install python3 python3-pip"
+  _error "  • Download:      https://www.python.org/downloads/"
+  exit 1
+}
+
+# Fetch uv's own build of Python for hosts without one. Idempotent: uv skips the
+# download when the version is already installed.
+_install_managed_python() {
+  if ! command -v uv >/dev/null 2>&1; then
+    _managed_python_unavailable "uv is unavailable, so a managed Python could not be installed."
+  fi
+  _info "Downloading Python $_MANAGED_PYTHON…"
+  if ! uv python install "$_MANAGED_PYTHON"; then
+    _managed_python_unavailable "uv could not download a managed Python $_MANAGED_PYTHON (an outdated uv on PATH is one cause: upgrade it with 'uv self update')."
+  fi
+  # Capture the interpreter by path, once. Handing "3.12" to `uv venv --python`
+  # later would re-resolve the request through the user's uv python-preference
+  # config, which can answer with a different 3.12 than the one just installed.
+  # --managed-python confines the lookup to uv's own builds; uv releases that
+  # predate the flag reject it, hence the retry with the older spelling of the
+  # same restriction.
+  PYTHON="$(uv python find --managed-python "$_MANAGED_PYTHON" 2>/dev/null \
+            || uv python find --python-preference only-managed "$_MANAGED_PYTHON" 2>/dev/null || true)"
+  if [[ -z "$PYTHON" ]] || [[ ! -x "$PYTHON" ]]; then
+    _managed_python_unavailable "uv installed Python $_MANAGED_PYTHON but reported no usable interpreter for it."
+  fi
+  _ok "Managed Python $_MANAGED_PYTHON ready ($PYTHON)"
 }
 
 _setup_venv() {
@@ -336,8 +386,11 @@ _setup_venv() {
   if [[ ! -d "$venv" ]]; then
     _info "Creating virtual environment…"
     if [[ "$use_uv" == "true" ]]; then
+      # Always a path — host or managed, _choose_python resolved it already, so
+      # uv is told which interpreter to use rather than asked to pick one.
       uv venv "$venv" --python "$PYTHON"
     else
+      [[ -n "$PYTHON" ]] || _managed_python_unavailable "uv is unavailable and the host has no Python 3.11+."
       "$PYTHON" -m venv "$venv"
     fi
   else
@@ -683,9 +736,8 @@ main() {
   _banner
   printf "  Platform: %s / %s\n\n" "$os" "$arch"
 
-  _check_python
   _install_build_deps
-  _ensure_uv
+  _choose_python
   _download_release
   _setup_venv
   _install_playwright

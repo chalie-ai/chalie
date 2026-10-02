@@ -1,0 +1,3 @@
+# Vite's bundler ships a platform binary that its install script links into place.
+allowBuilds:
+  esbuild: true

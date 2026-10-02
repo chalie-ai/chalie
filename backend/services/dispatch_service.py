@@ -332,7 +332,7 @@ class DispatchService:
             tool_name=tool_name, params=params, summary=act_summary,
         )
 
-        tr = self._run(ability, params)
+        tr = self._run(ability, params, call_id)
 
         state = ToolCall.ERROR if tr.status == "error" else ToolCall.DONE
 
@@ -409,10 +409,11 @@ class DispatchService:
 
     # ── The synchronous run primitive ─────────────────────────────────────────────
 
-    def _run(self, ability: "Ability", params: dict[str, object]) -> ToolResult:
+    def _run(self, ability: "Ability", params: dict[str, object], call_id: "int | None") -> ToolResult:
         """Execute ability.run() synchronously and enforce the ToolResult contract.
 
-        Loads the flattened client telemetry onto ``ability.telemetry`` just
+        Loads the flattened client telemetry onto ``ability.telemetry`` and the
+        call's own ``tool_calls`` row id onto ``ability.tool_call_id`` just
         before run(); the ability reads its parent off ``self.mp``.
 
         There is no wall-clock bound — an ability runs to completion. The
@@ -431,6 +432,7 @@ class DispatchService:
             ability.telemetry = ctx.as_dict() if ctx else None
         except Exception:  # noqa: BLE001
             ability.telemetry = None
+        ability.tool_call_id = call_id
 
         try:
             # The typed-input door: every first-party ability declares PARAMS,

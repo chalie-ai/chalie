@@ -9,18 +9,16 @@ from flask_restx import Namespace, Resource
 from werkzeug.security import generate_password_hash
 
 from services.auth_service import AuthService
-from services.feature_flags import internal_dev_enabled
 from contracts.constants.auth import LOGIN_RATE_LIMIT, LOGIN_RATE_WINDOW_SECONDS
-from .auth import require_auth, _cookie_only, internal_only
 from .dto import Error, expects, responds, register_dto
-from .dto.auth import AuthStatus, LoginRequest, RegisterRequest, Username, VaultResult
+from .dto.auth import AuthStatus, LoginRequest, RegisterRequest, VaultResult
 
 
 logger = logging.getLogger(__name__)
 
 user_auth_ns = Namespace('user_auth', description='Master account authentication', path='/api/auth')
 
-register_dto(user_auth_ns, AuthStatus, Username, RegisterRequest, LoginRequest, VaultResult, Error)
+register_dto(user_auth_ns, AuthStatus, RegisterRequest, LoginRequest, VaultResult, Error)
 
 _m = user_auth_ns.models
 
@@ -41,7 +39,6 @@ class AuthStatusResource(Resource):
         * ``has_providers``      — ``True`` if at least one active provider is configured.
         * ``has_session``        — ``True`` if the request carries a valid session token.
         * ``vault_state``        — ``"unlocked" | "locked" | "uninitialized"``.
-        * ``internal_dev``       — ``True`` when in-development features are enabled.
         """
         try:
             from services.database import Database
@@ -75,42 +72,10 @@ class AuthStatusResource(Resource):
                 has_session=has_session,
                 vault_state=vault_state,
                 has_vision_provider=has_vision,
-                internal_dev=internal_dev_enabled(),
             )
         except Exception as e:
             logger.error(f"[REST API] Auth status error: {e}")
             return {"error": "Failed to check auth status"}, 500
-
-
-@user_auth_ns.route('/username')
-class UsernameResource(Resource):
-    @internal_only
-    @require_auth
-    @_cookie_only
-    @user_auth_ns.doc(security="cookieAuth")
-    @user_auth_ns.response(200, "Username", _m["Username"])
-    @user_auth_ns.response(401, "Not authenticated")
-    @user_auth_ns.response(403, "Internal only")
-    @user_auth_ns.response(404, "No master account")
-    @user_auth_ns.response(500, "Failed to read username", _m["Error"])
-    @responds(Username)
-    def get(self) -> Username | ResponseReturnValue:
-        """Return the master account LOGIN username for the authenticated dashboard
-        session — the credential the device's UnlockVault screen submits to
-        POST /api/auth/login. Cookie-session only; a wrapper bearer must not read it.
-        """
-        try:
-            from services.database import Database
-
-            row = Database.conn().execute(
-                "SELECT username FROM master_account LIMIT 1"
-            ).fetchone()
-            if not row:
-                return {"error": "No master account"}, 404
-            return Username(username=row[0])
-        except Exception:
-            logger.exception("[REST API] Get username error")
-            return {"error": "Failed to read username"}, 500
 
 
 @user_auth_ns.route('/register')

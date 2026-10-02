@@ -21,6 +21,7 @@ import sqlite3
 import urllib.parse
 from typing import cast
 
+from abilities._registry import AbilityRegistry
 from services.database import Database
 from services.file_mapper_service import FileMapperService
 from services.locale_service import CHAT_DAY_FMT, CHAT_TIMESTAMP_FMT, format_date
@@ -56,6 +57,7 @@ def _fetch_tool_calls_for_transcripts(transcript_ids: list[int]) -> list[dict[st
     tc_rows = ToolCall.by_transcripts(transcript_ids)
     return [
         {
+            "id": tc.id,
             "transcript_id": tc.transcript_id,
             "tool_name": tc.tool_name,
             "params": tc.params,
@@ -129,19 +131,23 @@ def _apply_user_fields(msg: dict[str, object], r: dict[str, object], attachments
         msg["attachments"] = attachments
 
 
-def _tool_call_chips(own_calls: list[dict[str, object]]) -> list[dict[str, object]]:
+def _tool_call_chips(
+    own_calls: list[dict[str, object]], delegates: dict[int, dict[str, object]],
+) -> list[dict[str, object]]:
     """Chips for whatever transcript row anchors these calls — the user input row
     or an assistant text row alike. A step-1 tool-only call (the commonest shape)
     anchors to the user row, so chips are role-agnostic (the ratified feed vision:
     tool calls render under WHATEVER row anchors them). Each chip carries the
     persisted ``state`` + ``ended_at`` so a refetched error stays an error pill,
-    not a downgraded neutral chip."""
+    not a downgraded neutral chip, and ``delegate`` — the child turn the call
+    spawned, from ``delegates`` — so a settled pill still opens its transcript."""
     return [
         {
             "tool_name": c["tool_name"],
             "summary": c["summary"],
             "state": c["state"],
             "ended_at": c["ended_at"],
+            "delegate": delegates.get(cast("int", c["id"])),
         }
         for c in own_calls
         if c["tool_name"] != _COMPACTOR_TOOL
@@ -222,6 +228,13 @@ def _rows_to_messages(rows: list[dict[str, object]]) -> list[dict[str, object]]:
     turn_calls = _fetch_tool_calls_for_transcripts(turn_scope_ids)
     # Group by transcript_id for per-row chip lookup.
     calls_by_transcript = _group_calls_by_transcript(turn_calls)
+    # One lookup for the turn's delegate calls, bounded by their lifetimes, and
+    # none at all when it ran no watchable delegate.
+    delegates = Transcript.delegate_turns({
+        cast("int", c["id"]): (cast("str", c["created_at"]), cast("str | None", c["ended_at"]))
+        for c in turn_calls
+        if AbilityRegistry.is_watchable_delegate(cast("str", c["tool_name"]))
+    })
 
     # Rich-media spans resolve PER ACT CYCLE, not per turn. A turn_id spans the
     # whole thread — many user requests — and each request runs its own ACT loop
@@ -239,7 +252,7 @@ def _rows_to_messages(rows: list[dict[str, object]]) -> list[dict[str, object]]:
     for r in rows:
         msg = _base_message(r)
         own = calls_by_transcript.get(cast("int", r['id']), [])
-        chips = _tool_call_chips(own)
+        chips = _tool_call_chips(own, delegates)
         if chips:
             msg["tool_calls"] = chips
         own_thinking = thinking_states.get(cast("int", r['id']))
@@ -299,7 +312,9 @@ class TurnSerializerService:
     a refetching client needs to keep addressing the right channel, since
     ``channel`` alone isn't recoverable from a turn_id (a thread refetched
     without the right ``type`` would otherwise silently resolve to the wrong
-    channel and render as an empty block).
+    channel and render as an empty block). A delegate turn has no ConfigType:
+    it is read by ``channel`` with ``config_type`` None, and the block echoes
+    that ``channel`` instead.
 
     Returns the WHOLE turn (no floor) projected into messages, with every row
     from the turn's SECOND user-role row onward tagged ``thread_message: true``
@@ -322,7 +337,7 @@ class TurnSerializerService:
     "never settled" — and ``duration_ms``, derived from the row span) are
     folded in."""
 
-    def serialize(self, channel: str, turn_id: int, config_type: str = _TYPE) -> dict[str, object]:
+    def serialize(self, channel: str, turn_id: int, config_type: str | None = _TYPE) -> dict[str, object]:
         """The single turn-block getter — the REST single/batch reads and the WS
         refetch all flow through here, so one fetch fully determines a turn's render
         with no signal memory.
@@ -333,7 +348,11 @@ class TurnSerializerService:
         a refetching client needs to keep addressing the right channel, since
         ``channel`` alone isn't recoverable from a turn_id (a thread refetched
         without the right ``type`` would otherwise silently resolve to the wrong
-        channel and render as an empty block).
+        channel and render as an empty block). A delegate turn has no
+        ConfigType: it is read by ``channel`` with ``config_type`` None, and the
+        block echoes that ``channel`` instead (``type`` null). Its input row is
+        written under the tool's role yet is the turn's input — the task the
+        caller handed over — so it renders as a ``user`` message.
 
         Returns the WHOLE turn (no floor) projected into messages, with every row
         from the turn's SECOND user-role row onward tagged ``thread_message: true``
@@ -360,6 +379,12 @@ class TurnSerializerService:
         latest = TurnExecution.latest(channel, turn_id)
         rows = Transcript.by_turn(channel, turn_id)
         rows = _drop_trailing_cancelled_orphan(rows, latest)
+        # Only a delegate's input row carries a tool_call_id: it is the stamp
+        # linking the row to the call that spawned the turn, and nothing else
+        # has written the column since rows gained a turn_id.
+        for r in rows:
+            if r["tool_call_id"] is not None:
+                r["role"] = "user"
         messages = _rows_to_messages(rows)
 
         user_ids = [cast("int", r["id"]) for r in rows if r["role"] == "user"]
@@ -382,6 +407,7 @@ class TurnSerializerService:
             "duration_ms": duration_ms,
             "messages": messages,
             "type": config_type,
+            "channel": channel if config_type is None else None,
             # True when the turn's most recent execution ended CRASHED — an unhandled
             # step exception, or a process death the boot sweep stamped. A crash that
             # produced no reply row is otherwise indistinguishable from a normal empty

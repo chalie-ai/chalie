@@ -164,6 +164,9 @@ class Ability(ABC, Generic[B]):
         # client telemetry dict (location / locale / time / currency …) or None
         # when no client context is stored yet (fresh boot, no heartbeat).
         self.telemetry: "dict[str, object] | None" = None
+        # Set by DispatchService._run() alongside telemetry: the ``tool_calls``
+        # row this call opened, or None when it went unrecorded (no anchor row).
+        self.tool_call_id: "int | None" = None
 
     # ── Metadata getters — every concrete ability implements all four ──────────
 

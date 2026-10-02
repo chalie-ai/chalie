@@ -1,0 +1,39 @@
+[package]
+name = "chalie-desktop"
+version = "0.9.0"
+description = "Chalie desktop app"
+edition = "2021"
+rust-version = "1.77.2"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "chalie_desktop_lib"
+crate-type = ["lib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+tauri = { version = "2.11.3", features = [] }
+tauri-plugin-log = "2"
+reqwest = { version = "0.13.5", default-features = false, features = ["json"] }
+# Tauri's async runtime re-exports only the channels and locks from `tokio::sync`, so the
+# session watcher's wake signal and its interval come from tokio directly, and so do the
+# install's child processes and the readers that drain their output. Only the features they
+# use are compiled in; tauri already runs a full multi-threaded runtime, which is what drives
+# the timers and the child reaping.
+tokio = { version = "1", default-features = false, features = [
+  "sync",
+  "time",
+  "process",
+  "io-util",
+] }
+# Stopping an install means stopping everything the installer started, not only the shell
+# that started it, and a signal to a process group is the only way to reach children this app
+# never knew about. The standard library has no safe way to ask for one. Already compiled in
+# below tokio, so this names it rather than adding it.
+libc = "0.2"
