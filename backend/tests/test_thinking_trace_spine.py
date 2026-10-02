@@ -268,6 +268,13 @@ def test_next_turn_execution_starts_clean(
     assert len(rows) == 1
     assert rows[0].thinking_trace == trace_1
 
+    # A reply into a thread that has no label yet launches the thread-gist
+    # delegate on a daemon thread, whose own provider call would race this
+    # turn's for the scripted responses below. A thread that already carries its
+    # label launches nothing, so this turn is the provider's only caller.
+    from models.thread_gist import ThreadGist
+    ThreadGist(channel=mp_1.channel, turn_id=mp_1.turn_id, gist="first turn").upsert()
+
     # Second turn — fresh MP, new scripted provider.
     trace_2 = "turn two reasoning"
     resp_2 = ProviderResponse(
@@ -281,6 +288,7 @@ def test_next_turn_execution_starts_clean(
     assert mp_2.turn_id is not None
 
     # The first (and only) request of turn 2 must not carry any thinking trace.
+    assert len(provider_2.requests) == 1, "turn 2 must be the provider's only caller"
     req_1 = provider_2.requests[0]
     messages = getattr(req_1, "messages", None)
     assert messages is not None and len(messages) >= 1

@@ -44,7 +44,8 @@ class Message(DTO):
     speaker press starts the pipeline through the playback route. ``thinking``
     carries that row's stored chain-of-thought traces (traces in row order,
     summed ``duration_ms`` and ``tokens``); absent on rows with no thinking
-    rows.
+    rows. ``joined`` projects the transcript column on user rows — true on a
+    message sent into the turn while it was working, which a cancel keeps.
     """
 
     id: str
@@ -58,5 +59,6 @@ class Message(DTO):
     segments: list[Segment] | None = None
     thread_message: bool | None = None
     settled: bool | None = None
+    joined: bool | None = None
     voice_state: str | None = None
     thinking: Thinking | None = None

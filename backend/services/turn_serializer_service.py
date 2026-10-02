@@ -126,6 +126,7 @@ def _base_message(r: dict[str, object]) -> dict[str, object]:
 
 
 def _apply_user_fields(msg: dict[str, object], r: dict[str, object], attachments_by_id: dict[int, list[dict[str, object]]]) -> None:
+    msg["joined"] = bool(r['joined'])
     attachments = attachments_by_id.get(cast("int", r['id']))
     if attachments:
         msg["attachments"] = attachments
