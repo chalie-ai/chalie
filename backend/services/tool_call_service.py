@@ -9,13 +9,11 @@
 """ToolCallService — read/write the ``tool_calls`` trail for one ACT loop and
 emit its single live WS frame.
 
-A tool call anchors ONLY to the transcript input row that drove it
-(``transcript_id``, resolved off ``self.mp`` — never a parameter); its turn is
-derived by joining ``transcript`` on (channel, turn_id) inside
-``ToolCall.by_turn``, so ``tool_calls`` carries no turn_id/channel column of its
-own. Opening or recording a call un-settles the owning transcript row (§6.9)
-unless the tool's ability opts out via ``counts_as_settle=False`` — a settling
-tool demotes the turn's settle0 back to in-progress. Every write
+A tool call anchors to the assistant row of the provider call that made it
+(``transcript_id``, resolved off ``self.mp`` — never a parameter), falling back
+to the turn's input row before any such row exists; its turn is derived by
+joining ``transcript`` on (channel, turn_id) inside ``ToolCall.by_turn``, so
+``tool_calls`` carries no turn_id/channel column of its own. Every write
 emits the row's WS-safe projection (``ToolCall.to_json``, §6.2 — params/result
 never cross the wire) gated by ``self.mp.push_websocket`` and silenced
 outright for the turn-zero memory seed (§6.10); a terminal one is followed by
@@ -51,31 +49,26 @@ class ToolCallService:
         self, tool_name: str, params: dict[str, object], summary: "str | None" = None
     ) -> "int | None":
         """Open a row (state=STARTED) the instant a call begins executing,
-        un-settle the owning transcript row (unless ``tool_name``'s ability
-        opts out via ``counts_as_settle=False``, §6.9), emit the live frame,
-        and return the new row's id; :meth:`finish` writes the terminal state
-        when the call returns. Skips (returns None) with no anchor row to
-        attach to — a delegate with no input row has nothing to record
-        against. Both writes run in one atomic block; a failure of either
-        logs and yields None, and the turn continues unrecorded."""
+        emit the live frame, and return the new row's id; :meth:`finish`
+        writes the terminal state when the call returns. Skips (returns None)
+        with no anchor row to attach to — a delegate with no input row has
+        nothing to record against. A write failure logs and yields None, and
+        the turn continues unrecorded."""
         transcript_id = self._transcript_id()
         if transcript_id is None:
             logger.debug("[ToolCallService.start] skipping (no transcript_id): tool=%s", tool_name)
             return None
         try:
-            with self.mp.db.transaction():
-                call = ToolCall(
-                    transcript_id=transcript_id,
-                    tool_name=tool_name,
-                    params=json.dumps(params),
-                    result="",
-                    summary=summary or "",
-                    created_at=utc_now().isoformat(),
-                    ended_at=None,
-                    state=ToolCall.STARTED,
-                ).save()
-                if self._settles(tool_name):
-                    self.mp.transcript_service.unsettle()
+            call = ToolCall(
+                transcript_id=transcript_id,
+                tool_name=tool_name,
+                params=json.dumps(params),
+                result="",
+                summary=summary or "",
+                created_at=utc_now().isoformat(),
+                ended_at=None,
+                state=ToolCall.STARTED,
+            ).save()
         except Exception as exc:
             logger.warning(
                 "[ToolCallService.start] write failed (non-fatal): tool=%s transcript=%s: %s",
@@ -145,32 +138,26 @@ class ToolCallService:
         """One-shot terminal row for an outcome that never enters live
         execution (a denied/pre-validation-failed call, an unknown tool, or
         the turn-zero memory seed): written whole with its terminal ``state``
-        and ``ended_at`` set, then un-settles the owning transcript row
-        (unless ``tool_name``'s ability opts out via
-        ``counts_as_settle=False``, §6.9). ``emit=False`` persists the audit
-        row without a WS frame — an unknown tool must still land on the
-        trail but fires no live pill. Both writes run in one atomic block; a
-        failure of either logs and is non-fatal. Skips silently with no
-        anchor row."""
+        and ``ended_at`` set. ``emit=False`` persists the audit row without a
+        WS frame — an unknown tool must still land on the trail but fires no
+        live pill. A write failure logs and is non-fatal. Skips silently with
+        no anchor row."""
         transcript_id = self._transcript_id()
         if transcript_id is None:
             logger.debug("[ToolCallService.record] skipping (no transcript_id): tool=%s", tool_name)
             return
         try:
             now = utc_now().isoformat()
-            with self.mp.db.transaction():
-                call = ToolCall(
-                    transcript_id=transcript_id,
-                    tool_name=tool_name,
-                    params=json.dumps(params),
-                    result=result,
-                    summary=summary or "",
-                    created_at=now,
-                    ended_at=now,
-                    state=state,
-                ).save()
-                if self._settles(tool_name):
-                    self.mp.transcript_service.unsettle()
+            call = ToolCall(
+                transcript_id=transcript_id,
+                tool_name=tool_name,
+                params=json.dumps(params),
+                result=result,
+                summary=summary or "",
+                created_at=now,
+                ended_at=now,
+                state=state,
+            ).save()
         except Exception as exc:
             logger.warning(
                 "[ToolCallService.record] write failed (non-fatal): tool=%s transcript=%s: %s",
@@ -182,16 +169,16 @@ class ToolCallService:
 
     def by_turn(self) -> "list[ToolCall]":
         """Every tool call of the current turn, derived by joining
-        ``transcript`` on (channel, turn_id) — a turn's calls span an async
-        result or delegate re-entry, each its own input row under one
-        turn_id."""
+        ``transcript`` on (channel, turn_id) — a turn's calls span its opening
+        exchange and every reply forked into it, each its own input row under
+        one turn_id."""
         return ToolCall.by_turn(self.mp.channel, self.mp.turn_id)
 
     def by_exchange(self) -> "list[ToolCall]":
         """The current exchange's tool calls — those of this MP recursion
-        instance, floored at its input row (``self.mp.uid``) so a reply or
-        async re-entry sharing the turn never re-loads a prior exchange's raw
-        trail into context. Falls back to :meth:`by_turn` when this turn has no
+        instance, floored at its input row (``self.mp.uid``) so a reply
+        sharing the turn never re-loads a prior exchange's raw trail into
+        context. Falls back to :meth:`by_turn` when this turn has no
         input row (``skip_input_row`` channels): they never fork, so the turn
         and the exchange coincide."""
         if self.mp.uid is None:
@@ -199,7 +186,7 @@ class ToolCallService:
         return ToolCall.by_exchange(self.mp.channel, self.mp.turn_id, self.mp.uid)
 
     def by_transcript(self) -> "list[ToolCall]":
-        """Every tool call anchored to the current input row alone — the
+        """Every tool call anchored to the current anchor row alone — the
         narrow single-anchor read. Empty with no anchor row."""
         transcript_id = self._transcript_id()
         if transcript_id is None:
@@ -207,22 +194,10 @@ class ToolCallService:
         return ToolCall.by_transcript(transcript_id)
 
     def _transcript_id(self) -> "int | None":
-        """The input row this call anchors to: the row the turn is currently
-        writing against, falling back to the turn's own opening row."""
+        """The row this call anchors to: the current provider call's assistant
+        row, falling back to the turn's own input row before one exists."""
         current = self.mp.current_transcript_id
         return cast("int | None", current) if current is not None else self.mp.uid
-
-    def _settles(self, tool_name: str) -> bool:
-        """Whether opening/recording a call for ``tool_name`` demotes the
-        owning transcript's settle0 (§6.9) — the registered ability's
-        ``counts_as_settle`` flag (default True; ``chat_history_compactor``
-        opts out so it never demotes a settle0). An unregistered name (an
-        MCP proxy, or a tool the registry has no entry for) defaults True —
-        it was never a member of the pre-rewrite exclusion set either."""
-        try:
-            return AbilityRegistry.get(tool_name).counts_as_settle
-        except KeyError:
-            return True
 
     def _spawned(self, call: ToolCall) -> "dict[str, object] | None":
         """The child turn ``call`` spawned, read off that turn's input row. Only

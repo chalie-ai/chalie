@@ -50,8 +50,8 @@ class TranscriptService:
         turn above the watermark, each floored at its own settle0. Keyed off
         the same ``mp._forked`` flag ``CompactionService`` uses to pick its
         watermark axis, so the two never disagree mid-turn (a live
-        ``settle0`` lookup can flip under a MAIN turn that settles more than
-        one row before its terminal step; the fixed flag can't). Feeds
+        ``settle0`` lookup flips the moment this turn's terminal row lands;
+        the fixed flag can't). Feeds
         ``PromptService``'s history assembly. ``[]`` when the config
         suppresses history. BOTH views exclude ``role='memory'`` rows
         (memory-step inputs — turn plumbing, not conversation) by name. A
@@ -63,7 +63,7 @@ class TranscriptService:
         :meth:`TurnExecution.cancelled_orphan_cutoff` trims, which is the same
         rule the rendered thread trims itself with: the two views agree by
         construction rather than by coincidence. Only the turn IN FLIGHT is
-        skipped while unsettled, and it is named by its own id rather than
+        skipped while not yet settled, and it is named by its own id rather than
         inferred from a missing settle0 — the conflation that used to swallow
         crashed turns with it. A FORK always
         reads ``self.mp.channel`` — a fork IS the thread, its view is its own
@@ -133,8 +133,8 @@ class TranscriptService:
         )
 
     def exchange_assistant_rows(self) -> list[Transcript]:
-        """The CURRENT exchange's assistant rows — the interim-step prose that
-        anchors tool calls in this exchange, feeding the act-trail interleave.
+        """The CURRENT exchange's assistant rows — one per provider call, each
+        the anchor of that call's tool calls, feeding the act-trail interleave.
         Filtered to this MP's channel and turn, role ``assistant``, ordered by
         id ASC; when ``self.mp.uid`` is set (a real input row exists) only rows
         written after it survive — the uid is the exchange floor, mirroring
@@ -205,13 +205,15 @@ class TranscriptService:
             tool_call_id=str(tool_call_id) if tool_call_id is not None else None,
         )
 
-    def append_assistant(self, content: str) -> int:
-        """Write one assistant row for this turn's step (settled) and poke
+    def append_assistant(self, content: str, settled: bool = True) -> int:
+        """Write one provider call's assistant row for this turn and poke
         every open surface to refetch the turn block — the visible-transcript
-        write every chain step and the final synthesis land through. The
-        broadcast gate lives in ``mp.push_websocket`` (silent/background configs
-        are dropped there), so this is a single direct emit."""
-        row_id = self._append(content, role="assistant", settled=1)
+        write every step lands through. ``settled`` only for the turn's
+        terminal call (the one that made no tool calls), so settle0 names the
+        reply itself. The broadcast gate lives in ``mp.push_websocket``
+        (silent/background configs are dropped there), so this is a single
+        direct emit."""
+        row_id = self._append(content, role="assistant", settled=int(settled))
         self.mp.push_websocket(TurnSignal.updated(self.mp))
         return row_id
 
@@ -233,22 +235,6 @@ class TranscriptService:
         row = self.anchor_row()
         if row is not None:
             row.set_deliberation_score(score)
-
-    def settle(self) -> int | None:
-        """This turn's settle0 — the id of its first settled assistant row,
-        or ``None`` while the turn is still in flight (§6.1)."""
-        return Transcript.settle0(self.mp.channel, self.mp.turn_id)
-
-    def unsettle(self) -> None:
-        """Demote this turn's settle0 row back to unsettled — the cross-table
-        half of a settling tool-call re-opening the turn (§6.9), driven by
-        ``ToolCallService.start``/``record`` via ``self.mp.transcript_service``."""
-        settle_id = self.settle()
-        if settle_id is None:
-            return
-        row = Transcript.filter("id", settle_id).first()
-        if row is not None:
-            row.unsettle()
 
     # ── private helpers ──────────────────────────────────────────────────────
 

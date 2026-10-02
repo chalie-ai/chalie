@@ -44,8 +44,9 @@ becomes the override, ``auto``/NULL leaves it unset so the deliberation gate
 decides normally.
 
 ``_step()`` is the **recursive** step loop: send → (compact-and-continue on
-over-cap) → store any prose → dispatch tool calls → recurse; it bottoms out when
-the model returns a turn with no tool calls. The first ``_step()`` is isolated onto
+over-cap) → store the call's own assistant row → dispatch tool calls → recurse;
+it bottoms out when the model returns a call with no tool calls — the only call
+whose row is stored settled. The first ``_step()`` is isolated onto
 the daemon thread by ``begin()``; every recursive call is synchronous within that
 thread. Synchronous text-consumers (delegate abilities, mcp_server, the
 user-synthesis generator) call ``process()`` then ``result()`` to join the
@@ -366,11 +367,15 @@ class MessageProcessor:
         Send → on ``ContextLimit``, compact and continue (re-enter with the
         transcript reviewer armed; a payload that will not shrink is let out
         after ``_CONTEXT_LIMIT_RECOVERY_LIMIT`` attempts rather than spun on)
-        → store any prose the model emitted → if it made no tool
-        calls the turn is done (end); otherwise dispatch the calls and recurse.
-        A cancel observed at the top of any step aborts the whole turn. Every
-        provider client is a single blocking, non-streaming call (§ llm_clients/*)
-        with no mid-flight abort hook, so a cancel requested while that call is
+        → store the call's own assistant row → if it made no tool calls that
+        row is the terminal one, stored settled, and the turn is done (end);
+        otherwise the row is stored with settled=0 — empty when the call
+        carried no prose — so the call's tool calls and thinking trace anchor
+        to it, then the calls are dispatched and the step recurses. A retried
+        send and the empty-completion steer write no row. A cancel observed at
+        the top of any step aborts the whole turn. Every provider client is a
+        single blocking, non-streaming call (§ llm_clients/*) with no
+        mid-flight abort hook, so a cancel requested while that call is
         in flight can only be observed once it returns — the checkpoint right
         after it, BEFORE the response is stored, is what makes that observation
         count: without it a cancel that lands mid-generation is silently
@@ -419,13 +424,12 @@ class MessageProcessor:
                 )
                 self._empty_completion_steer = True
                 return self._step()
-            formatted = self._store(response.text)
+            formatted = self._store(response.text, settled=True)
             self._capture_thinking_trace(response)
             self._end(response.text)
             return formatted
         self._guard_runaway(response.text, tool_calls)
-        if response.text:
-            self._store(response.text)
+        self._store(response.text, settled=False)
         self._capture_thinking_trace(response)
         self._dispatch_tools(tool_calls)
         return self._step()
@@ -509,26 +513,28 @@ class MessageProcessor:
 
     # ── transcript writes ──────────────────────────────────────────────────────
 
-    def _store(self, text: str) -> str:
+    def _store(self, text: str, *, settled: bool) -> str:
         """Format the model's prose for its channel and, unless the config skips
-        the transcript, append it as this turn's assistant row (which pokes open
-        surfaces itself). Returns the formatted text."""
+        the transcript, append it as this provider call's assistant row (which
+        pokes open surfaces itself) — ``settled`` only for the turn's terminal
+        call. The new row becomes the anchor for everything the call goes on
+        to write. Returns the formatted text."""
         formatted = self._format(text or "")
         if self.config.skip_transcript:
             return formatted
-        self.current_transcript_id = self.transcript_service.append_assistant(formatted)
+        self.current_transcript_id = self.transcript_service.append_assistant(formatted, settled)
         return formatted
 
     def _capture_thinking_trace(self, response: "ProviderResponse") -> None:
         """Persist one ``transcript_thinking`` row when the provider returned a
         non-empty ``thinking_block``. Skips entirely when ``skip_transcript`` is
         set (same gate as ``_store`` — those channels have no transcript anchor).
-        The trace is captured after the cancel checkpoint and after any prose
-        storage for this response, so the anchor is fresh:
+        The trace is captured after the cancel checkpoint and after this
+        response's row is stored, so the anchor is fresh:
         ``current_transcript_id if set else uid`` — exactly the rule
-        ``ToolCallService._transcript_id`` uses. A settled response anchors to
-        its own stored row; a tool-calls-only response (no prose) anchors to the
-        prior anchor, same as its tool calls."""
+        ``ToolCallService._transcript_id`` uses. A stored response anchors to
+        its own row, same as its tool calls; a thinking-only empty completion
+        stores no row and anchors to the turn's current anchor."""
         if self.config.skip_transcript:
             return
         trace = response.thinking_block
@@ -673,11 +679,14 @@ class MessageProcessor:
             logger.warning("[MessageProcessor] memory step trigger failed (isolated): %s", exc)
 
     def _voice_presynthesis(self) -> None:
-        """Kick background speech pre-synthesis for this turn's settled row on a
-        fire-and-forget daemon thread — the pipeline owns every gate and terminal
-        state, and running it inline would delay the turn-complete frame the
-        frontend waits on (``finish(COMPLETED)`` stamps after post-turn work)."""
-        settle_id = Transcript.settle0(self.channel, self.turn_id)
+        """Kick background speech pre-synthesis for the row this exchange just
+        settled — its terminal row, the current anchor once ``_store`` has run.
+        Not the turn's settle0: in a reply that is still the opener's answer.
+        Runs on a fire-and-forget daemon thread — the pipeline owns every gate
+        and terminal state, and running it inline would delay the turn-complete
+        frame the frontend waits on (``finish(COMPLETED)`` stamps after
+        post-turn work)."""
+        settle_id = self.current_transcript_id
         if settle_id is None:
             return
         from services.voice_transcript_service import VoiceTranscriptService  # noqa: PLC0415

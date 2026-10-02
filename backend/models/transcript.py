@@ -7,8 +7,8 @@ row-shape reads/writes flow through the inherited active-record engine
 aggregate/feed shapes a generic builder cannot express (MAX / DISTINCT /
 GROUP BY / HAVING / correlated settle subselect) live here as named
 classmethods running their own parametrized SQL on the bound connection
-(§2.6). Cross-table effects (tool-call un-settle, GC of tool_calls/episodes,
-document links, location backfill) belong to the service layer — this model
+(§2.6). Cross-table effects (GC of tool_calls/episodes, document links,
+location backfill) belong to the service layer — this model
 only touches its own table.
 """
 
@@ -70,9 +70,10 @@ class Transcript(Model):
     thinking_level: str | None
 
     # settle0 — the FIRST assistant row of a turn with settled=1: the boundary
-    # between a turn's main exchange and its fork continuation. The write path
-    # stamps assistant rows settled=1; a settling tool-call demotes to 0
-    # (§6.9). No alias needed — every query below is single-table.
+    # between a turn's main exchange and its fork continuation. Each provider
+    # call writes its own assistant row; only the exchange's terminal call (the
+    # one with no tool calls) is stamped settled=1. No alias needed — every
+    # query below is single-table.
     _SETTLE_PREDICATE: ClassVar[str] = "role = 'assistant' AND settled = 1"
 
     # NULL-safe turn key. Legacy rows carry a NULL turn_id; -id is negative so
@@ -142,13 +143,6 @@ class Transcript(Model):
         sql += " ORDER BY id DESC LIMIT 1"
         row = cls._bound_connection().execute(sql, tuple(params)).fetchone()
         return row[0] if row and row[0] is not None else None
-
-    def unsettle(self) -> Self:
-        """Demote this row's settle flag to 0 — the transcript-table half of the
-        cross-table un-settle a tool-call opening triggers (§6.9). The SERVICE
-        owns loading the owning row and calling this; the model only flips."""
-        self.settled = 0
-        return self.save()
 
     def set_deliberation_score(self, score: float) -> Self:
         """Persist this row's per-turn deliberation score — the value that
@@ -454,7 +448,8 @@ class Transcript(Model):
     # a direct API/automation POST into an open turn_id can append a second
     # (or third) reply-less user row before the cancel lands, and this still
     # correctly leaves a partially-completed turn (any real assistant/tool
-    # content already written) alone per existing doctrine. The correlated
+    # content already written — including a provider call's empty assistant
+    # row carrying its tool calls) alone per existing doctrine. The correlated
     # subquery mirrors ``recent_threads``' own
     # ``MIN(CASE WHEN {predicate} THEN id END) IS NULL AS working`` idiom —
     # an aggregate over a per-row expression, not a join, so it costs nothing

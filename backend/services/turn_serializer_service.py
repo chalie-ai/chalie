@@ -135,9 +135,11 @@ def _tool_call_chips(
     own_calls: list[dict[str, object]], delegates: dict[int, dict[str, object]],
 ) -> list[dict[str, object]]:
     """Chips for whatever transcript row anchors these calls — the user input row
-    or an assistant text row alike. A step-1 tool-only call (the commonest shape)
-    anchors to the user row, so chips are role-agnostic (the ratified feed vision:
-    tool calls render under WHATEVER row anchors them). Each chip carries the
+    or an assistant row alike. A model tool call anchors to its own provider
+    call's assistant row (empty when that call carried no prose), while the
+    turn-zero memory seed, written before any provider call returns, anchors to
+    the user row, so chips are role-agnostic (the ratified feed vision: tool
+    calls render under WHATEVER row anchors them). Each chip carries the
     persisted ``state`` + ``ended_at`` so a refetched error stays an error pill,
     not a downgraded neutral chip, and ``delegate`` — the child turn the call
     spawned, from ``delegates`` — so a settled pill still opens its transcript."""
@@ -184,8 +186,9 @@ def _voice_states(rows: list[dict[str, object]]) -> dict[int, str]:
 def _thinking_states(rows: list[dict[str, object]]) -> dict[int, list[dict[str, object]]]:
     """Thinking traces per transcript row, in one batch query.
 
-    Traces anchor to WHATEVER row drove the tools — the user input row for
-    step-1 tool-only calls, or an assistant row for later steps — so the id
+    Traces anchor to WHATEVER row is the anchor when they are captured — a
+    stored provider call's own assistant row, or the user input row for a
+    thinking-only empty completion before any call's row exists — so the id
     list includes ALL rows, not just assistant rows. Returns a map from
     transcript_id to a list of trace dicts (traces in row order); rows with no
     thinking rows are absent from the map so the serializer can omit the
@@ -216,10 +219,10 @@ def _rows_to_messages(rows: list[dict[str, object]]) -> list[dict[str, object]]:
         conn, [cast("int", r['id']) for r in rows if r['role'] == 'user']
     )
 
-    # Resolve turn scope from EVERY row, not just assistant rows: a step-1
-    # tool-only call anchors to the user input row, and a turn whose only row
-    # so far is that input row has zero assistant rows — keying off assistant
-    # ids alone would resolve to an empty scope and silently drop its chips.
+    # Resolve turn scope from EVERY row, not just assistant rows: the turn-zero
+    # memory seed anchors to the user input row, and a turn whose only row so
+    # far is that input row has zero assistant rows — keying off assistant ids
+    # alone would resolve to an empty scope and silently drop its chips.
     turn_scope_ids = Transcript.turn_scope_ids(
         [cast("int", r['id']) for r in rows]
     )
@@ -321,17 +324,19 @@ class TurnSerializerService:
     — the reply continuation the main spine drops (it renders only the opener)
     and whose mere presence makes the turn a thread (the feed shows the
     opener). The opener is one user row plus every assistant row that follows
-    it (interim "let me check…" rows AND the final settled reply alike) up to
-    (not including) the next user row a reply appends — so the boundary keys
+    it (each provider call's row — "let me check…" prose, an empty tool-only
+    step AND the final settled reply alike) up to (not including) the next
+    user row a reply appends — so the boundary keys
     on the second user row's id, the one thing about a reply that is both
     structural (a fresh input row, not a column flip) and immutable once
     written. Neither ``Transcript.settle0`` NOR "first assistant row" work
-    here: settle0 is deliberately mutable (a reply's own tool activity
-    unsettles the ORIGINAL exchange's row via ``TranscriptService.unsettle()``,
-    so re-querying it retroactively erases every row's tag), and "first
-    assistant row" wrongly tags a single-exchange turn's own final reply once
-    an interim assistant row (a tool-using turn's "let me check…" row) precedes
-    it. The collapsed-feed metadata (gist, preview, last activity) and the
+    here: settle0 names only the terminal row of whichever exchange settled
+    first, so an opener that crashed or was cancelled before settling hands it
+    to a reply's terminal row and leaves the reply's own rows untagged; and
+    "first assistant row" wrongly tags a single-exchange turn's own final reply
+    once an earlier provider call's row (a "let me check…" or tool-only step
+    row) precedes it. The collapsed-feed metadata (gist, preview, last
+    activity) and the
     turn-level render state (``working`` — an open ``turn_executions`` row for
     this (channel, turn_id), i.e. a currently in-flight execution, not merely
     "never settled" — and ``duration_ms``, derived from the row span) are
@@ -359,17 +364,19 @@ class TurnSerializerService:
         — the reply continuation the main spine drops (it renders only the opener)
         and whose mere presence makes the turn a thread (the feed shows the
         opener). The opener is one user row plus every assistant row that follows
-        it (interim "let me check…" rows AND the final settled reply alike) up to
-        (not including) the next user row a reply appends — so the boundary keys
+        it (each provider call's row — "let me check…" prose, an empty tool-only
+        step AND the final settled reply alike) up to (not including) the next
+        user row a reply appends — so the boundary keys
         on the second user row's id, the one thing about a reply that is both
         structural (a fresh input row, not a column flip) and immutable once
         written. Neither ``Transcript.settle0`` NOR "first assistant row" work
-        here: settle0 is deliberately mutable (a reply's own tool activity
-        unsettles the ORIGINAL exchange's row via ``TranscriptService.unsettle()``,
-        so re-querying it retroactively erases every row's tag), and "first
-        assistant row" wrongly tags a single-exchange turn's own final reply once
-        an interim assistant row (a tool-using turn's "let me check…" row) precedes
-        it. The collapsed-feed metadata (gist, preview, last activity) and the
+        here: settle0 names only the terminal row of whichever exchange settled
+        first, so an opener that crashed or was cancelled before settling hands it
+        to a reply's terminal row and leaves the reply's own rows untagged; and
+        "first assistant row" wrongly tags a single-exchange turn's own final reply
+        once an earlier provider call's row (a "let me check…" or tool-only step
+        row) precedes it. The collapsed-feed metadata (gist, preview, last
+        activity) and the
         turn-level render state (``working`` — an open ``turn_executions`` row for
         this (channel, turn_id), i.e. a currently in-flight execution, not merely
         "never settled" — and ``duration_ms``, derived from the row span) are

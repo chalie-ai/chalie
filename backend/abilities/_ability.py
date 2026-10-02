@@ -89,13 +89,6 @@ class Ability(ABC, Generic[B]):
     # DISCOVERABLE=False abilities, which never appear in the menu at all.
     CATEGORY: ClassVar[AbilityCategory | None] = None
 
-    # Settle flag. True (the default) means a tool_calls row for this ability
-    # demotes its transcript row's settled=1 back to 0 — the row carries a
-    # model-driven tool and is therefore NOT a settle0. Internal framework passes
-    # (chat_history_compactor, thinking) set this False so they never demote a
-    # settle: their tool_calls rows are implementation artefacts, not model tools.
-    counts_as_settle: ClassVar[bool] = True
-
     # Constructor-injected, the invoking MessageProcessor (the "parent" of this
     # tool call). A tool reads ALL its context off this — self.mp.config.channel,
     # .config.policy_channel, ._uid, etc. This is the traceability spine: every

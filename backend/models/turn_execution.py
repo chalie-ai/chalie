@@ -91,7 +91,10 @@ class TurnExecution(Model):
         can append a second before the cancel lands. The loop stops at the
         first non-input row, since a cancel observed after real assistant or
         tool content was already written leaves that content in place ('every
-        row it already wrote stays'). Dropped only when the turn's own most
+        row it already wrote stays'). A provider call's own assistant row is
+        such content even when it is empty and only carries that call's tool
+        calls: once a call has returned and its row is stored, a later cancel
+        keeps the row and its calls. Dropped only when the turn's own most
         recent execution actually ended cancelled, never on role alone.
 
         The one place this rule lives: the thread-expand serializer trims the

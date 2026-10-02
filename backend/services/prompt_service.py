@@ -255,27 +255,31 @@ class PromptService:
     def previous_messages(self, drop_oldest: int = 0) -> str:
         """The ``## Previous Messages`` block body (no header): this turn's
         history view (``self.mp.transcript_service.read()``), each row formatted
-        ``[local-ts] Role: content``. ``drop_oldest`` lets a caller (e.g. the
-        history compactor, shrinking its own input) drop the N oldest rows — a
-        genuine external count, not mp-reachable."""
+        ``[local-ts] Role: content``. An assistant row with no text — a
+        provider call that only made tool calls — says nothing and is skipped.
+        ``drop_oldest`` lets a caller (e.g. the history compactor, shrinking its
+        own input) drop the N oldest rows — a genuine external count, not
+        mp-reachable."""
         rows = self.mp.transcript_service.read()[drop_oldest:]
         if not rows:
             return ""
         lines: list[str] = []
         for row in rows:
             fields = row.to_dict()
-            ts = self._format_ts(cast("str | None", fields.get("created_at")))
             raw_role = cast("str", fields.get("role") or "unknown")
-            role_label = "Assistant" if raw_role == "assistant" else raw_role
             content = cast("str", fields.get("content") or "").replace("\n", " ").strip()
+            if raw_role == "assistant" and not content:
+                continue
+            ts = self._format_ts(cast("str | None", fields.get("created_at")))
+            role_label = "Assistant" if raw_role == "assistant" else raw_role
             lines.append(f"[{ts}] {role_label}: {content}")
         return "\n".join(lines)
 
     def act_trail(self) -> str:
         """The current exchange's tool-call trail, rendered ``[tool] params →
         result`` one call per line. Scoped to this MP recursion instance
-        (``by_exchange``), so a reply or async re-entry sharing the turn sees
-        only its own calls — a prior exchange's raw trail lives on in the DB but
+        (``by_exchange``), so a reply sharing the turn sees only its own
+        calls — a prior exchange's raw trail lives on in the DB but
         leaves context once that exchange synthesises (its synthesis carries
         forward via Previous Messages). A mid-exchange compaction resets the
         visible trail: only calls after the most recent ``chat_history_compactor``

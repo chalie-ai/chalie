@@ -1,8 +1,8 @@
 """Migration 006 — add transcript.settled column and backfill.
 
 ``settled`` is a positive flag: 1 on assistant rows that carry no model-driven
-tool (the turn's settle0), 0 on every other row. Written as 1 by the write path;
-``ToolCallService.start()`` demotes to 0 when a settling tool is recorded. ``schema.sql``
+tool (the turn's settle0), 0 on every other row. The write path stamps it as each
+assistant row is stored: 1 only on an exchange's terminal row. ``schema.sql``
 declares the column, so the next release's database file carries it. This file is
 the standalone idempotent script for operators applying the change manually.
 
@@ -41,7 +41,7 @@ _SETTLE0_FILTER = (
 
 def needed(conn: sqlite3.Connection) -> bool:
     """Any settle0 assistant row still carrying ``settled = 0``? The write path
-    keeps new rows settled, so a hit is pre-column backlog. Runs after the release's
+    stamps every terminal row settled, so a hit is pre-column backlog. Runs after the release's
     database file is provisioned, so the column itself already exists."""
     return conn.execute(
         f"SELECT 1 FROM transcript WHERE settled = 0 AND {_SETTLE0_FILTER} LIMIT 1",
