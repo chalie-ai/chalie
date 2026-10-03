@@ -546,8 +546,8 @@ class MessageProcessor:
         TranscriptThinking.insert(transcript_id, trace, duration_ms, tokens)
 
     def _format(self, text: str) -> str:
-        """Render markdown to HTML for surface-broadcasting channels; pass raw
-        text through for background/silent channels (``RENDERS_HTML`` False).
+        """Render markdown to HTML for channels whose reply is rendered as HTML
+        (``RENDERS_HTML``); pass raw text through for every other channel.
         HTML branch is sanitized at the persist-time boundary so both the live
         WS send and the GET/refresh read paths inherit it."""
         if self.config.RENDERS_HTML:

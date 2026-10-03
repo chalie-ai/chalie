@@ -21,7 +21,7 @@ worth carving out for it. Paired with ``CodeAgentAbility`` (abilities/code_agent
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from abilities.delete import DeleteAbility
 from abilities.edit_file import EditFileAbility
@@ -63,6 +63,8 @@ _PINNED_TOOLS: tuple[str, ...] = (
 class CodeAgentConfig(ProcessorConfig):
     """``policy_channel`` is supplied by the caller (inherited from whoever
     invoked the tool) rather than hardcoded."""
+
+    RENDERS_HTML: ClassVar[bool] = True
 
     def __init__(self, policy_channel: "PolicyChannel") -> None:
         super().__init__(

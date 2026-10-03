@@ -50,6 +50,7 @@ class DiscoveryConfig(UserConfig):
 
     BROADCASTS_STATE = False
     RENDERS_HTML = False
+    RENDERS_CARDS = False
     # Re-declared, NOT inherited. Subclassing UserConfig would otherwise bill this
     # loop's spend as "foreground" — but the user never asked for it and never sees it;
     # Chalie runs it on its own initiative, so it is background spend. Every override

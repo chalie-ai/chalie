@@ -336,14 +336,15 @@ class DispatchService:
 
         state = ToolCall.ERROR if tr.status == "error" else ToolCall.DONE
 
-        # Rich-media ordinal is assigned ONLY when the owning mp broadcasts to a
-        # live surface (``RENDERS_HTML`` — the user spine or a schedule
-        # thread). Background channels never get a card: their
-        # natural-language synthesis is consumed by the parent, so a span emitted
-        # at that hop has no tool_calls row paired to it. This is the single
-        # physical chokepoint that gates the entire card path.
+        # Rich-media ordinal is assigned ONLY on a channel whose reply the user
+        # reads in the feed (``RENDERS_CARDS`` — the user spine or a schedule
+        # thread). Every other channel never gets a card — subagent channels
+        # included, even though they render HTML: their answer is handed to the
+        # calling agent, so a span emitted at that hop would pair against the
+        # caller's own ordinals. This is the single physical chokepoint that
+        # gates the entire card path.
         ordinal = None
-        if tr.rich is not None and self.mp.config.RENDERS_HTML:
+        if tr.rich is not None and self.mp.config.RENDERS_CARDS:
             ordinal = self._next_ordinal(tool_name)
 
         # The follow-up block fires only on a real SUCCESS: never on an error
