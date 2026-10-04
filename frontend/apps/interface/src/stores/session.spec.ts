@@ -62,9 +62,12 @@ vi.mock('@chalie/shared', () => ({
 // per the boundary rule (everything downstream of the response, including
 // the real turnDom/liveActTrail DOM effects, runs unmocked).
 const threadMock = vi.fn();
+// The stop's DELETE (`requestStop`), at the same edge.
+const stopMock = vi.fn();
 vi.mock('../api/conversation', () => ({
   conversation: {
     thread: (...args: unknown[]) => threadMock(...args),
+    stop: (...args: unknown[]) => stopMock(...args),
     threads: vi.fn(),
     batch: vi.fn(),
   },
@@ -133,6 +136,8 @@ async function freshSession() {
 beforeEach(() => {
   sendMock.mockReset();
   threadMock.mockReset();
+  stopMock.mockReset();
+  stopMock.mockResolvedValue({ cancelled: true, reason: null });
   pendingMock.mockReset();
   pendingMock.mockResolvedValue([]);
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true } as Response));
@@ -363,39 +368,80 @@ describe('requestStop — DELETE only fires for a confirmed in-flight turn', () 
     // Turn 10 was never confirmed working (stale/late click on an
     // already-settled turn) — must not hit the network.
     await session.requestStop(10, ConfigType.USER, null, '');
-    expect(fetch).not.toHaveBeenCalled();
+    expect(stopMock).not.toHaveBeenCalled();
 
     // Turn 11 is confirmed working via a live setTurnWorking signal alone
     // (no rendered element) — the DELETE must fire.
     turnDom.setTurnWorking(11, ConfigType.USER, true);
     await session.requestStop(11, ConfigType.USER, null, '');
-    expect(fetch).toHaveBeenCalledWith(
-      '/api/threads/11?type=user',
-      expect.objectContaining({ method: 'DELETE' }),
-    );
+    expect(stopMock).toHaveBeenCalledWith(11, ConfigType.USER);
   });
 
-  it('clears working optimistically but starts the content refetch only AFTER the DELETE resolves (stale pre-cancel content must never be fetched ahead of the cancel)', async () => {
+  it('undoes nothing while the DELETE is in flight, then clears working and refetches (stale pre-cancel content must never be fetched ahead of the cancel)', async () => {
     const { session, turnDom } = await freshSession();
     threadMock.mockResolvedValue(stubBlock(12, false));
+    const handBacks: unknown[] = [];
+    document.addEventListener('session:turn-interrupted', (e) => { handBacks.push((e as CustomEvent).detail); });
 
     let resolveDelete: (v: unknown) => void = () => { /* replaced below */ };
-    vi.stubGlobal('fetch', vi.fn().mockImplementationOnce(
-      () => new Promise((resolve) => { resolveDelete = resolve; }),
-    ));
+    stopMock.mockImplementationOnce(() => new Promise((resolve) => { resolveDelete = resolve; }));
 
     turnDom.setTurnWorking(12, ConfigType.USER, true);
-    const stopping = session.requestStop(12, ConfigType.USER, null, '');
+    const stopping = session.requestStop(12, ConfigType.USER, 12, 'draft');
 
-    // Spinner drops immediately (optimistic), but the reconcile fetch is
-    // held while the DELETE round-trip is still in flight.
-    expect(turnDom.isTurnWorking(12, ConfigType.USER)).toBe(false);
+    // Until the server accepts the stop the turn may still be running, so its
+    // spinner (and stop control), its draft and its content all stay put.
     await Promise.resolve();
+    expect(turnDom.isTurnWorking(12, ConfigType.USER)).toBe(true);
+    expect(handBacks).toEqual([]);
     expect(threadMock).not.toHaveBeenCalled();
 
-    resolveDelete({ ok: true });
+    resolveDelete({ cancelled: true, reason: null });
     await stopping;
+    expect(turnDom.isTurnWorking(12, ConfigType.USER)).toBe(false);
+    expect(handBacks).toEqual([{ text: 'draft', turnId: 12 }]);
     expect(threadMock).toHaveBeenCalledWith(12, ConfigType.USER);
+  });
+});
+
+describe('requestStop — a stop that fails', () => {
+  it('says so in the dock banner and undoes nothing, leaving the turn running and stoppable; a retry then stops it and takes the banner down', async () => {
+    const { session, turnDom } = await freshSession();
+    threadMock.mockResolvedValue(stubBlock(14, false));
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => { /* asserted below */ });
+    const handBacks: unknown[] = [];
+    document.addEventListener('session:turn-interrupted', (e) => { handBacks.push((e as CustomEvent).detail); });
+    stopMock.mockRejectedValueOnce(new Error('HTTP 500'));
+
+    turnDom.setTurnWorking(14, ConfigType.USER, true);
+    await session.requestStop(14, ConfigType.USER, 14, 'draft');
+
+    expect(session.errorMessage).toBe("Couldn't stop and undo. Try again.");
+    expect(logged).toHaveBeenCalled();
+    expect(turnDom.isTurnWorking(14, ConfigType.USER)).toBe(true);
+    expect(handBacks).toEqual([]);
+    expect(threadMock).not.toHaveBeenCalled();
+
+    await session.requestStop(14, ConfigType.USER, 14, 'draft');
+
+    expect(stopMock).toHaveBeenCalledTimes(2);
+    expect(session.errorMessage).toBeNull();
+    expect(turnDom.isTurnWorking(14, ConfigType.USER)).toBe(false);
+    expect(handBacks).toEqual([{ text: 'draft', turnId: 14 }]);
+  });
+
+  it('stays quiet when the turn had already ended (no_active_turn), and leaves an unrelated error on the banner alone', async () => {
+    const { session, turnDom } = await freshSession();
+    threadMock.mockResolvedValue(stubBlock(15, false));
+    stopMock.mockResolvedValueOnce({ cancelled: null, reason: 'no_active_turn' });
+    session.errorMessage = 'Provider quota exceeded';
+
+    turnDom.setTurnWorking(15, ConfigType.USER, true);
+    await session.requestStop(15, ConfigType.USER, null, '');
+
+    expect(session.errorMessage).toBe('Provider quota exceeded');
+    expect(turnDom.isTurnWorking(15, ConfigType.USER)).toBe(false);
+    expect(threadMock).toHaveBeenCalledWith(15, ConfigType.USER);
   });
 });
 

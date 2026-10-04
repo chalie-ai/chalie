@@ -160,6 +160,13 @@ export interface ConversationTurnBlock {
  */
 export type DelegateTurnBlock = Omit<ConversationTurnBlock, 'type' | 'channel'> & { type: null; channel: string };
 
+/** The stop's ack: `cancelled` when a running turn was stopped, or reason
+ *  `no_active_turn` when it had already ended — a quiet ack, not an error. */
+export interface TurnStopResult {
+  cancelled: true | null;
+  reason: 'no_active_turn' | null;
+}
+
 interface ListingEnvelope<T> {
   success: true;
   result: T[];
@@ -229,6 +236,27 @@ export const conversation = {
         }
         return block;
       });
+  },
+
+  /**
+   * DELETE /api/threads/<turn_id>?type= (or ?channel= for a delegate turn) —
+   * stop a running turn. `type` is forwarded as `thread()` forwards it and is
+   * ignored for a delegate. Rejects on any failure, including a 200 whose ack
+   * is neither a stop nor `no_active_turn`: an unrecognised answer must never
+   * read as a stop that happened.
+   */
+  stop(target: number | DelegateRef, type?: string): Promise<TurnStopResult> {
+    const [turnId, params] =
+      typeof target === 'number'
+        ? [target, type ? `?type=${encodeURIComponent(type)}` : '']
+        : [target.turn_id, `?channel=${encodeURIComponent(target.channel)}`];
+    return api.del<SingleEnvelope<TurnStopResult>>(`/api/threads/${turnId}${params}`).then((body) => {
+      const ack = body.result;
+      if (ack?.cancelled !== true && ack?.reason !== 'no_active_turn') {
+        throw new Error(`stop of turn ${turnId} got an unrecognised ack: ${JSON.stringify(body)}`);
+      }
+      return ack;
+    });
   },
 
   /**

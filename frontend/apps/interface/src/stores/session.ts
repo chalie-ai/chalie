@@ -22,7 +22,6 @@ import { defineStore } from 'pinia';
 import type { DelegateRef, WsPushEvent } from '@chalie/shared';
 import { AuthError, ConfigType, getWebSocket, useConnectionStore } from '@chalie/shared';
 import { extractText } from '../composables/useMarkup';
-import { getHost } from '../api/index';
 import { conversation as convoApi } from '../api/conversation';
 import { dispatchDrift, refetchDelegate, registerSessionHooks } from '../utils/driftDispatcher';
 import { reconcileCancelledTurn } from '../utils/cancelReconcile';
@@ -401,10 +400,16 @@ export const useSessionStore = defineStore('session', {
      * A delegate (subagent) turn is addressed by its DelegateRef instead of a
      * turn_id. It has no type, dock, send echo or lane, and turnDom keeps no
      * working marker for it, so `type`/`dockScope`/`restoreText` don't apply
-     * and nothing is undone: its stop is the same optimistic live-trail clear,
-     * the same DELETE, and a forced re-read of its post-cancel block — the
-     * read its WS 'cancelled' frame triggers too. Its stop control renders
-     * only while its block is working; a late click gets `no_active_turn`.
+     * and nothing is undone: once the server accepts its DELETE, its stop is
+     * the same live-trail clear and a forced re-read of its post-cancel block
+     * — the read its WS 'cancelled' frame triggers too. Its stop control
+     * renders only while its block is working; a late click gets
+     * `no_active_turn`.
+     *
+     * Nothing changes until the server accepts the stop: a refused or failed
+     * DELETE surfaces in the dock's error banner and leaves the turn running,
+     * its stop control in place for a retry. The DELETE only stamps the turn's
+     * row server-side, so the wait is a single round-trip.
      */
     async requestStop(
       target: number | DelegateRef | null = null,
@@ -413,8 +418,8 @@ export const useSessionStore = defineStore('session', {
       restoreText: string = '',
     ): Promise<void> {
       if (target != null && typeof target === 'object') {
+        if (!(await this._stop(target, type, "Couldn't stop the subagent. Try again."))) return;
         clearLiveTurn(target.channel, target.turn_id);
-        await this._postInterrupt(target);
         await refetchDelegate(target.turn_id, target.channel, { force: true });
         return;
       }
@@ -423,15 +428,15 @@ export const useSessionStore = defineStore('session', {
       // data-working marker) before firing the DELETE — a stale/late click
       // could otherwise target an already-settled turn.
       const stopId = target != null && isTurnWorking(target, type) ? target : null;
+      if (stopId != null && !(await this._stop(stopId, type, "Couldn't stop and undo. Try again."))) return;
 
       const text = restoreText === FILE_PLACEHOLDER ? '' : restoreText;
 
-      // Optimistic: hide the spinner/live pill trail immediately rather than
-      // waiting on the DELETE round-trip. The CONTENT refetch, however, must
-      // NOT start yet — the backend only strips a cancelled turn's orphan
-      // user row once cancel() has committed, so a fetch racing ahead of the
-      // DELETE can force-upsert stale pre-cancel content that nothing
-      // corrects if the WS 'cancelled' frame is dropped.
+      // The CONTENT refetch runs only after the DELETE: the backend only
+      // strips a cancelled turn's orphan user row once cancel() has
+      // committed, so a fetch racing ahead of it can force-upsert stale
+      // pre-cancel content that nothing corrects if the WS 'cancelled' frame
+      // is dropped.
       if (stopId != null) {
         setTurnWorking(stopId, type, false);
         clearLiveTurn(type, stopId);
@@ -445,8 +450,6 @@ export const useSessionStore = defineStore('session', {
       // one `sendMessage` mounted the echo under.
       clearSendEcho(dockScope, type);
 
-      await this._postInterrupt(stopId, type);
-
       if (stopId != null) {
         // Post-DELETE, the fetch reads authoritative post-cancel state — and
         // dedupes (same in-flight cache) with whatever reconcile a WS
@@ -456,26 +459,19 @@ export const useSessionStore = defineStore('session', {
       }
     },
 
-    /** DELETE /api/threads/<turn_id>?type=<type>, or ?channel=<channel> for a
-     *  delegate turn — best-effort interrupt, never throws. */
-    async _postInterrupt(
-      target: number | DelegateRef | null = null,
-      type: string = ConfigType.USER,
-    ): Promise<void> {
-      if (target == null) return;
-      const [turnId, scope] =
-        typeof target === 'number'
-          ? [target, 'type=' + encodeURIComponent(type)]
-          : [target.turn_id, 'channel=' + encodeURIComponent(target.channel)];
+    /** Send the stop's DELETE. True once the server accepted it — a stop or a
+     *  `no_active_turn` ack — which also takes down this stop's own earlier
+     *  failure, so a successful retry leaves no stale banner; on any failure,
+     *  logs it, shows `failure` in the dock's error banner and returns false. */
+    async _stop(target: number | DelegateRef, type: string, failure: string): Promise<boolean> {
       try {
-        const host = getHost();
-        const base = host ? host.replace(/\/$/, '') : '';
-        await fetch(base + '/api/threads/' + turnId + '?' + scope, {
-          method: 'DELETE',
-          credentials: 'same-origin',
-        });
-      } catch {
-        // Best-effort — swallow.
+        await convoApi.stop(target, type);
+        if (this.errorMessage === failure) this.errorMessage = null;
+        return true;
+      } catch (err) {
+        console.error('[Session] Stop failed:', err);
+        this.errorMessage = failure;
+        return false;
       }
     },
 

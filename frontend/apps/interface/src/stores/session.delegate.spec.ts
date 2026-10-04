@@ -82,8 +82,10 @@ const delegateReads = (): Read[] => reads.filter((r) => r.channel !== null);
 
 /** Every stop (`DELETE`) the backend was sent, as the path and query it named. */
 const stops: string[] = [];
+/** The backend's ack for a stop it carried out. */
+const STOPPED = { success: true, result: { cancelled: true, reason: null } };
 /** How the backend answers a stop; a test can hold it open to look mid-flight. */
-let answerStop: () => Promise<Response> = async () => json({ success: true });
+let answerStop: () => Promise<Response> = async () => json(STOPPED);
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -203,7 +205,7 @@ async function dropAndRestoreSocket(): Promise<void> {
 beforeEach(() => {
   reads.length = 0;
   stops.length = 0;
-  answerStop = async () => json({ success: true });
+  answerStop = async () => json(STOPPED);
   serve = () => {
     throw new Error('no block served');
   };
@@ -384,7 +386,7 @@ describe('stopping a running subagent from its open transcript', () => {
 
   function holdStopOpen(): () => void {
     const stopReturns = deferred<void>();
-    answerStop = () => stopReturns.promise.then(() => json({ success: true }));
+    answerStop = () => stopReturns.promise.then(() => json(STOPPED));
     return () => stopReturns.resolve();
   }
 
@@ -400,7 +402,7 @@ describe('stopping a running subagent from its open transcript', () => {
     expect(handBacks).toEqual([]);
   });
 
-  it('drops the live pills the moment stop is pressed, and re-reads the transcript only once the stop has returned', async () => {
+  it('keeps the live pills while the stop is in flight, and drops them and re-reads the transcript only once the stop has returned', async () => {
     const { session, panel } = await openRunning();
     const releaseStop = holdStopOpen();
     serve = () => delegateBlock(SEARCH, [TASK], false);
@@ -408,10 +410,10 @@ describe('stopping a running subagent from its open transcript', () => {
     const stopping = session.requestStop(SEARCH);
     await flushPromises();
 
-    // Mid-flight: the pills are gone at once, but nothing has been re-read and
-    // the panel still says the subagent is running until the server answers.
+    // Mid-flight: nothing changes until the server answers — the subagent may
+    // still be running if the stop fails.
     expect(stops).toEqual([SEARCH_STOP]);
-    expect(panel.text()).not.toContain('museum.example/hours');
+    expect(panel.text()).toContain('museum.example/hours');
     expect(delegateReads()).toEqual([]);
     expect(showsWorking(panel)).toBe(true);
 
@@ -419,7 +421,52 @@ describe('stopping a running subagent from its open transcript', () => {
     await stopping;
     await flushPromises();
 
+    expect(panel.text()).not.toContain('museum.example/hours');
     expect(delegateReads()).toEqual([{ turnId: 12, channel: 'delegate:web_search', type: null }]);
+    expect(showsWorking(panel)).toBe(false);
+  });
+
+  it.each([
+    ['the server refuses it', () => Promise.resolve(json({ success: false, error: 'Invalid channel' }, 400))],
+    ['the server fails', () => Promise.resolve(json({ error: 'backend failure' }, 500))],
+    ['the network drops it', () => Promise.reject(new TypeError('Failed to fetch'))],
+    ['the answer is not a stop ack', () => Promise.resolve(json({ success: true }))],
+  ])('says the stop failed and leaves the subagent running, stoppable again, when %s', async (_name, failure) => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => { /* asserted below */ });
+    const { session, panel } = await openRunning();
+    answerStop = failure;
+
+    subagentStop(panel)!.click();
+    await flushPromises();
+
+    expect(stops).toEqual([SEARCH_STOP]);
+    expect(session.errorMessage).toBe("Couldn't stop the subagent. Try again.");
+    expect(logged).toHaveBeenCalled();
+    expect(panel.text()).toContain('museum.example/hours');
+    expect(delegateReads()).toEqual([]);
+    expect(showsWorking(panel)).toBe(true);
+
+    // The retry goes through, and the failure it answered no longer shows.
+    answerStop = async () => json(STOPPED);
+    serve = () => delegateBlock(SEARCH, [TASK], false);
+    subagentStop(panel)!.click();
+    await flushPromises();
+
+    expect(stops).toEqual([SEARCH_STOP, SEARCH_STOP]);
+    expect(session.errorMessage).toBeNull();
+    expect(showsWorking(panel)).toBe(false);
+  });
+
+  it('takes a stop of a subagent that had already finished quietly, and shows its final transcript', async () => {
+    const { session, panel } = await openRunning();
+    answerStop = async () => json({ success: true, result: { cancelled: null, reason: 'no_active_turn' } });
+    serve = () => delegateBlock(SEARCH, [TASK, ANSWER], false);
+
+    await session.requestStop(SEARCH);
+    await flushPromises();
+
+    expect(session.errorMessage).toBeNull();
+    expect(panel.text()).toContain('The museum opens at nine.');
     expect(showsWorking(panel)).toBe(false);
   });
 
