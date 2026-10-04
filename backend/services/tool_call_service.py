@@ -18,8 +18,9 @@ unless the tool's ability opts out via ``counts_as_settle=False`` — a settling
 tool demotes the turn's settle0 back to in-progress. Every write
 emits the row's WS-safe projection (``ToolCall.to_json``, §6.2 — params/result
 never cross the wire) gated by ``self.mp.push_websocket`` and silenced
-outright for the turn-zero memory seed (§6.10). A delegate tool's frame also
-names the child turn it spawned, read off that turn's input row.
+outright for the turn-zero memory seed (§6.10); a terminal one is followed by
+the turn's ``updated`` refetch poke. A delegate tool's frame also names the
+child turn it spawned, read off that turn's input row.
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ from typing import TYPE_CHECKING, cast
 from abilities._registry import AbilityRegistry
 from models.tool_call import ToolCall
 from models.transcript import Transcript
+from models.turn_signal import TurnSignal
 from services.time_utils import utc_now
 
 if TYPE_CHECKING:
@@ -243,10 +245,19 @@ class ToolCallService:
         ``mp.push_websocket``. Sets the transient envelope (``type``/``turn_id``)
         on the row before pushing; ``delegate`` is set by the callers that may
         follow a child turn's opening (:meth:`reemit`, :meth:`finish`).
-        ``Websocket`` serializes it via ``ToolCall.to_json`` (§6.2)."""
+        ``Websocket`` serializes it via ``ToolCall.to_json`` (§6.2).
+
+        A terminal frame is followed by ``updated``: the turn's block carries
+        every call from the moment it starts, and only ``updated`` makes a
+        surface refetch it — without the poke a call that was still running at
+        the last refetch keeps its in-flight state there until the next reply
+        row lands. A ``started`` frame sends none: a running call is the live
+        pill's to show."""
         if self.mp.seeding_turn_zero:
             return
         config_type = self.mp.config.type()
         call.type = config_type.value if config_type is not None else ""
         call.turn_id = self.mp.turn_id
         self.mp.push_websocket(call)
+        if call.state != ToolCall.STARTED:
+            self.mp.push_websocket(TurnSignal.updated(self.mp))

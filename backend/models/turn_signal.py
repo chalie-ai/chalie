@@ -1,7 +1,7 @@
 """Transient mid-turn WS signal frames the spine emits (§4.1).
 
 Three lean kinds with no persisted counterpart: ``updated`` (TranscriptService
-pokes a surface to refetch the turn's block), ``provider_retry``
+or ToolCallService pokes a surface to refetch the turn's block), ``provider_retry``
 (ProviderService toasts that an upstream resend is underway — a notice, not a
 turn state) and ``context_usage`` (ProviderService reports how full the request
 it just sent was against the window — the context meter's live feed). Each is a
