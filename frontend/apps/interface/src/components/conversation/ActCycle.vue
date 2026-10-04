@@ -1,25 +1,35 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue';
-import { Undo2 } from '@lucide/vue';
+import { Bot, Square, Undo2 } from '@lucide/vue';
 import { readDomContext } from '../../utils/domContext';
 import { lastUserText } from '../../utils/turnDom';
 import type { LiveToolPill } from '../../utils/liveActTrail';
 import { useSessionStore } from '../../stores/session';
+import { delegatePillAttrs } from '../../composables/useDelegatePill';
 
-const props = defineProps<{ pills: LiveToolPill[] }>();
+const props = withDefaults(
+  defineProps<{
+    pills: LiveToolPill[];
+    /** False where a stop interrupts without handing anything back to undo (a
+     *  delegate's transcript). */
+    undoable?: boolean;
+  }>(),
+  { undoable: true },
+);
 
 const session = useSessionStore();
 const rootRef = ref<HTMLElement | null>(null);
 
 async function onStop(): Promise<void> {
-  const { turnId, type, dockScope } = readDomContext(rootRef.value);
+  const { turnId, type, channel, dockScope } = readDomContext(rootRef.value);
   if (turnId == null) return; // Guard: never fire a stop without a target
   // The restore text (D6) must come from the SAME rendered copy this stop
   // button belongs to — the same turn_id can render different row sets on
   // different surfaces (see lastUserText's own doc comment).
   const turnHost = rootRef.value?.closest<HTMLElement>('[data-turn-id]') ?? null;
   const restoreText = turnHost ? lastUserText(turnHost) : '';
-  await session.requestStop(turnId, type, dockScope, restoreText);
+  const target = channel != null ? { channel, turn_id: turnId } : turnId;
+  await session.requestStop(target, type, dockScope, restoreText);
 }
 
 // Live timer: ticks ONLY while a pill is unresolved.
@@ -64,12 +74,13 @@ function pillSeconds(pill: LiveToolPill): string {
       <span class="act-logo" />
       <button
         class="act-stop-btn"
-        aria-label="Stop and undo"
-        title="Stop & undo"
+        :aria-label="undoable ? 'Stop and undo' : 'Stop subagent'"
+        :title="undoable ? 'Stop & undo' : 'Stop subagent'"
         type="button"
         @click="onStop"
       >
-        <Undo2 :size="14" />
+        <Undo2 v-if="undoable" :size="14" />
+        <Square v-else :size="12" fill="currentColor" aria-hidden="true" />
       </button>
     </div>
 
@@ -77,9 +88,11 @@ function pillSeconds(pill: LiveToolPill): string {
          lands, the bare group is the "thinking…" anchor. -->
     <div class="act-tools">
       <span v-if="!pills.length" class="act-placeholder">thinking…</span>
-      <div
+      <component
+        :is="pill.delegate ? 'button' : 'div'"
         v-for="pill in pills"
         :key="pill.id"
+        v-bind="delegatePillAttrs(pill.delegate)"
         class="act-tool"
         :class="{
           'act-tool--running': !pill.resolved,
@@ -89,11 +102,14 @@ function pillSeconds(pill: LiveToolPill): string {
         :data-call-id="pill.id"
         :data-transcript-row-id="pill.transcriptRowId"
       >
-        <span v-if="pill.summary" class="act-tool__label">
-          <span class="act-tool__name">{{ pill.name }}</span>
-          <span class="act-tool__summary">— {{ pill.summary }}</span>
+        <span class="act-tool__label">
+          <span class="act-tool__name">
+            <Bot v-if="pill.delegate" class="delegate-pill__icon" :size="14" aria-hidden="true" />{{
+              pill.name
+            }}
+          </span>
+          <span v-if="pill.summary" class="act-tool__summary">— {{ pill.summary }}</span>
         </span>
-        <span v-else class="act-tool__name">{{ pill.name }}</span>
 
         <span class="act-tool__status">
           <template v-if="!pill.resolved">
@@ -102,7 +118,7 @@ function pillSeconds(pill: LiveToolPill): string {
           <template v-else-if="pill.ok">{{ pillSeconds(pill) }}s</template>
           <template v-else>error</template>
         </span>
-      </div>
+      </component>
     </div>
   </div>
 </template>

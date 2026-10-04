@@ -36,6 +36,7 @@ are re-pointed at ``transcript_service.read()`` / ``prompt_service.previous_mess
 — fixing that is out of scope for this test file."""
 
 import sqlite3
+from collections.abc import Callable
 from typing import TYPE_CHECKING, cast
 from unittest.mock import patch
 
@@ -43,13 +44,19 @@ import pytest
 
 from abilities._compaction_config import CompactionConfig
 from abilities.chat_history_compactor import ChatHistoryCompactionConfig, ChatHistoryCompactor
+from configs.channels import ScheduledConfig, WebBrowseConfig, WebSearchConfig
+from configs.channels.code_agent import CodeAgentConfig
+from configs.channels.pim import PimConfig
 from configs.channels.user import UserConfig
+from configs.enums.policy_channel import PolicyChannel
 from contracts.params.chat_history_compactor_params_bag import ChatHistoryCompactorParamsBag
 from controllers.message_processor import MessageProcessor
 from models.compaction import Compaction
 from models.transcript import Transcript
+from services.processor_config import ProcessorConfig
 from services.provider_cache_service import ProviderCacheService
 from services.provider_db_service import ProviderDbService
+from services.rich_media_parser import parse
 from tests._tool_result_harness import built
 
 if TYPE_CHECKING:
@@ -178,10 +185,86 @@ def test_run_completes_and_writes_a_checkpoint_without_crashing(db: sqlite3.Conn
     assert checkpoint.compacted_up_to == turn_id
 
 
-def test_compaction_config_never_broadcasts_to_user() -> None:
-    """Pins existing contract: the shared CompactionConfig (and both concrete
-    subclasses) leave ``RENDERS_HTML`` False. The dispatcher only assigns a
-    rich-media ordinal when the channel renders to a human AND tr.rich, so a
-    compactor result can never be paired to a user-facing card."""
-    assert CompactionConfig().RENDERS_HTML is False
-    assert ChatHistoryCompactionConfig().RENDERS_HTML is False
+# ── Rich-media card gate (DispatchService) ──────────────────────────────────────
+#
+# A rich tool result carries the ``<span id='<tool>_<n>'>`` card instruction only
+# on a channel whose reply the user reads in the feed. Everywhere else — the
+# compaction channels, and the subagent channels even though their reply is
+# rendered as HTML — a span would pair against the wrong ordinals, so no card is
+# offered. ``image_preview`` is the probe: an http(s) URL becomes a card with no
+# download, and the tool is INTERNAL, so it runs on every channel with no policy
+# row. Driven through the real ``dispatch`` on a real ``MessageProcessor``, then
+# through the real ``rich_media_parser.parse`` the feed render uses.
+
+_PREVIEW_URL = "https://images.example/aurora.jpg"
+_PREVIEW_SPAN = "<span id='image_preview_1'>The aurora over Iceland.</span>"
+
+_FEED_CHANNELS: dict[str, Callable[[], ProcessorConfig]] = {
+    "user": UserConfig,
+    "schedule": ScheduledConfig,
+}
+_OFF_FEED_CHANNELS: dict[str, Callable[[], ProcessorConfig]] = {
+    "web_search": lambda: WebSearchConfig(PolicyChannel.CHAT),
+    "web_browse": lambda: WebBrowseConfig(PolicyChannel.CHAT),
+    "pim": lambda: PimConfig(PolicyChannel.CHAT),
+    "code_agent": lambda: CodeAgentConfig(PolicyChannel.CHAT),
+    "compaction": CompactionConfig,
+    "chat_history_compaction": ChatHistoryCompactionConfig,
+}
+
+
+def _dispatch_image_preview(config: ProcessorConfig) -> str:
+    """Dispatch one ``image_preview`` call on a real processor for *config* and
+    return the envelope the model reads (and the tool_calls row stores)."""
+    mp = MessageProcessor(config, raw_input="show me the aurora")
+    return mp.dispatch_service.dispatch(
+        "image_preview",
+        {
+            "file_path": _PREVIEW_URL,
+            "subtitle": "Aurora over Iceland",
+            "act_summary": "Showing the aurora",
+        },
+    )
+
+
+def _cards(rendered: str) -> list[dict[str, object]]:
+    """The rich segments the feed would render for a reply that wraps its
+    synthesis in the first image_preview span, against this one tool result."""
+    return [
+        s
+        for s in parse(_PREVIEW_SPAN, [{"result": rendered}])
+        if s.get("type") == "rich"
+    ]
+
+
+@pytest.mark.parametrize(
+    "make_config", list(_FEED_CHANNELS.values()), ids=list(_FEED_CHANNELS)
+)
+def test_rich_result_becomes_a_card_on_a_feed_channel(
+    db: sqlite3.Connection, make_config: Callable[[], ProcessorConfig]
+) -> None:
+    """Should-fire: on the user spine and a schedule thread the model is told
+    which span to wrap its synthesis in, and that span renders as the image
+    card."""
+    rendered = _dispatch_image_preview(make_config())
+
+    assert "<span id='image_preview_1'>" in rendered
+    cards = _cards(rendered)
+    assert len(cards) == 1, f"expected one card, got {cards}"
+    assert cast("dict[str, object]", cards[0]["payload"])["url"] == _PREVIEW_URL
+
+
+@pytest.mark.parametrize(
+    "make_config", list(_OFF_FEED_CHANNELS.values()), ids=list(_OFF_FEED_CHANNELS)
+)
+def test_rich_result_never_becomes_a_card_off_the_feed(
+    db: sqlite3.Connection, make_config: Callable[[], ProcessorConfig]
+) -> None:
+    """Shouldn't-fire: a subagent's answer is handed to the calling agent and a
+    compaction pass is never shown, so the same successful rich result carries
+    no card instruction there, and nothing in it pairs to a card."""
+    rendered = _dispatch_image_preview(make_config())
+
+    assert "status=success" in rendered.splitlines()[0], rendered
+    assert "<span" not in rendered
+    assert _cards(rendered) == []

@@ -11,7 +11,8 @@
 The foundational delegate-tool template.  A delegate
 tool is a standalone Ability that pairs with a typed ``ProcessorConfig``
 subclass (``WebSearchConfig``, in ``configs/channels/web_search.py`` with the
-other channel configs).  ``run()`` instantiates the subclass and calls
+other channel configs).  ``run()`` hands the subclass to
+``DelegateAbility.delegate()``, which runs it through
 ``MessageProcessor.process()`` — there is no MessageProcessor subclass, no
 SUBAGENT_TYPES registry, and no make_subagent_config() factory.
 
@@ -36,7 +37,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from abilities._delegate import DelegateAbility, delegate_result
+from abilities._delegate import DelegateAbility
 from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 from configs.channels.web_search import WebSearchConfig
@@ -106,19 +107,7 @@ class WebSearchAbility(DelegateAbility[DelegateParamsBag]):
         return self._PARAMETERS
 
     def run(self, params: DelegateParamsBag) -> ToolResult:
-        from controllers.message_processor import MessageProcessor  # noqa: PLC0415
-
-        mp = self.mp
-        if mp is None:
-            raise RuntimeError("web_search.run() dispatched without a bound MessageProcessor")
-
-        # A gated tool inside the delegate prompts on the CALLER's turn — the
-        # delegate's own turn has no surface a human could answer from.
-        result = MessageProcessor.process(
-            WebSearchConfig(mp.config.policy_channel),
-            raw_input=params.instructions,
-            metadata={"origin": mp.origin},
-        ).result()
-        return delegate_result(
-            result, hint="Narrow the query or split it into smaller searches, then retry."
+        return self.delegate(
+            WebSearchConfig, params.instructions,
+            hint="Narrow the query or split it into smaller searches, then retry.",
         )

@@ -19,14 +19,14 @@
  * stable id of its own until a brand-new send's POST resolves one.
  */
 import { defineStore } from 'pinia';
-import type { WsPushEvent } from '@chalie/shared';
+import type { DelegateRef, WsPushEvent } from '@chalie/shared';
 import { AuthError, ConfigType, getWebSocket, useConnectionStore } from '@chalie/shared';
 import { extractText } from '../composables/useMarkup';
 import { getHost } from '../api/index';
 import { conversation as convoApi } from '../api/conversation';
-import { dispatchDrift, registerSessionHooks } from '../utils/driftDispatcher';
+import { dispatchDrift, refetchDelegate, registerSessionHooks } from '../utils/driftDispatcher';
 import { reconcileCancelledTurn } from '../utils/cancelReconcile';
-import { clearLiveTurn } from '../utils/liveActTrail';
+import { clearDelegateFeeds, clearLiveTurn } from '../utils/liveActTrail';
 import { blockSpeechText } from '../utils/speech';
 import { clearSendEcho, mountSendEcho } from '../utils/sendEcho';
 import {
@@ -43,7 +43,6 @@ import {
 import { laneKey, useQueueStore } from './queue';
 import { useNotificationsStore } from './notifications';
 import { usePermissionsStore } from './permissions';
-import { useAmbientSensor } from '../composables/useAmbientSensor';
 
 /** Guard: init() must be idempotent (HMR / Vue StrictMode). */
 let _initialized = false;
@@ -103,6 +102,10 @@ export const useSessionStore = defineStore('session', {
     /** ConfigType of the thread currently open in the panel (default user). */
     panelType: ConfigType.USER as string,
 
+    /** The delegate (subagent) turn watched in the panel, or null.
+     *  Exclusive with `panelThreadId`: the panel shows one or the other. */
+    panelDelegate: null as DelegateRef | null,
+
     /** True while the thread-search overlay is open (Cmd/Ctrl-K or the top-bar
      *  search button). The overlay self-fetches; this is pure open/close state. */
     searchOpen: false,
@@ -150,6 +153,10 @@ export const useSessionStore = defineStore('session', {
         // every connect, first load and reconnect alike, so a reload or a drop
         // brings the cards back instead of parking the turn for ever.
         void usePermissionsStore().refreshPending();
+        // An open delegate panel froze with the socket and lost its live pills
+        // on disconnect, and only a frame for its turn would re-read it.
+        const delegate = this.panelDelegate;
+        if (delegate) void refetchDelegate(delegate.turn_id, delegate.channel);
       });
 
       ws.onDisconnect(() => {
@@ -177,6 +184,9 @@ export const useSessionStore = defineStore('session', {
           const turnId = Number(key.slice(idx + 1));
           setTurnWorking(turnId, type, false);
         }
+        // A delegate's terminal frame is lost the same way — drop its pills
+        // and timers now; reconnect re-reads the delegate panel, if open.
+        clearDelegateFeeds();
       });
 
       ws.onDrift((data: WsPushEvent) => {
@@ -338,13 +348,12 @@ export const useSessionStore = defineStore('session', {
     /** Settle bookkeeping for a completed/crashed/offline-settled turn.
      *  `data-done` itself is already stamped by the caller (D16, see
      *  `driftDispatcher`'s turn_execution branch and `_reconcileWorking`
-     *  above) — this only drains queues, records ambient activity, and fires
-     *  an OS notification for the final reply when the tab is unfocused.
+     *  above) — this only drains queues and fires an OS notification for the
+     *  final reply when the tab is unfocused.
      *  Identical for every type — only the dock the settled thread lives in
      *  differs. */
     async _finishTurn(turnId: number, type: string = ConfigType.USER): Promise<void> {
       this._drainQueues();
-      useAmbientSensor().recordResponse();
 
       if (!document.hasFocus()) {
         // Fetched ONCE, here, for the notification — deliberately NOT read
@@ -376,7 +385,7 @@ export const useSessionStore = defineStore('session', {
     },
 
     /**
-     * Stop + undo the in-flight turn identified by `turnId`. Emits
+     * Stop + undo the in-flight turn whose turn_id is `target`. Emits
      * 'session:turn-interrupted' so InputDock can restore the textarea.
      * `type` (default user) names the owning thread's ProcessorConfig —
      * DELETE resolves the channel from it server-side, and turn_id alone is
@@ -388,17 +397,32 @@ export const useSessionStore = defineStore('session', {
      * from. `restoreText` is the exact text to hand back to that dock,
      * likewise read by the caller off the DOM (`data-user-text`, see
      * UserBubble.vue / turnDom's `lastUserText`) before this call.
+     *
+     * A delegate (subagent) turn is addressed by its DelegateRef instead of a
+     * turn_id. It has no type, dock, send echo or lane, and turnDom keeps no
+     * working marker for it, so `type`/`dockScope`/`restoreText` don't apply
+     * and nothing is undone: its stop is the same optimistic live-trail clear,
+     * the same DELETE, and a forced re-read of its post-cancel block — the
+     * read its WS 'cancelled' frame triggers too. Its stop control renders
+     * only while its block is working; a late click gets `no_active_turn`.
      */
     async requestStop(
-      turnId: number | null = null,
+      target: number | DelegateRef | null = null,
       type: string = ConfigType.USER,
       dockScope: number | null = null,
       restoreText: string = '',
     ): Promise<void> {
-      // D6: confirm turnId is genuinely still in flight (per the DOM's own
+      if (target != null && typeof target === 'object') {
+        clearLiveTurn(target.channel, target.turn_id);
+        await this._postInterrupt(target);
+        await refetchDelegate(target.turn_id, target.channel, { force: true });
+        return;
+      }
+
+      // D6: confirm the turn is genuinely still in flight (per the DOM's own
       // data-working marker) before firing the DELETE — a stale/late click
       // could otherwise target an already-settled turn.
-      const stopId = turnId != null && isTurnWorking(turnId, type) ? turnId : null;
+      const stopId = target != null && isTurnWorking(target, type) ? target : null;
 
       const text = restoreText === FILE_PLACEHOLDER ? '' : restoreText;
 
@@ -432,13 +456,21 @@ export const useSessionStore = defineStore('session', {
       }
     },
 
-    /** DELETE /api/threads/<turn_id>?type=<type> — best-effort interrupt, never throws. */
-    async _postInterrupt(turnId: number | null = null, type: string = ConfigType.USER): Promise<void> {
-      if (turnId == null) return;
+    /** DELETE /api/threads/<turn_id>?type=<type>, or ?channel=<channel> for a
+     *  delegate turn — best-effort interrupt, never throws. */
+    async _postInterrupt(
+      target: number | DelegateRef | null = null,
+      type: string = ConfigType.USER,
+    ): Promise<void> {
+      if (target == null) return;
+      const [turnId, scope] =
+        typeof target === 'number'
+          ? [target, 'type=' + encodeURIComponent(type)]
+          : [target.turn_id, 'channel=' + encodeURIComponent(target.channel)];
       try {
         const host = getHost();
         const base = host ? host.replace(/\/$/, '') : '';
-        await fetch(base + '/api/threads/' + turnId + '?type=' + encodeURIComponent(type), {
+        await fetch(base + '/api/threads/' + turnId + '?' + scope, {
           method: 'DELETE',
           credentials: 'same-origin',
         });
@@ -489,14 +521,27 @@ export const useSessionStore = defineStore('session', {
      * its channel explicitly rather than risk an implicit `user` guess.
      */
     openThreadPanel(turnId: number, type: string): void {
+      this.panelDelegate = null;
       this.panelThreadId = turnId;
       this.panelType = type;
       setTurnDone(turnId, type, false);
     },
 
+    /**
+     * Open a delegate (subagent) turn in the slide-over panel to watch (and,
+     * while it runs, stop), replacing whatever it showed. ThreadPanel.vue
+     * watches panelDelegate and owns the fetch; a delegate turn has no type
+     * and no done marker.
+     */
+    openDelegatePanel(ref: DelegateRef): void {
+      this.panelThreadId = null;
+      this.panelDelegate = { channel: ref.channel, turn_id: ref.turn_id };
+    },
+
     /** Close the slide-over panel. */
     closeThreadPanel(): void {
       this.panelThreadId = null;
+      this.panelDelegate = null;
     },
 
     /** Open / close the thread-search overlay. */

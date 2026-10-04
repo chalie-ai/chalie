@@ -1,4 +1,5 @@
 import { api } from '@chalie/shared';
+import type { DelegateRef } from '@chalie/shared';
 
 /** A single attachment served from /api/files/preview/<path> (URL is backend-provided). */
 export interface ConversationAttachment {
@@ -22,6 +23,16 @@ export interface ConversationSegment {
    * which is the tool body the model reads.
    */
   created_at?: string | null;
+}
+
+/** One tool call's chip (see ConversationMessage.tool_calls). `delegate` names
+ *  the delegate turn the call spawned, once that turn wrote a transcript. */
+export interface ToolCallChip {
+  tool_name: string;
+  summary: string;
+  state: 'started' | 'done' | 'error';
+  ended_at: string | null;
+  delegate: DelegateRef | null;
 }
 
 /** One row inside a turn block (see ConversationTurnBlock.messages). */
@@ -51,7 +62,7 @@ export interface ConversationMessage {
    * The refresh path renders them as a collapsed group beneath the row,
    * mirroring how the live path collapses a superseded step.
    */
-  tool_calls?: { tool_name: string; summary: string; state: string; ended_at: string | null }[];
+  tool_calls?: ToolCallChip[];
   /**
    * Set (true) on every row PAST this turn's settle0 — the reply continuation.
    * The main spine drops these (it renders only through settle0); a turn that
@@ -122,6 +133,9 @@ export interface ConversationTurnBlock {
    * a bare tool-trace footer. Absent (undefined) on legacy/non-crashed blocks.
    */
   crashed?: boolean;
+  /** True when the turn's most recent execution was stopped — drives the
+   *  "stopped" note on a subagent's transcript panel. */
+  cancelled?: boolean;
   /** Row-span duration in ms (0 for a single-row turn). */
   duration_ms: number;
   messages: ConversationMessage[];
@@ -133,7 +147,18 @@ export interface ConversationTurnBlock {
    * fall back from.
    */
   type: string;
+  /** Null on a typed block — only a delegate read (DelegateTurnBlock) sets it. */
+  channel?: null;
 }
+
+/**
+ * A delegate (subagent) turn's block — the same shape, read by `channel`
+ * rather than `type`. A delegate has no ConfigType, so the block carries
+ * `type` null and echoes the channel it was read by. Its first `user` row is
+ * the task the caller handed over; an empty `messages` means the transcript
+ * has expired.
+ */
+export type DelegateTurnBlock = Omit<ConversationTurnBlock, 'type' | 'channel'> & { type: null; channel: string };
 
 interface ListingEnvelope<T> {
   success: true;
@@ -186,6 +211,24 @@ export const conversation = {
   thread(turnId: number, type?: string): Promise<ConversationTurnBlock> {
     const params = type ? `?type=${encodeURIComponent(type)}` : '';
     return api.get<SingleEnvelope<ConversationTurnBlock>>(`/api/threads/${turnId}${params}`).then((body) => body.result);
+  },
+
+  /**
+   * GET /api/threads/<turn_id>?channel= — one delegate turn's full block (the
+   * subagent panel's read + WS refetch). turn_id is unique only per channel,
+   * so the full `delegate:<name>` channel is always sent, and a block echoed
+   * back on any other channel rejects rather than reach a caller as this turn.
+   */
+  delegateThread(turnId: number, channel: string): Promise<DelegateTurnBlock> {
+    return api
+      .get<SingleEnvelope<DelegateTurnBlock>>(`/api/threads/${turnId}?channel=${encodeURIComponent(channel)}`)
+      .then((body) => {
+        const block = body.result;
+        if (block.channel !== channel) {
+          throw new Error(`delegate turn ${turnId} was read on ${channel} but came back on ${block.channel}`);
+        }
+        return block;
+      });
   },
 
   /**

@@ -11,11 +11,11 @@ A tool call anchors ONLY to the transcript input row that drove it
 builder can't express).
 
 WS privacy (§6.2): the emitted frame (:meth:`to_json`) exposes ONLY
-type/turn_id/id/tool_name/summary/created_at/ended_at/state. ``params`` and
-``result`` are the model-facing turn DATA and NEVER cross the wire. ``type`` and
-``turn_id`` are transient envelope fields the ``ToolCallService`` sets on the
-instance before broadcast; they are not columns, so :meth:`Model.to_dict` /
-:meth:`save` exclude them. :meth:`to_dict` (inherited, full-field) stays the
+type/turn_id/id/tool_name/summary/created_at/ended_at/state/delegate. ``params``
+and ``result`` are the model-facing turn DATA and NEVER cross the wire. ``type``,
+``turn_id`` and ``delegate`` are transient envelope fields the
+``ToolCallService`` sets on the instance before broadcast; they are not columns,
+so :meth:`Model.to_dict` / :meth:`save` exclude them. :meth:`to_dict` (inherited, full-field) stays the
 internal projection, distinct from this wire-safe whitelist.
 """
 
@@ -69,6 +69,10 @@ class ToolCall(Model):
     # to_dict.
     type: str
     turn_id: int
+    # The watchable child turn this call spawned (``{"channel", "turn_id"}``),
+    # or None — the frame's link from the pill to the delegate's transcript.
+    # None until the service resolves it: a call just opened has no child yet.
+    delegate: dict[str, object] | None = None
 
     def to_json(self) -> str:
         """The single WS tool frame (§6.2). Carries the row's identity + live
@@ -84,6 +88,7 @@ class ToolCall(Model):
                 "created_at": self.created_at,
                 "ended_at": self.ended_at,
                 "state": self.state,
+                "delegate": self.delegate,
             },
             default=self._json_default,
         )
@@ -176,14 +181,7 @@ class ToolCall(Model):
         ``?`` per id, since a first-run sweep's candidate set can exceed
         SQLite's bound-variable limit. Empty ``transcript_ids`` is a clean
         no-op — no query runs. Returns rows deleted."""
-        if not transcript_ids:
-            return 0
-        cursor = cls._bound_connection().execute(
-            f"DELETE FROM {cls.get_table()} "
-            "WHERE transcript_id IN (SELECT value FROM json_each(?))",
-            (json.dumps(transcript_ids),),
-        )
-        return cursor.rowcount or 0
+        return cls._delete_where_in_json("transcript_id", transcript_ids)
 
     @classmethod
     def decay(cls) -> int:

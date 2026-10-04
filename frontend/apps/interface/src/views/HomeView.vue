@@ -6,14 +6,13 @@ import {
   BaseCard,
   BaseField,
   getHost,
-  getToken,
   useTheme,
   useWebSocket,
 } from '@chalie/shared';
 
 const { theme, toggle } = useTheme();
 const { connected } = useWebSocket();
-const api = new ApiClient(getHost, getToken);
+const api = new ApiClient(getHost);
 const ready = ref<string>('checking…');
 const note = ref('');
 

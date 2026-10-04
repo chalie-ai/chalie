@@ -40,8 +40,9 @@ class ScheduledConfig(ProcessorConfig):
     BROADCASTS_STATE: ClassVar[bool] = True
     # The schedule thread is a rendered surface (its output is converted and
     # sanitized as HTML at persist time), so it carries the same HTML output
-    # contract as the user channel.
+    # contract and rich-media cards as the user channel.
     RENDERS_HTML: ClassVar[bool] = True
+    RENDERS_CARDS: ClassVar[bool] = True
 
     def __init__(self) -> None:
         super().__init__(

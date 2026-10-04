@@ -44,6 +44,7 @@ class WebBrowseConfig(ProcessorConfig):
     """policy_channel is inherited from the caller; the user-facing permission
     check happens at the outer ``web_browse`` tool."""
 
+    RENDERS_HTML: ClassVar[bool] = True
     uses_delegate_provider: ClassVar[bool] = True
 
     def __init__(self, policy_channel: "PolicyChannel") -> None:

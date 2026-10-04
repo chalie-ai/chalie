@@ -14,10 +14,29 @@ only touches its own table.
 
 from __future__ import annotations
 
-import json
+from datetime import datetime, timedelta, timezone
 from typing import ClassVar, Self, cast
 
+from configs.enums.channels import WATCHABLE_DELEGATE_CHANNELS
 from models.model import Model
+
+# How long after a call's ``ended_at`` its child's input row may still land. A
+# finished call stamps ``ended_at`` after its child turn opened, but the boot
+# backfill closes a call a crash left open at its own ``created_at`` — while the
+# child row lands after the call opened, by the delegate's pre-flight plus however
+# long its ``BEGIN IMMEDIATE`` waited on the write lock.
+_CHILD_ROW_LAG = timedelta(minutes=1)
+
+
+def _row_time(stamp: str, shift: timedelta = timedelta()) -> str:
+    """A ``tool_calls`` timestamp moved by ``shift``, in the shape SQLite's
+    ``datetime('now')`` gives ``transcript.created_at`` — UTC, truncated to whole
+    seconds — so it compares as text against that column. A stamp with no
+    offset is the schema default's, already UTC; an unparseable one raises."""
+    at = datetime.fromisoformat(stamp)
+    if at.tzinfo is not None:
+        at = at.astimezone(timezone.utc)
+    return (at + shift).strftime("%Y-%m-%d %H:%M:%S")
 
 
 class Transcript(Model):
@@ -263,6 +282,37 @@ class Transcript(Model):
         ]
 
     @classmethod
+    def delegate_turns(
+        cls, calls: dict[int, tuple[str, str | None]],
+    ) -> dict[int, dict[str, object]]:
+        """The watchable delegate turn each call spawned, keyed by its
+        ``tool_calls`` id: ``{"channel", "turn_id"}`` read off the child's input
+        row, whose ``tool_call_id`` holds the caller's call id as text.
+
+        ``calls`` maps each id to its ``(created_at, ended_at)``. A child row is
+        written after its call opened and before it ended, so the read is bounded
+        to the batch's span — earliest open to latest end, open-ended while any
+        call still runs — and walks the ``(channel, created_at)`` index rather
+        than every row the delegate channels hold: ``tool_call_id`` is unindexed.
+        A call with no such row (not a delegate, not yet started, or purged by
+        retention) is simply absent. Empty input short-circuits to ``{}``."""
+        if not calls:
+            return {}
+        channels = sorted(WATCHABLE_DELEGATE_CHANNELS)
+        sql = (
+            f"SELECT tool_call_id, channel, turn_id FROM transcript "
+            f"WHERE channel IN ({cls._placeholders(len(channels))}) "
+            f"AND tool_call_id IN ({cls._placeholders(len(calls))}) AND created_at >= ?"
+        )
+        params = [*channels, *(str(i) for i in calls), min(_row_time(c) for c, _ in calls.values())]
+        ended = [e for _, e in calls.values() if e is not None]
+        if len(ended) == len(calls):
+            sql += " AND created_at <= ?"
+            params.append(max(_row_time(e, _CHILD_ROW_LAG) for e in ended))
+        rows = cls._bound_connection().execute(sql, params).fetchall()
+        return {int(r[0]): {"channel": r[1], "turn_id": r[2]} for r in rows}
+
+    @classmethod
     def turn_scope_ids(cls, ids: list[int]) -> list[int]:
         """Every transcript id that shares a turn with any of the given ids.
 
@@ -389,13 +439,7 @@ class Transcript(Model):
         together with the ``tool_calls`` pre-clear in one
         ``Database.transaction()`` (I6 — ``Database`` owns multi-write
         transactions). Returns rows deleted."""
-        if not ids:
-            return 0
-        cursor = cls._bound_connection().execute(
-            f"DELETE FROM {cls.get_table()} WHERE id IN (SELECT value FROM json_each(?))",
-            (json.dumps(ids),),
-        )
-        return cursor.rowcount or 0
+        return cls._delete_where_in_json("id", ids)
 
     # ── SQL fragment builders (shared, no duplication) ───────────────────────
 

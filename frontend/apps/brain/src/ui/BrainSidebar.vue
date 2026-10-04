@@ -16,7 +16,6 @@ import {
   Server,
   Settings,
   ShieldCheck,
-  Smartphone,
   Sun,
 } from '@lucide/vue';
 import { useTheme } from '@chalie/shared';
@@ -78,10 +77,9 @@ const NAV: NavItem[] = [
   { id: 'mcp', label: 'MCP', icon: Server, group: 'system' },
   { id: 'import-export', label: 'Import / Export', icon: DatabaseBackup, group: 'system' },
   { id: 'system', label: 'System', icon: Network, group: 'system' },
-  { id: 'link-device', label: 'Link device', icon: Smartphone, group: 'system' },
 ];
 
-// Both nav groups render from one template; link-device is an in-development feature hidden unless the backend reports it on.
+// Both nav groups render from one template.
 const NAV_GROUPS: { title: string; group: NavItem['group'] }[] = [
   { title: 'Cognition', group: 'cognition' },
   { title: 'System', group: 'system' },
@@ -89,7 +87,7 @@ const NAV_GROUPS: { title: string; group: NavItem['group'] }[] = [
 const navGroups = computed(() =>
   NAV_GROUPS.map((g) => ({
     ...g,
-    items: NAV.filter((n) => n.group === g.group && (n.id !== 'link-device' || shell.internalDev)),
+    items: NAV.filter((n) => n.group === g.group),
   })),
 );
 

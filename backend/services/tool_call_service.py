@@ -17,8 +17,10 @@ own. Opening or recording a call un-settles the owning transcript row (§6.9)
 unless the tool's ability opts out via ``counts_as_settle=False`` — a settling
 tool demotes the turn's settle0 back to in-progress. Every write
 emits the row's WS-safe projection (``ToolCall.to_json``, §6.2 — params/result
-never cross the wire) gated by ``self.mp.config.BROADCASTS_STATE`` and silenced
-outright for the turn-zero memory seed (§6.10).
+never cross the wire) gated by ``self.mp.push_websocket`` and silenced
+outright for the turn-zero memory seed (§6.10); a terminal one is followed by
+the turn's ``updated`` refetch poke. A delegate tool's frame also names the
+child turn it spawned, read off that turn's input row.
 """
 
 from __future__ import annotations
@@ -29,6 +31,8 @@ from typing import TYPE_CHECKING, cast
 
 from abilities._registry import AbilityRegistry
 from models.tool_call import ToolCall
+from models.transcript import Transcript
+from models.turn_signal import TurnSignal
 from services.time_utils import utc_now
 
 if TYPE_CHECKING:
@@ -102,6 +106,30 @@ class ToolCallService:
             logger.warning(
                 "[ToolCallService.finish] write failed (non-fatal): call=%s: %s", call_id, exc,
             )
+            return
+        call.delegate = self._spawned(call)
+        self._emit(call)
+
+    def reemit(self, call_id: "int | None") -> None:
+        """Emit the frame of a call :meth:`start` opened again, unchanged in
+        state — a delegate announcing its child turn once that turn's input row
+        exists, so a live pill can be followed before the call finishes. No-op
+        when ``call_id`` is None (the call was never recorded — no anchor) or no
+        child turn was found (nothing new to announce). A vanished row or a
+        failed read logs and is non-fatal: the delegate's answer must not be
+        lost to its announcement."""
+        if call_id is None:
+            return
+        try:
+            call = ToolCall.filter("id", call_id).first()
+        except Exception as exc:
+            logger.warning("[ToolCallService.reemit] read failed (non-fatal): call=%s: %s", call_id, exc)
+            return
+        if call is None:
+            logger.warning("[ToolCallService.reemit] row vanished while its delegate ran: call=%s", call_id)
+            return
+        call.delegate = self._spawned(call)
+        if call.delegate is None:
             return
         self._emit(call)
 
@@ -196,16 +224,40 @@ class ToolCallService:
         except KeyError:
             return True
 
+    def _spawned(self, call: ToolCall) -> "dict[str, object] | None":
+        """The child turn ``call`` spawned, read off that turn's input row. Only
+        a watchable delegate's call can have one, so no other call pays for the
+        lookup. A failed lookup logs and yields None: the frame still goes out,
+        only without its link to the child."""
+        if not AbilityRegistry.is_watchable_delegate(call.tool_name):
+            return None
+        call_id = cast("int", call.id)
+        try:
+            return Transcript.delegate_turns({call_id: (call.created_at, call.ended_at)}).get(call_id)
+        except Exception as exc:
+            logger.warning("[ToolCallService._spawned] child-turn lookup failed (non-fatal): call=%s: %s", call_id, exc)
+            return None
+
     def _emit(self, call: ToolCall) -> None:
         """The sole tool-frame emitter. Silenced outright while the turn-zero
         seed phase runs (§6.10, ``mp.seeding_turn_zero``) — the seed must never
         surface a live pill; the broadcast-state gate itself lives in
         ``mp.push_websocket``. Sets the transient envelope (``type``/``turn_id``)
-        on the row before pushing; ``Websocket`` serializes it via
-        ``ToolCall.to_json`` (§6.2)."""
+        on the row before pushing; ``delegate`` is set by the callers that may
+        follow a child turn's opening (:meth:`reemit`, :meth:`finish`).
+        ``Websocket`` serializes it via ``ToolCall.to_json`` (§6.2).
+
+        A terminal frame is followed by ``updated``: the turn's block carries
+        every call from the moment it starts, and only ``updated`` makes a
+        surface refetch it — without the poke a call that was still running at
+        the last refetch keeps its in-flight state there until the next reply
+        row lands. A ``started`` frame sends none: a running call is the live
+        pill's to show."""
         if self.mp.seeding_turn_zero:
             return
         config_type = self.mp.config.type()
         call.type = config_type.value if config_type is not None else ""
         call.turn_id = self.mp.turn_id
         self.mp.push_websocket(call)
+        if call.state != ToolCall.STARTED:
+            self.mp.push_websocket(TurnSignal.updated(self.mp))
