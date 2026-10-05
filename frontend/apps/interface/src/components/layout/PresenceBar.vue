@@ -3,13 +3,13 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { Brain, CalendarClock, Clock, Moon, Search, Sun } from '@lucide/vue';
 import { useSessionStore } from '../../stores/session';
 import { useTasksStore } from '../../stores/tasks';
-import { ConfigType, webPlatformAdapter, useTheme } from '@chalie/shared';
+import { ChalieMark, ConfigType, webPlatformAdapter, useTheme } from '@chalie/shared';
 import { emit } from '../../composables/useEventBus';
 import { useDockBusy } from '../../composables/useDockBusy';
 import { useThreadActivity } from '../../utils/threadActivity';
 import { hasDoneScheduled } from '../../utils/turnDom';
 
-// D16 — scheduler-dock activity cue: aqua icon when any scheduled turn is
+// Scheduler-dock activity cue: pink icon when any scheduled turn is
 // "done" (settled unseen). Mirrors SchedulerDock.vue's bumpActivity pattern.
 const hasSchedulerActivity = ref(hasDoneScheduled());
 
@@ -18,8 +18,8 @@ function onTurnStateChanged(): void {
 }
 const session = useSessionStore();
 
-// D3: replaces the retired `session.isSending` store getter — the logo
-// breathes while the main spine (no stable turn_id) has anything working.
+// Replaces the retired `session.isSending` store getter — the mark's dot
+// pulses while the main spine (no stable turn_id) has anything working.
 const isSending = useDockBusy(() => null, () => ConfigType.USER);
 
 const tasks = useTasksStore();
@@ -50,12 +50,7 @@ onBeforeUnmount(() => {
 
 <template>
   <header class="presence-bar">
-    <img
-      class="presence-logo"
-      :class="{ 'presence-logo--active': isSending }"
-      src="/icons/icon.png"
-      alt="Chalie"
-    />
+    <ChalieMark :size="28" :working="isSending" />
     <div class="presence-bar__right">
       <button
         id="searchBtn"
@@ -111,32 +106,7 @@ onBeforeUnmount(() => {
   justify-content: center;
 }
 
-// Chalie logo — the bar's left mark. Static at rest; a slow, slight opacity
-// breathe (0.7 → 1) while a turn is in flight, in sync with the in-feed
-// "thinking…" anchor. The gradient mark reads on both theme scrims (Rule 7).
-.presence-logo {
-  height: 30px;
-  width: auto;
-  display: block;
-  user-select: none;
-  -webkit-user-drag: none;
-}
-
-.presence-logo--active {
-  animation: presence-logo-breathe 2.5s ease-in-out infinite;
-}
-
-@keyframes presence-logo-breathe {
-  0%,
-  100% {
-    opacity: 0.7;
-  }
-  50% {
-    opacity: 1;
-  }
-}
-
-// D16 — aqua cue on the scheduler dock button when any scheduled turn is
+// Pink cue on the scheduler dock button when any scheduled turn is
 // "done" (settled unseen). The CalendarClock SVG inherits this via
 // currentColor, so setting it on the button cascades to the icon.
 .has-activity {

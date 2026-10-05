@@ -3,33 +3,14 @@
 // in each SFC's scoped styles. Depends on @chalie/shared/styles/main.scss (tokens).
 
 :root {
-  --sand:              var(--magenta);      // alias for accent-secondary
-  --dusk-blue:         var(--cyan);         // alias for accent-tertiary
-  --amber:             #B07CFF;             // soft violet used on responding state
-
-  --bg-surface-user:   var(--bg-user);
-  --bg-surface-chalie: var(--bg-chalie);
-
   --font-size-sm:  0.8125rem;
-  --font-size-lg:  1.125rem;
-  --font-size-xl:  1.5rem;
-
-  --radius-sm:   8px;
-  --radius-md:   16px;
-  --radius-lg:   24px;
-  --radius-full: 9999px;
 
   // Layout — the input box and its trays (attachment preview, controls) all
   // share this width so they line up as one stacked unit above the dock.
   --dock-width:  min(80%, 1200px);
-
-  // Transitions
-  --duration-fast:   150ms;
-  --duration-normal: 300ms;
-  --duration-slow:   500ms;
 }
 
-// Base additions (body bg/color/font handled by _tokens.scss + _reset.scss).
+// Base additions (body bg/color/font come from the shared afterhours.css foundation).
 html {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -46,11 +27,6 @@ body {
   text-rendering: optimizeLegibility;
 }
 
-:focus-visible {
-  outline: 1.5px solid rgba(var(--bs-primary-rgb), 0.45);
-  outline-offset: 2px;
-}
-
 // Voice-button visibility is driven by a reactive flag on the input dock, not a
 // `body.voice-loading` class, so the legacy body-class CSS rule is not ported.
 
@@ -64,11 +40,11 @@ body {
   align-items: center;
   gap: var(--space-sm);
   padding: var(--space-sm) var(--space-md);
-  background: rgba(var(--bs-danger-rgb), 0.15);
-  border: 1px solid rgba(var(--bs-danger-rgb), 0.3);
+  background: var(--surface);
+  border: 1px solid var(--deny);
   font-size: var(--font-size-sm);
   color: var(--deny-text);
-  animation: fadeSlideDown var(--dur-2) var(--ease-out);
+  animation: rise var(--dur-2) var(--ease-out);
 }
 
 .connection-banner__dot {
@@ -76,17 +52,7 @@ body {
   height: 6px;
   border-radius: 50%;
   background: var(--deny);
-  animation: blink 1.5s infinite;
-}
-
-@keyframes fadeSlideDown {
-  from { opacity: 0; transform: translateX(-50%) translateY(-8px); }
-  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
-}
-
-@keyframes blink {
-  0%, 100% { opacity: 1; }
-  50%       { opacity: 0.3; }
+  animation: working 1.4s ease-in-out infinite;
 }
 
 .capability-alert-banner {
@@ -99,17 +65,17 @@ body {
   align-items: center;
   gap: var(--space-sm);
   padding: var(--space-sm) var(--space-md);
-  background: rgba(var(--bs-warning-rgb), 0.15);
-  border: 1px solid rgba(var(--bs-warning-rgb), 0.35);
+  background: var(--surface);
+  border: 1px solid var(--ask);
   font-size: var(--font-size-sm);
   color: var(--ask-text);
-  animation: fadeSlideDown var(--dur-2) var(--ease-out);
+  animation: rise var(--dur-2) var(--ease-out);
 }
 
 .banner-dismiss {
   background: none;
   border: none;
-  color: color-mix(in srgb, var(--ask-text) 55%, transparent);
+  color: var(--muted);
   cursor: pointer;
   padding: 0 2px;
   font-size: 1rem;
@@ -133,11 +99,11 @@ body {
   align-items: center;
   gap: var(--space-sm);
   padding: var(--space-sm) var(--space-md);
-  background: rgba(var(--bs-info-rgb), 0.08);
-  border: 1px solid rgba(var(--bs-info-rgb), 0.25);
+  background: var(--surface);
+  border: 1px solid var(--pink);
   font-size: var(--font-size-sm);
   color: var(--pink-text);
-  animation: fadeSlideDown var(--dur-2) var(--ease-out);
+  animation: rise var(--dur-2) var(--ease-out);
 }
 
 .update-banner__icon {
@@ -156,17 +122,18 @@ body {
 
 .update-banner__action {
   background: var(--pink);
-  color: #06080e;
+  color: var(--on-pink);
   border: none;
   padding: 2px 12px;
   font-size: var(--font-size-sm);
   font-weight: 500;
   cursor: pointer;
-  transition: opacity var(--dur-1) var(--ease-out);
+  transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
 }
 
 .update-banner__action:hover {
-  opacity: 0.85;
+  background: var(--text);
+  color: var(--bg);
 }
 
 .update-banner__dismiss {
@@ -188,7 +155,7 @@ body {
 // teleports cards inside and lays out the inner wrapper (.perm-stack-inner).
 .permission-stack {
   position: fixed;
-  bottom: calc(var(--input-dock-height, 80px) + var(--space-md));
+  bottom: calc(var(--dock-height) + var(--space-md));
   left: 50%;
   transform: translateX(-50%);
   width: min(480px, calc(100vw - var(--space-lg) * 2));
@@ -224,9 +191,9 @@ body {
   justify-content: space-between;
   height: 56px;
   padding: 0 var(--space-lg);
-  background: var(--scrim-top);
-  border-bottom: 1px solid color-mix(in oklab, var(--pink-text) 8%, transparent);
-  transition: background 420ms ease, border-color 420ms ease;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+  transition: background var(--dur-3) var(--ease-out), border-color var(--dur-3) var(--ease-out);
 }
 
 .presence-bar__right {
@@ -252,7 +219,6 @@ body {
   display: flex;
   flex-direction: column;
   min-height: 100vh;
-  mask-image: linear-gradient(to bottom, transparent, black 32px, black calc(100% - 32px), transparent);
 }
 
 // Groups a user message with the assistant rows/act groups it produced; inner
@@ -270,11 +236,10 @@ body {
   right: 0;
   z-index: 100;
   padding: var(--space-md) var(--space-lg);
-  // Solid, near-opaque scrim + blur — same fixed-chrome treatment as
-  // .presence-bar. A gradient fading to transparent let the feed bleed through
-  // the composer; this reads as a clean ground on both themes (tokens flip).
-  background: var(--scrim-dock);
-  transition: background 420ms ease;
+  // Flat ground on the app background — same fixed-chrome treatment as
+  // .presence-bar (token-driven, so it flips with the theme).
+  background: var(--bg);
+  transition: background var(--dur-3) var(--ease-out);
   border-top: 1px solid var(--control);
 }
 
@@ -305,8 +270,8 @@ body {
   gap: var(--space-sm);
   padding: var(--space-md) var(--space-lg);
   color: var(--deny-text); // cascades to the icon (currentColor), text, and close
-  background: color-mix(in oklab, var(--deny) 12%, var(--surface-2));
-  border: 1px solid color-mix(in oklab, var(--deny-text) 35%, transparent);
+  background: var(--surface-2);
+  border: 1px solid var(--deny);
 }
 
 .dock-error__icon { flex: none; }
@@ -328,13 +293,11 @@ body {
   background: transparent;
   color: inherit;
   cursor: pointer;
-  opacity: 0.75;
-  transition: opacity 160ms ease, background 160ms ease;
+  transition: background var(--dur-1) var(--ease-out);
 }
 
 .dock-error__close:hover {
-  opacity: 1;
-  background: color-mix(in oklab, var(--deny) 16%, transparent);
+  background: var(--cell);
 }
 
 .input-dock__inner {
