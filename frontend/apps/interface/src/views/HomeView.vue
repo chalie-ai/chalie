@@ -37,7 +37,7 @@ onMounted(async () => {
       <BaseField v-model="note" data-testid="note" label="Scratch note" placeholder="type…" />
       <div class="action-row">
         <BaseButton data-testid="toggle-theme" @click="toggle">Toggle theme</BaseButton>
-        <BaseButton variant="ghost">Ghost</BaseButton>
+        <BaseButton variant="secondary">Secondary</BaseButton>
       </div>
     </BaseCard>
   </main>

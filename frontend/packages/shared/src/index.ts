@@ -29,4 +29,4 @@ export type { AsyncResource, AsyncResourceOptions } from './composables/useAsync
 export { default as BaseButton } from './ui/BaseButton.vue';
 export { default as BaseCard } from './ui/BaseCard.vue';
 export { default as BaseField } from './ui/BaseField.vue';
-export { default as BaseTooltip } from './ui/BaseTooltip.vue';
+export { default as ChalieMark } from './ui/ChalieMark.vue';
