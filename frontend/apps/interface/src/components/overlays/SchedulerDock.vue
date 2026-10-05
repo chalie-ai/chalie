@@ -123,7 +123,7 @@ function cadence(turn: SchedulerTurn): string {
 
 .sched-dock__empty {
   font-size: 13px;
-  color: var(--text-secondary);
+  color: var(--muted);
   padding: 10px 16px;
   font-style: italic;
   margin: 0;
@@ -144,15 +144,15 @@ function cadence(turn: SchedulerTurn): string {
   cursor: pointer;
 
   &:hover {
-    background: var(--surface-hover, rgba(128, 128, 128, 0.06));
+    background: var(--surface-2, rgba(128, 128, 128, 0.06));
   }
 }
 
 .sched-dock__row--working {
-  border-left-color: var(--status-main);
+  border-left-color: var(--pink-text);
 }
 .sched-dock__row--done {
-  border-left-color: var(--cyan);
+  border-left-color: var(--pink-text);
 }
 
 .sched-dock__row-top {
@@ -166,7 +166,7 @@ function cadence(turn: SchedulerTurn): string {
   min-width: 0;
   font-size: 13px;
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -174,7 +174,7 @@ function cadence(turn: SchedulerTurn): string {
 
 .sched-dock__row-sub {
   font-size: 11.5px;
-  color: var(--text-secondary);
+  color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

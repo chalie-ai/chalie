@@ -23,7 +23,6 @@
 
   background: var(--card-bg);
   border: 1px solid var(--card-border);
-  border-radius: var(--card-radius);
   padding: var(--card-padding);
   max-width: 480px;
   margin: 6px 0;
@@ -32,13 +31,13 @@
 
 .rich-card__divider {
   height: 1px;
-  background: var(--border);
+  background: var(--line);
   margin: 14px 0;
 }
 
 .rich-card__synthesis {
   font-size: 0.8125rem;
-  color: var(--text-secondary);
+  color: var(--muted);
   font-style: italic;
   line-height: 1.5;
   margin-top: 2px;

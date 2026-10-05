@@ -89,14 +89,13 @@ function close(): void {
   max-height: 640px;
   object-fit: contain;
   cursor: pointer;
-  border-radius: var(--radius-md);
   display: block;
 }
 
 .image-preview-card__caption {
   margin: 10px 0 0;
   padding: 0 16px;
-  color: var(--text-secondary);
+  color: var(--muted);
   font-size: 0.8125rem;
   line-height: 1.4;
 }

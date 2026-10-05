@@ -139,12 +139,12 @@ async function handleAccountSubmit(): Promise<void> {
   background:
     radial-gradient(
       600px circle at 30% 20%,
-      color-mix(in srgb, var(--accent-primary) 6%, transparent),
+      color-mix(in srgb, var(--pink) 6%, transparent),
       transparent 60%
     ),
     radial-gradient(
       500px circle at 70% 75%,
-      color-mix(in srgb, var(--accent-tertiary) 4%, transparent),
+      color-mix(in srgb, var(--pink) 4%, transparent),
       transparent 60%
     );
   animation: ambient-breathe 20s ease-in-out infinite;
@@ -173,9 +173,8 @@ async function handleAccountSubmit(): Promise<void> {
   width: 100%;
   max-width: 500px;
   padding: 40px;
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: var(--bs-border-radius-lg);
+  background: var(--surface);
+  border: 1px solid var(--line);
 }
 
 .ob-card-header {
@@ -189,22 +188,21 @@ async function handleAccountSubmit(): Promise<void> {
   }
 
   p {
-    color: var(--text-secondary);
+    color: var(--muted);
     font-size: 0.85rem;
     margin-bottom: 0;
   }
 }
 
 .warning-box {
-  border-radius: 6px;
   padding: 16px;
   margin-bottom: 24px;
-  background: color-mix(in srgb, var(--error) 8%, transparent);
-  border: 1px solid color-mix(in srgb, var(--error) 35%, transparent);
-  border-left: 3px solid var(--error);
+  background: color-mix(in srgb, var(--deny) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--deny-text) 35%, transparent);
+  border-left: 3px solid var(--deny-text);
 
   h3 {
-    color: var(--error);
+    color: var(--deny-text);
     font-size: 13px;
     margin-bottom: 8px;
   }
@@ -227,7 +225,7 @@ async function handleAccountSubmit(): Promise<void> {
   label {
     display: block;
     font-size: 0.8rem;
-    color: var(--text-secondary);
+    color: var(--muted);
     margin-bottom: 0.35rem;
   }
 
@@ -237,16 +235,14 @@ async function handleAccountSubmit(): Promise<void> {
     padding: 0.6rem 0.75rem;
     font-size: 0.9rem;
     color: var(--text);
-    background: var(--bg-input);
-    border: 1px solid var(--border);
-    border-radius: var(--bs-border-radius);
+    background: var(--surface-2);
+    border: 1px solid var(--line);
     outline: none;
     transition: border-color 0.2s;
     box-sizing: border-box;
 
     &:focus {
-      border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
-      box-shadow: 0 0 8px color-mix(in srgb, var(--accent-primary) 6%, transparent);
+      border-color: color-mix(in srgb, var(--pink-text) 35%, transparent);
     }
 
     &:disabled {
@@ -267,11 +263,10 @@ async function handleAccountSubmit(): Promise<void> {
   padding: 0.65rem;
   font-size: 0.9rem;
   font-weight: 500;
-  border-radius: var(--bs-border-radius);
   cursor: pointer;
   transition: opacity 0.2s;
   color: #fff;
-  background: var(--accent-primary);
+  background: var(--pink);
   border: none;
 
   &:hover:not(:disabled) {
@@ -296,24 +291,22 @@ async function handleAccountSubmit(): Promise<void> {
 }
 
 .toast {
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  background: var(--surface);
+  border: 1px solid var(--line);
   padding: 12px 16px;
   font-size: 13px;
   font-weight: 500;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
   pointer-events: auto;
   animation: slideIn 0.3s ease;
 
   &.toast-success {
-    border-left: 3px solid var(--success);
+    border-left: 3px solid var(--allow-text);
   }
   &.toast-error {
-    border-left: 3px solid var(--error);
+    border-left: 3px solid var(--deny-text);
   }
   &.toast-info {
-    border-left: 3px solid var(--accent-primary);
+    border-left: 3px solid var(--pink-text);
   }
 }
 

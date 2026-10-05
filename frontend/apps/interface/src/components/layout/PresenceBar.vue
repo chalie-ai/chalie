@@ -140,6 +140,6 @@ onBeforeUnmount(() => {
 // "done" (settled unseen). The CalendarClock SVG inherits this via
 // currentColor, so setting it on the button cascades to the icon.
 .has-activity {
-  color: var(--cyan);
+  color: var(--pink-text);
 }
 </style>

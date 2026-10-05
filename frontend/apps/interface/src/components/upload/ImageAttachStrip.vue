@@ -120,14 +120,11 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
   gap: var(--space-xs);
   padding: var(--space-sm);
-  background: var(--bg-surface-2);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  backdrop-filter: blur(20px) saturate(120%);
-  -webkit-backdrop-filter: blur(20px) saturate(120%);
+  background: var(--surface-2);
+  border: 1px solid var(--control);
 
   &--drag {
-    outline: 2px dashed var(--accent);
+    outline: 2px dashed var(--pink-text);
     outline-offset: -2px;
   }
 
@@ -138,10 +135,9 @@ onBeforeUnmount(() => {
     justify-content: center;
     width: 56px;
     height: 56px;
-    border-radius: var(--radius-sm);
     overflow: hidden;
-    background: var(--surface-raised, var(--surface, #222));
-    border: 1px solid var(--border);
+    background: var(--surface, var(--surface, #222));
+    border: 1px solid var(--line);
     flex-shrink: 0;
 
     img {
@@ -160,7 +156,7 @@ onBeforeUnmount(() => {
       // A doc thumb shows its frame (unlike image thumbs), so it needs a real
       // theme-aware token: --surface-raised/--surface don't exist here and fell
       // back to #222 — illegible against the light-mode filename text.
-      background: var(--bg-surface-2);
+      background: var(--surface-2);
     }
   }
 
@@ -171,7 +167,7 @@ onBeforeUnmount(() => {
 
   &__doc-name {
     font-size: 10px;
-    color: var(--text-secondary);
+    color: var(--muted);
     text-align: center;
     word-break: break-all;
     white-space: nowrap;
@@ -195,7 +191,7 @@ onBeforeUnmount(() => {
     font-size: 12px;
     line-height: 1;
     cursor: pointer;
-    background: var(--surface-overlay, rgba(0 0 0 / 0.6));
+    background: var(--surface, rgba(0 0 0 / 0.6));
     color: var(--text);
     opacity: 0;
     transition: opacity 0.15s;

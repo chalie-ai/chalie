@@ -171,9 +171,9 @@ const listContacts = computed<Contact[]>(() => {
   width: 56px;
   height: 56px;
   border-radius: 50%;
-  background: color-mix(in oklab, var(--violet) 18%, var(--bg-2));
-  border: 1px solid color-mix(in oklab, var(--violet) 35%, transparent);
-  color: var(--violet);
+  background: color-mix(in oklab, var(--pink) 18%, var(--surface));
+  border: 1px solid color-mix(in oklab, var(--pink-text) 35%, transparent);
+  color: var(--pink-text);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -207,12 +207,12 @@ const listContacts = computed<Contact[]>(() => {
   font-weight: 600;
   letter-spacing: -0.01em;
   margin: 0 0 8px;
-  color: var(--text-primary);
+  color: var(--text);
 }
 
 .ct__subtitle {
   font-size: 0.78rem;
-  color: var(--text-tertiary);
+  color: var(--muted);
   margin: -4px 0 8px;
 }
 
@@ -227,23 +227,22 @@ const listContacts = computed<Contact[]>(() => {
   align-items: center;
   gap: 6px;
   padding: 4px 10px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: var(--bg-input);
+  border: 1px solid var(--line);
+  background: var(--surface-2);
   font-family: var(--font-mono);
   font-size: 0.74rem;
-  color: var(--text-secondary);
+  color: var(--muted);
   text-decoration: none;
   letter-spacing: 0.02em;
   transition: all 160ms ease;
 
   &:hover {
-    border-color: var(--border-strong);
-    color: var(--text-primary);
+    border-color: var(--control);
+    color: var(--text);
   }
 
   svg {
-    color: var(--text-tertiary);
+    color: var(--muted);
     flex-shrink: 0;
   }
 }
@@ -259,7 +258,7 @@ const listContacts = computed<Contact[]>(() => {
   align-items: center;
   gap: 12px;
   padding: 8px 0;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--line);
 
   &:last-child {
     border-bottom: none;
@@ -274,6 +273,6 @@ const listContacts = computed<Contact[]>(() => {
   white-space: nowrap;
   font-size: 0.88rem;
   font-weight: 500;
-  color: var(--text-primary);
+  color: var(--text);
 }
 </style>

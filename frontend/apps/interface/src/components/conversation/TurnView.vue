@@ -333,6 +333,6 @@ function onOpenThread(): void {
   margin: 0;
   font-size: 13px;
   font-style: italic;
-  color: var(--text-secondary);
+  color: var(--muted);
 }
 </style>

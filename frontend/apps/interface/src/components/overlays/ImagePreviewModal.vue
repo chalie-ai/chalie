@@ -88,15 +88,11 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKey));
   justify-content: center;
   padding: var(--space-xl);
   background: rgba(0, 0, 0, 0.82);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
   animation: imgModalFade 160ms ease;
 }
 
 .img-modal__img {
   object-fit: contain;
-  border-radius: var(--radius-md);
-  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6);
 }
 
 .img-modal__close {

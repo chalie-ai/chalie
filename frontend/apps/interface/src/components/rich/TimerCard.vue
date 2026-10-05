@@ -341,7 +341,6 @@ onBeforeUnmount((): void => {
   gap: 16px;
   align-items: center;
   border: none;
-  box-shadow: none;
 }
 
 .timer-card__ring {
@@ -358,13 +357,13 @@ onBeforeUnmount((): void => {
 
 .timer-card__ring-track {
   fill: none;
-  stroke: var(--border);
+  stroke: var(--line);
   stroke-width: 3;
 }
 
 .timer-card__ring-fill {
   fill: none;
-  stroke: var(--violet);
+  stroke: var(--pink-text);
   stroke-width: 3;
   stroke-linecap: round;
   transition: stroke-dashoffset 0.4s linear;
@@ -403,7 +402,7 @@ onBeforeUnmount((): void => {
   font-weight: 500;
   letter-spacing: -0.005em;
   margin: 0 0 2px;
-  color: var(--text-primary);
+  color: var(--text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -412,11 +411,11 @@ onBeforeUnmount((): void => {
 .timer-card__time {
   font-family: var(--font-mono);
   font-size: 0.78rem;
-  color: var(--text-tertiary);
+  color: var(--muted);
   letter-spacing: 0.04em;
 
   :deep(b) {
-    color: var(--text-secondary);
+    color: var(--muted);
     font-weight: 500;
   }
 }
@@ -430,9 +429,9 @@ onBeforeUnmount((): void => {
   width: 32px;
   height: 32px;
   border-radius: 50%;
-  border: 1px solid var(--border);
+  border: 1px solid var(--line);
   background: transparent;
-  color: var(--text-secondary);
+  color: var(--muted);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -443,8 +442,8 @@ onBeforeUnmount((): void => {
   padding: 0;
 
   &:hover:not(:disabled) {
-    color: var(--text-primary);
-    border-color: color-mix(in oklab, var(--violet) 50%, var(--border));
+    color: var(--text);
+    border-color: color-mix(in oklab, var(--pink-text) 50%, var(--line));
   }
 
   &:disabled {
@@ -465,7 +464,7 @@ onBeforeUnmount((): void => {
 
 .timer-card--error {
   display: block;
-  color: var(--text-tertiary);
+  color: var(--muted);
   font-style: italic;
 }
 </style>

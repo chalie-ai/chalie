@@ -115,22 +115,13 @@ const title = computed(() => props.req.summary || actionLabel(props.req.action_i
   // the Allow/Deny clicks fall through to the turn underneath. The transition
   // states below re-disable it mid enter/leave, which is intentional.
   pointer-events: auto;
-  background: color-mix(in oklab, var(--surface, var(--bg-chalie)) 95%, transparent);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  box-shadow:
-    0 8px 32px rgba(0, 0, 0, 0.35),
-    0 2px 8px rgba(0, 0, 0, 0.2);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+  background: color-mix(in oklab, var(--surface, var(--surface)) 95%, transparent);
+  border: 1px solid var(--line);
   overflow: hidden;
 
   // Light theme: soften the lift so it reads as depth, not a dark halo.
   // Plain `[data-theme] &` — :global() drops the `&` and leaks this onto <html>.
   [data-theme='light'] & {
-    box-shadow:
-      0 2px 8px rgba(0, 0, 0, 0.08),
-      0 8px 32px rgba(0, 0, 0, 0.12);
   }
 }
 
@@ -147,8 +138,8 @@ const title = computed(() => props.req.summary || actionLabel(props.req.action_i
 .perm-card-enter-active,
 .perm-card-leave-active {
   transition:
-    transform var(--duration-normal) ease,
-    opacity var(--duration-normal) ease;
+    transform var(--dur-2) ease,
+    opacity var(--dur-2) ease;
   pointer-events: none;
 }
 
@@ -170,7 +161,7 @@ const title = computed(() => props.req.summary || actionLabel(props.req.action_i
   gap: var(--space-sm);
   margin-bottom: var(--space-xs);
   font-size: var(--font-size-xs);
-  color: var(--text-secondary);
+  color: var(--muted);
 }
 
 .perm-card__lane-text {
@@ -185,14 +176,13 @@ const title = computed(() => props.req.summary || actionLabel(props.req.action_i
   font-size: var(--font-size-xs);
   font-weight: 500;
   line-height: 1.4;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--line);
   background: transparent;
-  color: var(--accent-primary);
+  color: var(--pink-text);
   cursor: pointer;
 
   &:hover {
-    background: color-mix(in oklab, var(--accent-primary) 10%, transparent);
+    background: color-mix(in oklab, var(--pink) 10%, transparent);
   }
 }
 
@@ -204,7 +194,7 @@ const title = computed(() => props.req.summary || actionLabel(props.req.action_i
 }
 
 .perm-card__icon {
-  color: var(--accent-primary);
+  color: var(--pink-text);
   flex-shrink: 0;
   line-height: 1;
 }
@@ -212,13 +202,13 @@ const title = computed(() => props.req.summary || actionLabel(props.req.action_i
 .perm-card__title {
   font-size: var(--font-size-sm);
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--text);
   margin: 0;
 }
 
 .perm-card__desc {
   font-size: var(--font-size-sm);
-  color: var(--text-secondary);
+  color: var(--muted);
   margin: 0 0 var(--space-sm);
   line-height: 1.45;
   overflow: hidden;
@@ -236,35 +226,34 @@ const title = computed(() => props.req.summary || actionLabel(props.req.action_i
   padding: 5px var(--space-sm);
   font-size: var(--font-size-sm);
   font-weight: 500;
-  border-radius: var(--radius-sm);
   border: 1px solid transparent;
   cursor: pointer;
   transition:
-    background var(--duration-fast),
-    border-color var(--duration-fast),
-    color var(--duration-fast);
+    background var(--dur-1),
+    border-color var(--dur-1),
+    color var(--dur-1);
   line-height: 1.4;
 
   &--allow {
-    background: color-mix(in oklab, var(--success) 15%, transparent);
-    border-color: color-mix(in oklab, var(--success) 35%, transparent);
-    color: var(--success);
+    background: color-mix(in oklab, var(--allow) 15%, transparent);
+    border-color: color-mix(in oklab, var(--allow-text) 35%, transparent);
+    color: var(--allow-text);
 
     &:hover {
-      background: color-mix(in oklab, var(--success) 25%, transparent);
-      border-color: color-mix(in oklab, var(--success) 55%, transparent);
+      background: color-mix(in oklab, var(--allow) 25%, transparent);
+      border-color: color-mix(in oklab, var(--allow-text) 55%, transparent);
     }
   }
 
   &--deny {
     background: color-mix(in oklab, var(--text) 5%, transparent);
-    border-color: var(--border-subtle);
-    color: var(--text-secondary);
+    border-color: var(--line);
+    color: var(--muted);
 
     &:hover {
       background: color-mix(in oklab, var(--text) 9%, transparent);
       border-color: color-mix(in oklab, var(--text) 15%, transparent);
-      color: var(--text-primary);
+      color: var(--text);
     }
   }
 }

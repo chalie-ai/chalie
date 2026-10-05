@@ -229,7 +229,7 @@ onBeforeUnmount(() => {
           height="14"
           viewBox="0 0 24 24"
           fill="none"
-          stroke="var(--violet-light)"
+          stroke="var(--pink-text)"
           stroke-width="2.2"
           stroke-linecap="round"
           stroke-linejoin="round"
@@ -284,11 +284,7 @@ onBeforeUnmount(() => {
   // Published for .user-text--clamped::after (conversation.scss) — rows in
   // this panel sit on the translucent scrim, not the page background.
   --row-fade-bg: var(--scrim-panel-main);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  border-left: 1px solid var(--border);
-  border-radius: 16px 0 0 16px;
-  box-shadow: -26px 0 64px rgba(0, 0, 0, 0.6);
+  border-left: 1px solid var(--line);
   overflow: hidden;
 }
 
@@ -299,7 +295,7 @@ onBeforeUnmount(() => {
   gap: 11px;
   height: 46px;
   padding: 0 26px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--line);
 }
 
 .thread-panel__back {
@@ -309,28 +305,25 @@ onBeforeUnmount(() => {
   margin-left: -4px;
   padding: 5px 9px 5px 6px;
   border: none;
-  border-radius: 8px;
   background: none;
-  color: var(--text-tertiary);
+  color: var(--muted);
   font:
-    500 13px Inter,
-    system-ui,
-    sans-serif;
+    500 13px var(--font-ui);
   cursor: pointer;
   transition:
-    color var(--duration-fast),
-    background var(--duration-fast);
+    color var(--dur-1),
+    background var(--dur-1);
 }
 
 .thread-panel__back:hover {
-  color: var(--text-primary);
-  background: var(--border);
+  color: var(--text);
+  background: var(--line);
 }
 
 .thread-panel__divider {
   width: 1px;
   height: 16px;
-  background: var(--border-strong);
+  background: var(--control);
   flex-shrink: 0;
 }
 
@@ -339,7 +332,7 @@ onBeforeUnmount(() => {
 }
 
 .thread-panel__bot-glyph {
-  color: var(--violet-light);
+  color: var(--pink-text);
 }
 
 // A delegate transcript is a side read, not a working thread: narrower, so the
@@ -351,17 +344,14 @@ onBeforeUnmount(() => {
 @media (max-width: 640px) {
   .thread-panel--delegate {
     width: 100%;
-    border-radius: 0;
   }
 }
 
 .thread-panel__title {
   font:
-    600 14px Inter,
-    system-ui,
-    sans-serif;
+    600 14px var(--font-ui);
   letter-spacing: -0.01em;
-  color: var(--text-primary);
+  color: var(--text);
   min-width: 0;
   white-space: nowrap;
   overflow: hidden;
@@ -389,20 +379,20 @@ onBeforeUnmount(() => {
 .thread-panel__expired-title {
   margin: 0 0 6px;
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--text);
 }
 
 .thread-panel__expired-note {
   margin: 0;
   font-size: 13px;
-  color: var(--text-secondary);
+  color: var(--muted);
 }
 
 .thread-panel__spinner {
   width: 20px;
   height: 20px;
-  border: 2px solid color-mix(in oklab, var(--violet) 20%, transparent);
-  border-top-color: var(--violet);
+  border: 2px solid color-mix(in oklab, var(--pink-text) 20%, transparent);
+  border-top-color: var(--pink-text);
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
 }

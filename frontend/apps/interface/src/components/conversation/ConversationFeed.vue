@@ -159,8 +159,8 @@ onBeforeUnmount(() => {
 .history-loader__spinner {
   width: 18px;
   height: 18px;
-  border: 2px solid color-mix(in oklab, var(--violet) 20%, transparent);
-  border-top-color: var(--violet);
+  border: 2px solid color-mix(in oklab, var(--pink-text) 20%, transparent);
+  border-top-color: var(--pink-text);
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
 }
@@ -173,10 +173,9 @@ onBeforeUnmount(() => {
 
 .history-end-pill__label {
   font-size: 11px;
-  color: var(--text-muted);
+  color: var(--muted);
   background: color-mix(in oklab, var(--text) 3%, transparent);
   border: 1px solid color-mix(in oklab, var(--text) 7%, transparent);
-  border-radius: 20px;
   padding: 4px 14px;
   letter-spacing: 0.04em;
 }

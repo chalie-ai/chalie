@@ -131,9 +131,8 @@ onBeforeUnmount(() => {
   height: 100%;
   width: 320px;
   max-width: 90vw;
-  background: var(--bg-2);
-  border-left: 1px solid var(--border);
-  box-shadow: -4px 0 24px var(--shadow, rgba(0, 0, 0, 0.15));
+  background: var(--surface);
+  border-left: 1px solid var(--line);
   z-index: 200;
   display: flex;
   flex-direction: column;
@@ -155,7 +154,7 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: space-between;
   padding: 16px 16px 12px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--line);
   flex-shrink: 0;
 }
 
@@ -163,14 +162,14 @@ onBeforeUnmount(() => {
   margin: 0;
   font-size: 15px;
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--text);
 }
 
 .side-drawer__close {
-  color: var(--text-secondary);
+  color: var(--muted);
 
   &:hover {
-    color: var(--text-primary);
+    color: var(--text);
   }
 }
 

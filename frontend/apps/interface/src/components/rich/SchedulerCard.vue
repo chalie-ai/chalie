@@ -97,9 +97,8 @@ const metaText = computed((): string => {
 }
 
 .scheduler-card__when {
-  border-radius: 10px;
-  background: color-mix(in oklab, var(--violet) 12%, transparent);
-  border: 1px solid color-mix(in oklab, var(--violet) 26%, transparent);
+  background: color-mix(in oklab, var(--pink) 12%, transparent);
+  border: 1px solid color-mix(in oklab, var(--pink-text) 26%, transparent);
   padding: 6px 4px;
   text-align: center;
 }
@@ -109,7 +108,7 @@ const metaText = computed((): string => {
   font-size: 0.58rem;
   letter-spacing: 0.16em;
   text-transform: uppercase;
-  color: color-mix(in oklab, var(--violet) 80%, var(--text-secondary));
+  color: color-mix(in oklab, var(--pink-text) 80%, var(--muted));
 }
 
 .scheduler-card__when-date {
@@ -118,7 +117,7 @@ const metaText = computed((): string => {
   letter-spacing: -0.03em;
   line-height: 1;
   margin: 2px 0;
-  color: var(--text-primary);
+  color: var(--text);
 }
 
 .scheduler-card__when-mon {
@@ -126,7 +125,7 @@ const metaText = computed((): string => {
   font-size: 0.58rem;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--text-tertiary);
+  color: var(--muted);
 }
 
 .scheduler-card__title {
@@ -134,17 +133,17 @@ const metaText = computed((): string => {
   font-weight: 500;
   letter-spacing: -0.005em;
   margin: 0 0 2px;
-  color: var(--text-primary);
+  color: var(--text);
 }
 
 .scheduler-card__meta {
   font-family: var(--font-mono);
   font-size: 0.74rem;
-  color: var(--text-tertiary);
+  color: var(--muted);
   letter-spacing: 0.04em;
 
   b {
-    color: var(--text-secondary);
+    color: var(--muted);
     font-weight: 500;
   }
 }

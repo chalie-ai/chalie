@@ -97,25 +97,24 @@ async function onToggle(item: ListItem): Promise<void> {
   font-weight: 500;
   letter-spacing: -0.005em;
   margin: 0;
-  color: var(--text-primary);
+  color: var(--text);
 }
 
 .list-card__progress {
   font-family: var(--font-mono);
   font-size: 0.72rem;
-  color: var(--text-tertiary);
+  color: var(--muted);
   letter-spacing: 0.06em;
 }
 
 .list-card__progress b {
-  color: var(--success);
+  color: var(--allow-text);
   font-weight: 500;
 }
 
 .list-card__bar {
   height: 2px;
-  background: var(--border);
-  border-radius: 1px;
+  background: var(--line);
   overflow: hidden;
   margin-bottom: 6px;
 }
@@ -123,9 +122,7 @@ async function onToggle(item: ListItem): Promise<void> {
 .list-card__bar-fill {
   width: var(--fill, 0);
   height: 100%;
-  background: linear-gradient(90deg, var(--violet), var(--violet-hover));
-  box-shadow: 0 0 6px color-mix(in oklab, var(--violet) 50%, transparent);
-  border-radius: 1px;
+  background: linear-gradient(90deg, var(--pink), var(--pink));
   transition: width 300ms ease;
 }
 
@@ -140,7 +137,7 @@ async function onToggle(item: ListItem): Promise<void> {
   gap: 12px;
   align-items: flex-start;
   padding: 10px 0;
-  border-bottom: 1px solid color-mix(in oklab, var(--border) 60%, transparent);
+  border-bottom: 1px solid color-mix(in oklab, var(--line) 60%, transparent);
   cursor: pointer;
   transition: background 160ms ease;
 
@@ -156,8 +153,7 @@ async function onToggle(item: ListItem): Promise<void> {
 .list-card__check {
   width: 18px;
   height: 18px;
-  border-radius: 6px;
-  border: 1.5px solid var(--border-strong);
+  border: 1.5px solid var(--control);
   background: transparent;
   display: inline-flex;
   align-items: center;
@@ -176,9 +172,8 @@ async function onToggle(item: ListItem): Promise<void> {
 
 .list-card__item--done {
   .list-card__check {
-    background: var(--violet);
-    border-color: var(--violet);
-    box-shadow: 0 0 8px color-mix(in oklab, var(--violet) 50%, transparent);
+    background: var(--pink);
+    border-color: var(--pink-text);
 
     svg {
       opacity: 1;
@@ -186,15 +181,15 @@ async function onToggle(item: ListItem): Promise<void> {
   }
 
   .list-card__text {
-    color: var(--text-tertiary);
+    color: var(--muted);
     text-decoration: line-through;
-    text-decoration-color: color-mix(in oklab, var(--text-tertiary) 60%, transparent);
+    text-decoration-color: color-mix(in oklab, var(--muted) 60%, transparent);
   }
 }
 
 .list-card__text {
   font-size: 0.94rem;
-  color: var(--text-primary);
+  color: var(--text);
   line-height: 1.4;
 }
 </style>

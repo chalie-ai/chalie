@@ -87,9 +87,8 @@ async function handleSubmit() {
   width: 100%;
   max-width: 420px;
   padding: 2.5rem 2rem;
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: var(--bs-border-radius-lg);
+  background: var(--surface);
+  border: 1px solid var(--line);
 
   h1 {
     font-size: 1.4rem;
@@ -98,7 +97,7 @@ async function handleSubmit() {
   }
 
   p {
-    color: var(--text-secondary);
+    color: var(--muted);
     font-size: 0.85rem;
     margin-bottom: 1.5rem;
   }
@@ -106,7 +105,7 @@ async function handleSubmit() {
   label {
     display: block;
     font-size: 0.8rem;
-    color: var(--text-secondary);
+    color: var(--muted);
     margin-bottom: 0.35rem;
   }
 
@@ -116,16 +115,15 @@ async function handleSubmit() {
     padding: 0.6rem 0.75rem;
     font-size: 0.9rem;
     color: var(--text);
-    background: var(--bg-input);
-    border: 1px solid var(--border);
-    border-radius: var(--bs-border-radius);
+    background: var(--surface-2);
+    border: 1px solid var(--line);
     margin-bottom: 1rem;
     outline: none;
     transition: border-color 0.2s;
     box-sizing: border-box;
 
     &:focus {
-      border-color: var(--accent-primary);
+      border-color: var(--pink-text);
     }
 
     &:disabled {
@@ -140,9 +138,8 @@ async function handleSubmit() {
     font-size: 0.9rem;
     font-weight: 500;
     color: #fff;
-    background: var(--accent-primary);
+    background: var(--pink);
     border: none;
-    border-radius: var(--bs-border-radius);
     cursor: pointer;
     transition: opacity 0.2s;
 
@@ -158,7 +155,7 @@ async function handleSubmit() {
 }
 
 .login-error {
-  color: var(--error);
+  color: var(--deny-text);
   font-size: 0.8rem;
   margin-top: 0.75rem;
   min-height: 1.2em;

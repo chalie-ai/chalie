@@ -149,7 +149,7 @@ const hourCells = computed<HourCell[]>(() => {
   width: 100%;
   max-width: 100%;
   background: transparent;
-  border: 1px solid var(--border);
+  border: 1px solid var(--line);
 }
 
 .weather-card__sky {
@@ -190,7 +190,6 @@ const hourCells = computed<HourCell[]>(() => {
   width: 90px;
   height: 90px;
   border-radius: 50%;
-  filter: blur(2px);
   opacity: 0.9;
   animation: weather-sun-bob 12s ease-in-out infinite alternate;
   pointer-events: none;
@@ -208,7 +207,6 @@ const hourCells = computed<HourCell[]>(() => {
     width: 70px;
     height: 70px;
     background: radial-gradient(circle, #f4f1ff 0%, #b8b3d6 55%, transparent 80%);
-    filter: blur(1px);
     opacity: 0.85;
   }
 }
@@ -225,7 +223,6 @@ const hourCells = computed<HourCell[]>(() => {
 .weather-card__cloud {
   position: absolute;
   background: rgba(255, 255, 255, 0.18);
-  filter: blur(14px);
   border-radius: 50%;
   animation: weather-cloud-drift 30s linear infinite;
   pointer-events: none;
@@ -374,7 +371,6 @@ const hourCells = computed<HourCell[]>(() => {
   font-size: 0.844rem;
   line-height: 1.55;
   color: rgba(255, 255, 255, 0.94);
-  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.18);
 }
 
 /* Hourly strip is a neutral DATA surface, not part of the immersive sky — it
@@ -384,8 +380,8 @@ const hourCells = computed<HourCell[]>(() => {
 .weather-card__rail {
   display: grid;
   grid-template-columns: repeat(8, 1fr);
-  background: var(--bg-surface-2);
-  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+  border-top: 1px solid var(--line);
 }
 
 .weather-card__hour {
@@ -395,22 +391,22 @@ const hourCells = computed<HourCell[]>(() => {
   align-items: center;
   gap: 8px;
   text-align: center;
-  border-right: 1px solid var(--border);
+  border-right: 1px solid var(--line);
 
   &:last-child {
     border-right: none;
   }
 
   &--cur {
-    background: color-mix(in oklab, var(--accent-primary) 8%, transparent);
+    background: color-mix(in oklab, var(--pink) 8%, transparent);
 
     .weather-card__hour-temp {
-      color: var(--accent-primary);
+      color: var(--pink-text);
     }
   }
 
   &--peak .weather-card__hour-temp {
-    color: var(--accent-primary);
+    color: var(--pink-text);
   }
 }
 
@@ -419,7 +415,7 @@ const hourCells = computed<HourCell[]>(() => {
   font-size: 0.75rem;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
-  color: var(--text-primary);
+  color: var(--text);
   letter-spacing: 0;
 }
 
@@ -435,8 +431,7 @@ const hourCells = computed<HourCell[]>(() => {
 .weather-card__hour-bar {
   width: 5px;
   min-height: 3px;
-  border-radius: 3px;
-  background: var(--accent-primary);
+  background: var(--pink);
   opacity: 0.28;
   transition: opacity 200ms ease;
 }
@@ -452,7 +447,7 @@ const hourCells = computed<HourCell[]>(() => {
 .weather-card__hour-label {
   font-family: var(--font-mono);
   font-size: 0.656rem;
-  color: var(--text-tertiary);
+  color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
 </style>

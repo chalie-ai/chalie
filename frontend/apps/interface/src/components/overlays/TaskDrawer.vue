@@ -108,12 +108,12 @@ watch(totalCount, (count) => {
   cursor: pointer;
 
   &:hover {
-    background: var(--surface-hover, rgba(128, 128, 128, 0.06));
+    background: var(--surface-2, rgba(128, 128, 128, 0.06));
   }
 }
 
 .task-drawer__thread--done {
-  border-left-color: var(--cyan);
+  border-left-color: var(--pink-text);
 }
 
 .task-drawer__thread-top {
@@ -127,7 +127,7 @@ watch(totalCount, (count) => {
   min-width: 0;
   font-size: 13px;
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -136,7 +136,7 @@ watch(totalCount, (count) => {
 .task-drawer__thread-snippet {
   font-size: 11.5px;
   line-height: 1.45;
-  color: var(--text-secondary);
+  color: var(--muted);
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -145,7 +145,7 @@ watch(totalCount, (count) => {
 
 .task-drawer__hint {
   font-size: 12px;
-  color: var(--text-secondary);
+  color: var(--muted);
   padding: 8px 16px 4px;
   font-style: italic;
 }

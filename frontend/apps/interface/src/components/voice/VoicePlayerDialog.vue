@@ -431,13 +431,11 @@ function _unbindKeyboard(): void {
   transform: translateX(-50%);
   z-index: 900;
   background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 0.75rem;
+  border: 1px solid var(--line);
   padding: 0.75rem 1rem;
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.18);
   color: var(--text);
   min-width: 280px;
 
@@ -470,8 +468,8 @@ function _unbindKeyboard(): void {
   display: inline-block;
   width: 1.25rem;
   height: 1.25rem;
-  border: 2px solid var(--border);
-  border-top-color: var(--violet);
+  border: 2px solid var(--line);
+  border-top-color: var(--pink-text);
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
 }
@@ -480,7 +478,7 @@ function _unbindKeyboard(): void {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  color: var(--error);
+  color: var(--deny-text);
   font-size: 0.8125rem;
   margin: 0;
   width: 100%;
@@ -514,13 +512,13 @@ function _unbindKeyboard(): void {
   transition: color 0.15s;
 
   &:hover {
-    color: var(--violet);
+    color: var(--pink-text);
   }
 
   &--play {
     width: 2.25rem;
     height: 2.25rem;
-    background: var(--violet);
+    background: var(--pink);
     color: #fff;
     border-radius: 50%;
 
@@ -531,7 +529,7 @@ function _unbindKeyboard(): void {
   }
 
   &--close {
-    color: var(--text-tertiary);
+    color: var(--muted);
     margin-left: 0.25rem;
   }
 }
@@ -539,14 +537,14 @@ function _unbindKeyboard(): void {
 .voice-player__progress {
   flex: 1;
   min-width: 0;
-  accent-color: var(--violet);
+  accent-color: var(--pink);
   height: 4px;
   cursor: pointer;
 }
 
 .voice-player__time {
   font-size: 0.75rem;
-  color: var(--text-secondary);
+  color: var(--muted);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
   flex-shrink: 0;

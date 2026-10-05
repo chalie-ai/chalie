@@ -140,16 +140,16 @@ function toggleExpanded(i: number, event: MouseEvent): void {
   border: none;
   border-radius: 50%;
   background: none;
-  color: var(--text-tertiary);
+  color: var(--muted);
   cursor: pointer;
   transition:
-    color var(--duration-fast) ease,
-    background var(--duration-fast) ease;
+    color var(--dur-1) ease,
+    background var(--dur-1) ease;
 }
 
 .pending__remove:hover {
-  color: var(--error);
-  background: var(--border);
+  color: var(--deny-text);
+  background: var(--line);
 }
 
 // The floating chip: a translucent, blurred rounded box that hugs its text so a
@@ -158,28 +158,25 @@ function toggleExpanded(i: number, event: MouseEvent): void {
   min-width: 0;
   max-width: 100%;
   padding: 7px 14px;
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  background: color-mix(in oklab, var(--bg-surface-2) 62%, transparent);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--line);
+  background: color-mix(in oklab, var(--surface-2) 62%, transparent);
   text-align: left;
   cursor: pointer;
   transition:
-    border-color var(--duration-fast) ease,
-    background var(--duration-fast) ease;
+    border-color var(--dur-1) ease,
+    background var(--dur-1) ease;
 }
 
 .pending__chip:hover {
-  border-color: var(--border-strong);
-  background: color-mix(in oklab, var(--bg-surface-2) 78%, transparent);
+  border-color: var(--control);
+  background: color-mix(in oklab, var(--surface-2) 78%, transparent);
 }
 
 .pending__text {
   display: block;
   font-size: 0.875rem;
   line-height: 1.45;
-  color: var(--text-secondary);
+  color: var(--muted);
   white-space: pre-wrap;
   overflow-wrap: break-word;
 }
@@ -192,7 +189,7 @@ function toggleExpanded(i: number, event: MouseEvent): void {
 }
 
 .pending__chip:hover .pending__text {
-  color: var(--text-primary);
+  color: var(--text);
 }
 
 .pending__toggle {
@@ -203,12 +200,12 @@ function toggleExpanded(i: number, event: MouseEvent): void {
   background: none;
   font-size: 0.8125rem;
   font-weight: 500;
-  color: var(--text-tertiary);
+  color: var(--muted);
   cursor: pointer;
-  transition: color var(--duration-fast) ease;
+  transition: color var(--dur-1) ease;
 }
 
 .pending__toggle:hover {
-  color: var(--accent-primary);
+  color: var(--pink-text);
 }
 </style>

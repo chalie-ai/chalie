@@ -66,19 +66,16 @@ body {
   padding: var(--space-sm) var(--space-md);
   background: rgba(var(--bs-danger-rgb), 0.15);
   border: 1px solid rgba(var(--bs-danger-rgb), 0.3);
-  border-radius: var(--radius-full);
   font-size: var(--font-size-sm);
-  color: var(--error);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  animation: fadeSlideDown var(--duration-normal) var(--ease-out);
+  color: var(--deny-text);
+  animation: fadeSlideDown var(--dur-2) var(--ease-out);
 }
 
 .connection-banner__dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--error);
+  background: var(--deny);
   animation: blink 1.5s infinite;
 }
 
@@ -104,29 +101,26 @@ body {
   padding: var(--space-sm) var(--space-md);
   background: rgba(var(--bs-warning-rgb), 0.15);
   border: 1px solid rgba(var(--bs-warning-rgb), 0.35);
-  border-radius: var(--radius-full);
   font-size: var(--font-size-sm);
-  color: var(--warning-banner-text);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  animation: fadeSlideDown var(--duration-normal) var(--ease-out);
+  color: var(--ask-text);
+  animation: fadeSlideDown var(--dur-2) var(--ease-out);
 }
 
 .banner-dismiss {
   background: none;
   border: none;
-  color: color-mix(in srgb, var(--warning-banner-text) 55%, transparent);
+  color: color-mix(in srgb, var(--ask-text) 55%, transparent);
   cursor: pointer;
   padding: 0 2px;
   font-size: 1rem;
   line-height: 1;
   display: flex;
   align-items: center;
-  transition: color var(--duration-fast) var(--ease-out);
+  transition: color var(--dur-1) var(--ease-out);
 }
 
 .banner-dismiss:hover {
-  color: var(--warning-banner-text);
+  color: var(--ask-text);
 }
 
 .update-banner {
@@ -141,38 +135,34 @@ body {
   padding: var(--space-sm) var(--space-md);
   background: rgba(var(--bs-info-rgb), 0.08);
   border: 1px solid rgba(var(--bs-info-rgb), 0.25);
-  border-radius: var(--radius-full);
   font-size: var(--font-size-sm);
-  color: var(--accent-tertiary);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  animation: fadeSlideDown var(--duration-normal) var(--ease-out);
+  color: var(--pink-text);
+  animation: fadeSlideDown var(--dur-2) var(--ease-out);
 }
 
 .update-banner__icon {
   display: flex;
   align-items: center;
-  color: var(--accent-tertiary);
+  color: var(--pink-text);
 }
 
 .update-banner__text {
-  color: var(--text-primary);
+  color: var(--text);
 }
 
 .update-banner__text strong {
-  color: var(--accent-tertiary);
+  color: var(--pink-text);
 }
 
 .update-banner__action {
-  background: var(--accent-tertiary);
+  background: var(--pink);
   color: #06080e;
   border: none;
-  border-radius: var(--radius-full);
   padding: 2px 12px;
   font-size: var(--font-size-sm);
   font-weight: 500;
   cursor: pointer;
-  transition: opacity var(--duration-fast) var(--ease-out);
+  transition: opacity var(--dur-1) var(--ease-out);
 }
 
 .update-banner__action:hover {
@@ -182,16 +172,16 @@ body {
 .update-banner__dismiss {
   background: none;
   border: none;
-  color: var(--text-tertiary);
+  color: var(--muted);
   cursor: pointer;
   padding: 2px;
   display: flex;
   align-items: center;
-  transition: color var(--duration-fast) var(--ease-out);
+  transition: color var(--dur-1) var(--ease-out);
 }
 
 .update-banner__dismiss:hover {
-  color: var(--text-primary);
+  color: var(--text);
 }
 
 // Permission Stack — outer container fixed-positioning only; PermissionStack.vue
@@ -235,9 +225,7 @@ body {
   height: 56px;
   padding: 0 var(--space-lg);
   background: var(--scrim-top);
-  backdrop-filter: blur(24px) saturate(120%);
-  -webkit-backdrop-filter: blur(24px) saturate(120%);
-  border-bottom: 1px solid color-mix(in oklab, var(--violet) 8%, transparent);
+  border-bottom: 1px solid color-mix(in oklab, var(--pink-text) 8%, transparent);
   transition: background 420ms ease, border-color 420ms ease;
 }
 
@@ -286,10 +274,8 @@ body {
   // .presence-bar. A gradient fading to transparent let the feed bleed through
   // the composer; this reads as a clean ground on both themes (tokens flip).
   background: var(--scrim-dock);
-  backdrop-filter: blur(24px) saturate(120%);
-  -webkit-backdrop-filter: blur(24px) saturate(120%);
   transition: background 420ms ease;
-  border-top: 1px solid var(--border-strong);
+  border-top: 1px solid var(--control);
 }
 
 // Inline variant — the same composer rendered in-flow at the foot of the thread
@@ -318,13 +304,9 @@ body {
   align-items: center;
   gap: var(--space-sm);
   padding: var(--space-md) var(--space-lg);
-  color: var(--error); // cascades to the icon (currentColor), text, and close
-  background: color-mix(in oklab, var(--error) 12%, var(--bg-surface-2));
-  border: 1px solid color-mix(in oklab, var(--error) 35%, transparent);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-card);
-  backdrop-filter: blur(20px) saturate(120%);
-  -webkit-backdrop-filter: blur(20px) saturate(120%);
+  color: var(--deny-text); // cascades to the icon (currentColor), text, and close
+  background: color-mix(in oklab, var(--deny) 12%, var(--surface-2));
+  border: 1px solid color-mix(in oklab, var(--deny-text) 35%, transparent);
 }
 
 .dock-error__icon { flex: none; }
@@ -343,7 +325,6 @@ body {
   justify-content: center;
   padding: var(--space-xs);
   border: none;
-  border-radius: var(--radius-sm);
   background: transparent;
   color: inherit;
   cursor: pointer;
@@ -353,7 +334,7 @@ body {
 
 .dock-error__close:hover {
   opacity: 1;
-  background: color-mix(in oklab, var(--error) 16%, transparent);
+  background: color-mix(in oklab, var(--deny) 16%, transparent);
 }
 
 .input-dock__inner {
@@ -378,7 +359,7 @@ body {
   background: transparent;
   border: none;
   outline: none;
-  color: var(--text-primary);
+  color: var(--text);
   font-size: 15px;
   line-height: 1.4;
   resize: none;
@@ -390,7 +371,7 @@ body {
 }
 
 .input-dock__textarea::placeholder {
-  color: var(--text-tertiary);
+  color: var(--muted);
 }
 
 .loading-overlay {
@@ -422,12 +403,12 @@ body {
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  background: var(--violet);
+  background: var(--pink);
   animation: loadingGlow 2s ease-in-out infinite;
 }
 
 .loading-overlay__text {
-  color: var(--text-secondary);
+  color: var(--muted);
   font-size: 15px;
   font-weight: 400;
   letter-spacing: 0.02em;
@@ -436,7 +417,7 @@ body {
 .loading-overlay__skip {
   background: none;
   border: none;
-  color: var(--text-tertiary);
+  color: var(--muted);
   font-size: 13px;
   cursor: pointer;
   padding: 4px 8px;
@@ -445,7 +426,7 @@ body {
   transition: color 220ms ease;
 }
 
-.loading-overlay__skip:hover { color: var(--text-secondary); }
+.loading-overlay__skip:hover { color: var(--muted); }
 
 .loading-overlay__skip:focus-visible {
   outline: 1.5px solid rgba(var(--bs-primary-rgb), 0.45);
@@ -490,14 +471,12 @@ body {
   border-radius: 50%;
 
   &.working {
-    background: var(--status-main);
-    box-shadow: 0 0 10px color-mix(in oklab, var(--status-main) 60%, transparent);
+    background: var(--pink);
     animation: pulseV 1.4s ease-in-out infinite;
   }
 
   &.done {
-    background: var(--cyan);
-    box-shadow: 0 0 8px color-mix(in oklab, var(--cyan) 50%, transparent);
+    background: var(--pink);
   }
 }
 
@@ -510,14 +489,13 @@ body {
 // mockup's baseStyle when inThread. The top bar and the panel itself stay crisp.
 .weave-dimmed {
   opacity: 0.5;
-  filter: blur(1px);
   pointer-events: none;
-  transition: opacity var(--duration-normal) var(--ease-out), filter var(--duration-normal) var(--ease-out);
+  transition: opacity var(--dur-2) var(--ease-out), filter var(--dur-2) var(--ease-out);
 }
 
 @keyframes loadingGlow {
-  0%, 100% { box-shadow: 0 0 12px var(--violet), 0 0 24px rgba(var(--bs-primary-rgb), 0.3); }
-  50%       { box-shadow: 0 0 24px var(--violet), 0 0 48px rgba(var(--bs-primary-rgb), 0.45); }
+  0%, 100% { }
+  50%       { }
 }
 
 @keyframes loadingTextFadeIn {
@@ -529,33 +507,31 @@ body {
 .btn-action {
   width: 36px;
   height: 36px;
-  border-radius: 10px;
   border: none;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   line-height: 1;
-  transition: all var(--duration-fast);
+  transition: all var(--dur-1);
   flex-shrink: 0;
 }
 
 .btn-action--attach {
-  background: var(--bg-surface-2);
-  color: var(--text-secondary);
+  background: var(--surface-2);
+  color: var(--muted);
 }
 
 .btn-action--attach svg { width: 18px; height: 18px; }
 
 .btn-action--attach:hover {
-  background: color-mix(in oklab, var(--accent-primary) 12%, transparent);
-  color: var(--accent-primary);
+  background: color-mix(in oklab, var(--pink) 12%, transparent);
+  color: var(--pink-text);
 }
 
 .btn-action--send {
-  background: var(--accent-primary);
+  background: var(--pink);
   color: #fff;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
   transition: all 220ms ease;
 }
 
@@ -577,19 +553,18 @@ body {
   position: relative;
   width: 36px;
   height: 36px;
-  border-radius: 10px;
-  background: var(--bg-surface-2);
-  color: var(--text-secondary);
+  background: var(--surface-2);
+  color: var(--muted);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: color var(--duration-fast), background var(--duration-fast);
+  transition: color var(--dur-1), background var(--dur-1);
 }
 
 .voice-rec-btn:hover {
-  background: color-mix(in oklab, var(--accent-primary) 12%, transparent);
-  color: var(--accent-primary);
+  background: color-mix(in oklab, var(--pink) 12%, transparent);
+  color: var(--pink-text);
 }
 
 .voice-rec-btn[data-state="idle"] .voice-rec-btn__mic     { display: block; }
@@ -621,8 +596,8 @@ body {
 .voice-rec-btn__spinner {
   width: 14px;
   height: 14px;
-  border: 2px solid var(--border-strong);
-  border-top-color: var(--text-secondary);
+  border: 2px solid var(--control);
+  border-top-color: var(--muted);
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
 }
@@ -637,17 +612,16 @@ body {
 .btn-icon {
   background: none;
   border: none;
-  color: var(--text-secondary);
+  color: var(--muted);
   cursor: pointer;
   padding: var(--space-sm);
-  border-radius: var(--radius-sm);
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: color var(--duration-fast);
+  transition: color var(--dur-1);
 }
 
-.btn-icon:hover  { color: var(--text-primary); }
+.btn-icon:hover  { color: var(--text); }
 .btn-icon--small { padding: var(--space-xs); }
 
 // Status line — thinking pill (left) and context indicator (right)
@@ -664,7 +638,7 @@ body {
   gap: 12px;
   font-family: var(--font-mono);
   font-size: 11px;
-  color: var(--text-tertiary);
+  color: var(--muted);
 }
 
 .thinking-select { position: relative; }
@@ -675,19 +649,18 @@ body {
   gap: 6px;
   height: 24px;
   padding: 0 9px;
-  border-radius: var(--radius-full);
   background: transparent;
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--control);
   cursor: pointer;
   font-family: var(--font-mono);
   font-size: 11px;
-  color: var(--text-secondary);
-  transition: border-color var(--duration-fast), color var(--duration-fast);
+  color: var(--muted);
+  transition: border-color var(--dur-1), color var(--dur-1);
 }
 
 .thinking-select__trigger:hover {
-  border-color: color-mix(in oklab, var(--border-strong) 60%, transparent);
-  color: var(--text-primary);
+  border-color: color-mix(in oklab, var(--control) 60%, transparent);
+  color: var(--text);
 }
 
 .thinking-select__swirl {
@@ -695,12 +668,12 @@ body {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--accent-primary);
+  background: var(--pink);
   flex-shrink: 0;
 }
 
 .thinking-select__value {
-  color: var(--text-secondary);
+  color: var(--muted);
   font-weight: 500;
 }
 
@@ -717,10 +690,6 @@ body {
   padding: var(--space-xs);
   background: color-mix(in oklab, var(--text) 5%, transparent);
   border: 1px solid color-mix(in oklab, var(--text) 8%, transparent);
-  border-radius: var(--radius-md);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  box-shadow: var(--shadow-card);
 }
 
 .thinking-select__menu.hidden { display: none; }
@@ -731,14 +700,13 @@ body {
   border: none;
   cursor: pointer;
   padding: var(--space-sm) var(--space-md);
-  border-radius: var(--radius-sm);
   font-size: var(--font-size-sm);
-  color: var(--text-primary);
+  color: var(--text);
   transition: background 220ms ease;
 }
 
-.thinking-select__item:hover  { background: color-mix(in oklab, var(--accent-primary) 8%, transparent); }
-.thinking-select__item.active { color: var(--accent-primary); font-weight: 600; }
+.thinking-select__item:hover  { background: color-mix(in oklab, var(--pink) 8%, transparent); }
+.thinking-select__item.active { color: var(--pink-text); font-weight: 600; }
 
 .context-display {
   margin-left: auto;
@@ -749,7 +717,7 @@ body {
 
 .context-indicator {
   background: transparent;
-  color: var(--text-secondary);
+  color: var(--muted);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
@@ -757,17 +725,15 @@ body {
 .meter {
   width: 96px;
   height: 5px;
-  border-radius: 3px;
-  background: var(--bg-surface-2);
-  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  border: 1px solid var(--control);
   overflow: hidden;
 }
 
 .meter > i {
   display: block;
   height: 100%;
-  background: var(--accent-primary);
-  border-radius: 3px;
+  background: var(--pink);
 }
 
 @media (max-width: 640px) {
@@ -815,21 +781,19 @@ body {
   gap: var(--space-md);
   max-width: min(90vw, 28rem);
   padding: var(--space-sm) var(--space-md);
-  background: var(--bg-surface-2);
-  color: var(--text-primary);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-card);
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--control);
   font-size: var(--font-size-sm);
   opacity: 0;
-  transition: opacity var(--duration-normal) var(--ease-out),
-              transform var(--duration-normal) var(--ease-out);
+  transition: opacity var(--dur-2) var(--ease-out),
+              transform var(--dur-2) var(--ease-out);
 }
 .chalie-toast--visible { opacity: 1; transform: translate(-50%, 0); }
 .chalie-toast__undo {
   border: 0;
   background: none;
-  color: var(--accent-primary);
+  color: var(--pink-text);
   font-weight: 600;
   cursor: pointer;
 }

@@ -16,7 +16,7 @@
   font-size: 11px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--text-tertiary);
+  color: var(--muted);
 }
 
 .daymark::before,
@@ -24,18 +24,14 @@
   content: '';
   height: 1px;
   flex: 1;
-  background: var(--border);
+  background: var(--line);
 }
 
 .speech-form {
   position: relative;
   padding: var(--space-lg);
-  border-radius: 18px;
-  background: var(--bg-chalie);
-  backdrop-filter: blur(16px) saturate(120%);
-  -webkit-backdrop-filter: blur(16px) saturate(120%);
-  border: 1px solid var(--border);
-  box-shadow: var(--shadow-card);
+  background: var(--surface);
+  border: 1px solid var(--line);
   animation: formEntry 200ms var(--ease-out) both;
   transition: background 420ms ease, border-color 400ms ease, box-shadow 400ms ease;
 }
@@ -47,7 +43,6 @@
   top: 14px;
   bottom: 14px;
   width: 2px;
-  border-radius: 2px;
   z-index: 1;
   pointer-events: none;
 }
@@ -64,9 +59,8 @@
   gap: var(--space-sm);
   max-width: 80%;
   margin-left: auto;
-  background: var(--bg-surface-2);
-  border: 1px solid var(--border);
-  border-radius: 18px 18px 6px 18px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
   padding: 11px 15px;
   // The clamped-text fade (.user-text--clamped::after) resolves against
   // --row-fade-bg. --bg-surface-2 is translucent, so publish the bubble's
@@ -81,7 +75,7 @@
 .user-message__label {
   font-size: 0.72rem;
   font-weight: 500;
-  color: var(--text-tertiary);
+  color: var(--muted);
 }
 
 .user-text {
@@ -92,7 +86,7 @@
   font-weight: 500;
   font-size: 0.9375rem;
   line-height: 1.6;
-  color: var(--text-primary);
+  color: var(--text);
 }
 
 // Collapsed long message: clamp to 5 lines with a soft fade hinting at more text
@@ -129,12 +123,12 @@
   font-family: var(--font-mono);
   font-size: 0.78rem;
   letter-spacing: 0.01em;
-  color: var(--text-tertiary);
+  color: var(--muted);
   transition: color 150ms ease;
 }
 
 .user-text__toggle:hover {
-  color: var(--accent-primary);
+  color: var(--pink-text);
 }
 
 // Hard no-shadow guard inside bubbles
@@ -144,17 +138,11 @@
 .speech-form::after,
 .speech-form *::before,
 .speech-form *::after {
-  box-shadow: none !important;
-  text-shadow: none !important;
 }
 
 .speech-form--chalie {
   border: none;
-  box-shadow: none;
-  border-radius: 0;
   background: none;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
   align-self: stretch;
   width: 100%;
   max-width: 100%;
@@ -203,12 +191,12 @@
   font-size: 0.82rem;
   line-height: 1.4;
   letter-spacing: -0.005em;
-  color: var(--text-secondary);
+  color: var(--muted);
   transition: color 150ms ease;
 }
 
 .user-attachments__item:hover {
-  color: var(--accent-primary);
+  color: var(--pink-text);
 }
 
 .user-attachments__icon {
@@ -241,14 +229,14 @@
   font-family: var(--font-mono);
   font-size: 0.66rem;
   letter-spacing: 0.02em;
-  color: var(--text-tertiary);
+  color: var(--muted);
   position: relative;
   z-index: 2;
 }
 
 .speech-form__timestamp {
   font-size: 0.72rem;
-  color: var(--text-tertiary);
+  color: var(--muted);
   opacity: 0.85;
   letter-spacing: 0.04em;
 }
@@ -278,11 +266,10 @@
 .speech-form__act-btn {
   background: transparent;
   border: 0;
-  color: var(--text-tertiary);
+  color: var(--muted);
   cursor: pointer;
   padding: 0;
-  border-radius: 7px;
-  transition: background var(--duration-fast), color var(--duration-fast);
+  transition: background var(--dur-1), color var(--dur-1);
   display: grid;
   place-items: center;
   width: 26px;
@@ -290,20 +277,20 @@
 }
 
 .speech-form__act-btn:hover {
-  background: color-mix(in oklab, var(--text-primary) 8%, transparent);
-  color: var(--text-primary);
+  background: color-mix(in oklab, var(--text) 8%, transparent);
+  color: var(--text);
 }
 
 .speech-form__act-btn--speak:hover {
-  color: var(--cyan);
+  color: var(--pink-text);
 }
 
 .speech-form__act-btn--reply:hover {
-  color: var(--violet);
+  color: var(--pink-text);
 }
 
 .speech-form__act-btn--copy:hover {
-  color: var(--accent-primary);
+  color: var(--pink-text);
 }
 
 // Speech is synthesized in the background, so the speaker button reports a
@@ -322,7 +309,7 @@
 }
 
 .speech-form__act-btn--failed {
-  color: var(--error);
+  color: var(--deny-text);
   opacity: 0.65;
 }
 
@@ -343,25 +330,24 @@
   padding: 0 11px;
   font-family: var(--font-mono);
   font-size: 0.72rem;
-  color: var(--text-secondary);
-  background: var(--bg-surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
+  color: var(--muted);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
   cursor: pointer;
   white-space: nowrap;
   flex-shrink: 0;
-  transition: border-color var(--duration-fast), color var(--duration-fast), background var(--duration-fast);
+  transition: border-color var(--dur-1), color var(--dur-1), background var(--dur-1);
 }
 
 .trace-pill:hover,
 .trace-pill--open {
-  border-color: var(--border-strong);
-  color: var(--text-primary);
+  border-color: var(--control);
+  color: var(--text);
 }
 
 // Open also lifts the fill, so it stays distinct from a hovered closed pill.
 .trace-pill--open {
-  background: color-mix(in oklab, var(--text-primary) 8%, var(--bg-surface-2));
+  background: color-mix(in oklab, var(--text) 8%, var(--surface-2));
 }
 
 // Static marker — the dot signals "has a trace", never activity: each row's own
@@ -370,7 +356,7 @@
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--accent-primary);
+  background: var(--pink);
 }
 
 .trace-body {
@@ -396,9 +382,8 @@
 .calls {
   overflow: hidden;
   max-width: 100%;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--bg-surface-2);
+  border: 1px solid var(--line);
+  background: var(--surface-2);
   line-height: 1.5;
 }
 
@@ -413,7 +398,7 @@
 }
 
 .call + .call {
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--line);
 }
 
 // Pulled into the gutter by its margins, the dot takes no inline space and
@@ -426,16 +411,15 @@
   border-radius: 50%;
 }
 
-.call--done .call__dot { background: var(--success); }
-.call--error .call__dot { background: var(--error); }
-.call--started .call__dot { background: var(--text-secondary); }
+.call--done .call__dot { background: var(--allow); }
+.call--error .call__dot { background: var(--deny); }
+.call--started .call__dot { background: var(--muted); }
 
 .call__fn {
   max-width: 100%;
   padding: 1px 7px;
-  border-radius: 6px;
-  background: color-mix(in oklab, var(--text-primary) 8%, transparent);
-  color: var(--text-primary);
+  background: color-mix(in oklab, var(--text) 8%, transparent);
+  color: var(--text);
   font-family: var(--font-mono);
   font-size: 0.72rem;
   font-weight: 600;
@@ -444,13 +428,13 @@
 .call__summary {
   min-width: 0;
   font-size: 0.78rem;
-  color: var(--text-secondary);
+  color: var(--muted);
 }
 
 // Red mixed toward --text-primary so it clears AA on its tint in both themes.
 .call--error .call__fn {
-  background: color-mix(in oklab, var(--error) 12%, transparent);
-  color: color-mix(in oklab, var(--error) 75%, var(--text-primary));
+  background: color-mix(in oklab, var(--deny) 12%, transparent);
+  color: color-mix(in oklab, var(--deny-text) 75%, var(--text));
 }
 
 // A tool row whose call spawned a delegate turn is a button into that turn's
@@ -473,11 +457,11 @@
 
 .delegate-pill:hover,
 .delegate-pill:focus-visible {
-  background: color-mix(in oklab, var(--text-primary) 5%, transparent);
+  background: color-mix(in oklab, var(--text) 5%, transparent);
 }
 
 .delegate-pill:focus-visible {
-  outline: 1.5px solid var(--text-secondary);
+  outline: 1.5px solid var(--muted);
 }
 
 // The tool card clips its rows, so a row's ring is drawn inside it.
@@ -499,13 +483,13 @@
   display: inline-flex;
   align-items: center;
   font-size: 0.72rem;
-  color: var(--text-tertiary);
+  color: var(--muted);
   opacity: 0.85;
   // It renders as an <a>, so the UA underline applies unless explicitly killed.
   text-decoration: none;
   cursor: pointer;
   flex-shrink: 0;
-  transition: opacity var(--duration-fast);
+  transition: opacity var(--dur-1);
   background: none;
   border: none;
   padding: 0;
@@ -520,7 +504,7 @@
 .thinking-traces {
   font-family: var(--font-mono);
   font-size: 0.72rem;
-  color: var(--text-tertiary);
+  color: var(--muted);
   opacity: 0.85;
   line-height: 1.5;
 }
@@ -543,18 +527,17 @@
   gap: 8px;
   height: 26px;
   padding: 0 10px 0 11px;
-  border-radius: var(--radius-full);
   cursor: pointer;
-  background: var(--bg-surface-2);
-  border: 1px solid var(--border);
-  color: var(--text-primary);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  color: var(--text);
   font-size: 0.75rem;
   max-width: min(260px, 40%);
-  transition: border-color var(--duration-fast), background var(--duration-fast);
+  transition: border-color var(--dur-1), background var(--dur-1);
 }
 
 .thread-pill:hover {
-  border-color: var(--border-strong);
+  border-color: var(--control);
 }
 
 .thread-pill__dot {
@@ -574,32 +557,31 @@
 .thread-pill__chevron {
   font-size: 15px;
   line-height: 1;
-  color: var(--text-tertiary);
+  color: var(--muted);
   flex-shrink: 0;
 }
 
 .thread-pill--working .thread-pill__dot {
-  background: var(--status-main);
+  background: var(--pink);
   animation: pulseV 1.4s ease-in-out infinite;
 }
 
 .thread-pill--done .thread-pill__dot {
-  background: var(--cyan);
+  background: var(--pink);
 }
 
 .thread-pill--thread .thread-pill__dot {
-  background: var(--violet);
+  background: var(--pink);
 }
 
 .thread-pill--idle .thread-pill__dot {
   background: transparent;
-  border: 1.5px solid color-mix(in oklab, var(--text-primary) 30%, transparent);
+  border: 1.5px solid color-mix(in oklab, var(--text) 30%, transparent);
 }
 
 // Escalation form (critic)
 .speech-form--escalation {
-  border-color: color-mix(in oklab, var(--warning) 25%, transparent);
-  box-shadow: 0 0 16px color-mix(in oklab, var(--warning) 6%, transparent);
+  border-color: color-mix(in oklab, var(--ask-text) 25%, transparent);
   margin-top: var(--space-lg);
 }
 
@@ -607,11 +589,10 @@
   background: linear-gradient(
     180deg,
     transparent 0%,
-    color-mix(in oklab, var(--warning) 85%, transparent) 20%,
-    color-mix(in oklab, var(--warning) 85%, transparent) 80%,
+    color-mix(in oklab, var(--ask) 85%, transparent) 20%,
+    color-mix(in oklab, var(--ask) 85%, transparent) 80%,
     transparent 100%
   );
-  box-shadow: 0 0 8px color-mix(in oklab, var(--warning) 60%, transparent), 0 0 18px color-mix(in oklab, var(--warning) 33%, transparent);
 }
 
 .speech-form--escalation::after {
@@ -621,7 +602,7 @@
   left: 0;
   right: 0;
   height: 1px;
-  background: linear-gradient(90deg, transparent, color-mix(in oklab, var(--warning) 30%, transparent), transparent);
+  background: linear-gradient(90deg, transparent, color-mix(in oklab, var(--ask) 30%, transparent), transparent);
   pointer-events: none;
 }
 
@@ -647,7 +628,7 @@
   width: 12px;
   height: 12px;
   border-radius: 50%;
-  background: var(--violet);
+  background: var(--pink);
   flex-shrink: 0;
   animation: act-logo-pulse 1.4s ease-in-out infinite;
 }
@@ -655,17 +636,16 @@
 // Bare-group anchor before any tool pill lands; evicted the moment one does.
 .act-placeholder {
   font-size: var(--font-size-sm);
-  color: var(--text-tertiary);
+  color: var(--muted);
   animation: act-logo-pulse 1.4s ease-in-out infinite;
 }
 
 .act-stop-btn {
   background: transparent;
   border: none;
-  color: var(--error);
+  color: var(--deny-text);
   cursor: pointer;
   padding: 4px;
-  border-radius: 4px;
   opacity: 0.7;
   transition: opacity 180ms ease, transform 180ms ease;
   display: flex;
@@ -719,7 +699,7 @@
 }
 
 .act-tool__summary {
-  color: var(--text-secondary);
+  color: var(--muted);
   font-weight: 400;
   white-space: nowrap;
   overflow: hidden;
@@ -735,16 +715,16 @@
 }
 
 .act-tool--running {
-  color: color-mix(in oklab, var(--text-primary) 75%, transparent);
+  color: color-mix(in oklab, var(--text) 75%, transparent);
 }
 
 .act-tool--done {
-  color: var(--success);
+  color: var(--allow-text);
   opacity: 0.9;
 }
 
 .act-tool--error {
-  color: var(--error);
+  color: var(--deny-text);
   opacity: 0.5;
 }
 
@@ -764,10 +744,9 @@
   font-size: 0.6rem;
   letter-spacing: 0.06em;
   padding: 1px 6px;
-  border-radius: 3px;
   background: color-mix(in oklab, var(--text) 5%, transparent);
   border: 1px solid color-mix(in oklab, var(--text) 8%, transparent);
-  color: color-mix(in oklab, var(--text-primary) 50%, transparent);
+  color: color-mix(in oklab, var(--text) 50%, transparent);
   margin-left: 8px;
   vertical-align: middle;
   animation: meta-fade-in 150ms ease both;

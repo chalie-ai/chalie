@@ -45,28 +45,26 @@ defineProps<{ message: ConversationMessage }>();
 }
 
 .chalie-markup a {
-  color: var(--accent-primary);
+  color: var(--pink-text);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
 
 .chalie-markup a:hover {
-  color: var(--accent-secondary);
+  color: var(--pink-text);
 }
 
 .chalie-code,
 .chalie-markup code {
   font-family: var(--font-mono);
   font-size: 0.875em;
-  background: color-mix(in oklab, var(--text-primary) 8%, transparent);
+  background: color-mix(in oklab, var(--text) 8%, transparent);
   padding: 0.1em 0.35em;
-  border-radius: 4px;
 }
 
 .chalie-markup pre {
-  background: color-mix(in oklab, var(--text-primary) 6%, transparent);
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  background: color-mix(in oklab, var(--text) 6%, transparent);
+  border: 1px solid var(--line);
   padding: var(--space-md);
   overflow-x: auto;
   margin: 0.75em 0;
@@ -75,18 +73,17 @@ defineProps<{ message: ConversationMessage }>();
 .chalie-markup pre code {
   background: none;
   padding: 0;
-  border-radius: 0;
   font-size: 0.85em;
 }
 
 .chalie-markup strong {
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--text);
 }
 
 .chalie-markup em {
   font-style: italic;
-  color: var(--text-secondary);
+  color: var(--muted);
 }
 
 .chalie-markup ul,
@@ -109,15 +106,15 @@ defineProps<{ message: ConversationMessage }>();
 }
 
 .chalie-markup blockquote {
-  border-left: 2px solid var(--border);
+  border-left: 2px solid var(--line);
   margin: 0.75em 0;
   padding: 0.25em 0 0.25em var(--space-md);
-  color: var(--text-secondary);
+  color: var(--muted);
 }
 
 .chalie-markup hr {
   border: none;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--line);
   margin: var(--space-md) 0;
 }
 
@@ -129,16 +126,16 @@ defineProps<{ message: ConversationMessage }>();
 
 .chalie-markup th,
 .chalie-markup td {
-  border: 1px solid var(--border);
+  border: 1px solid var(--line);
   padding: 6px 10px;
   text-align: left;
 }
 
 .chalie-markup thead {
-  background: color-mix(in oklab, var(--text-primary) 5%, transparent);
+  background: color-mix(in oklab, var(--text) 5%, transparent);
 }
 
 .chalie-markup tbody tr:nth-child(even) {
-  background: color-mix(in oklab, var(--text-primary) 3%, transparent);
+  background: color-mix(in oklab, var(--text) 3%, transparent);
 }
 </style>
