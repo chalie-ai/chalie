@@ -168,8 +168,8 @@ async function save(): Promise<void> {
 .network-ssl-warn {
   font-size: 12px;
   color: var(--deny-text);
-  background: rgba(var(--bs-danger-rgb), 0.1);
-  border: 1px solid rgba(var(--bs-danger-rgb), 0.25);
+  background: var(--surface);
+  border: 1px solid var(--deny);
   padding: 8px 12px;
   margin: 8px 0;
   text-align: left;
@@ -180,8 +180,8 @@ async function save(): Promise<void> {
   align-items: center;
   gap: 10px;
   padding: 20px 24px;
-  background: rgba(var(--bs-warning-rgb), 0.1);
-  border: 1px solid rgba(var(--bs-warning-rgb), 0.25);
+  background: var(--surface);
+  border: 1px solid var(--ask);
   color: var(--ask-text);
   font-size: 14px;
   font-weight: 500;

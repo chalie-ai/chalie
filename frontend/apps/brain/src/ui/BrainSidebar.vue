@@ -18,16 +18,13 @@ import {
   ShieldCheck,
   Sun,
 } from '@lucide/vue';
-import { useTheme } from '@chalie/shared';
+import { ChalieMark, useTheme } from '@chalie/shared';
 import { useShellStore } from '../stores/shell';
 
 const shell = useShellStore();
 const route = useRoute();
 const router = useRouter();
 const { theme, toggle: toggleTheme } = useTheme();
-
-// Absolute runtime URL; :src (dynamic binding) stops Vite/Rollup resolving it as a build-time module import.
-const brandIconUrl = '/icons/icon.png';
 
 interface SubItem {
   id: string;
@@ -116,8 +113,7 @@ function isExpanded(item: NavItem): boolean {
 <template>
   <aside class="sidebar">
     <a class="sidebar-brand" href="/">
-      <!-- eslint-disable-next-line vue/html-self-closing -->
-      <img :src="brandIconUrl" alt="Chalie" width="28" height="28" />
+      <ChalieMark :size="28" />
       <div class="sidebar-brand-text">
         <div class="wordmark">Chalie</div>
         <div class="wordmark-sub">Brain</div>
