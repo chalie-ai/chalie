@@ -197,7 +197,7 @@ async function disconnect(c: Capability): Promise<void> {
           <button class="btn btn-sm btn-danger" @click="disconnect(c)">Disconnect</button>
         </template>
         <template v-else>
-          <button class="btn btn-sm btn-primary" @click="openForm(c)">Setup</button>
+          <button class="btn btn-sm btn-secondary" @click="openForm(c)">Setup</button>
         </template>
       </div>
     </div>

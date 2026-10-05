@@ -179,6 +179,20 @@ input[type="checkbox"], input[type="radio"], input[type="range"], progress { acc
 .btn-danger { border-color: var(--deny); color: var(--deny-text); }
 .btn-danger:hover:not(:disabled) { background: var(--deny); border-color: var(--deny); color: var(--on-pink); }
 
+/* A file input's own button can't take a class; it reads as a secondary button. */
+::file-selector-button {
+  margin-right: var(--space-sm);
+  padding: 6px 10px;
+  border: 1px solid var(--control);
+  border-radius: 0;
+  background: var(--surface);
+  color: var(--text);
+  font: 600 0.75rem/1 var(--font-ui);
+  cursor: pointer;
+  transition: background-color var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out);
+}
+::file-selector-button:hover { border-color: var(--text); background: var(--surface-2); }
+
 /* Mono label: times, keys, section labels. */
 .lbl {
   font: 500 0.75rem/1.2 var(--font-mono);
