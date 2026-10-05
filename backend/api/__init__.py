@@ -282,7 +282,7 @@ def create_app() -> Flask:
     api = Api(
         title="Chalie API",
         version="1.0",
-        description="REST API for the Chalie personal intelligence layer",
+        description="REST API for Chalie",
         doc="/swagger/",
     )
 

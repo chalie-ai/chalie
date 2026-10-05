@@ -41,8 +41,8 @@ _section() { printf "\n${_bold}${_pink}%s${_reset}\n" "$*"; }
 _banner() {
   printf "\n"
   printf "${_pink}  ┌─────────────────────────────────────────────┐${_reset}\n"
-  printf "${_pink}  │${_reset}    ${_bold}Chalie Installer${_reset}                            ${_pink}│${_reset}\n"
-  printf "${_pink}  │${_reset}    A personal intelligence layer               ${_pink}│${_reset}\n"
+  printf "${_pink}  │${_reset}    ${_bold}Chalie Installer${_reset}                         ${_pink}│${_reset}\n"
+  printf "${_pink}  │${_reset}    Built for day 300.                       ${_pink}│${_reset}\n"
   printf "${_pink}  └─────────────────────────────────────────────┘${_reset}\n"
   printf "\n"
 }

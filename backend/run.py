@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 
 
 def _parse_cli() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Chalie — personal intelligence layer")
+    parser = argparse.ArgumentParser(description="Chalie — built for day 300.")
     parser.add_argument("--port", type=int, default=31025, help="Server port (default: 31025)")
     parser.add_argument("--host", default="0.0.0.0", help="Bind address (default: 0.0.0.0)")
     return parser.parse_args()

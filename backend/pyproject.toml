@@ -1,7 +1,7 @@
 [project]
 name = "chalie"
 version = "1.4.0-beta"
-description = "A personal intelligence layer"
+description = "An open-source personal AI that runs on your own machine"
 requires-python = ">=3.11"
 
 dependencies = [
