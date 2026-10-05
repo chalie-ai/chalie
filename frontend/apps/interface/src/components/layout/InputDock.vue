@@ -27,7 +27,8 @@ import { lsGet, lsSet } from '../../utils/storage';
 import { system } from '../../api';
 import ImageAttachStrip from '../upload/ImageAttachStrip.vue';
 import QueuedMessages from '../conversation/QueuedMessages.vue';
-import { Plus, Mic, Send, X, AlertTriangle, ChevronDown } from '@lucide/vue';
+import DockError from './DockError.vue';
+import { Plus, Mic, Send, ChevronDown } from '@lucide/vue';
 
 /**
  * `turnId` is the only thing that distinguishes a thread reply from a main-dock
@@ -285,18 +286,7 @@ onBeforeUnmount(() => {
     @focusin="markActive"
     @pointerdown="markActive"
   >
-    <div v-if="session.errorMessage" class="dock-error" role="alert">
-      <AlertTriangle class="dock-error__icon" :size="18" aria-hidden="true" />
-      <span class="dock-error__text">{{ session.errorMessage }}</span>
-      <button
-        class="dock-error__close"
-        type="button"
-        aria-label="Dismiss error"
-        @click="session.errorMessage = null"
-      >
-        <X :size="16" />
-      </button>
-    </div>
+    <DockError />
 
     <!-- Attachments are a shared store; render the pending strip only in the
          active dock so the footer and an open thread don't show duplicates. -->

@@ -20,6 +20,7 @@ import {
 import { delegateName } from '../../utils/delegateChannel';
 import TurnView from './TurnView.vue';
 import InputDock from '../layout/InputDock.vue';
+import DockError from '../layout/DockError.vue';
 
 const PANEL_SURFACE_ID = 'thread-panel';
 
@@ -266,6 +267,11 @@ onBeforeUnmount(() => {
            stack since no thread is open. -->
       <div id="permStackPanel" class="permission-stack permission-stack--panel"></div>
 
+      <!-- A delegate transcript has no dock of its own, and the main dock sits
+           dimmed under this panel, so its errors (a failed stop, a failed
+           load) show here. A thread's own dock shows them itself. -->
+      <DockError v-if="session.panelThreadId == null" class="thread-panel__error" />
+
       <InputDock
         v-if="session.panelThreadId != null"
         dock-id="thread_view_dock"
@@ -379,6 +385,14 @@ onBeforeUnmount(() => {
   min-height: 0;
   overflow-y: auto;
   padding: var(--space-md) 0 var(--space-lg);
+}
+
+// Panel placement of the shared error banner: it spans the panel with the
+// dock's own gutter, since there is no composer here to line up with.
+.thread-panel__error {
+  flex-shrink: 0;
+  max-width: none;
+  margin: 0 var(--space-lg) var(--space-md);
 }
 
 .thread-panel__loader {
