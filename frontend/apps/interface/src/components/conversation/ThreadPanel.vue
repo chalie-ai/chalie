@@ -13,6 +13,7 @@ import {
   registerSurface,
   unregisterSurface,
   clearSurfaceContainer,
+  nextTicket,
   upsertDelegateTurn,
   upsertTurnToSurfaces,
 } from '../../utils/turnDom';
@@ -71,6 +72,10 @@ async function _openTurn(turnId: number, type: string): Promise<void> {
   });
 
   session.threadExpanding = true;
+  // Ticketed: opened on a running turn, this read can answer after the settle's
+  // and would repaint "thinking…" on every surface (see turnDom's
+  // `UpsertOptions.ticket`).
+  const ticket = nextTicket();
   try {
     const block = await convoApi.thread(turnId, type);
     if (session.panelThreadId !== turnId || session.panelType !== type) return; // superseded
@@ -83,7 +88,7 @@ async function _openTurn(turnId: number, type: string): Promise<void> {
       );
     }
     heading.value = block.gist || block.preview || 'Thread';
-    upsertTurnToSurfaces(block, block.type);
+    upsertTurnToSurfaces(block, block.type, { ticket });
     hydrated.value = true;
   } catch {
     if (session.panelThreadId !== turnId || session.panelType !== type) return; // superseded
@@ -120,12 +125,13 @@ async function _openDelegate(target: DelegateRef): Promise<void> {
     accepts: (id) => id === target.turn_id,
   });
 
+  const ticket = nextTicket(); // same race as `_open`, against the delegate's settle
   try {
     const block = await convoApi.delegateThread(target.turn_id, target.channel);
     if (!isOpenDelegate(target)) return; // superseded
     hydrated.value = true;
     expired.value = block.messages.length === 0;
-    if (!expired.value) upsertDelegateTurn(block);
+    if (!expired.value) upsertDelegateTurn(block, { ticket });
   } catch (err) {
     if (!isOpenDelegate(target)) return; // superseded
     console.warn('[ThreadPanel] delegate turn', target.turn_id, 'on', target.channel, 'failed to load', err);

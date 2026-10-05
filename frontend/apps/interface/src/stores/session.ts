@@ -34,6 +34,7 @@ import {
   isTurnWorking,
   liveWorkingKeys,
   markThreadLane,
+  nextTicket,
   resolveScopeContainer,
   setTurnDone,
   setTurnWorking,
@@ -228,6 +229,10 @@ export const useSessionStore = defineStore('session', {
         const turnId = Number(key.slice(idx + 1));
 
         let block;
+        // Ticketed even though only a settled block is applied below: its mark
+        // stops a refetch sent before the drop, still answering, from landing
+        // on top of it (see turnDom's `UpsertOptions.ticket`).
+        const ticket = nextTicket();
         try {
           block = await convoApi.thread(turnId, type);
         } catch {
@@ -243,7 +248,7 @@ export const useSessionStore = defineStore('session', {
           // rows never appear, and any send echo mounted for this scope has no
           // terminal clear path and ghosts forever (the land hook fired here
           // clears it).
-          upsertTurnToSurfaces(block, type);
+          upsertTurnToSurfaces(block, type, { ticket });
           // D16 gate is the FULL (turn_id, type) pair — turn_id alone is only
           // unique per channel, so a same-id turn in a different channel must
           // not be treated as the one open in the panel.

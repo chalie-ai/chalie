@@ -27,6 +27,7 @@ import { isDelegateChannel } from './delegateChannel';
 import {
   findTurnType,
   hasDelegateSurface,
+  nextTicket,
   setTurnDone,
   setTurnWorking,
   upsertDelegateTurn,
@@ -399,15 +400,16 @@ function _dispatchDelegateExecution(turnId: number, channel: string, state: stri
  *  (session.ts). Never rejects: a failed read (including a block echoed back
  *  on another channel) is warned about and leaves the DOM as is. An empty
  *  block is an expired transcript, which the panel shows itself, so it is
- *  never rendered as a turn. */
+ *  never rendered as a turn. Ticketed like `_refetchAndUpsert`. */
 export async function refetchDelegate(
   turnId: number,
   channel: string,
   options: { force?: boolean } = {},
 ): Promise<void> {
+  const ticket = nextTicket();
   try {
     const block = await convoApi.delegateThread(turnId, channel);
-    if (block.messages.length) upsertDelegateTurn(block, options);
+    if (block.messages.length) upsertDelegateTurn(block, { ...options, ticket });
   } catch (err) {
     console.warn('[driftDispatcher] delegate refetch failed for turn', turnId, channel, err);
   }
@@ -418,12 +420,16 @@ export async function refetchDelegate(
  * carries its own authoritative `type` (turn_id is only unique PER TYPE) —
  * that's trusted over whatever type this call was made with, loudly warning
  * on disagreement rather than silently upserting under the wrong channel.
+ * Ticketed before the read, so an earlier refetch answering after this one
+ * (an `updated` read landing after the settle's) is dropped rather than
+ * repainting the turn as still working (see turnDom's `UpsertOptions.ticket`).
  */
 async function _refetchAndUpsert(
   turnId: number,
   type: string,
   options: { force?: boolean } = {},
 ): Promise<void> {
+  const ticket = nextTicket();
   const block = await convoApi.thread(turnId, type);
   if (block.type !== type) {
     console.warn(
@@ -431,7 +437,7 @@ async function _refetchAndUpsert(
       'but was requested as', type, '— trusting the fetched type',
     );
   }
-  upsertTurnToSurfaces(block, block.type, options);
+  upsertTurnToSurfaces(block, block.type, { ...options, ticket });
 }
 
 /**
