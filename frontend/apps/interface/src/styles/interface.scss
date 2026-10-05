@@ -343,11 +343,11 @@ body {
   // Must sit above every shell layer (bars at 100, banners at 1000); until the
   // ready-gate is wired we layer the overlay on top so the dock can't poke through.
   z-index: 1100;
-  background: #06080e; // always dark — stays consistent in both themes
+  background: var(--bg);
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: opacity 220ms ease;
+  transition: opacity var(--dur-2) var(--ease-out);
 }
 
 .loading-overlay.loading-overlay--fading {
@@ -367,7 +367,7 @@ body {
   height: 18px;
   border-radius: 50%;
   background: var(--pink);
-  animation: loadingGlow 2s ease-in-out infinite;
+  animation: working 1.4s ease-in-out infinite;
 }
 
 .loading-overlay__text {
@@ -384,49 +384,15 @@ body {
   font-size: 13px;
   cursor: pointer;
   padding: 4px 8px;
-  opacity: 0;
-  animation: loadingTextFadeIn 400ms ease 4s both;
-  transition: color 220ms ease;
+  animation: fade var(--dur-2) var(--ease-out) 4s both;
+  transition: color var(--dur-1) var(--ease-out);
 }
 
-.loading-overlay__skip:hover { color: var(--muted); }
-
-.loading-overlay__skip:focus-visible {
-  outline: 1.5px solid rgba(var(--bs-primary-rgb), 0.45);
-  outline-offset: 2px;
-}
-
-@keyframes formEntry {
-  from { opacity: 0; transform: translateY(6px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-
-// ── Weave motion (canonical bodies from the threading design system) ──
-// Single signature easing for all of these is var(--ease-out) = cubic-bezier(0.16,1,0.3,1).
-@keyframes panelSlide {
-  from { transform: translateX(48px); }
-  to   { transform: translateX(0); }
-}
-
-@keyframes overlayIn {
-  from { opacity: 0; }
-  to   { opacity: 1; }
-}
-
-@keyframes cardEnter {
-  from { opacity: 0; transform: translateY(8px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-
-// Status-dot heartbeat (thinking threads) and gist-glyph twinkle.
-@keyframes pulseV {
-  0%, 100% { opacity: 0.55; transform: scale(1); }
-  50%       { opacity: 1;    transform: scale(1.4); }
-}
+.loading-overlay__skip:hover { color: var(--text); }
 
 // Thread activity marker (blinker) — one definition shared by the user activity
 // dock (TaskDrawer) and the scheduler dock. Working (pink) pulses while the reply
-// streams; done (blue) is a steady standing marker until the user opens the thread.
+// streams; done is a steady standing marker until the user opens the thread.
 .thread-activity-dot {
   flex-shrink: 0;
   width: 8px;
@@ -435,17 +401,12 @@ body {
 
   &.working {
     background: var(--pink);
-    animation: pulseV 1.4s ease-in-out infinite;
+    animation: working 1.4s ease-in-out infinite;
   }
 
   &.done {
-    background: var(--pink);
+    background: var(--text);
   }
-}
-
-@keyframes glyphTwinkle {
-  0%, 100% { opacity: 0.55; }
-  50%       { opacity: 1; }
 }
 
 // Base layer (feed + footer dock) recedes behind an open thread panel — the
@@ -453,17 +414,7 @@ body {
 .weave-dimmed {
   opacity: 0.5;
   pointer-events: none;
-  transition: opacity var(--dur-2) var(--ease-out), filter var(--dur-2) var(--ease-out);
-}
-
-@keyframes loadingGlow {
-  0%, 100% { }
-  50%       { }
-}
-
-@keyframes loadingTextFadeIn {
-  from { opacity: 0; transform: translateY(4px); }
-  to   { opacity: 1; transform: translateY(0); }
+  transition: opacity var(--dur-2) var(--ease-out);
 }
 
 // Action buttons (send / attach / voice)
@@ -476,8 +427,23 @@ body {
   justify-content: center;
   cursor: pointer;
   line-height: 1;
-  transition: all var(--dur-1);
+  transition: background-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
   flex-shrink: 0;
+}
+
+// One press response, shared by every button in this file.
+.btn-action:active,
+.voice-rec-btn:active,
+.btn-icon:active,
+.thinking-select__trigger:active,
+.thinking-select__item:active,
+.loading-overlay__skip:active,
+.chalie-toast__undo:active,
+.banner-dismiss:active,
+.update-banner__action:active,
+.update-banner__dismiss:active,
+.dock-error__close:active {
+  translate: 0 1px;
 }
 
 .btn-action--attach {
@@ -488,22 +454,18 @@ body {
 .btn-action--attach svg { width: 18px; height: 18px; }
 
 .btn-action--attach:hover {
-  background: color-mix(in oklab, var(--pink) 12%, transparent);
+  background: var(--cell);
   color: var(--pink-text);
 }
 
 .btn-action--send {
   background: var(--pink);
-  color: #fff;
-  transition: all 220ms ease;
+  color: var(--on-pink);
 }
 
 .btn-action--send:hover:not(:disabled) {
-  filter: brightness(1.08);
-}
-
-.btn-action--send:active:not(:disabled) {
-  transform: scale(0.92);
+  background: var(--text);
+  color: var(--bg);
 }
 
 .btn-action--send:disabled {
@@ -522,11 +484,11 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: color var(--dur-1), background var(--dur-1);
+  transition: color var(--dur-1) var(--ease-out), background-color var(--dur-1) var(--ease-out);
 }
 
 .voice-rec-btn:hover {
-  background: color-mix(in oklab, var(--pink) 12%, transparent);
+  background: var(--cell);
   color: var(--pink-text);
 }
 
@@ -534,7 +496,7 @@ body {
 .voice-rec-btn[data-state="idle"] .voice-rec-btn__dot     { display: none; }
 .voice-rec-btn[data-state="idle"] .voice-rec-btn__spinner { display: none; }
 
-.voice-rec-btn[data-state="recording"] { color: #E06C6C; }
+.voice-rec-btn[data-state="recording"] { color: var(--deny-text); }
 .voice-rec-btn[data-state="recording"] .voice-rec-btn__mic     { display: none; }
 .voice-rec-btn[data-state="recording"] .voice-rec-btn__dot     { display: block; }
 .voice-rec-btn[data-state="recording"] .voice-rec-btn__spinner { display: none; }
@@ -547,13 +509,8 @@ body {
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  background: #E06C6C;
-  animation: voiceRecPulse 1s ease-in-out infinite;
-}
-
-@keyframes voiceRecPulse {
-  0%, 100% { transform: scale(1); opacity: 1; }
-  50%       { transform: scale(1.4); opacity: 0.6; }
+  background: var(--deny);
+  animation: working 1.4s ease-in-out infinite;
 }
 
 .voice-rec-btn__spinner {
@@ -563,12 +520,6 @@ body {
   border-top-color: var(--muted);
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
-}
-
-/* Canonical spin keyframe — the single 360° rotation every inline loading
-   spinner uses (history, thread panel, voice, action cards, update prompt). */
-@keyframes spin {
-  to { transform: rotate(360deg); }
 }
 
 // Shared icon button — navbar, drawer close, update prompt, etc.
@@ -581,7 +532,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: color var(--dur-1);
+  transition: color var(--dur-1) var(--ease-out);
 }
 
 .btn-icon:hover  { color: var(--text); }
@@ -618,11 +569,11 @@ body {
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--muted);
-  transition: border-color var(--dur-1), color var(--dur-1);
+  transition: border-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
 }
 
 .thinking-select__trigger:hover {
-  border-color: color-mix(in oklab, var(--control) 60%, transparent);
+  border-color: var(--text);
   color: var(--text);
 }
 
@@ -651,8 +602,8 @@ body {
   flex-direction: column;
   gap: 2px;
   padding: var(--space-xs);
-  background: color-mix(in oklab, var(--text) 5%, transparent);
-  border: 1px solid color-mix(in oklab, var(--text) 8%, transparent);
+  background: var(--surface);
+  border: 1px solid var(--line);
 }
 
 .thinking-select__menu.hidden { display: none; }
@@ -665,10 +616,10 @@ body {
   padding: var(--space-sm) var(--space-md);
   font-size: var(--font-size-sm);
   color: var(--text);
-  transition: background 220ms ease;
+  transition: background-color var(--dur-1) var(--ease-out);
 }
 
-.thinking-select__item:hover  { background: color-mix(in oklab, var(--pink) 8%, transparent); }
+.thinking-select__item:hover  { background: var(--surface-2); }
 .thinking-select__item.active { color: var(--pink-text); font-weight: 600; }
 
 .context-display {
@@ -719,18 +670,6 @@ body {
   .btn-action { width: 32px; height: 32px; }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .loading-overlay__dot { animation: none; }
-  .loading-overlay__skip { animation: none; opacity: 1; }
-}
-
-// Backdrop-filter doesn't print — substitute the opaque scrim fallback.
-@media print {
-  .presence-bar { background: var(--scrim-fallback); }
-  .input-dock   { background: var(--scrim-fallback); }
-  .connection-banner { background: rgba(40, 20, 20, 0.95); }
-}
-
 // Transient toast (showToast): undo confirmations + provider-retry notices.
 // Theme vars resolve per data-theme, so one rule covers dark and light.
 .chalie-toast {
@@ -759,7 +698,4 @@ body {
   color: var(--pink-text);
   font-weight: 600;
   cursor: pointer;
-}
-@media (prefers-reduced-motion: reduce) {
-  .chalie-toast { transition: none; }
 }

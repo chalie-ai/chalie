@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>It thinks while you're not looking.</strong><br>
-  An open-source personal AI that runs on your own machine — it remembers what matters, works while you're away, and asks before it acts.
+  An open-source personal AI that runs on your own machine — it remembers what matters and acts only within the rules you set.
 </p>
 
 <p align="center">
