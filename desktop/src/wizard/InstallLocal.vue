@@ -189,13 +189,13 @@ async function makeAccount(username: string, password: string): Promise<void> {
       <button
         v-if="hasAccountAlready"
         type="button"
-        class="primary"
+        class="btn btn-primary"
         @click="emit('sign-in', host, port)"
       >
         Sign in instead
       </button>
-      <button v-else type="button" class="primary" @click="run">Try again</button>
-      <button type="button" @click="emit('back')">Back</button>
+      <button v-else type="button" class="btn btn-primary" @click="run">Try again</button>
+      <button type="button" class="btn" @click="emit('back')">Back</button>
     </div>
   </template>
 </template>

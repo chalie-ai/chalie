@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 
+import ChalieMark from '../../frontend/packages/shared/src/ui/ChalieMark.vue';
+
 import { DEFAULT_PORT, autoConnect, detectLocal, getSetupState, onInstallPhase } from './wizard/api';
 import type { InstallPhase, UnlistenFn } from './wizard/api';
 import { describeError } from './wizard/errors';
@@ -200,6 +202,8 @@ function backToStart(): void {
 
 <template>
   <main>
+    <ChalieMark :size="40" class="mark" />
+
     <template v-if="step === 'loading'">
       <h1>Chalie</h1>
       <p class="lead">Reading your setup…</p>
@@ -210,8 +214,10 @@ function backToStart(): void {
       <p class="lead">{{ connectingLead }}</p>
       <Message v-if="failure" tone="error" :text="failure.text" :detail="failure.detail" />
       <div class="actions">
-        <button v-if="failure" type="button" class="primary" @click="resume">Try again</button>
-        <button type="button" @click="backToStart">
+        <button v-if="failure" type="button" class="btn btn-primary" @click="resume">
+          Try again
+        </button>
+        <button type="button" class="btn" @click="backToStart">
           {{ failure ? 'Use a different Chalie' : 'Cancel' }}
         </button>
       </div>
@@ -221,7 +227,7 @@ function backToStart(): void {
       <h1>Chalie</h1>
       <p class="lead">Looking for a Chalie on this Mac…</p>
       <div class="actions">
-        <button type="button" @click="backToStart">Cancel</button>
+        <button type="button" class="btn" @click="backToStart">Cancel</button>
       </div>
     </template>
 

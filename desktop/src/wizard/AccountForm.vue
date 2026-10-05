@@ -58,23 +58,31 @@ function submit(): void {
     <fieldset :disabled="busy">
       <Message v-if="notice" :text="notice" />
 
-      <label for="username">Username</label>
-      <input id="username" v-model="username" autocapitalize="off" autocorrect="off"
-             spellcheck="false" autocomplete="username" />
+      <div class="form-group">
+        <label for="username" class="lbl">Username</label>
+        <input id="username" v-model="username" autocapitalize="off" autocorrect="off"
+               spellcheck="false" autocomplete="username" />
+      </div>
 
-      <label for="password">Password</label>
-      <input id="password" v-model="password" type="password" autocomplete="new-password" />
+      <div class="form-group">
+        <label for="password" class="lbl">Password</label>
+        <input id="password" v-model="password" type="password" autocomplete="new-password" />
+      </div>
 
-      <label for="confirmation">Password again</label>
-      <input id="confirmation" v-model="confirmation" type="password"
-             autocomplete="new-password" />
+      <div class="form-group">
+        <label for="confirmation" class="lbl">Password again</label>
+        <input id="confirmation" v-model="confirmation" type="password"
+               autocomplete="new-password" />
+      </div>
 
       <Message v-if="asked && problem" tone="error" :text="problem" />
       <Message v-else-if="failure" tone="error" :text="failure.text" :detail="failure.detail" />
 
       <div class="actions">
-        <button type="submit" class="primary">{{ busy ? 'Working…' : submitLabel }}</button>
-        <button type="button" @click="emit('back')">Back</button>
+        <button type="submit" class="btn btn-primary">
+          {{ busy ? 'Working…' : submitLabel }}
+        </button>
+        <button type="button" class="btn" @click="emit('back')">Back</button>
       </div>
     </fieldset>
   </form>

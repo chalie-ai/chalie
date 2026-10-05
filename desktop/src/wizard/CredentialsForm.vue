@@ -42,19 +42,25 @@ async function submit(): Promise<void> {
     <fieldset :disabled="busy">
       <Message v-if="notice" :text="notice" />
 
-      <label for="username">Username</label>
-      <input id="username" v-model="username" required autocapitalize="off" autocorrect="off"
-             spellcheck="false" autocomplete="username" />
+      <div class="form-group">
+        <label for="username" class="lbl">Username</label>
+        <input id="username" v-model="username" required autocapitalize="off" autocorrect="off"
+               spellcheck="false" autocomplete="username" />
+      </div>
 
-      <label for="password">Password</label>
-      <input id="password" v-model="password" type="password" required
-             autocomplete="current-password" />
+      <div class="form-group">
+        <label for="password" class="lbl">Password</label>
+        <input id="password" v-model="password" type="password" required
+               autocomplete="current-password" />
+      </div>
 
       <Message v-if="failure" tone="error" :text="failure.text" :detail="failure.detail" />
 
       <div class="actions">
-        <button type="submit" class="primary">{{ busy ? 'Connecting…' : 'Connect' }}</button>
-        <button type="button" @click="emit('back')">Back</button>
+        <button type="submit" class="btn btn-primary">
+          {{ busy ? 'Connecting…' : 'Connect' }}
+        </button>
+        <button type="button" class="btn" @click="emit('back')">Back</button>
       </div>
     </fieldset>
   </form>

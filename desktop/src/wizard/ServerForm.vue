@@ -46,12 +46,16 @@ async function check(): Promise<void> {
 
   <form @submit.prevent="check">
     <fieldset :disabled="busy">
-      <label for="host">Host</label>
-      <input id="host" v-model="host" required autocapitalize="off" autocorrect="off"
-             spellcheck="false" placeholder="chalie.example.com" />
+      <div class="form-group">
+        <label for="host" class="lbl">Host</label>
+        <input id="host" v-model="host" required autocapitalize="off" autocorrect="off"
+               spellcheck="false" placeholder="chalie.example.com" />
+      </div>
 
-      <label for="port">Port</label>
-      <input id="port" v-model.number="port" type="number" required min="1" max="65535" />
+      <div class="form-group">
+        <label for="port" class="lbl">Port</label>
+        <input id="port" v-model.number="port" type="number" required min="1" max="65535" />
+      </div>
 
       <Message v-if="failure" tone="error" :text="failure.text" :detail="failure.detail" />
       <Message
@@ -64,14 +68,14 @@ async function check(): Promise<void> {
       />
 
       <div class="actions">
-        <button v-if="status" type="button" class="primary"
+        <button v-if="status" type="button" class="btn btn-primary"
                 @click="emit('ready', host.trim(), port, status.has_master_account)">
           Continue
         </button>
-        <button v-else type="submit" class="primary">
+        <button v-else type="submit" class="btn btn-primary">
           {{ busy ? 'Checking…' : 'Check' }}
         </button>
-        <button type="button" @click="emit('back')">Back</button>
+        <button type="button" class="btn" @click="emit('back')">Back</button>
       </div>
     </fieldset>
   </form>

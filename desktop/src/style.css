@@ -1,31 +1,21 @@
-:root {
-  color-scheme: light dark;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  font-size: 15px;
-  line-height: 1.5;
-}
-
-body {
-  margin: 0;
-  display: flex;
-  justify-content: center;
-  min-height: 100vh;
-}
-
 #app {
-  width: 100%;
   max-width: 30rem;
-  padding: 3rem 1.5rem;
+  margin-inline: auto;
+  padding: var(--space-xl) var(--space-lg);
+}
+
+.mark {
+  margin-bottom: var(--space-lg);
 }
 
 h1 {
   font-size: 1.35rem;
-  margin: 0 0 0.25rem;
+  margin: 0 0 var(--space-xs);
 }
 
-p.lead {
-  margin: 0 0 1.5rem;
-  opacity: 0.75;
+.lead {
+  margin: 0 0 var(--space-lg);
+  color: var(--muted);
 }
 
 fieldset {
@@ -34,95 +24,71 @@ fieldset {
   padding: 0;
 }
 
-label {
+.form-group .lbl {
   display: block;
-  font-weight: 600;
-  margin-bottom: 0.25rem;
+  margin-bottom: var(--space-xs);
 }
 
 input {
   width: 100%;
-  box-sizing: border-box;
-  padding: 0.5rem 0.6rem;
-  margin-bottom: 1rem;
-  font: inherit;
-  border: 1px solid rgba(128, 128, 128, 0.5);
-  border-radius: 6px;
-  background: transparent;
-  color: inherit;
-}
-
-button {
-  font: inherit;
-  padding: 0.5rem 1rem;
-  border-radius: 6px;
-  border: 1px solid rgba(128, 128, 128, 0.5);
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-}
-
-button[type='submit'],
-button.primary {
-  border-color: transparent;
-  background: #2d6cdf;
-  color: #fff;
-}
-
-button[disabled] {
-  opacity: 0.5;
-  cursor: default;
+  padding: var(--space-sm);
 }
 
 .choices {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: var(--space-sm);
 }
 
-.choices button {
+.choices .btn {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-xs);
+  padding: var(--space-md);
+  line-height: 1.4;
   text-align: left;
-  padding: 1rem;
 }
 
 .choices small {
-  display: block;
   font-weight: 400;
-  opacity: 0.75;
+}
+
+/* On the pink fill it keeps the button's own text colour. */
+.choices .btn:not(.btn-primary) small {
+  color: var(--muted);
 }
 
 .actions {
   display: flex;
-  gap: 0.75rem;
+  gap: var(--space-sm);
   align-items: center;
 }
 
 .message {
-  margin: 0 0 1rem;
-  padding: 0.6rem 0.75rem;
-  border-radius: 6px;
-  border: 1px solid rgba(128, 128, 128, 0.4);
+  margin: 0 0 var(--space-md);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--surface);
+  border: 1px solid var(--line);
 }
 
 .message.error {
-  border-color: #d05353;
+  border-color: var(--deny);
 }
 
 .message small {
   display: block;
-  opacity: 0.75;
+  color: var(--muted);
   word-break: break-word;
 }
 
 .output {
   height: 12rem;
   overflow-y: auto;
-  margin-bottom: 1rem;
-  padding: 0.6rem 0.75rem;
-  border: 1px solid rgba(128, 128, 128, 0.4);
-  border-radius: 6px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.8rem;
+  margin-bottom: var(--space-md);
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--line);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
   white-space: pre-wrap;
   word-break: break-word;
 }
