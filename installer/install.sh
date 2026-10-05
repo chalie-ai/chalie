@@ -28,23 +28,22 @@ _TAG=""
 # ─── Colours ────────────────────────────────────────────────────────────────
 _reset="\033[0m"
 _bold="\033[1m"
-_violet="\033[35m"
-_cyan="\033[36m"
-_green="\033[32m"
-_yellow="\033[33m"
-_red="\033[31m"
+_pink="\033[38;5;205m"
+_green="\033[38;5;85m"
+_yellow="\033[38;5;221m"
+_red="\033[38;5;203m"
 
-_info()    { printf "  ${_cyan}→${_reset}  %s\n" "$*"; }
+_info()    { printf "  ${_pink}→${_reset}  %s\n" "$*"; }
 _ok()      { printf "  ${_green}✓${_reset}  %s\n" "$*"; }
 _warn()    { printf "  ${_yellow}⚠${_reset}  %s\n" "$*"; }
 _error()   { printf "  ${_red}✗${_reset}  %s\n" "$*" >&2; }
-_section() { printf "\n${_bold}${_violet}%s${_reset}\n" "$*"; }
+_section() { printf "\n${_bold}${_pink}%s${_reset}\n" "$*"; }
 _banner() {
   printf "\n"
-  printf "${_violet}  ┌─────────────────────────────────────────────┐${_reset}\n"
-  printf "${_violet}  │${_reset}    ${_bold}Chalie Installer${_reset}                            ${_violet}│${_reset}\n"
-  printf "${_violet}  │${_reset}    ${_cyan}A personal intelligence layer${_reset}               ${_violet}│${_reset}\n"
-  printf "${_violet}  └─────────────────────────────────────────────┘${_reset}\n"
+  printf "${_pink}  ┌─────────────────────────────────────────────┐${_reset}\n"
+  printf "${_pink}  │${_reset}    ${_bold}Chalie Installer${_reset}                            ${_pink}│${_reset}\n"
+  printf "${_pink}  │${_reset}    A personal intelligence layer               ${_pink}│${_reset}\n"
+  printf "${_pink}  └─────────────────────────────────────────────┘${_reset}\n"
   printf "\n"
 }
 
@@ -707,11 +706,11 @@ _print_success() {
   printf "${_green}${_bold}  ┌─────────────────────────────────────────────┐${_reset}\n"
   printf "${_green}${_bold}  │${_reset}  ${_bold}Chalie is installed!${_reset}                        ${_green}${_bold}│${_reset}\n"
   printf "${_green}${_bold}  │${_reset}                                             ${_green}${_bold}│${_reset}\n"
-  printf "${_green}${_bold}  │${_reset}    ${_cyan}chalie${_reset}              Start on port 31025${_green}${_bold}│${_reset}\n"
-  printf "${_green}${_bold}  │${_reset}    ${_cyan}chalie --port=9000${_reset}  Custom port           ${_green}${_bold}│${_reset}\n"
-  printf "${_green}${_bold}  │${_reset}    ${_cyan}chalie stop${_reset}         Stop                  ${_green}${_bold}│${_reset}\n"
-  printf "${_green}${_bold}  │${_reset}    ${_cyan}chalie update${_reset}       Update to latest      ${_green}${_bold}│${_reset}\n"
-  printf "${_green}${_bold}  │${_reset}    ${_cyan}chalie logs${_reset}         Follow logs           ${_green}${_bold}│${_reset}\n"
+  printf "${_green}${_bold}  │${_reset}    ${_pink}chalie${_reset}              Start on port 31025${_green}${_bold}│${_reset}\n"
+  printf "${_green}${_bold}  │${_reset}    ${_pink}chalie --port=9000${_reset}  Custom port           ${_green}${_bold}│${_reset}\n"
+  printf "${_green}${_bold}  │${_reset}    ${_pink}chalie stop${_reset}         Stop                  ${_green}${_bold}│${_reset}\n"
+  printf "${_green}${_bold}  │${_reset}    ${_pink}chalie update${_reset}       Update to latest      ${_green}${_bold}│${_reset}\n"
+  printf "${_green}${_bold}  │${_reset}    ${_pink}chalie logs${_reset}         Follow logs           ${_green}${_bold}│${_reset}\n"
   printf "${_green}${_bold}  └─────────────────────────────────────────────┘${_reset}\n"
   printf "\n"
 }
