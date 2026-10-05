@@ -280,10 +280,7 @@ onBeforeUnmount(() => {
   z-index: 120;
   display: flex;
   flex-direction: column;
-  background: var(--scrim-panel-main);
-  // Published for .user-text--clamped::after (conversation.scss) — rows in
-  // this panel sit on the translucent scrim, not the page background.
-  --row-fade-bg: var(--scrim-panel-main);
+  background: var(--surface);
   border-left: 1px solid var(--line);
   overflow: hidden;
 }
@@ -311,13 +308,18 @@ onBeforeUnmount(() => {
     500 13px var(--font-ui);
   cursor: pointer;
   transition:
-    color var(--dur-1),
-    background var(--dur-1);
+    color var(--dur-1) var(--ease-out),
+    background-color var(--dur-1) var(--ease-out),
+    translate var(--dur-1) var(--ease-out);
 }
 
 .thread-panel__back:hover {
   color: var(--text);
-  background: var(--line);
+  background: var(--surface-2);
+}
+
+.thread-panel__back:active {
+  translate: 0 1px;
 }
 
 .thread-panel__divider {
@@ -391,34 +393,20 @@ onBeforeUnmount(() => {
 .thread-panel__spinner {
   width: 20px;
   height: 20px;
-  border: 2px solid color-mix(in oklab, var(--pink-text) 20%, transparent);
+  border: 2px solid var(--line);
   border-top-color: var(--pink-text);
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
 }
 
-.thread-panel-enter-active {
-  animation: panelSlide 0.4s var(--ease-out);
+// The panel slides in on open and plays the same slide backwards on close.
+.thread-panel-enter-active,
+.thread-panel-leave-active {
+  animation: slide-in var(--dur-3) var(--ease-out);
 }
 
 .thread-panel-leave-active {
-  transition:
-    opacity 200ms ease,
-    transform 200ms ease;
-}
-
-.thread-panel-leave-to {
-  opacity: 0;
-  transform: translateX(48px);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .thread-panel-enter-active {
-    animation: none;
-  }
-
-  .thread-panel-leave-active {
-    transition: none;
-  }
+  animation-direction: reverse;
+  animation-fill-mode: forwards;
 }
 </style>

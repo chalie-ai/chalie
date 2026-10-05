@@ -1,5 +1,5 @@
 // Conversation component styles. Colors use CSS-var tokens for dark+light (Rule 7).
-// Depends on @chalie/shared/styles/main.scss + interface.scss loaded first (tokens, keyframes).
+// Depends on @chalie/shared/styles/main.scss (tokens, keyframes) + interface.scss loaded first.
 
 // --------------------------------------------------------------------------
 // 0. Date divider — day-group marker in the spine
@@ -32,19 +32,7 @@
   padding: var(--space-lg);
   background: var(--surface);
   border: 1px solid var(--line);
-  animation: formEntry 200ms var(--ease-out) both;
-  transition: background 420ms ease, border-color 400ms ease, box-shadow 400ms ease;
-}
-
-// Neon accent stripe — left for Chalie (violet), right for user (cyan)
-.speech-form::before {
-  content: '';
-  position: absolute;
-  top: 14px;
-  bottom: 14px;
-  width: 2px;
-  z-index: 1;
-  pointer-events: none;
+  animation: rise var(--dur-2) var(--ease-out);
 }
 
 // --------------------------------------------------------------------------
@@ -62,12 +50,6 @@
   background: var(--surface-2);
   border: 1px solid var(--line);
   padding: 11px 15px;
-  // The clamped-text fade (.user-text--clamped::after) resolves against
-  // --row-fade-bg. --bg-surface-2 is translucent, so publish the bubble's
-  // actual composited (opaque) appearance here instead of letting the fade
-  // fall back to the page background — otherwise the fade barely occludes
-  // the text and leaves a visible seam against the bubble.
-  --row-fade-bg: var(--user-bubble-fade);
 }
 
 // Names who wrote the row when it is not the user — a delegate transcript's
@@ -89,29 +71,14 @@
   color: var(--text);
 }
 
-// Collapsed long message: clamp to 5 lines with a soft fade hinting at more text
-// below. The fade resolves to --row-fade-bg, a custom property the hosting
-// surface publishes (bubble / feed / panel) so it matches whichever backdrop
-// the row sits on, in both the dark and light themes. .user-message publishes
-// its own opaque composited colour (see --user-bubble-fade in _tokens.scss)
-// since --bg-surface-2 itself is translucent and would barely occlude the text.
+// Collapsed long message: clamp to 5 lines; the clamp ends the last line in an
+// ellipsis, hinting at more text below.
 .user-text--clamped {
   display: -webkit-box;
   -webkit-line-clamp: 5;
   line-clamp: 5;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  position: relative;
-}
-
-.user-text--clamped::after {
-  content: '';
-  position: absolute;
-  inset-inline: 0;
-  bottom: 0;
-  height: 2.4em;
-  background: linear-gradient(to bottom, transparent, var(--row-fade-bg));
-  pointer-events: none;
 }
 
 .user-text__toggle {
@@ -124,20 +91,11 @@
   font-size: 0.78rem;
   letter-spacing: 0.01em;
   color: var(--muted);
-  transition: color 150ms ease;
+  transition: color var(--dur-1) var(--ease-out);
 }
 
 .user-text__toggle:hover {
-  color: var(--pink-text);
-}
-
-// Hard no-shadow guard inside bubbles
-.speech-form,
-.speech-form *,
-.speech-form::before,
-.speech-form::after,
-.speech-form *::before,
-.speech-form *::after {
+  color: var(--text);
 }
 
 .speech-form--chalie {
@@ -147,16 +105,6 @@
   width: 100%;
   max-width: 100%;
   padding: 0;
-}
-
-// No accent stripe on Chalie — full-bleed text on the spine
-.speech-form--chalie::before {
-  display: none;
-}
-
-// Faded messages — outside working memory
-.message--faded {
-  opacity: 0.75;
 }
 
 .speech-form__text {
@@ -192,16 +140,15 @@
   line-height: 1.4;
   letter-spacing: -0.005em;
   color: var(--muted);
-  transition: color 150ms ease;
+  transition: color var(--dur-1) var(--ease-out);
 }
 
 .user-attachments__item:hover {
-  color: var(--pink-text);
+  color: var(--text);
 }
 
 .user-attachments__icon {
   flex-shrink: 0;
-  opacity: 0.7;
 }
 
 .user-attachments__name {
@@ -237,7 +184,6 @@
 .speech-form__timestamp {
   font-size: 0.72rem;
   color: var(--muted);
-  opacity: 0.85;
   letter-spacing: 0.04em;
 }
 
@@ -261,15 +207,14 @@
   }
 }
 
-// Footer action buttons (read-aloud, reply, copy). 26×26 ghost buttons that take
-// a per-action accent on hover.
+// Footer action buttons (read-aloud, reply, copy). 26×26 ghost buttons.
 .speech-form__act-btn {
   background: transparent;
   border: 0;
   color: var(--muted);
   cursor: pointer;
   padding: 0;
-  transition: background var(--dur-1), color var(--dur-1);
+  transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
   display: grid;
   place-items: center;
   width: 26px;
@@ -277,24 +222,12 @@
 }
 
 .speech-form__act-btn:hover {
-  background: color-mix(in oklab, var(--text) 8%, transparent);
+  background: var(--surface-2);
   color: var(--text);
 }
 
-.speech-form__act-btn--speak:hover {
-  color: var(--pink-text);
-}
-
-.speech-form__act-btn--reply:hover {
-  color: var(--pink-text);
-}
-
-.speech-form__act-btn--copy:hover {
-  color: var(--pink-text);
-}
-
 // Speech is synthesized in the background, so the speaker button reports a
-// pipeline it did not start. Pending breathes rather than spins — synthesis
+// pipeline it did not start. Pending pulses rather than spins — synthesis
 // takes seconds and a still button reads as a dead one; failed is terminal, so
 // it goes red and stops responding instead of inviting a press that can only
 // fail again. Both drop the hover accent by refusing pointer events.
@@ -305,18 +238,11 @@
 }
 
 .speech-form__act-btn--pending {
-  animation: speak-breathe 1.8s ease-in-out infinite;
+  animation: working 1.4s ease-in-out infinite;
 }
 
 .speech-form__act-btn--failed {
   color: var(--deny-text);
-  opacity: 0.65;
-}
-
-@keyframes speak-breathe {
-  0%,
-  100% { opacity: 0.8; }
-  50% { opacity: 0.25; }
 }
 
 // --------------------------------------------------------------------------
@@ -332,22 +258,25 @@
   font-size: 0.72rem;
   color: var(--muted);
   background: var(--surface-2);
-  border: 1px solid var(--line);
+  border: 1px solid var(--control);
   cursor: pointer;
   white-space: nowrap;
   flex-shrink: 0;
-  transition: border-color var(--dur-1), color var(--dur-1), background var(--dur-1);
+  transition:
+    border-color var(--dur-1) var(--ease-out),
+    color var(--dur-1) var(--ease-out),
+    background var(--dur-1) var(--ease-out);
 }
 
 .trace-pill:hover,
 .trace-pill--open {
-  border-color: var(--control);
+  border-color: var(--text);
   color: var(--text);
 }
 
 // Open also lifts the fill, so it stays distinct from a hovered closed pill.
 .trace-pill--open {
-  background: color-mix(in oklab, var(--text) 8%, var(--surface-2));
+  background: var(--cell);
 }
 
 // Static marker — the dot signals "has a trace", never activity: each row's own
@@ -362,7 +291,7 @@
 .trace-body {
   display: grid;
   grid-template-rows: 0fr;
-  transition: grid-template-rows 220ms ease;
+  transition: grid-template-rows var(--dur-2) var(--ease-out);
 }
 
 .trace-body--open {
@@ -415,10 +344,20 @@
 .call--error .call__dot { background: var(--deny); }
 .call--started .call__dot { background: var(--muted); }
 
+// Rule-colour fills sit under 3:1 on the light grounds, so they take the glyph
+// outline.
+.call--done .call__dot,
+.call--error .call__dot {
+  outline: 1px solid var(--glyph-stroke);
+}
+
+// The transparent border reserves the room a failed call's status border takes,
+// so both chips are the same size.
 .call__fn {
   max-width: 100%;
-  padding: 1px 7px;
-  background: color-mix(in oklab, var(--text) 8%, transparent);
+  padding: 0 6px;
+  border: 1px solid transparent;
+  background: var(--cell);
   color: var(--text);
   font-family: var(--font-mono);
   font-size: 0.72rem;
@@ -431,10 +370,10 @@
   color: var(--muted);
 }
 
-// Red mixed toward --text-primary so it clears AA on its tint in both themes.
 .call--error .call__fn {
-  background: color-mix(in oklab, var(--deny) 12%, transparent);
-  color: color-mix(in oklab, var(--deny-text) 75%, var(--text));
+  background: var(--surface);
+  border-color: var(--deny);
+  color: var(--deny-text);
 }
 
 // A tool row whose call spawned a delegate turn is a button into that turn's
@@ -457,7 +396,13 @@
 
 .delegate-pill:hover,
 .delegate-pill:focus-visible {
-  background: color-mix(in oklab, var(--text) 5%, transparent);
+  background: var(--surface-2);
+}
+
+// A tool-card row already stands on surface-2.
+.call.delegate-pill:hover,
+.call.delegate-pill:focus-visible {
+  background: var(--cell);
 }
 
 .delegate-pill:focus-visible {
@@ -484,12 +429,11 @@
   align-items: center;
   font-size: 0.72rem;
   color: var(--muted);
-  opacity: 0.85;
   // It renders as an <a>, so the UA underline applies unless explicitly killed.
   text-decoration: none;
   cursor: pointer;
   flex-shrink: 0;
-  transition: opacity var(--dur-1);
+  transition: color var(--dur-1) var(--ease-out);
   background: none;
   border: none;
   padding: 0;
@@ -498,14 +442,13 @@
 }
 
 .thinking-link:hover {
-  opacity: 1;
+  color: var(--text);
 }
 
 .thinking-traces {
   font-family: var(--font-mono);
   font-size: 0.72rem;
   color: var(--muted);
-  opacity: 0.85;
   line-height: 1.5;
 }
 
@@ -529,15 +472,15 @@
   padding: 0 10px 0 11px;
   cursor: pointer;
   background: var(--surface-2);
-  border: 1px solid var(--line);
+  border: 1px solid var(--control);
   color: var(--text);
   font-size: 0.75rem;
   max-width: min(260px, 40%);
-  transition: border-color var(--dur-1), background var(--dur-1);
+  transition: border-color var(--dur-1) var(--ease-out), background var(--dur-1) var(--ease-out);
 }
 
 .thread-pill:hover {
-  border-color: var(--control);
+  border-color: var(--text);
 }
 
 .thread-pill__dot {
@@ -561,13 +504,15 @@
   flex-shrink: 0;
 }
 
+// Working and done match the thread-activity dots: working pulses pink, done is
+// a steady marker.
 .thread-pill--working .thread-pill__dot {
   background: var(--pink);
-  animation: pulseV 1.4s ease-in-out infinite;
+  animation: working 1.4s ease-in-out infinite;
 }
 
 .thread-pill--done .thread-pill__dot {
-  background: var(--pink);
+  background: var(--text);
 }
 
 .thread-pill--thread .thread-pill__dot {
@@ -576,34 +521,7 @@
 
 .thread-pill--idle .thread-pill__dot {
   background: transparent;
-  border: 1.5px solid color-mix(in oklab, var(--text) 30%, transparent);
-}
-
-// Escalation form (critic)
-.speech-form--escalation {
-  border-color: color-mix(in oklab, var(--ask-text) 25%, transparent);
-  margin-top: var(--space-lg);
-}
-
-.speech-form--escalation::before {
-  background: linear-gradient(
-    180deg,
-    transparent 0%,
-    color-mix(in oklab, var(--ask) 85%, transparent) 20%,
-    color-mix(in oklab, var(--ask) 85%, transparent) 80%,
-    transparent 100%
-  );
-}
-
-.speech-form--escalation::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, color-mix(in oklab, var(--ask) 30%, transparent), transparent);
-  pointer-events: none;
+  border: 1.5px solid var(--control);
 }
 
 // ACT cycle
@@ -614,7 +532,7 @@
   flex-direction: column;
   gap: 10px;
   padding: 4px 0;
-  animation: formEntry 200ms var(--ease-out) both;
+  animation: rise var(--dur-2) var(--ease-out);
 }
 
 .act-row {
@@ -630,14 +548,14 @@
   border-radius: 50%;
   background: var(--pink);
   flex-shrink: 0;
-  animation: act-logo-pulse 1.4s ease-in-out infinite;
+  animation: working 1.4s ease-in-out infinite;
 }
 
 // Bare-group anchor before any tool pill lands; evicted the moment one does.
 .act-placeholder {
   font-size: var(--font-size-sm);
   color: var(--muted);
-  animation: act-logo-pulse 1.4s ease-in-out infinite;
+  animation: working 1.4s ease-in-out infinite;
 }
 
 .act-stop-btn {
@@ -646,16 +564,15 @@
   color: var(--deny-text);
   cursor: pointer;
   padding: 4px;
-  opacity: 0.7;
-  transition: opacity 180ms ease, transform 180ms ease;
+  transition: background var(--dur-1) var(--ease-out), translate var(--dur-1) var(--ease-out);
   display: flex;
   align-items: center;
   flex-shrink: 0;
 }
 
-.act-stop-btn:hover { opacity: 1; transform: scale(1.15); }
-.act-stop-btn:active { transform: scale(0.9); }
-.act-stop-btn--stopping { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
+.act-stop-btn:hover { background: var(--surface-2); }
+.act-stop-btn:active { translate: 0 1px; }
+.act-stop-btn--stopping { opacity: 0.45; cursor: not-allowed; pointer-events: none; }
 
 // Indented under the logo (logo 12 + gap 12 = 24) to align with the row.
 .act-tools {
@@ -681,7 +598,7 @@
   line-height: 1.2;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.005em;
-  animation: formEntry 200ms var(--ease-out) both;
+  animation: rise var(--dur-2) var(--ease-out);
 }
 
 .act-tool__name {
@@ -715,44 +632,19 @@
 }
 
 .act-tool--running {
-  color: color-mix(in oklab, var(--text) 75%, transparent);
+  color: var(--muted);
 }
 
 .act-tool--done {
   color: var(--allow-text);
-  opacity: 0.9;
 }
 
 .act-tool--error {
   color: var(--deny-text);
-  opacity: 0.5;
 }
 
 // Live elapsed readout shown beside the spinner while a call runs.
 .act-tool__elapsed {
   margin-left: 6px;
   font-variant-numeric: tabular-nums;
-}
-
-@keyframes act-logo-pulse {
-  0%, 100% { opacity: 0.55; }
-  50%      { opacity: 1; }
-}
-
-// Meta-mode badge (cognitive signal)
-.meta-mode-badge {
-  font-size: 0.6rem;
-  letter-spacing: 0.06em;
-  padding: 1px 6px;
-  background: color-mix(in oklab, var(--text) 5%, transparent);
-  border: 1px solid color-mix(in oklab, var(--text) 8%, transparent);
-  color: color-mix(in oklab, var(--text) 50%, transparent);
-  margin-left: 8px;
-  vertical-align: middle;
-  animation: meta-fade-in 150ms ease both;
-}
-
-@keyframes meta-fade-in {
-  from { opacity: 0; }
-  to   { opacity: 1; }
 }

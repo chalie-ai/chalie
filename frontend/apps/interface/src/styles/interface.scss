@@ -455,7 +455,7 @@ body {
 
 .btn-action--attach:hover {
   background: var(--cell);
-  color: var(--pink-text);
+  color: var(--text);
 }
 
 .btn-action--send {
@@ -489,7 +489,7 @@ body {
 
 .voice-rec-btn:hover {
   background: var(--cell);
-  color: var(--pink-text);
+  color: var(--text);
 }
 
 .voice-rec-btn[data-state="idle"] .voice-rec-btn__mic     { display: block; }

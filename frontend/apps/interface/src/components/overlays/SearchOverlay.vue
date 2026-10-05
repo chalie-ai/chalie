@@ -109,12 +109,11 @@ function pick(item: ConversationThread): void {
   position: fixed;
   inset: 0;
   z-index: 1200;
-  background: var(--scrim-overlay);
   display: flex;
   flex-direction: column;
   align-items: center;
   padding-top: 78px;
-  animation: overlayIn 0.15s ease;
+  animation: fade var(--dur-2) var(--ease-out);
   font-family: var(--font-ui);
 }
 
@@ -122,7 +121,7 @@ function pick(item: ConversationThread): void {
   width: 580px;
   max-width: 92vw;
   background: var(--surface);
-  border: 1px solid color-mix(in oklab, var(--pink-text) 18%, transparent);
+  border: 1px solid var(--line);
   overflow: hidden;
 }
 
@@ -182,15 +181,22 @@ function pick(item: ConversationThread): void {
   padding: 10px 11px;
   cursor: pointer;
   color: var(--text);
+  transition:
+    background-color var(--dur-1) var(--ease-out),
+    translate var(--dur-1) var(--ease-out);
 }
 
 .result-row:disabled {
   cursor: default;
-  opacity: 0.5;
+  color: var(--muted);
 }
 
 .result-row:not(:disabled):hover {
-  background: color-mix(in oklab, var(--pink) 8%, transparent);
+  background: var(--surface-2);
+}
+
+.result-row:not(:disabled):active {
+  translate: 0 1px;
 }
 
 .result-body {
@@ -205,7 +211,6 @@ function pick(item: ConversationThread): void {
   display: block;
   font:
     600 12.5px var(--font-ui);
-  color: var(--text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
