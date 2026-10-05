@@ -1,32 +1,15 @@
 // Rich-Media Card shared chrome. GLOBAL (not scoped) because every card SFC
 // reuses it: a card renders <div class="rich-card <name>-card"> and adds detail
-// in its own scoped styles. Uses shared tokens for light/dark (Rule 7).
+// in its own scoped styles.
 // Depends on @chalie/shared/styles/main.scss (tokens) imported first.
 
-@keyframes card-enter {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
 .rich-card {
-  --card-bg: color-mix(in oklab, var(--violet) 4%, var(--bg-surface));
-  --card-border: color-mix(in oklab, var(--violet) 22%, transparent);
-  --card-radius: 16px;
-  --card-padding: 20px 22px;
-  --card-glow: color-mix(in oklab, var(--violet) 8%, transparent);
-
-  background: var(--card-bg);
-  border: 1px solid var(--card-border);
-  padding: var(--card-padding);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  padding: 20px 22px;
   max-width: 480px;
   margin: 6px 0;
-  animation: card-enter 200ms ease-out both;
+  animation: rise var(--dur-2) var(--ease-out) both;
 }
 
 .rich-card__divider {
