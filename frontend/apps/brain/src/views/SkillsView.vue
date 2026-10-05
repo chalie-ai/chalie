@@ -158,7 +158,7 @@ async function submitCreate(): Promise<void> {
   <template v-else-if="viewMode === 'create'">
     <div class="provider-form-page">
       <div class="form-page-header">
-        <button class="btn btn-secondary btn-sm" @click="viewMode = 'list'">
+        <button class="btn btn-sm" @click="viewMode = 'list'">
           <ChevronLeft :size="14" /> Back
         </button>
         <h3>New Skill</h3>
@@ -204,7 +204,7 @@ async function submitCreate(): Promise<void> {
           ></textarea>
         </div>
         <div class="form-actions">
-          <button type="button" class="btn btn-secondary" @click="viewMode = 'list'">Cancel</button>
+          <button type="button" class="btn" @click="viewMode = 'list'">Cancel</button>
           <button type="submit" class="btn btn-primary">Create Skill</button>
         </div>
       </form>
@@ -261,7 +261,7 @@ async function submitCreate(): Promise<void> {
               ></textarea>
             </div>
             <div class="form-actions">
-              <button type="button" class="btn btn-secondary btn-sm" @click="editingId = null">
+              <button type="button" class="btn btn-sm" @click="editingId = null">
                 Cancel
               </button>
               <button type="submit" class="btn btn-primary btn-sm">Save</button>
@@ -299,7 +299,7 @@ async function submitCreate(): Promise<void> {
                   <span class="switch-track"></span>
                 </label>
               </label>
-              <button class="btn btn-secondary btn-sm" @click="startEdit(skill)">
+              <button class="btn btn-sm" @click="startEdit(skill)">
                 <SquarePen :size="13" />
               </button>
               <button class="btn btn-danger btn-sm" @click="deleteSkill(skill)">
@@ -365,7 +365,7 @@ async function submitCreate(): Promise<void> {
               </label>
             </label>
             <button
-              class="btn btn-secondary btn-sm"
+              class="btn btn-sm"
               title="Copy &amp; Customise"
               @click="copySkill(skill)"
             >

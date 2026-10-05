@@ -170,7 +170,6 @@ const listContacts = computed<Contact[]>(() => {
 .ct__avatar {
   width: 56px;
   height: 56px;
-  border-radius: 50%;
   background: var(--surface);
   border: 1px solid var(--pink);
   color: var(--pink-text);
@@ -188,7 +187,6 @@ const listContacts = computed<Contact[]>(() => {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  border-radius: 50%;
 }
 
 .ct__avatar--sm {

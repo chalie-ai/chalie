@@ -545,7 +545,7 @@ async function saveProvider(): Promise<void> {
             </div>
           </div>
           <div class="provider-actions">
-            <button class="btn btn-sm btn-secondary" @click="openWizard(p.id)">Edit</button>
+            <button class="btn btn-sm" @click="openWizard(p.id)">Edit</button>
             <button
               class="btn btn-sm btn-danger"
               :disabled="providerRoles(p.id).length > 0"
@@ -606,7 +606,7 @@ async function saveProvider(): Promise<void> {
   <template v-else-if="mode === 'picker'">
     <div class="provider-wizard">
       <div class="form-page-header">
-        <button class="btn btn-secondary btn-sm back-btn" @click="backFromPicker">
+        <button class="btn btn-sm back-btn" @click="backFromPicker">
           <ChevronLeft :size="14" />
           Back
         </button>
@@ -634,7 +634,7 @@ async function saveProvider(): Promise<void> {
   <template v-else-if="mode === 'form'">
     <div class="provider-wizard">
       <div class="form-page-header">
-        <button class="btn btn-secondary btn-sm back-btn" @click="backFromForm">
+        <button class="btn btn-sm back-btn" @click="backFromForm">
           <ChevronLeft :size="14" />
           {{ isEditing ? 'Back' : 'Providers' }}
         </button>
@@ -664,7 +664,7 @@ async function saveProvider(): Promise<void> {
             v-if="!keyRevealed"
             id="pKeyReveal"
             type="button"
-            class="btn btn-secondary"
+            class="btn"
             :disabled="revealingKey"
             @click="revealApiKey"
           >
@@ -721,10 +721,10 @@ async function saveProvider(): Promise<void> {
         </div>
 
         <div class="form-actions">
-          <button type="button" class="btn btn-secondary" @click="cancelForm">Cancel</button>
+          <button type="button" class="btn" @click="cancelForm">Cancel</button>
           <button
             type="button"
-            class="btn btn-secondary"
+            class="btn"
             :disabled="testing"
             @click="testConnection"
           >

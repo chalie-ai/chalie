@@ -147,7 +147,7 @@ async function cancelSchedule(s: ScheduleItem): Promise<void> {
 
   <div v-else-if="formMode === 'form'" class="provider-form-page">
     <div class="form-page-header">
-      <button class="btn btn-secondary btn-sm back-btn" @click="formMode = 'list'">
+      <button class="btn btn-sm back-btn" @click="formMode = 'list'">
         <ChevronLeft :size="14" /> Back
       </button>
       <h3>{{ editingId != null ? 'Edit Schedule' : 'New Schedule' }}</h3>
@@ -204,7 +204,7 @@ async function cancelSchedule(s: ScheduleItem): Promise<void> {
         <p class="form-hint">Disable to pause firing without deleting the schedule.</p>
       </div>
       <div class="form-actions">
-        <button type="button" class="btn btn-secondary" @click="formMode = 'list'">Cancel</button>
+        <button type="button" class="btn" @click="formMode = 'list'">Cancel</button>
         <button type="submit" class="btn btn-primary">Save</button>
       </div>
     </form>
@@ -243,7 +243,7 @@ async function cancelSchedule(s: ScheduleItem): Promise<void> {
         <td>{{ formatDate(s.start_at) }}</td>
         <td>{{ cadenceLabel(s) }}</td>
         <td class="row-actions">
-          <button class="btn btn-sm btn-secondary" @click="openForm(s)">Edit</button>
+          <button class="btn btn-sm" @click="openForm(s)">Edit</button>
           <button class="btn btn-sm btn-danger" @click="cancelSchedule(s)">Delete</button>
         </td>
       </tr>

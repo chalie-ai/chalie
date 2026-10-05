@@ -303,7 +303,7 @@ onMounted(async () => {
               </div>
             </div>
             <button
-              class="btn btn-xs btn-secondary"
+              class="btn btn-xs"
               type="button"
               @click="addHeaderRow(editHeaders)"
             >
@@ -313,7 +313,7 @@ onMounted(async () => {
 
           <div class="mcp-out-card-actions">
             <button class="btn btn-primary" type="button" @click="saveEdit(server.id)">Save</button>
-            <button class="btn btn-secondary" type="button" @click="cancelEdit">Cancel</button>
+            <button class="btn" type="button" @click="cancelEdit">Cancel</button>
           </div>
         </div>
 
@@ -331,18 +331,13 @@ onMounted(async () => {
             </div>
           </div>
           <div class="mcp-out-card-actions">
-            <button class="btn btn-xs btn-secondary" type="button" @click="startEdit(server)">
+            <button class="btn btn-xs" type="button" @click="startEdit(server)">
               Edit
             </button>
-            <button class="btn btn-xs btn-secondary" type="button" @click="testServer(server.id)">
+            <button class="btn btn-xs" type="button" @click="testServer(server.id)">
               Test
             </button>
-            <button
-              class="btn btn-xs"
-              :class="server.enabled ? 'btn-secondary' : 'btn-primary'"
-              type="button"
-              @click="toggleServer(server)"
-            >
+            <button class="btn btn-xs" type="button" @click="toggleServer(server)">
               {{ server.enabled ? 'Disable' : 'Enable' }}
             </button>
             <button class="btn btn-xs btn-danger" type="button" @click="deleteServer(server)">
@@ -418,7 +413,7 @@ onMounted(async () => {
               </button>
             </div>
           </div>
-          <button class="btn btn-xs btn-secondary" type="button" @click="addHeaderRow(addHeaders)">
+          <button class="btn btn-xs" type="button" @click="addHeaderRow(addHeaders)">
             + Header
           </button>
         </div>

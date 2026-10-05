@@ -284,7 +284,6 @@
 .trace-pill__dot {
   width: 6px;
   height: 6px;
-  border-radius: 50%;
   background: var(--pink);
 }
 
@@ -337,7 +336,6 @@
   width: 6px;
   height: 6px;
   margin: 0 -2px 0 -14px;
-  border-radius: 50%;
 }
 
 .call--done .call__dot { background: var(--allow); }
@@ -486,7 +484,6 @@
 .thread-pill__dot {
   width: 7px;
   height: 7px;
-  border-radius: 50%;
   flex-shrink: 0;
 }
 
@@ -545,7 +542,6 @@
 .act-logo {
   width: 12px;
   height: 12px;
-  border-radius: 50%;
   background: var(--pink);
   flex-shrink: 0;
   animation: working 1.4s ease-in-out infinite;

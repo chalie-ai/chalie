@@ -50,7 +50,6 @@ body {
 .connection-banner__dot {
   width: 6px;
   height: 6px;
-  border-radius: 50%;
   background: var(--deny);
   animation: working 1.4s ease-in-out infinite;
 }
@@ -365,7 +364,6 @@ body {
 .loading-overlay__dot {
   width: 18px;
   height: 18px;
-  border-radius: 50%;
   background: var(--pink);
   animation: working 1.4s ease-in-out infinite;
 }
@@ -397,7 +395,6 @@ body {
   flex-shrink: 0;
   width: 8px;
   height: 8px;
-  border-radius: 50%;
 
   &.working {
     background: var(--pink);
@@ -508,7 +505,6 @@ body {
 .voice-rec-btn__dot {
   width: 10px;
   height: 10px;
-  border-radius: 50%;
   background: var(--deny);
   animation: working 1.4s ease-in-out infinite;
 }
@@ -518,7 +514,6 @@ body {
   height: 14px;
   border: 2px solid var(--control);
   border-top-color: var(--muted);
-  border-radius: 50%;
   animation: spin 0.7s linear infinite;
 }
 
@@ -581,7 +576,6 @@ body {
   display: block;
   width: 6px;
   height: 6px;
-  border-radius: 50%;
   background: var(--pink);
   flex-shrink: 0;
 }

@@ -164,7 +164,7 @@ async function deleteList(list: List): Promise<void> {
           <span class="list-count">{{ c.done }}/{{ c.total }}</span>
         </div>
         <div class="list-card-actions">
-          <button class="btn btn-sm btn-secondary" @click.stop="openRename(list)">Rename</button>
+          <button class="btn btn-sm" @click.stop="openRename(list)">Rename</button>
           <button class="btn btn-sm btn-danger" @click.stop="deleteList(list)">Delete</button>
         </div>
       </div>
@@ -216,7 +216,7 @@ async function deleteList(list: List): Promise<void> {
         />
       </div>
       <div class="form-actions">
-        <button type="button" class="btn btn-secondary" @click="showNew = false">Cancel</button>
+        <button type="button" class="btn" @click="showNew = false">Cancel</button>
         <button type="submit" class="btn btn-primary">Create</button>
       </div>
     </form>
@@ -235,7 +235,7 @@ async function deleteList(list: List): Promise<void> {
         <input id="renameInput" v-model="renameName" type="text" maxlength="200" required />
       </div>
       <div class="form-actions">
-        <button type="button" class="btn btn-secondary" @click="showRename = false">Cancel</button>
+        <button type="button" class="btn" @click="showRename = false">Cancel</button>
         <button type="submit" class="btn btn-primary">Rename</button>
       </div>
     </form>

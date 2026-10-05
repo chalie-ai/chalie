@@ -110,7 +110,7 @@ async function save(): Promise<void> {
           placeholder="e.g. chalie.example.com (blank = same-origin only)"
         />
       </label>
-      <button class="btn btn-primary" @click="save"><Network :size="14" /> Save Domain</button>
+      <button class="btn" @click="save"><Network :size="14" /> Save Domain</button>
     </div>
 
     <!-- SSL / TLS card -->
@@ -146,7 +146,7 @@ async function save(): Promise<void> {
         before saving.
       </p>
 
-      <button class="btn btn-primary" :disabled="sslSaveBlocked" @click="save">
+      <button class="btn" :disabled="sslSaveBlocked" @click="save">
         <Lock :size="14" /> Save SSL Settings
       </button>
     </div>

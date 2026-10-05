@@ -148,7 +148,6 @@ body {
     right: 7px;
     width: 7px;
     height: 7px;
-    border-radius: 50%;
     background: var(--pink);
   }
 }
@@ -429,7 +428,6 @@ body {
     content: '';
     width: 6px;
     height: 6px;
-    border-radius: 50%;
     background: var(--pink);
   }
 }
@@ -439,8 +437,6 @@ body {
 .btn-sm { min-height: 0; padding: 5px 10px; font-size: 12px; }
 
 .btn-xs { min-height: 0; padding: 3px 8px; font-size: 11px; }
-
-.btn-secondary { background: var(--surface); }
 
 .filter-tabs {
   display: flex;
@@ -841,7 +837,6 @@ input[type='checkbox'] {
   display: inline-block;
   width: 8px;
   height: 8px;
-  border-radius: 50%;
   background: var(--muted);
 
   &.active {
@@ -867,6 +862,8 @@ input[type='checkbox'] {
 
 .switch {
   display: inline-flex;
+  align-items: center;
+  gap: 8px;
   cursor: pointer;
 
   input { display: none; }
@@ -894,7 +891,6 @@ input[type='checkbox'] {
     left: 2px;
     width: 16px;
     height: 16px;
-    border-radius: 50%;
     background: var(--muted);
     transition: transform var(--dur-1) var(--ease-out), background-color var(--dur-1) var(--ease-out);
   }
@@ -1168,7 +1164,6 @@ input[type='checkbox'] {
 .model-reload-btn {
   width: 24px;
   height: 24px;
-  border-radius: 50%;
 
   &:disabled { cursor: default; opacity: 0.6; }
 }
@@ -1281,7 +1276,6 @@ input[type='checkbox'] {
     -webkit-appearance: none;
     width: 16px;
     height: 16px;
-    border-radius: 50%;
     background: var(--pink);
     border: 2px solid var(--surface);
     cursor: pointer;
