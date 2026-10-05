@@ -108,14 +108,12 @@ onBeforeUnmount(() => {
 
 <style scoped lang="scss">
 // ── Scrim ──────────────────────────────────────────────────────────────────────
+// A transparent click-catcher: a click anywhere outside the panel closes it.
 
 .side-drawer__scrim {
   position: fixed;
   inset: 0;
-  background: var(--overlay-scrim, rgba(0, 0, 0, 0.35));
   z-index: 199;
-  opacity: 1;
-  transition: opacity 0.2s ease;
 
   &.hidden {
     display: none;
@@ -137,7 +135,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   transform: translateX(100%);
-  transition: transform 0.25s ease;
+  transition: transform var(--dur-3) var(--ease-out);
   overflow: hidden;
 
   &.open {

@@ -167,8 +167,8 @@ const dayGroups = computed<DayGroup[]>(() => {
 }
 
 .calendar-card__when {
-  background: color-mix(in oklab, var(--pink) 12%, transparent);
-  border: 1px solid color-mix(in oklab, var(--pink-text) 26%, transparent);
+  background: var(--surface);
+  border: 1px solid var(--pink);
   padding: 6px 4px;
   text-align: center;
 }
@@ -178,7 +178,7 @@ const dayGroups = computed<DayGroup[]>(() => {
   font-size: 0.58rem;
   letter-spacing: 0.16em;
   text-transform: uppercase;
-  color: color-mix(in oklab, var(--pink-text) 80%, var(--muted));
+  color: var(--pink-text);
 }
 
 .calendar-card__when-date {
@@ -244,7 +244,7 @@ const dayGroups = computed<DayGroup[]>(() => {
 .calendar-card__day-group + .calendar-card__day-group {
   margin-top: 14px;
   padding-top: 12px;
-  border-top: 1px solid color-mix(in oklab, var(--line) 60%, transparent);
+  border-top: 1px solid var(--line);
 }
 
 .calendar-card__day-label {
@@ -252,7 +252,7 @@ const dayGroups = computed<DayGroup[]>(() => {
   font-size: 0.62rem;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: color-mix(in oklab, var(--pink-text) 80%, var(--muted));
+  color: var(--pink-text);
   margin-bottom: 8px;
 }
 
@@ -262,7 +262,7 @@ const dayGroups = computed<DayGroup[]>(() => {
   gap: 12px;
   padding: 5px 0;
   font-size: 0.88rem;
-  border-bottom: 1px solid color-mix(in oklab, var(--line) 35%, transparent);
+  border-bottom: 1px solid var(--line);
 }
 
 .calendar-card__row:last-child {

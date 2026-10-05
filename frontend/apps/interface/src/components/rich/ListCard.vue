@@ -64,7 +64,7 @@ async function onToggle(item: ListItem): Promise<void> {
     </div>
 
     <div class="list-card__bar">
-      <div class="list-card__bar-fill" :style="{ '--fill': progressPercent + '%' }" />
+      <div class="list-card__bar-fill" :style="{ width: progressPercent + '%' }" />
     </div>
 
     <div class="list-card__items">
@@ -114,16 +114,15 @@ async function onToggle(item: ListItem): Promise<void> {
 
 .list-card__bar {
   height: 2px;
-  background: var(--line);
+  background: var(--cell);
   overflow: hidden;
   margin-bottom: 6px;
 }
 
 .list-card__bar-fill {
-  width: var(--fill, 0);
   height: 100%;
-  background: linear-gradient(90deg, var(--pink), var(--pink));
-  transition: width 300ms ease;
+  background: var(--pink);
+  transition: width var(--dur-3) var(--ease-out);
 }
 
 .list-card__items {
@@ -137,16 +136,16 @@ async function onToggle(item: ListItem): Promise<void> {
   gap: 12px;
   align-items: flex-start;
   padding: 10px 0;
-  border-bottom: 1px solid color-mix(in oklab, var(--line) 60%, transparent);
+  border-bottom: 1px solid var(--line);
   cursor: pointer;
-  transition: background 160ms ease;
+  transition: background-color var(--dur-1) var(--ease-out);
 
   &:last-child {
     border-bottom: none;
   }
 
   &:hover {
-    background: color-mix(in oklab, var(--text) 1.5%, transparent);
+    background: var(--surface-2);
   }
 }
 
@@ -160,20 +159,22 @@ async function onToggle(item: ListItem): Promise<void> {
   justify-content: center;
   margin-top: 1px;
   flex-shrink: 0;
-  transition: all 160ms ease;
+  transition:
+    background-color var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out);
 
   svg {
     width: 11px;
     height: 11px;
     opacity: 0;
-    color: white;
+    color: var(--on-pink);
   }
 }
 
 .list-card__item--done {
   .list-card__check {
     background: var(--pink);
-    border-color: var(--pink-text);
+    border-color: var(--pink);
 
     svg {
       opacity: 1;
@@ -183,7 +184,6 @@ async function onToggle(item: ListItem): Promise<void> {
   .list-card__text {
     color: var(--muted);
     text-decoration: line-through;
-    text-decoration-color: color-mix(in oklab, var(--muted) 60%, transparent);
   }
 }
 

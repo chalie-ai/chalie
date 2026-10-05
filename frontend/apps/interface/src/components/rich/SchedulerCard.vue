@@ -97,8 +97,8 @@ const metaText = computed((): string => {
 }
 
 .scheduler-card__when {
-  background: color-mix(in oklab, var(--pink) 12%, transparent);
-  border: 1px solid color-mix(in oklab, var(--pink-text) 26%, transparent);
+  background: var(--surface);
+  border: 1px solid var(--pink);
   padding: 6px 4px;
   text-align: center;
 }
@@ -108,7 +108,7 @@ const metaText = computed((): string => {
   font-size: 0.58rem;
   letter-spacing: 0.16em;
   text-transform: uppercase;
-  color: color-mix(in oklab, var(--pink-text) 80%, var(--muted));
+  color: var(--pink-text);
 }
 
 .scheduler-card__when-date {

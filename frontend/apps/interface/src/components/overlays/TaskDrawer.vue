@@ -66,7 +66,7 @@ watch(totalCount, (count) => {
 
 <template>
   <SideDrawer :open="isOpen" title="Activity" @close="tasks.close()">
-    <!-- Forked threads whose reply has settled unseen (done, blue). Clicking
+    <!-- Forked threads whose reply has settled unseen (done). Clicking
          opens the thread's slide-over. The mockup's floating notifications
          live here. -->
     <template v-if="threadActivity.length">
@@ -93,7 +93,7 @@ watch(totalCount, (count) => {
 <style scoped lang="scss">
 // ── Thread-activity row ──────────────────────────────────────────────────────────
 // Forked threads whose reply has settled unseen, folded out of the mockup's
-// floating notifications. A cyan left accent stripe marks them done.
+// floating notifications. A left accent stripe marks them done.
 
 .task-drawer__thread {
   display: flex;
@@ -106,9 +106,16 @@ watch(totalCount, (count) => {
   border-left: 2px solid transparent;
   padding: 10px 16px;
   cursor: pointer;
+  transition:
+    background-color var(--dur-1) var(--ease-out),
+    translate var(--dur-1) var(--ease-out);
 
   &:hover {
-    background: var(--surface-2, rgba(128, 128, 128, 0.06));
+    background: var(--surface-2);
+  }
+
+  &:active {
+    translate: 0 1px;
   }
 }
 

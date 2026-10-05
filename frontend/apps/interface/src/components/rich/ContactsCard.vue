@@ -171,8 +171,8 @@ const listContacts = computed<Contact[]>(() => {
   width: 56px;
   height: 56px;
   border-radius: 50%;
-  background: color-mix(in oklab, var(--pink) 18%, var(--surface));
-  border: 1px solid color-mix(in oklab, var(--pink-text) 35%, transparent);
+  background: var(--surface);
+  border: 1px solid var(--pink);
   color: var(--pink-text);
   display: flex;
   align-items: center;
@@ -227,18 +227,25 @@ const listContacts = computed<Contact[]>(() => {
   align-items: center;
   gap: 6px;
   padding: 4px 10px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--control);
   background: var(--surface-2);
   font-family: var(--font-mono);
   font-size: 0.74rem;
   color: var(--muted);
   text-decoration: none;
   letter-spacing: 0.02em;
-  transition: all 160ms ease;
+  transition:
+    border-color var(--dur-1) var(--ease-out),
+    color var(--dur-1) var(--ease-out),
+    translate var(--dur-1) var(--ease-out);
 
   &:hover {
-    border-color: var(--control);
+    border-color: var(--text);
     color: var(--text);
+  }
+
+  &:active {
+    translate: 0 1px;
   }
 
   svg {

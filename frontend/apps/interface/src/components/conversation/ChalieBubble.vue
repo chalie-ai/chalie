@@ -51,19 +51,19 @@ defineProps<{ message: ConversationMessage }>();
 }
 
 .chalie-markup a:hover {
-  color: var(--pink-text);
+  color: var(--text);
 }
 
 .chalie-code,
 .chalie-markup code {
   font-family: var(--font-mono);
   font-size: 0.875em;
-  background: color-mix(in oklab, var(--text) 8%, transparent);
+  background: var(--surface-2);
   padding: 0.1em 0.35em;
 }
 
 .chalie-markup pre {
-  background: color-mix(in oklab, var(--text) 6%, transparent);
+  background: var(--surface-2);
   border: 1px solid var(--line);
   padding: var(--space-md);
   overflow-x: auto;
@@ -131,11 +131,8 @@ defineProps<{ message: ConversationMessage }>();
   text-align: left;
 }
 
-.chalie-markup thead {
-  background: color-mix(in oklab, var(--text) 5%, transparent);
-}
-
+.chalie-markup thead,
 .chalie-markup tbody tr:nth-child(even) {
-  background: color-mix(in oklab, var(--text) 3%, transparent);
+  background: var(--surface-2);
 }
 </style>

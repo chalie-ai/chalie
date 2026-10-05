@@ -136,7 +136,7 @@ onBeforeUnmount(() => {
     width: 56px;
     height: 56px;
     overflow: hidden;
-    background: var(--surface, var(--surface, #222));
+    background: var(--surface);
     border: 1px solid var(--line);
     flex-shrink: 0;
 
@@ -153,9 +153,6 @@ onBeforeUnmount(() => {
       width: auto;
       min-width: 64px;
       max-width: 120px;
-      // A doc thumb shows its frame (unlike image thumbs), so it needs a real
-      // theme-aware token: --surface-raised/--surface don't exist here and fell
-      // back to #222 — illegible against the light-mode filename text.
       background: var(--surface-2);
     }
   }
@@ -185,19 +182,23 @@ onBeforeUnmount(() => {
     justify-content: center;
     width: 16px;
     height: 16px;
-    border-radius: 50%;
     border: none;
     padding: 0;
     font-size: 12px;
     line-height: 1;
     cursor: pointer;
-    background: var(--surface, rgba(0 0 0 / 0.6));
+    background: var(--surface);
     color: var(--text);
-    opacity: 0;
-    transition: opacity 0.15s;
+    transition:
+      background-color var(--dur-1) var(--ease-out),
+      translate var(--dur-1) var(--ease-out);
 
-    .image-preview__thumb:hover & {
-      opacity: 1;
+    &:hover {
+      background: var(--surface-2);
+    }
+
+    &:active {
+      translate: 0 1px;
     }
   }
 }

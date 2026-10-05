@@ -142,9 +142,16 @@ function cadence(turn: SchedulerTurn): string {
   border-left: 2px solid transparent;
   padding: 10px 16px;
   cursor: pointer;
+  transition:
+    background-color var(--dur-1) var(--ease-out),
+    translate var(--dur-1) var(--ease-out);
 
   &:hover {
-    background: var(--surface-2, rgba(128, 128, 128, 0.06));
+    background: var(--surface-2);
+  }
+
+  &:active {
+    translate: 0 1px;
   }
 }
 

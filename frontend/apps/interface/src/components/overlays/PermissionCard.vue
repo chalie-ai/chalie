@@ -115,37 +115,21 @@ const title = computed(() => props.req.summary || actionLabel(props.req.action_i
   // the Allow/Deny clicks fall through to the turn underneath. The transition
   // states below re-disable it mid enter/leave, which is intentional.
   pointer-events: auto;
-  background: color-mix(in oklab, var(--surface, var(--surface)) 95%, transparent);
+  background: var(--surface);
   border: 1px solid var(--line);
   overflow: hidden;
-
-  // Light theme: soften the lift so it reads as depth, not a dark halo.
-  // Plain `[data-theme] &` — :global() drops the `&` and leaks this onto <html>.
-  [data-theme='light'] & {
-  }
 }
 
-.perm-card-enter-from,
-.perm-card-leave-to {
-  opacity: 0;
-  transform: translateY(20px);
-}
-
-.perm-card-leave-to {
-  transform: translateY(-20px);
-}
-
+// A card rises in on arrival and plays the same rise backwards on leave.
 .perm-card-enter-active,
 .perm-card-leave-active {
-  transition:
-    transform var(--dur-2) ease,
-    opacity var(--dur-2) ease;
+  animation: rise var(--dur-2) var(--ease-out);
   pointer-events: none;
 }
 
-.perm-card-enter-to {
-  opacity: 1;
-  transform: none;
+.perm-card-leave-active {
+  animation-direction: reverse;
+  animation-fill-mode: forwards;
 }
 
 .perm-card__body {
@@ -176,13 +160,20 @@ const title = computed(() => props.req.summary || actionLabel(props.req.action_i
   font-size: var(--font-size-xs);
   font-weight: 500;
   line-height: 1.4;
-  border: 1px solid var(--line);
+  border: 1px solid var(--control);
   background: transparent;
   color: var(--pink-text);
   cursor: pointer;
+  transition:
+    background-color var(--dur-1) var(--ease-out),
+    translate var(--dur-1) var(--ease-out);
 
   &:hover {
-    background: color-mix(in oklab, var(--pink) 10%, transparent);
+    background: var(--surface-2);
+  }
+
+  &:active {
+    translate: 0 1px;
   }
 }
 
@@ -200,14 +191,14 @@ const title = computed(() => props.req.summary || actionLabel(props.req.action_i
 }
 
 .perm-card__title {
-  font-size: var(--font-size-sm);
+  font-size: 0.8125rem;
   font-weight: 600;
   color: var(--text);
   margin: 0;
 }
 
 .perm-card__desc {
-  font-size: var(--font-size-sm);
+  font-size: 0.8125rem;
   color: var(--muted);
   margin: 0 0 var(--space-sm);
   line-height: 1.45;
@@ -224,35 +215,40 @@ const title = computed(() => props.req.summary || actionLabel(props.req.action_i
 
 .perm-card__btn {
   padding: 5px var(--space-sm);
-  font-size: var(--font-size-sm);
+  font-size: 0.8125rem;
   font-weight: 500;
   border: 1px solid transparent;
   cursor: pointer;
   transition:
-    background var(--dur-1),
-    border-color var(--dur-1),
-    color var(--dur-1);
+    background-color var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out),
+    color var(--dur-1) var(--ease-out),
+    translate var(--dur-1) var(--ease-out);
   line-height: 1.4;
 
+  &:active {
+    translate: 0 1px;
+  }
+
   &--allow {
-    background: color-mix(in oklab, var(--allow) 15%, transparent);
-    border-color: color-mix(in oklab, var(--allow-text) 35%, transparent);
+    background: var(--surface);
+    border-color: var(--allow);
     color: var(--allow-text);
 
     &:hover {
-      background: color-mix(in oklab, var(--allow) 25%, transparent);
-      border-color: color-mix(in oklab, var(--allow-text) 55%, transparent);
+      background: var(--allow);
+      color: var(--on-pink);
     }
   }
 
   &--deny {
-    background: color-mix(in oklab, var(--text) 5%, transparent);
-    border-color: var(--line);
+    background: var(--surface-2);
+    border-color: var(--control);
     color: var(--muted);
 
     &:hover {
-      background: color-mix(in oklab, var(--text) 9%, transparent);
-      border-color: color-mix(in oklab, var(--text) 15%, transparent);
+      background: var(--cell);
+      border-color: var(--text);
       color: var(--text);
     }
   }

@@ -20,7 +20,7 @@ const props = defineProps<{ payload: WeatherPayload; synthesis?: string }>();
 
 const now = new Date();
 
-/** Sky phase from local hour + sunrise/sunset; coarse day/night when astro times missing. */
+/** Time-of-day phase from local hour + sunrise/sunset; coarse day/night when astro times missing. */
 function pickPhase(
   now: Date,
   sunrise: string | undefined,
@@ -94,29 +94,20 @@ const hourCells = computed<HourCell[]>(() => {
 </script>
 
 <template>
-  <div class="rich-card weather-card" :data-phase="phase">
-    <div class="weather-card__sky">
-      <div class="weather-card__sun" aria-hidden="true" />
+  <div class="rich-card weather-card">
+    <div class="weather-card__body">
+      <div class="weather-card__readout">
+        <div class="weather-card__temp">{{ roundedTemp }}<sup>°</sup></div>
 
-      <div class="weather-card__cloud weather-card__cloud--1" aria-hidden="true" />
-      <div class="weather-card__cloud weather-card__cloud--2" aria-hidden="true" />
-
-      <div class="weather-card__skyline" aria-hidden="true" />
-
-      <div class="weather-card__overlay">
-        <div class="weather-card__readout">
-          <div class="weather-card__temp">{{ roundedTemp }}<sup>°</sup></div>
-
-          <div class="weather-card__loc">
-            <div>{{ payload.location || '—' }}</div>
-            <div>{{ dayLabel }} · {{ timeLabel }}</div>
-          </div>
+        <div class="weather-card__loc">
+          <div>{{ payload.location || '—' }}</div>
+          <div>{{ dayLabel }} · {{ timeLabel }}</div>
         </div>
-
-        <!-- Caption: synthesis (HTML) or fallback plain text -->
-        <div v-if="synthesis" class="weather-card__caption" v-html="captionHtml" />
-        <div v-else class="weather-card__caption">{{ fallbackCaption }}</div>
       </div>
+
+      <!-- Caption: synthesis (HTML) or fallback plain text -->
+      <div v-if="synthesis" class="weather-card__caption" v-html="captionHtml" />
+      <div v-else class="weather-card__caption">{{ fallbackCaption }}</div>
     </div>
 
     <div v-if="hourCells.length" class="weather-card__rail">
@@ -142,188 +133,20 @@ const hourCells = computed<HourCell[]>(() => {
 <style scoped lang="scss">
 /* Card-specific rules only; base .rich-card chrome lives globally in base_card.css. */
 
-/* padding:0 — the sky canvas IS the card body. */
 .rich-card.weather-card {
   padding: 0;
   overflow: hidden;
   width: 100%;
   max-width: 100%;
-  background: transparent;
   border: 1px solid var(--line);
 }
 
-.weather-card__sky {
-  position: relative;
-  min-height: 220px;
-  overflow: hidden;
-  isolation: isolate;
-}
-
-/* Phase-driven gradients. Fallback (no phase) is night. */
-.weather-card[data-phase='day'] .weather-card__sky {
-  background: linear-gradient(180deg, #4a8cd6 0%, #6ea7e0 40%, #a9c8eb 80%, #f0d59f 100%);
-}
-.weather-card[data-phase='dawn'] .weather-card__sky {
-  background: linear-gradient(180deg, #1a2240 0%, #4a4070 35%, #c87a5a 75%, #ffc97a 100%);
-}
-.weather-card[data-phase='sunset'] .weather-card__sky {
-  background: linear-gradient(180deg, #1a2240 0%, #2a3560 35%, #c75a3f 75%, #ffb070 100%);
-}
-.weather-card[data-phase='night'] .weather-card__sky {
-  background: linear-gradient(180deg, #06080e 0%, #121a30 50%, #1f2a4a 100%);
-}
-
-.weather-card__sky::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background:
-    radial-gradient(ellipse 60% 40% at 70% 30%, rgba(255, 200, 140, 0.3), transparent 60%),
-    radial-gradient(ellipse 80% 50% at 20% 85%, rgba(138, 92, 255, 0.2), transparent 60%);
-  pointer-events: none;
-}
-
-.weather-card__sun {
-  position: absolute;
-  right: 14%;
-  top: 38%;
-  width: 90px;
-  height: 90px;
-  border-radius: 50%;
-  opacity: 0.9;
-  animation: weather-sun-bob 12s ease-in-out infinite alternate;
-  pointer-events: none;
-
-  .weather-card[data-phase='day'] & {
-    background: radial-gradient(circle, #fff4cc 0%, #ffd972 60%, transparent 80%);
-  }
-
-  .weather-card[data-phase='dawn'] &,
-  .weather-card[data-phase='sunset'] & {
-    background: radial-gradient(circle, #ffd28c 0%, #ff9b50 60%, transparent 80%);
-  }
-
-  .weather-card[data-phase='night'] & {
-    width: 70px;
-    height: 70px;
-    background: radial-gradient(circle, #f4f1ff 0%, #b8b3d6 55%, transparent 80%);
-    opacity: 0.85;
-  }
-}
-
-@keyframes weather-sun-bob {
-  from {
-    transform: translateY(0);
-  }
-  to {
-    transform: translateY(8px);
-  }
-}
-
-.weather-card__cloud {
-  position: absolute;
-  background: rgba(255, 255, 255, 0.18);
-  border-radius: 50%;
-  animation: weather-cloud-drift 30s linear infinite;
-  pointer-events: none;
-
-  &--1 {
-    width: 220px;
-    height: 60px;
-    top: 30%;
-    left: -25%;
-    animation-duration: 38s;
-  }
-
-  &--2 {
-    width: 160px;
-    height: 48px;
-    top: 50%;
-    left: -25%;
-    animation-duration: 26s;
-    animation-delay: -10s;
-    opacity: 0.55;
-  }
-}
-
-@keyframes weather-cloud-drift {
-  from {
-    transform: translateX(0);
-  }
-  to {
-    transform: translateX(160vw);
-  }
-}
-
-.weather-card__skyline {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 36px;
-  background: linear-gradient(to top, #06080e 0%, #06080e 30%, transparent 100%);
-  pointer-events: none;
-
-  &::before {
-    content: '';
-    position: absolute;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    height: 28px;
-    background-image: linear-gradient(
-      to right,
-      transparent 5%,
-      #0a0d18 5%,
-      #0a0d18 8%,
-      transparent 8%,
-      transparent 14%,
-      #0a0d18 14%,
-      #0a0d18 18%,
-      transparent 18%,
-      transparent 24%,
-      #0a0d18 24%,
-      #0a0d18 30%,
-      transparent 30%,
-      transparent 38%,
-      #0a0d18 38%,
-      #0a0d18 41%,
-      transparent 41%,
-      transparent 50%,
-      #0a0d18 50%,
-      #0a0d18 56%,
-      transparent 56%,
-      transparent 64%,
-      #0a0d18 64%,
-      #0a0d18 68%,
-      transparent 68%,
-      transparent 76%,
-      #0a0d18 76%,
-      #0a0d18 82%,
-      transparent 82%,
-      transparent 90%,
-      #0a0d18 90%,
-      #0a0d18 95%,
-      transparent 95%
-    );
-    background-size: 100% 100%;
-    background-position: bottom;
-    background-repeat: no-repeat;
-    mask-image: linear-gradient(to top, black 60%, transparent 100%);
-    -webkit-mask-image: linear-gradient(to top, black 60%, transparent 100%);
-  }
-}
-
-/* In normal flow (not absolute) so the sky grows to fit a long caption instead
-   of clipping it. min-height keeps the art visible when the caption is short. */
-.weather-card__overlay {
-  position: relative;
+.weather-card__body {
   min-height: 220px;
   display: grid;
   grid-template-rows: 1fr auto;
   padding: 18px 22px;
-  color: white;
-  z-index: 1;
+  color: var(--text);
 }
 
 .weather-card__readout {
@@ -334,15 +157,15 @@ const hourCells = computed<HourCell[]>(() => {
 }
 
 .weather-card__temp {
+  font-family: var(--font-display);
   font-size: 3.75rem;
-  font-weight: 250;
+  font-weight: 900;
   letter-spacing: -0.03em;
   line-height: 0.9;
   font-variant-numeric: tabular-nums;
 
   sup {
     font-size: 1.625rem;
-    font-weight: 300;
     vertical-align: super;
   }
 }
@@ -360,7 +183,7 @@ const hourCells = computed<HourCell[]>(() => {
     font-size: 0.6875rem;
     font-weight: 400;
     letter-spacing: 0.06em;
-    opacity: 0.82;
+    color: var(--muted);
     margin-top: 3px;
   }
 }
@@ -370,13 +193,9 @@ const hourCells = computed<HourCell[]>(() => {
   max-width: 62%;
   font-size: 0.844rem;
   line-height: 1.55;
-  color: rgba(255, 255, 255, 0.94);
+  color: var(--text);
 }
 
-/* Hourly strip is a neutral DATA surface, not part of the immersive sky — it
-   flips with the theme (was a hard-coded near-black rgba band that read as
-   "black blocks" over a light/day sky). Mirrors the mockup's `.whours`:
-   `--surface` ground, `--border` rules, accent bars. */
 .weather-card__rail {
   display: grid;
   grid-template-columns: repeat(8, 1fr);
@@ -398,7 +217,7 @@ const hourCells = computed<HourCell[]>(() => {
   }
 
   &--cur {
-    background: color-mix(in oklab, var(--pink) 8%, transparent);
+    background: var(--cell);
 
     .weather-card__hour-temp {
       color: var(--pink-text);
@@ -431,17 +250,15 @@ const hourCells = computed<HourCell[]>(() => {
 .weather-card__hour-bar {
   width: 5px;
   min-height: 3px;
-  background: var(--pink);
-  opacity: 0.28;
-  transition: opacity 200ms ease;
+  background: var(--control);
 }
 
 .weather-card__hour--cur .weather-card__hour-bar {
-  opacity: 0.55;
+  background: var(--muted);
 }
 
 .weather-card__hour--peak .weather-card__hour-bar {
-  opacity: 0.9;
+  background: var(--pink);
 }
 
 .weather-card__hour-label {

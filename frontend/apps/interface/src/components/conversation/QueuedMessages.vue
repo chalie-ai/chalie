@@ -1,5 +1,5 @@
 <!-- Pending (queued) sends for one scope, floating just above that scope's
-     composer as blurred rounded chips — a clear "waiting to send" affordance.
+     composer as chips — a clear "waiting to send" affordance.
      Each chip clicks back into the composer for editing; its x removes it.
      The chips live inside the InputDock, so the scope is the dock's turn_id and
      dispatch is the session store's job. -->
@@ -143,33 +143,33 @@ function toggleExpanded(i: number, event: MouseEvent): void {
   color: var(--muted);
   cursor: pointer;
   transition:
-    color var(--dur-1) ease,
-    background var(--dur-1) ease;
+    color var(--dur-1) var(--ease-out),
+    background var(--dur-1) var(--ease-out);
 }
 
 .pending__remove:hover {
-  color: var(--deny-text);
-  background: var(--line);
+  color: var(--text);
+  background: var(--surface-2);
 }
 
-// The floating chip: a translucent, blurred rounded box that hugs its text so a
-// queued message reads as "pending" against the conversation behind it.
+// The chip hugs its text so a queued message reads as "pending" against the
+// conversation behind it.
 .pending__chip {
   min-width: 0;
   max-width: 100%;
   padding: 7px 14px;
-  border: 1px solid var(--line);
-  background: color-mix(in oklab, var(--surface-2) 62%, transparent);
+  border: 1px solid var(--control);
+  background: var(--surface-2);
   text-align: left;
   cursor: pointer;
   transition:
-    border-color var(--dur-1) ease,
-    background var(--dur-1) ease;
+    border-color var(--dur-1) var(--ease-out),
+    background var(--dur-1) var(--ease-out);
 }
 
 .pending__chip:hover {
-  border-color: var(--control);
-  background: color-mix(in oklab, var(--surface-2) 78%, transparent);
+  border-color: var(--text);
+  background: var(--cell);
 }
 
 .pending__text {
@@ -202,10 +202,10 @@ function toggleExpanded(i: number, event: MouseEvent): void {
   font-weight: 500;
   color: var(--muted);
   cursor: pointer;
-  transition: color var(--dur-1) ease;
+  transition: color var(--dur-1) var(--ease-out);
 }
 
 .pending__toggle:hover {
-  color: var(--pink-text);
+  color: var(--text);
 }
 </style>

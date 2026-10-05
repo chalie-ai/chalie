@@ -159,7 +159,7 @@ onBeforeUnmount(() => {
 .history-loader__spinner {
   width: 18px;
   height: 18px;
-  border: 2px solid color-mix(in oklab, var(--pink-text) 20%, transparent);
+  border: 2px solid var(--line);
   border-top-color: var(--pink-text);
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
@@ -174,8 +174,8 @@ onBeforeUnmount(() => {
 .history-end-pill__label {
   font-size: 11px;
   color: var(--muted);
-  background: color-mix(in oklab, var(--text) 3%, transparent);
-  border: 1px solid color-mix(in oklab, var(--text) 7%, transparent);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
   padding: 4px 14px;
   letter-spacing: 0.04em;
 }

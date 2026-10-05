@@ -212,9 +212,11 @@ input[type="checkbox"], input[type="radio"], input[type="range"], progress { acc
 @keyframes spin     { to { rotate: 360deg; } }
 
 @media (prefers-reduced-motion: reduce) {
+  /* Near-zero, not none: code waiting on transitionend/animationend still gets it. */
   *, *::before, *::after {
-    animation: none !important;
-    transition: none !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
 }

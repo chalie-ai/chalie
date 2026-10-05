@@ -430,7 +430,7 @@ function _unbindKeyboard(): void {
   left: 50%;
   transform: translateX(-50%);
   z-index: 900;
-  background: var(--bg);
+  background: var(--surface);
   border: 1px solid var(--line);
   padding: 0.75rem 1rem;
   display: flex;
@@ -506,25 +506,30 @@ function _unbindKeyboard(): void {
   border: none;
   cursor: pointer;
   color: var(--text);
-  border-radius: 50%;
   padding: 0.25rem;
   flex-shrink: 0;
-  transition: color 0.15s;
+  transition:
+    color var(--dur-1) var(--ease-out),
+    background-color var(--dur-1) var(--ease-out),
+    translate var(--dur-1) var(--ease-out);
 
   &:hover {
-    color: var(--pink-text);
+    color: var(--text);
+  }
+
+  &:active {
+    translate: 0 1px;
   }
 
   &--play {
     width: 2.25rem;
     height: 2.25rem;
     background: var(--pink);
-    color: #fff;
-    border-radius: 50%;
+    color: var(--on-pink);
 
     &:hover {
-      color: #fff;
-      opacity: 0.9;
+      background: var(--text);
+      color: var(--bg);
     }
   }
 

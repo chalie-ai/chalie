@@ -357,7 +357,7 @@ onBeforeUnmount((): void => {
 
 .timer-card__ring-track {
   fill: none;
-  stroke: var(--line);
+  stroke: var(--cell);
   stroke-width: 3;
 }
 
@@ -365,29 +365,19 @@ onBeforeUnmount((): void => {
   fill: none;
   stroke: var(--pink-text);
   stroke-width: 3;
-  stroke-linecap: round;
-  transition: stroke-dashoffset 0.4s linear;
+  transition: stroke-dashoffset var(--dur-3) var(--ease-out);
 }
 
 .timer-card--done .timer-card__ring-fill {
-  stroke: var(--amber);
-  animation: timer-ring-pulse 1s ease-in-out infinite;
-}
-
-@keyframes timer-ring-pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.45;
-  }
+  stroke: var(--ask-text);
+  animation: working 1.4s ease-in-out infinite;
 }
 
 /*
  * Compound `--done.--silenced` (specificity 0-3-0) deliberately outranks the
  * `--done` pulse rule (0-2-0) by specificity, not source order — a silenced
- * card always carries both classes — so it cancels the pulse while keeping amber.
+ * card always carries both classes — so it cancels the pulse while keeping the
+ * done colour.
  */
 .timer-card--done.timer-card--silenced .timer-card__ring-fill {
   animation: none;
@@ -428,8 +418,7 @@ onBeforeUnmount((): void => {
 .timer-card__btn {
   width: 32px;
   height: 32px;
-  border-radius: 50%;
-  border: 1px solid var(--line);
+  border: 1px solid var(--control);
   background: transparent;
   color: var(--muted);
   display: inline-flex;
@@ -437,13 +426,18 @@ onBeforeUnmount((): void => {
   justify-content: center;
   cursor: pointer;
   transition:
-    color 160ms ease,
-    border-color 160ms ease;
+    color var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out),
+    translate var(--dur-1) var(--ease-out);
   padding: 0;
 
   &:hover:not(:disabled) {
     color: var(--text);
-    border-color: color-mix(in oklab, var(--pink-text) 50%, var(--line));
+    border-color: var(--text);
+  }
+
+  &:active:not(:disabled) {
+    translate: 0 1px;
   }
 
   &:disabled {
@@ -458,8 +452,8 @@ onBeforeUnmount((): void => {
   }
 }
 
-.timer-card--stopped {
-  opacity: 0.65;
+.timer-card--stopped .timer-card__title {
+  color: var(--muted);
 }
 
 .timer-card--error {

@@ -116,10 +116,10 @@ async function handleSubmit() {
     font-size: 0.9rem;
     color: var(--text);
     background: var(--surface-2);
-    border: 1px solid var(--line);
+    border: 1px solid var(--control);
     margin-bottom: 1rem;
     outline: none;
-    transition: border-color 0.2s;
+    transition: border-color var(--dur-1) var(--ease-out);
     box-sizing: border-box;
 
     &:focus {
@@ -137,14 +137,22 @@ async function handleSubmit() {
     padding: 0.65rem;
     font-size: 0.9rem;
     font-weight: 500;
-    color: #fff;
+    color: var(--on-pink);
     background: var(--pink);
     border: none;
     cursor: pointer;
-    transition: opacity 0.2s;
+    transition:
+      background-color var(--dur-1) var(--ease-out),
+      color var(--dur-1) var(--ease-out),
+      translate var(--dur-1) var(--ease-out);
 
     &:hover:not(:disabled) {
-      opacity: 0.85;
+      background: var(--text);
+      color: var(--bg);
+    }
+
+    &:active:not(:disabled) {
+      translate: 0 1px;
     }
 
     &:disabled {

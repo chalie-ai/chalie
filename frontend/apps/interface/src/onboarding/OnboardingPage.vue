@@ -16,7 +16,7 @@ let nextId = 0;
 const toasts = ref<Toast[]>([]);
 
 // Drop from the queue after the 3s visible window; the TransitionGroup leave
-// transition plays the 0.3s fade-out.
+// transition plays the fade-out.
 const TOAST_VISIBLE_MS = 3000;
 
 function showToast(message: string, type: Toast['type'] = 'info'): void {
@@ -130,38 +130,6 @@ async function handleAccountSubmit(): Promise<void> {
 </template>
 
 <style scoped lang="scss">
-:global(body::before) {
-  content: '';
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  pointer-events: none;
-  background:
-    radial-gradient(
-      600px circle at 30% 20%,
-      color-mix(in srgb, var(--pink) 6%, transparent),
-      transparent 60%
-    ),
-    radial-gradient(
-      500px circle at 70% 75%,
-      color-mix(in srgb, var(--pink) 4%, transparent),
-      transparent 60%
-    );
-  animation: ambient-breathe 20s ease-in-out infinite;
-}
-
-@keyframes ambient-breathe {
-  0%,
-  100% {
-    transform: scale(1);
-    opacity: 0.8;
-  }
-  50% {
-    transform: scale(1.06);
-    opacity: 1;
-  }
-}
-
 .ob-container {
   width: 100%;
   display: flex;
@@ -197,9 +165,8 @@ async function handleAccountSubmit(): Promise<void> {
 .warning-box {
   padding: 16px;
   margin-bottom: 24px;
-  background: color-mix(in srgb, var(--deny) 8%, transparent);
-  border: 1px solid color-mix(in srgb, var(--deny-text) 35%, transparent);
-  border-left: 3px solid var(--deny-text);
+  background: var(--surface);
+  border: 1px solid var(--deny);
 
   h3 {
     color: var(--deny-text);
@@ -236,13 +203,13 @@ async function handleAccountSubmit(): Promise<void> {
     font-size: 0.9rem;
     color: var(--text);
     background: var(--surface-2);
-    border: 1px solid var(--line);
+    border: 1px solid var(--control);
     outline: none;
-    transition: border-color 0.2s;
+    transition: border-color var(--dur-1) var(--ease-out);
     box-sizing: border-box;
 
     &:focus {
-      border-color: color-mix(in srgb, var(--pink-text) 35%, transparent);
+      border-color: var(--pink-text);
     }
 
     &:disabled {
@@ -264,13 +231,21 @@ async function handleAccountSubmit(): Promise<void> {
   font-size: 0.9rem;
   font-weight: 500;
   cursor: pointer;
-  transition: opacity 0.2s;
-  color: #fff;
+  transition:
+    background-color var(--dur-1) var(--ease-out),
+    color var(--dur-1) var(--ease-out),
+    translate var(--dur-1) var(--ease-out);
+  color: var(--on-pink);
   background: var(--pink);
   border: none;
 
   &:hover:not(:disabled) {
-    opacity: 0.85;
+    background: var(--text);
+    color: var(--bg);
+  }
+
+  &:active:not(:disabled) {
+    translate: 0 1px;
   }
 
   &:disabled {
@@ -297,32 +272,21 @@ async function handleAccountSubmit(): Promise<void> {
   font-size: 13px;
   font-weight: 500;
   pointer-events: auto;
-  animation: slideIn 0.3s ease;
+  animation: rise var(--dur-2) var(--ease-out);
 
   &.toast-success {
-    border-left: 3px solid var(--allow-text);
+    border-color: var(--allow);
   }
   &.toast-error {
-    border-left: 3px solid var(--deny-text);
+    border-color: var(--deny);
   }
   &.toast-info {
-    border-left: 3px solid var(--pink-text);
-  }
-}
-
-@keyframes slideIn {
-  from {
-    transform: translateX(400px);
-    opacity: 0;
-  }
-  to {
-    transform: translateX(0);
-    opacity: 1;
+    border-color: var(--pink);
   }
 }
 
 .toast-leave-active {
-  transition: opacity 0.3s ease;
+  transition: opacity var(--dur-2) var(--ease-out);
 }
 .toast-leave-to {
   opacity: 0;
