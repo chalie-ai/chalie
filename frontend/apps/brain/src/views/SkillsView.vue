@@ -227,7 +227,7 @@ async function submitCreate(): Promise<void> {
         <div v-if="editingId === skill.id" class="cap-card skill-card">
           <div class="skill-card-header">
             <strong>{{ skill.title }}</strong>
-            <span class="badge badge-violet">v{{ skill.version }}</span>
+            <span class="badge">v{{ skill.version }}</span>
           </div>
           <form class="skill-edit-form" @submit.prevent="saveEdit(skill)">
             <div class="form-group">
@@ -280,7 +280,7 @@ async function submitCreate(): Promise<void> {
                 <component :is="expandedId === skill.id ? ChevronDown : ChevronRight" :size="12" />
               </span>
               <strong>{{ skill.title }}</strong>
-              <span class="badge badge-violet">v{{ skill.version }}</span>
+              <span class="badge">v{{ skill.version }}</span>
               <span v-if="skill.enabled" class="badge badge-success">enabled</span>
               <span v-else class="badge badge-muted">disabled</span>
             </div>

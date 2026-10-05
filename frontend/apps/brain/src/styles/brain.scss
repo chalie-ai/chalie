@@ -592,11 +592,8 @@ body {
 }
 
 .badge-ollama,
-.badge-violet,
 .badge-anthropic,
-.badge-magenta,
-.badge-openai,
-.badge-cyan     { border-color: var(--pink); color: var(--pink-text); }
+.badge-openai   { border-color: var(--pink); color: var(--pink-text); }
 .badge-gemini,
 .badge-success,
 .badge-online,
