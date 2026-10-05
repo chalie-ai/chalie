@@ -258,10 +258,10 @@ async function cancelSchedule(s: ScheduleItem): Promise<void> {
   gap: 0.5rem;
 }
 .state-active {
-  color: var(--success);
+  color: var(--allow-text);
 }
 .state-disabled {
-  color: var(--text-muted);
+  color: var(--muted);
 }
 
 /* Crontab field grid — five compact expression inputs on one row. */
@@ -277,7 +277,7 @@ async function cancelSchedule(s: ScheduleItem): Promise<void> {
 }
 .cron-field label {
   font-size: 0.72rem;
-  color: var(--text-muted);
+  color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -288,6 +288,6 @@ async function cancelSchedule(s: ScheduleItem): Promise<void> {
 .cron-preview {
   margin: 0.5rem 0 0.25rem;
   font-weight: 500;
-  color: var(--text-primary);
+  color: var(--text);
 }
 </style>
