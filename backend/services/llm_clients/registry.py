@@ -99,11 +99,6 @@ def _build_index() -> dict[str, type[ProviderClient]]:
 PROVIDERS_BY_PLATFORM: dict[str, type[ProviderClient]] = _build_index()
 
 
-def client_class_for(platform: str) -> type[ProviderClient] | None:
-    """The client class serving *platform*, or None when nothing claims it."""
-    return PROVIDERS_BY_PLATFORM.get(platform)
-
-
 def platform_requires_key(platform: str) -> bool:
     """Whether *platform* cannot be reached at all without a credential.
 
@@ -117,5 +112,5 @@ def platform_requires_key(platform: str) -> bool:
     factory with a message naming it, which is a better answer than a complaint
     about a missing key for a provider that does not exist.
     """
-    client = client_class_for(platform)
+    client = PROVIDERS_BY_PLATFORM.get(platform)
     return client is not None and client.REQUIRES_KEY
