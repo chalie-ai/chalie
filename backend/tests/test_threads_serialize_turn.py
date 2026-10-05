@@ -268,6 +268,46 @@ def test_reply_with_tool_call_tags_only_the_reply_rows(db: sqlite3.Connection) -
     assert any(c["tool_name"] == "calendar" for c in tool_calls)
 
 
+def test_thread_read_gives_each_chip_its_tool_calls_row_id(
+    authed_client: tuple[FlaskClient, sqlite3.Connection, object],
+) -> None:
+    """A running call is drawn live as a pill keyed on its tool_calls row id,
+    and a read of the turn mid-call returns the same call as a ``started``
+    chip. Through the real thread read, every chip must carry its own row id —
+    the finished call's and the still-running call's — so the client can tell
+    the running chip and its live pill are one call and draw it once."""
+    client, _db, _store = authed_client
+    turn_id = 7005
+    mp = MessageProcessor(UserConfig(), turn_id, "Find the museum hours.")  # inert (I2)
+    assert mp.turn_execution_service.open() is not None
+    uid = mp.transcript_service.append_input(mp.raw_input)
+    mp.uid = uid
+    mp.current_transcript_id = uid
+
+    done_id = mp.tool_call_service.start("web_search", {"query": "museum hours"})
+    assert done_id is not None  # sanity: the real tool-call write succeeded
+    mp.tool_call_service.finish(done_id, "open 9-5", ToolCall.DONE)
+    running_id = mp.tool_call_service.start("calendar", {"action": "list"})  # left running: mid-call
+    assert running_id is not None
+    assert running_id != done_id
+
+    resp = client.get(f"/api/threads/{turn_id}")
+    assert resp.status_code == 200
+    body = cast("dict[str, object]", resp.get_json()["result"])
+    assert body["working"] is True  # the read happens while the turn is still running
+    messages = cast("list[dict[str, object]]", body["messages"])
+    chips = {
+        cast("str", c["tool_name"]): c
+        for m in messages
+        for c in cast("list[dict[str, object]]", m.get("tool_calls") or [])
+    }
+
+    assert chips["web_search"]["id"] == done_id
+    assert chips["web_search"]["state"] == ToolCall.DONE
+    assert chips["calendar"]["id"] == running_id
+    assert chips["calendar"]["state"] == ToolCall.STARTED
+
+
 # ── Rich-media spans resolve PER ACT CYCLE, not per turn (§ same function) ─────
 #
 # A turn_id spans the WHOLE thread — many user requests — and each request runs

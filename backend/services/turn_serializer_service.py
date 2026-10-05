@@ -143,9 +143,12 @@ def _tool_call_chips(
     calls render under WHATEVER row anchors them). Each chip carries the
     persisted ``state`` + ``ended_at`` so a refetched error stays an error pill,
     not a downgraded neutral chip, and ``delegate`` — the child turn the call
-    spawned, from ``delegates`` — so a settled pill still opens its transcript."""
+    spawned, from ``delegates`` — so a settled pill still opens its transcript.
+    Each chip carries its tool_calls row ``id``, the id the live frame keys its
+    pill on, so the client can show a still-running call once."""
     return [
         {
+            "id": c["id"],
             "tool_name": c["tool_name"],
             "summary": c["summary"],
             "state": c["state"],

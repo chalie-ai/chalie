@@ -126,6 +126,17 @@ const droppedOnCancel = computed<Set<string>>(() => {
 
 const displayRows = computed<DisplayRow[]>(() => {
   const rows: DisplayRow[] = [];
+  // Live trails: appended at the tail while the turn is working, but only when
+  // this render is the authoritative live view of the turn (thread panel, or a
+  // non-forked turn in the spine). Forked turns in the spine show the thread
+  // pill's animated dot instead — rendering "thinking..." inline would duplicate
+  // that indicator and misattribute thread activity to the top-level timeline.
+  const trails =
+    props.block.working && (props.fullThread || !isForkedThread.value)
+      ? liveTrailsFor(channel.value ?? props.type, props.block.turn_id)
+      : null;
+  const liveIds = new Set((trails ?? []).flatMap((t) => t.pills.map((p) => p.id)));
+
   // One provider call is one assistant row, drawn on its own: its bubble when it
   // said something, then its footer when it closes its exchange or carries a
   // trace. A step row that only asked for tools has no text, so its trace stands
@@ -139,18 +150,23 @@ const displayRows = computed<DisplayRow[]>(() => {
     if (hasBubble) rows.push({ kind: 'msg', message });
 
     const closing = closingRowIds.value.has(message.id);
-    if (closing || message.tool_calls?.length || message.thinking) {
-      rows.push({ kind: 'footer', message, closing, standalone: message.role === 'user' || !hasBubble });
+    const all = message.tool_calls ?? [];
+    // A running call shows as its live pill, and a refetch also returns it as a
+    // `started` chip: the footer drops a chip whose pill is in the trail, so the
+    // call shows once — the pill while it runs, the stored chip once the pill
+    // clears.
+    const calls = all.filter((c) => !liveIds.has(String(c.id)));
+    if (closing || calls.length || message.thinking) {
+      rows.push({
+        kind: 'footer',
+        message: calls.length === all.length ? message : { ...message, tool_calls: calls },
+        closing,
+        standalone: message.role === 'user' || !hasBubble,
+      });
     }
   }
 
-  // Live trails: appended at the tail while the turn is working, but only when
-  // this render is the authoritative live view of the turn (thread panel, or a
-  // non-forked turn in the spine). Forked turns in the spine show the thread
-  // pill's animated dot instead — rendering "thinking..." inline would duplicate
-  // that indicator and misattribute thread activity to the top-level timeline.
-  if (props.block.working && (props.fullThread || !isForkedThread.value)) {
-    const trails = liveTrailsFor(channel.value ?? props.type, props.block.turn_id);
+  if (trails) {
     if (trails.length) {
       for (const t of trails) {
         rows.push({ kind: 'live-act', rowId: t.rowId, pills: t.pills });
