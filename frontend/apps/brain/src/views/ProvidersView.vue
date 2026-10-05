@@ -533,7 +533,7 @@ async function saveProvider(): Promise<void> {
               >
             </div>
             <div class="provider-meta">
-              <span :class="`badge badge-${p.platform}`">{{ p.platform }}</span>
+              <span class="badge badge-muted">{{ p.platform }}</span>
               <span
                 v-if="p.supports_vision"
                 class="badge badge-success"

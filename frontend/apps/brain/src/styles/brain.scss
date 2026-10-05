@@ -591,14 +591,9 @@ body {
   border: 1px solid var(--line);
 }
 
-.badge-ollama,
-.badge-anthropic,
-.badge-openai   { border-color: var(--pink); color: var(--pink-text); }
-.badge-gemini,
 .badge-success,
 .badge-online,
 .badge-enabled  { border-color: var(--allow); color: var(--allow-text); }
-.badge-openai_compatible,
 .badge-warning  { border-color: var(--ask); color: var(--ask-text); }
 .badge-danger,
 .badge-offline  { border-color: var(--deny); color: var(--deny-text); }
