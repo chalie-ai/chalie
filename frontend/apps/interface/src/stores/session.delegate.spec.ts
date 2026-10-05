@@ -433,6 +433,7 @@ describe('stopping a running subagent from its open transcript', () => {
     ['the answer is not a stop ack', () => Promise.resolve(json({ success: true }))],
   ])('says the stop failed and leaves the subagent running, stoppable again, when %s', async (_name, failure) => {
     const logged = vi.spyOn(console, 'error').mockImplementation(() => { /* asserted below */ });
+    // The backend still serves the subagent as running when the failed stop re-reads it.
     const { session, panel } = await openRunning();
     answerStop = failure;
 
@@ -443,7 +444,8 @@ describe('stopping a running subagent from its open transcript', () => {
     expect(session.errorMessage).toBe("Couldn't stop the subagent. Try again.");
     expect(logged).toHaveBeenCalled();
     expect(panel.text()).toContain('museum.example/hours');
-    expect(delegateReads()).toEqual([]);
+    // The one read is the re-read that found it still running.
+    expect(delegateReads()).toEqual([{ turnId: 12, channel: 'delegate:web_search', type: null }]);
     expect(showsWorking(panel)).toBe(true);
 
     // The retry goes through, and the failure it answered no longer shows.
@@ -455,6 +457,33 @@ describe('stopping a running subagent from its open transcript', () => {
     expect(stops).toEqual([SEARCH_STOP, SEARCH_STOP]);
     expect(session.errorMessage).toBeNull();
     expect(showsWorking(panel)).toBe(false);
+  });
+
+  it.each([
+    ['the network drops the answer', () => Promise.reject(new TypeError('Failed to fetch'))],
+    ['a gateway times out on the answer', () => Promise.resolve(json({ error: 'gateway timeout' }, 504))],
+  ])('takes the stop as done, with no failure shown, when %s after the subagent was stopped', async (_name, lost) => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => { /* asserted below */ });
+    const { session, panel } = await openRunning();
+    const answer = deferred<void>();
+    answerStop = () => answer.promise.then(lost);
+
+    subagentStop(panel)!.click();
+    await flushPromises();
+    // The server stopped it and said so over the socket before answering.
+    serve = () => ({ ...delegateBlock(SEARCH, [TASK], false), cancelled: true });
+    wsCallbacks.onDrift(cancelledFrame(SEARCH));
+    await flushPromises();
+    answer.resolve();
+    await flushPromises();
+
+    expect(stops).toEqual([SEARCH_STOP]);
+    expect(logged).toHaveBeenCalled();
+    expect(session.errorMessage).toBeNull();
+    expect(panel.text()).not.toContain('museum.example/hours');
+    expect(panel.text()).toContain('This subagent was stopped.');
+    expect(showsWorking(panel)).toBe(false);
+    expect(stopControls(panel.element as Element)).toEqual([]);
   });
 
   it('takes a stop of a subagent that had already finished quietly, and shows its final transcript', async () => {

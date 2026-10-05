@@ -448,7 +448,9 @@ export const useSessionStore = defineStore('session', {
      *
      * Nothing changes until the server accepts the stop: a refused or failed
      * DELETE surfaces in the dock's error banner and leaves the turn running,
-     * its stop control in place for a retry. The DELETE only stamps the turn's
+     * its stop control in place for a retry — unless a re-read finds the turn
+     * already ended, in which case only the answer was lost and the stop goes
+     * on as accepted (see `_stoppedAnyway`). The DELETE only stamps the turn's
      * row server-side, so the wait is a single round-trip.
      */
     async requestStop(
@@ -516,17 +518,40 @@ export const useSessionStore = defineStore('session', {
     },
 
     /** Send the stop's DELETE. True once the server accepted it — a stop or a
-     *  `no_active_turn` ack — which also takes down this stop's own earlier
-     *  failure, so a successful retry leaves no stale banner; on any failure,
-     *  logs it, shows `failure` in the dock's error banner and returns false. */
+     *  `no_active_turn` ack, or a failed DELETE after which the turn is found
+     *  no longer working — which also takes down this stop's own earlier
+     *  failure, so a successful retry leaves no stale banner; otherwise logs
+     *  it, shows `failure` in the dock's error banner and returns false. */
     async _stop(target: number | DelegateRef, type: string, failure: string): Promise<boolean> {
       try {
         await convoApi.stop(target, type);
-        if (this.errorMessage === failure) this.errorMessage = null;
-        return true;
       } catch (err) {
         console.error('[Session] Stop failed:', err);
-        this.errorMessage = failure;
+        if (!(await this._stoppedAnyway(target, type))) {
+          this.errorMessage = failure;
+          return false;
+        }
+      }
+      if (this.errorMessage === failure) this.errorMessage = null;
+      return true;
+    },
+
+    /** Whether a stop whose DELETE failed went through anyway. The server
+     *  commits the cancel and sends its 'cancelled' frame before it answers,
+     *  so a lost answer can hide a stop that happened — and that frame has
+     *  already taken the stop control away, leaving nothing to retry. Re-reads
+     *  the turn: no longer working counts as accepted, as `no_active_turn`
+     *  does. Still working, or a read that fails too, stays a failure, so a
+     *  refused stop is still reported and keeps its control. Only decides —
+     *  the reconcile after an accepted stop is what renders the turn. */
+    async _stoppedAnyway(target: number | DelegateRef, type: string): Promise<boolean> {
+      try {
+        const block = typeof target === 'number'
+          ? await convoApi.thread(target, type)
+          : await convoApi.delegateThread(target.turn_id, target.channel);
+        return !block.working;
+      } catch (err) {
+        console.error('[Session] Stop re-read failed:', err);
         return false;
       }
     },
