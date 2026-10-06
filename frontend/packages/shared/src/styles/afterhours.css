@@ -4,9 +4,11 @@
    tokens; this file is the source of truth.
 
    Flat and sharp: no radius, gradient, glow, shadow or blur anywhere. Depth comes
-   from the three grounds (bg → surface → surface-2) and 1px lines. Pink is the only
-   accent and is always a fill with night-coloured text on it. Every text colour
-   clears 4.5:1 on all three grounds in both themes; --control clears 3:1. */
+   from the three grounds (bg → surface → surface-2): fills group things, and a
+   border marks only a text field or the focus ring. One control height, one icon
+   size, three text sizes (12 mono, 15 body, 20 title). Pink is the only accent
+   and is always a fill with night-coloured text on it. Every text colour clears
+   4.5:1 on all three grounds in both themes; --control clears 3:1. */
 
 @font-face {
   font-family: 'Epilogue Variable';
@@ -95,7 +97,11 @@
   --space-md:     16px;
   --space-lg:     24px;
   --space-xl:     40px;
-  --font-size-xs: 0.75rem;
+  --control-h:    32px;      /* every button, input, select and segmented control */
+  --icon:         16px;      /* every inline icon */
+  --fs-mono:      0.75rem;   /* 12px: mono labels, times, counts */
+  --fs-body:      0.9375rem; /* 15px: all reading and control text */
+  --fs-title:     1.25rem;   /* 20px: page and card titles */
 }
 
 /* ── Base ─────────────────────────────────────────────────────────────── */
@@ -106,7 +112,7 @@ html, body { margin: 0; padding: 0; }
 body {
   background: var(--bg);
   color: var(--text);
-  font: 400 0.9375rem/1.55 var(--font-ui);
+  font: 400 var(--fs-body)/1.55 var(--font-ui);
   -webkit-font-smoothing: antialiased;
   transition: background-color var(--dur-3) var(--ease-out), color var(--dur-3) var(--ease-out);
 }
@@ -136,6 +142,8 @@ select {
   color: var(--text);
   transition: border-color var(--dur-1) var(--ease-out);
 }
+input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="color"]),
+select { min-height: var(--control-h); }
 input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="color"]):hover,
 textarea:hover,
 select:hover { border-color: var(--muted); }
@@ -158,44 +166,44 @@ input[type="checkbox"], input[type="radio"], input[type="range"], progress { acc
   align-items: center;
   justify-content: center;
   gap: var(--space-sm);
-  min-height: 36px;
+  min-height: var(--control-h);
   padding: 0 var(--space-md);
-  border: 1px solid var(--control);
+  border: none;
   border-radius: 0;
-  background: transparent;
+  background: var(--surface-2);
   color: var(--text);
-  font: 600 0.875rem/1 var(--font-ui);
+  font: 600 var(--fs-body)/1 var(--font-ui);
   text-decoration: none;
   transition: background-color var(--dur-1) var(--ease-out),
-              border-color var(--dur-1) var(--ease-out),
               color var(--dur-1) var(--ease-out),
               translate var(--dur-1) var(--ease-out);
 }
-.btn:hover:not(:disabled) { border-color: var(--text); background: var(--surface-2); }
+.btn:hover:not(:disabled) { background: var(--cell); }
 .btn:active:not(:disabled) { translate: 0 1px; }
 .btn:disabled { opacity: 0.45; }
-.btn-primary { background: var(--pink); border-color: var(--pink); color: var(--on-pink); }
-.btn-primary:hover:not(:disabled) { background: var(--text); border-color: var(--text); color: var(--bg); }
-.btn-danger { border-color: var(--deny); color: var(--deny-text); }
-.btn-danger:hover:not(:disabled) { background: var(--deny); border-color: var(--deny); color: var(--on-pink); }
+.btn-primary { background: var(--pink); color: var(--on-pink); }
+.btn-primary:hover:not(:disabled) { background: var(--text); color: var(--bg); }
+.btn-danger { background: var(--surface-2); color: var(--deny-text); }
+.btn-danger:hover:not(:disabled) { background: var(--deny); color: var(--on-pink); }
 
 /* A file input's own button can't take a class; it reads as a secondary button. */
 ::file-selector-button {
   margin-right: var(--space-sm);
   padding: 6px 10px;
-  border: 1px solid var(--control);
+  min-height: var(--control-h);
+  border: none;
   border-radius: 0;
-  background: var(--surface);
+  background: var(--surface-2);
   color: var(--text);
-  font: 600 0.75rem/1 var(--font-ui);
+  font: 600 var(--fs-mono)/1 var(--font-ui);
   cursor: pointer;
-  transition: background-color var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out);
+  transition: background-color var(--dur-1) var(--ease-out);
 }
-::file-selector-button:hover { border-color: var(--text); background: var(--surface-2); }
+::file-selector-button:hover { background: var(--cell); }
 
 /* Mono label: times, keys, section labels. */
 .lbl {
-  font: 500 0.75rem/1.2 var(--font-mono);
+  font: 500 var(--fs-mono)/1.2 var(--font-mono);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--muted);
@@ -203,8 +211,8 @@ input[type="checkbox"], input[type="radio"], input[type="range"], progress { acc
 .tag {
   display: inline-block;
   padding: 5px 7px;
-  border: 1px solid var(--line);
-  font: 500 0.75rem/1 var(--font-mono);
+  background: var(--surface-2);
+  font: 500 var(--fs-mono)/1 var(--font-mono);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--muted);

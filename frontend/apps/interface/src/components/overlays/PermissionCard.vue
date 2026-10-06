@@ -144,7 +144,7 @@ const title = computed(() => props.req.summary || actionLabel(props.req.action_i
   justify-content: space-between;
   gap: var(--space-sm);
   margin-bottom: var(--space-xs);
-  font-size: var(--font-size-xs);
+  font-size: var(--fs-mono);
   color: var(--muted);
 }
 
@@ -157,7 +157,7 @@ const title = computed(() => props.req.summary || actionLabel(props.req.action_i
 .perm-card__lane-open {
   flex-shrink: 0;
   padding: 2px var(--space-xs);
-  font-size: var(--font-size-xs);
+  font-size: var(--fs-mono);
   font-weight: 500;
   line-height: 1.4;
   border: 1px solid var(--control);
