@@ -4,43 +4,15 @@ import { computed } from 'vue';
 import { useRoute } from 'vue-router';
 import { useShellStore } from '../stores/shell';
 import { Menu, PanelLeft, Search } from '@lucide/vue';
+import { NAV } from './nav';
 
 const shell = useShellStore();
 const route = useRoute();
 
-const LABELS: Record<string, string> = {
-  providers: 'Providers',
-  cognition: 'Cognition',
-  scheduler: 'Scheduler',
-  lists: 'Lists',
-  capabilities: 'Capabilities',
-  policies: 'Policies',
-  skills: 'Skills',
-  mcp: 'MCP',
-  memory: 'Memory',
-  tools: 'Tools',
-  world: 'World state',
-  personality: 'Personality',
-  errors: 'Errors',
-  usage: 'Usage',
-  compaction: 'Compacted Summary',
-  all: 'All',
-  pending: 'Pending',
-  fired: 'Fired',
-  failed: 'Failed',
-  cancelled: 'Cancelled',
-  active: 'Active',
-  processing: 'Processing',
-  uploads: 'Uploads',
-  deleted: 'Deleted',
-  chat: 'Chat',
-  background: 'Background',
-  external: 'External agent',
-};
-
 const segments = computed(() => route.path.split('/').filter(Boolean));
-const topLabel = computed(() => LABELS[segments.value[0]] ?? segments.value[0] ?? '');
-const subLabel = computed(() => LABELS[segments.value[1]] ?? segments.value[1] ?? '');
+const item = computed(() => NAV.find((n) => n.id === segments.value[0]));
+const topLabel = computed(() => item.value?.label ?? '');
+const subLabel = computed(() => item.value?.sub?.find((s) => s.id === segments.value[1])?.label ?? '');
 
 function handleSearchKeydown(e: KeyboardEvent): void {
   if (e.key === 'Enter' || e.key === ' ') {

@@ -846,20 +846,6 @@ input[type='checkbox'] {
   }
 }
 
-.progress-bar {
-  height: 3px;
-  background: var(--cell);
-  overflow: hidden;
-  margin: 8px 0;
-}
-
-.progress-fill {
-  width: var(--fill, 0);
-  height: 100%;
-  background: var(--pink);
-  transition: width var(--dur-3) var(--ease-out);
-}
-
 .switch {
   display: inline-flex;
   align-items: center;
@@ -1620,7 +1606,7 @@ input[type='checkbox'] {
   .topbar { padding: 0 12px; gap: 8px; }
   .topbar-center { display: none; }
   .crumb { font-size: 12px; }
-  .crumb .sep:first-of-type,
+  .crumb span:first-child + .sep,
   .crumb span:first-child { display: none; }
 
   .modal { width: 92vw; padding: 16px; }
@@ -1635,7 +1621,8 @@ input[type='checkbox'] {
   .seg-btn { padding: 4px 8px; font-size: 11px; }
 }
 
-// Import/Export Time-Machine panel. .form-hint and .form-input are declared
+// System and Import / Export pages: left-aligned sections like the Providers
+// page's Vision/Delegate blocks, not boxed cards. .form-input is declared
 // above and intentionally not repeated here.
 .brain-overview {
   display: flex;
@@ -1643,31 +1630,11 @@ input[type='checkbox'] {
   gap: 24px;
 }
 
-.export-card {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  padding: 20px;
-  text-align: center;
-}
-
-.export-card-icon {
-  color: var(--pink-text);
-  margin-bottom: 8px;
-}
-
-.export-card-label {
-  font-size: 0.9rem;
-  font-weight: 600;
-  color: var(--muted);
-  margin-bottom: 8px;
-}
-
-.export-card .form-label {
+.brain-overview .form-label {
   display: flex;
   flex-direction: column;
   gap: 4px;
   font-size: 0.8rem;
   color: var(--muted);
   margin: 12px 0;
-  text-align: left;
 }

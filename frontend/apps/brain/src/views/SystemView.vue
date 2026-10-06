@@ -93,10 +93,9 @@ async function save(): Promise<void> {
 
   <div v-else class="brain-overview">
     <!-- Domain card -->
-    <div class="export-card">
-      <div class="export-card-icon"><Network :size="24" /></div>
-      <div class="export-card-label">Domain</div>
-      <p class="form-hint">
+    <section>
+      <h4 class="section-head">Domain</h4>
+      <p class="panel-desc">
         The public domain Chalie is served from. Used for CORS: leave blank to allow same-origin
         requests only, or set to your external domain (e.g. <code>chalie.example.com</code>) to
         allow cross-origin access.
@@ -111,13 +110,12 @@ async function save(): Promise<void> {
         />
       </label>
       <button class="btn" @click="save"><Network :size="14" /> Save Domain</button>
-    </div>
+    </section>
 
     <!-- SSL / TLS card -->
-    <div class="export-card">
-      <div class="export-card-icon"><Lock :size="24" /></div>
-      <div class="export-card-label">SSL / TLS</div>
-      <p class="form-hint">
+    <section>
+      <h4 class="section-head">SSL / TLS</h4>
+      <p class="panel-desc">
         Enable HTTPS. Upload a PEM certificate and private key. After saving, Chalie restarts and
         the site switches to <code>https://</code> — you will need to reconnect at the new address.
       </p>
@@ -149,7 +147,7 @@ async function save(): Promise<void> {
       <button class="btn" :disabled="sslSaveBlocked" @click="save">
         <Lock :size="14" /> Save SSL Settings
       </button>
-    </div>
+    </section>
   </div>
 </template>
 

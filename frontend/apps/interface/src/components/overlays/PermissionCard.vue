@@ -185,7 +185,7 @@ const title = computed(() => props.req.summary || actionLabel(props.req.action_i
 }
 
 .perm-card__icon {
-  color: var(--pink-text);
+  color: var(--ask-text);
   flex-shrink: 0;
   line-height: 1;
 }

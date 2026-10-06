@@ -31,12 +31,11 @@ const showRename = ref(false);
 const renameName = ref('');
 const renameId = ref<string | number | null>(null);
 
-function counts(list: List): { done: number; total: number; pct: number } {
+function counts(list: List): { done: number; total: number } {
   const items = list.items ?? [];
   const done = list.items ? items.filter((i) => i.checked).length : (list.checked_count ?? 0);
   const total = list.items ? items.length : (list.item_count ?? 0);
-  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
-  return { done, total, pct };
+  return { done, total };
 }
 
 // Reuses the same `list` reference from listsData so toggle/fetchListDetail mutations still apply.
@@ -167,10 +166,6 @@ async function deleteList(list: List): Promise<void> {
           <button class="btn btn-sm" @click.stop="openRename(list)">Rename</button>
           <button class="btn btn-sm btn-danger" @click.stop="deleteList(list)">Delete</button>
         </div>
-      </div>
-
-      <div v-if="c.total > 0" class="progress-bar">
-        <div class="progress-fill" :style="{ '--fill': c.pct + '%' }"></div>
       </div>
 
       <div v-if="expanded[String(list.id)]" class="list-items">

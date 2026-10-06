@@ -6,7 +6,8 @@
  * The trigger button lives in PresenceBar.vue; the slide-out shell (scrim,
  * panel, close, transition choreography) is SideDrawer. This component supplies
  * the rows and wires them to tasks.isOpen. The hint appears on first
- * open-with-content; the panel auto-closes when the last item clears.
+ * open-with-content, an empty drawer says so, and the panel auto-closes when
+ * the last item clears.
  */
 import { computed, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
@@ -84,6 +85,7 @@ watch(totalCount, (count) => {
         <span class="task-drawer__thread-snippet">{{ ta.snippet }}</span>
       </button>
     </template>
+    <p v-else class="task-drawer__hint">Nothing new. Finished replies in your threads show up here.</p>
 
     <!-- First-time hint — shown on first open-with-content. -->
     <div v-if="showHint" class="task-drawer__hint">I'll show what I'm working on here.</div>

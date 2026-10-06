@@ -1,80 +1,16 @@
 <!-- Two NAV groups with collapsible sub-lists, active-route highlight, providersOnly lock banner, theme toggle. -->
 <script setup lang="ts">
-import type { FunctionalComponent } from 'vue';
 import { computed } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import {
-  BookOpen,
-  Brain,
-  Calendar,
-  ChevronRight,
-  DatabaseBackup,
-  LayoutGrid,
-  List,
-  Moon,
-  Network,
-  Server,
-  Settings,
-  ShieldCheck,
-  Sun,
-} from '@lucide/vue';
+import { ChevronRight, LayoutGrid, Moon, Sun } from '@lucide/vue';
 import { ChalieMark, useTheme } from '@chalie/shared';
 import { useShellStore } from '../stores/shell';
+import { NAV, type NavItem, type SubItem } from './nav';
 
 const shell = useShellStore();
 const route = useRoute();
 const router = useRouter();
 const { theme, toggle: toggleTheme } = useTheme();
-
-interface SubItem {
-  id: string;
-  label: string;
-}
-
-interface NavItem {
-  id: string;
-  label: string;
-  icon: FunctionalComponent;
-  group: 'cognition' | 'system';
-  sub?: SubItem[];
-}
-
-const NAV: NavItem[] = [
-  { id: 'providers', label: 'Providers', icon: LayoutGrid, group: 'cognition' },
-  {
-    id: 'cognition',
-    label: 'Cognition',
-    icon: Brain,
-    group: 'cognition',
-    sub: [
-      { id: 'memory', label: 'Memory' },
-      { id: 'tools', label: 'Tools' },
-      { id: 'world', label: 'World state' },
-      { id: 'personality', label: 'Personality' },
-      { id: 'errors', label: 'Errors' },
-      { id: 'usage', label: 'Usage' },
-      { id: 'compaction', label: 'Compacted Summary' },
-    ],
-  },
-  { id: 'scheduler', label: 'Scheduler', icon: Calendar, group: 'cognition' },
-  { id: 'lists', label: 'Lists', icon: List, group: 'cognition' },
-  { id: 'capabilities', label: 'Capabilities', icon: Settings, group: 'system' },
-  {
-    id: 'policies',
-    label: 'Policies',
-    icon: ShieldCheck,
-    group: 'system',
-    sub: [
-      { id: 'chat', label: 'Chat' },
-      { id: 'background', label: 'Background' },
-      { id: 'external', label: 'External agent' },
-    ],
-  },
-  { id: 'skills', label: 'Skills', icon: BookOpen, group: 'system' },
-  { id: 'mcp', label: 'MCP', icon: Server, group: 'system' },
-  { id: 'import-export', label: 'Import / Export', icon: DatabaseBackup, group: 'system' },
-  { id: 'system', label: 'System', icon: Network, group: 'system' },
-];
 
 // Both nav groups render from one template.
 const NAV_GROUPS: { title: string; group: NavItem['group'] }[] = [
