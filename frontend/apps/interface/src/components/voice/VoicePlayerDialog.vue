@@ -31,8 +31,8 @@
         :aria-label="isPlaying ? 'Pause' : 'Play'"
         @click="_togglePlayPause"
       >
-        <Pause v-if="isPlaying" :size="20" />
-        <Play v-else :size="20" />
+        <Pause v-if="isPlaying" :size="16" />
+        <Play v-else :size="16" />
       </button>
 
       <input
@@ -431,7 +431,6 @@ function _unbindKeyboard(): void {
   transform: translateX(-50%);
   z-index: 900;
   background: var(--surface);
-  border: 1px solid var(--line);
   padding: 0.75rem 1rem;
   display: flex;
   align-items: center;
@@ -478,7 +477,7 @@ function _unbindKeyboard(): void {
   align-items: center;
   gap: 0.5rem;
   color: var(--deny-text);
-  font-size: 0.8125rem;
+  font-size: var(--fs-body);
   margin: 0;
   width: 100%;
   max-width: 22rem;
@@ -547,7 +546,8 @@ function _unbindKeyboard(): void {
 }
 
 .voice-player__time {
-  font-size: 0.75rem;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
   color: var(--muted);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;

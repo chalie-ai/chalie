@@ -6,6 +6,7 @@
  * triggering bubble sits. Closes on backdrop click, the × button, or Escape.
  */
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { X } from '@lucide/vue';
 
 interface Props {
   src: string;
@@ -62,7 +63,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKey));
         aria-label="Close preview"
         @click="emit('close')"
       >
-        ×
+        <X :size="16" />
       </button>
       <img
         class="img-modal__img"
@@ -100,13 +101,11 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKey));
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
+  width: var(--control-h);
+  height: var(--control-h);
   border: none;
   background: var(--surface-2);
   color: var(--text);
-  font-size: 24px;
-  line-height: 1;
   cursor: pointer;
   transition:
     background-color var(--dur-1) var(--ease-out),

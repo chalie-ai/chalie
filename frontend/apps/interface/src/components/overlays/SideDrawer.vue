@@ -130,7 +130,6 @@ onBeforeUnmount(() => {
   width: 320px;
   max-width: 90vw;
   background: var(--surface);
-  border-left: 1px solid var(--line);
   z-index: 200;
   display: flex;
   flex-direction: column;
@@ -152,13 +151,12 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: space-between;
   padding: 16px 16px 12px;
-  border-bottom: 1px solid var(--line);
   flex-shrink: 0;
 }
 
 .side-drawer__title {
   margin: 0;
-  font-size: 15px;
+  font-size: var(--fs-title);
   font-weight: 600;
   color: var(--text);
 }

@@ -75,7 +75,6 @@ watch(totalCount, (count) => {
         v-for="ta in threadActivity"
         :key="`thread-${ta.turn_id}`"
         class="task-drawer__thread"
-        :class="`task-drawer__thread--${ta.kind}`"
         @click="openThread(ta.turn_id, ta.type)"
       >
         <span class="task-drawer__thread-top">
@@ -95,7 +94,7 @@ watch(totalCount, (count) => {
 <style scoped lang="scss">
 // ── Thread-activity row ──────────────────────────────────────────────────────────
 // Forked threads whose reply has settled unseen, folded out of the mockup's
-// floating notifications. A left accent stripe marks them done.
+// floating notifications. The steady activity dot marks them done.
 
 .task-drawer__thread {
   display: flex;
@@ -105,7 +104,6 @@ watch(totalCount, (count) => {
   text-align: left;
   background: transparent;
   border: none;
-  border-left: 2px solid transparent;
   padding: 10px 16px;
   cursor: pointer;
   transition:
@@ -113,16 +111,12 @@ watch(totalCount, (count) => {
     translate var(--dur-1) var(--ease-out);
 
   &:hover {
-    background: var(--surface-2);
+    background: var(--cell);
   }
 
   &:active {
     translate: 0 1px;
   }
-}
-
-.task-drawer__thread--done {
-  border-left-color: var(--pink-text);
 }
 
 .task-drawer__thread-top {
@@ -134,7 +128,7 @@ watch(totalCount, (count) => {
 .task-drawer__thread-label {
   flex: 1;
   min-width: 0;
-  font-size: 13px;
+  font-size: var(--fs-body);
   font-weight: 600;
   color: var(--text);
   white-space: nowrap;
@@ -143,7 +137,7 @@ watch(totalCount, (count) => {
 }
 
 .task-drawer__thread-snippet {
-  font-size: 11.5px;
+  font-size: var(--fs-body);
   line-height: 1.45;
   color: var(--muted);
   display: -webkit-box;
@@ -153,7 +147,7 @@ watch(totalCount, (count) => {
 }
 
 .task-drawer__hint {
-  font-size: 12px;
+  font-size: var(--fs-body);
   color: var(--muted);
   padding: 8px 16px 4px;
   font-style: italic;

@@ -142,7 +142,7 @@ onBeforeUnmount(() => {
     </div>
 
     <div v-if="!hasMoreRef" class="history-end-pill">
-      <span class="history-end-pill__label">End of thread history</span>
+      <span class="tag">End of thread history</span>
     </div>
 
     <div ref="turnsRef" class="conversation-spine__turns" />
@@ -168,14 +168,5 @@ onBeforeUnmount(() => {
   display: flex;
   justify-content: center;
   padding: 16px 0 8px;
-}
-
-.history-end-pill__label {
-  font-size: 11px;
-  color: var(--muted);
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  padding: 4px 14px;
-  letter-spacing: 0.04em;
 }
 </style>

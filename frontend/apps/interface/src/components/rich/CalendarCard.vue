@@ -167,39 +167,36 @@ const dayGroups = computed<DayGroup[]>(() => {
 }
 
 .calendar-card__when {
-  background: var(--surface);
-  border: 1px solid var(--pink);
+  background: var(--pink);
+  color: var(--on-pink);
   padding: 6px 4px;
   text-align: center;
 }
 
 .calendar-card__when-day {
   font-family: var(--font-mono);
-  font-size: 0.58rem;
+  font-size: var(--fs-mono);
   letter-spacing: 0.16em;
   text-transform: uppercase;
-  color: var(--pink-text);
 }
 
 .calendar-card__when-date {
-  font-size: 1.35rem;
+  font-size: var(--fs-title);
   font-weight: 500;
   letter-spacing: -0.03em;
   line-height: 1;
   margin: 2px 0;
-  color: var(--text);
 }
 
 .calendar-card__when-mon {
   font-family: var(--font-mono);
-  font-size: 0.58rem;
+  font-size: var(--fs-mono);
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--muted);
 }
 
 .calendar-card__title {
-  font-size: 0.96rem;
+  font-size: var(--fs-body);
   font-weight: 500;
   letter-spacing: -0.005em;
   margin: 0 0 2px;
@@ -208,7 +205,7 @@ const dayGroups = computed<DayGroup[]>(() => {
 
 .calendar-card__meta {
   font-family: var(--font-mono);
-  font-size: 0.74rem;
+  font-size: var(--fs-mono);
   color: var(--muted);
   letter-spacing: 0.04em;
 }
@@ -219,13 +216,13 @@ const dayGroups = computed<DayGroup[]>(() => {
 }
 
 .calendar-card__location {
-  font-size: 0.82rem;
+  font-size: var(--fs-body);
   color: var(--muted);
   margin-top: 4px;
 }
 
 .calendar-card__attendees {
-  font-size: 0.76rem;
+  font-size: var(--fs-body);
   color: var(--muted);
   margin-top: 4px;
   line-height: 1.4;
@@ -244,12 +241,11 @@ const dayGroups = computed<DayGroup[]>(() => {
 .calendar-card__day-group + .calendar-card__day-group {
   margin-top: 14px;
   padding-top: 12px;
-  border-top: 1px solid var(--line);
 }
 
 .calendar-card__day-label {
   font-family: var(--font-mono);
-  font-size: 0.62rem;
+  font-size: var(--fs-mono);
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--pink-text);
@@ -261,17 +257,12 @@ const dayGroups = computed<DayGroup[]>(() => {
   align-items: baseline;
   gap: 12px;
   padding: 5px 0;
-  font-size: 0.88rem;
-  border-bottom: 1px solid var(--line);
-}
-
-.calendar-card__row:last-child {
-  border-bottom: none;
+  font-size: var(--fs-body);
 }
 
 .calendar-card__row-time {
   font-family: var(--font-mono);
-  font-size: 0.74rem;
+  font-size: var(--fs-mono);
   color: var(--muted);
   font-weight: 500;
   letter-spacing: 0.04em;
@@ -289,7 +280,7 @@ const dayGroups = computed<DayGroup[]>(() => {
 }
 
 .calendar-card__row-loc {
-  font-size: 0.76rem;
+  font-size: var(--fs-body);
   color: var(--muted);
   flex-shrink: 0;
   max-width: 160px;

@@ -25,7 +25,7 @@ const STATUS_LABELS: Record<ToolCall['state'], string> = { done: 'succeeded', er
     >
       <span class="call__dot" role="img" :aria-label="STATUS_LABELS[c.state]" />
       <span class="call__summary">{{ c.summary }}</span>
-      <span class="call__fn"><Bot v-if="c.delegate" class="delegate-pill__icon" :size="14" aria-hidden="true" />{{ c.tool_name }}</span>
+      <span class="call__fn"><Bot v-if="c.delegate" class="delegate-pill__icon" :size="16" aria-hidden="true" />{{ c.tool_name }}</span>
     </component>
   </div>
 </template>

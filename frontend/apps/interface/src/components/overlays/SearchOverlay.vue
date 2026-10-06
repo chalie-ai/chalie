@@ -121,7 +121,6 @@ function pick(item: ConversationThread): void {
   width: 580px;
   max-width: 92vw;
   background: var(--surface);
-  border: 1px solid var(--line);
   overflow: hidden;
 }
 
@@ -130,13 +129,12 @@ function pick(item: ConversationThread): void {
   align-items: center;
   gap: 11px;
   padding: 14px 16px;
-  border-bottom: 1px solid var(--line);
 }
 
 .search-input {
   flex: 1;
   font:
-    400 14px var(--font-ui);
+    400 var(--fs-body) var(--font-ui);
   color: var(--text);
   background: transparent;
   border: 0;
@@ -149,9 +147,8 @@ function pick(item: ConversationThread): void {
 
 .esc-chip {
   font:
-    600 10px var(--font-ui);
+    600 var(--fs-mono) var(--font-ui);
   color: var(--muted);
-  border: 1px solid var(--control);
   padding: 2px 6px;
   flex-shrink: 0;
 }
@@ -166,7 +163,7 @@ function pick(item: ConversationThread): void {
   padding: 22px;
   text-align: center;
   font:
-    400 13px var(--font-ui);
+    400 var(--fs-body) var(--font-ui);
   color: var(--muted);
 }
 
@@ -192,7 +189,7 @@ function pick(item: ConversationThread): void {
 }
 
 .result-row:not(:disabled):hover {
-  background: var(--surface-2);
+  background: var(--cell);
 }
 
 .result-row:not(:disabled):active {
@@ -210,7 +207,7 @@ function pick(item: ConversationThread): void {
 .result-name {
   display: block;
   font:
-    600 12.5px var(--font-ui);
+    600 var(--fs-body) var(--font-ui);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -219,7 +216,7 @@ function pick(item: ConversationThread): void {
 .result-snippet {
   display: block;
   font:
-    400 11.5px var(--font-ui);
+    400 var(--fs-body) var(--font-ui);
   color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
@@ -228,11 +225,10 @@ function pick(item: ConversationThread): void {
 
 .result-tag {
   font:
-    600 9px var(--font-ui);
+    600 var(--fs-mono) var(--font-ui);
   letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--muted);
-  border: 1px solid var(--line);
   padding: 2px 6px;
   flex-shrink: 0;
 }

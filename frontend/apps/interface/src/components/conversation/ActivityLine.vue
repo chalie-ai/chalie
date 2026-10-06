@@ -237,7 +237,7 @@ async function onStop(): Promise<void> {
             >
               <span class="activity__pill-label">
                 <span class="activity__pill-name">
-                  <Bot v-if="pill.delegate" class="delegate-pill__icon" :size="14" aria-hidden="true" />{{
+                  <Bot v-if="pill.delegate" class="delegate-pill__icon" :size="16" aria-hidden="true" />{{
                     pill.name
                   }}
                 </span>

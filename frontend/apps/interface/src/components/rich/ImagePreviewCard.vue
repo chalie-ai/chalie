@@ -96,7 +96,7 @@ function close(): void {
   margin: 10px 0 0;
   padding: 0 16px;
   color: var(--muted);
-  font-size: 0.8125rem;
+  font-size: var(--fs-body);
   line-height: 1.4;
 }
 </style>

@@ -138,7 +138,6 @@ const hourCells = computed<HourCell[]>(() => {
   overflow: hidden;
   width: 100%;
   max-width: 100%;
-  border: 1px solid var(--line);
 }
 
 .weather-card__body {
@@ -172,7 +171,7 @@ const hourCells = computed<HourCell[]>(() => {
 
 .weather-card__loc {
   font-family: var(--font-mono);
-  font-size: 0.75rem;
+  font-size: var(--fs-mono);
   letter-spacing: 0.1em;
   text-transform: uppercase;
   font-weight: 600;
@@ -180,7 +179,7 @@ const hourCells = computed<HourCell[]>(() => {
   margin-top: 4px;
 
   div:last-child {
-    font-size: 0.6875rem;
+    font-size: var(--fs-mono);
     font-weight: 400;
     letter-spacing: 0.06em;
     color: var(--muted);
@@ -191,7 +190,7 @@ const hourCells = computed<HourCell[]>(() => {
 .weather-card__caption {
   align-self: end;
   max-width: 62%;
-  font-size: 0.844rem;
+  font-size: var(--fs-body);
   line-height: 1.55;
   color: var(--text);
 }
@@ -200,7 +199,6 @@ const hourCells = computed<HourCell[]>(() => {
   display: grid;
   grid-template-columns: repeat(8, 1fr);
   background: var(--surface-2);
-  border-top: 1px solid var(--line);
 }
 
 .weather-card__hour {
@@ -210,11 +208,6 @@ const hourCells = computed<HourCell[]>(() => {
   align-items: center;
   gap: 8px;
   text-align: center;
-  border-right: 1px solid var(--line);
-
-  &:last-child {
-    border-right: none;
-  }
 
   &--cur {
     background: var(--cell);
@@ -231,7 +224,7 @@ const hourCells = computed<HourCell[]>(() => {
 
 .weather-card__hour-temp {
   font-family: var(--font-mono);
-  font-size: 0.75rem;
+  font-size: var(--fs-mono);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   color: var(--text);
@@ -263,7 +256,7 @@ const hourCells = computed<HourCell[]>(() => {
 
 .weather-card__hour-label {
   font-family: var(--font-mono);
-  font-size: 0.656rem;
+  font-size: var(--fs-mono);
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }

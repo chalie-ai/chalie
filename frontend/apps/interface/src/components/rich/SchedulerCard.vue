@@ -97,39 +97,36 @@ const metaText = computed((): string => {
 }
 
 .scheduler-card__when {
-  background: var(--surface);
-  border: 1px solid var(--pink);
+  background: var(--pink);
+  color: var(--on-pink);
   padding: 6px 4px;
   text-align: center;
 }
 
 .scheduler-card__when-day {
   font-family: var(--font-mono);
-  font-size: 0.58rem;
+  font-size: var(--fs-mono);
   letter-spacing: 0.16em;
   text-transform: uppercase;
-  color: var(--pink-text);
 }
 
 .scheduler-card__when-date {
-  font-size: 1.35rem;
+  font-size: var(--fs-title);
   font-weight: 500;
   letter-spacing: -0.03em;
   line-height: 1;
   margin: 2px 0;
-  color: var(--text);
 }
 
 .scheduler-card__when-mon {
   font-family: var(--font-mono);
-  font-size: 0.58rem;
+  font-size: var(--fs-mono);
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--muted);
 }
 
 .scheduler-card__title {
-  font-size: 0.96rem;
+  font-size: var(--fs-body);
   font-weight: 500;
   letter-spacing: -0.005em;
   margin: 0 0 2px;
@@ -138,7 +135,7 @@ const metaText = computed((): string => {
 
 .scheduler-card__meta {
   font-family: var(--font-mono);
-  font-size: 0.74rem;
+  font-size: var(--fs-mono);
   color: var(--muted);
   letter-spacing: 0.04em;
 

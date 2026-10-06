@@ -114,7 +114,7 @@ async function handleAccountSubmit(): Promise<void> {
           />
         </div>
         <div class="form-actions">
-          <button type="submit" class="btn-primary" :disabled="pending">
+          <button type="submit" class="btn btn-primary" :disabled="pending">
             {{ pending ? 'Creating...' : 'Create Account' }}
           </button>
         </div>
@@ -142,7 +142,6 @@ async function handleAccountSubmit(): Promise<void> {
   max-width: 500px;
   padding: 40px;
   background: var(--surface);
-  border: 1px solid var(--line);
 }
 
 .ob-card-header {
@@ -150,14 +149,14 @@ async function handleAccountSubmit(): Promise<void> {
   margin-bottom: 32px;
 
   h1 {
-    font-size: 1.4rem;
+    font-size: var(--fs-title);
     font-weight: 500;
     margin-bottom: 0.25rem;
   }
 
   p {
     color: var(--muted);
-    font-size: 0.85rem;
+    font-size: var(--fs-body);
     margin-bottom: 0;
   }
 }
@@ -165,17 +164,16 @@ async function handleAccountSubmit(): Promise<void> {
 .warning-box {
   padding: 16px;
   margin-bottom: 24px;
-  background: var(--surface);
-  border: 1px solid var(--deny);
+  background: var(--surface-2);
 
   h3 {
     color: var(--deny-text);
-    font-size: 13px;
+    font-size: var(--fs-body);
     margin-bottom: 8px;
   }
 
   p {
-    font-size: 13px;
+    font-size: var(--fs-body);
     color: var(--text);
     line-height: 1.6;
     margin-bottom: 6px;
@@ -191,7 +189,7 @@ async function handleAccountSubmit(): Promise<void> {
 
   label {
     display: block;
-    font-size: 0.8rem;
+    font-size: var(--fs-body);
     color: var(--muted);
     margin-bottom: 0.35rem;
   }
@@ -199,18 +197,6 @@ async function handleAccountSubmit(): Promise<void> {
   input {
     display: block;
     width: 100%;
-    padding: 0.6rem 0.75rem;
-    font-size: 0.9rem;
-    color: var(--text);
-    background: var(--surface-2);
-    border: 1px solid var(--control);
-    outline: none;
-    transition: border-color var(--dur-1) var(--ease-out);
-    box-sizing: border-box;
-
-    &:focus {
-      border-color: var(--pink-text);
-    }
 
     &:disabled {
       opacity: 0.6;
@@ -227,31 +213,6 @@ async function handleAccountSubmit(): Promise<void> {
 
 .btn-primary {
   flex: 1;
-  padding: 0.65rem;
-  font-size: 0.9rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition:
-    background-color var(--dur-1) var(--ease-out),
-    color var(--dur-1) var(--ease-out),
-    translate var(--dur-1) var(--ease-out);
-  color: var(--on-pink);
-  background: var(--pink);
-  border: none;
-
-  &:hover:not(:disabled) {
-    background: var(--text);
-    color: var(--bg);
-  }
-
-  &:active:not(:disabled) {
-    translate: 0 1px;
-  }
-
-  &:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
 }
 
 .toast-container {
@@ -266,22 +227,21 @@ async function handleAccountSubmit(): Promise<void> {
 }
 
 .toast {
-  background: var(--surface);
-  border: 1px solid var(--line);
+  background: var(--surface-2);
   padding: 12px 16px;
-  font-size: 13px;
+  font-size: var(--fs-body);
   font-weight: 500;
   pointer-events: auto;
   animation: rise var(--dur-2) var(--ease-out);
 
   &.toast-success {
-    border-color: var(--allow);
+    color: var(--allow-text);
   }
   &.toast-error {
-    border-color: var(--deny);
+    color: var(--deny-text);
   }
   &.toast-info {
-    border-color: var(--pink);
+    color: var(--pink-text);
   }
 }
 
@@ -301,9 +261,6 @@ async function handleAccountSubmit(): Promise<void> {
     left: 10px;
     right: 10px;
     bottom: 10px;
-  }
-  .toast {
-    font-size: 12px;
   }
 }
 </style>

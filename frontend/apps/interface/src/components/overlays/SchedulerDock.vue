@@ -25,7 +25,7 @@ let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 // Scheduled turns don't render on the spine, so `threadPhase` reads DOM
 // contract state globally (any rendered copy, e.g. an open thread panel) —
-// bumped on every 'turn-state-changed' so the dock's dots/borders stay live.
+// bumped on every 'turn-state-changed' so the dock's dots stay live.
 const activityTick = ref(0);
 function bumpActivity(): void {
   activityTick.value++;
@@ -101,7 +101,6 @@ function cadence(turn: SchedulerTurn): string {
       v-for="turn in turns"
       :key="turn.turn_id"
       class="sched-dock__row"
-      :class="phase(turn) ? `sched-dock__row--${phase(turn)}` : ''"
       @click="openTurn(turn)"
     >
       <span class="sched-dock__row-top">
@@ -122,7 +121,7 @@ function cadence(turn: SchedulerTurn): string {
 // ── Empty state ───────────────────────────────────────────────────────────────
 
 .sched-dock__empty {
-  font-size: 13px;
+  font-size: var(--fs-body);
   color: var(--muted);
   padding: 10px 16px;
   font-style: italic;
@@ -139,7 +138,6 @@ function cadence(turn: SchedulerTurn): string {
   text-align: left;
   background: transparent;
   border: none;
-  border-left: 2px solid transparent;
   padding: 10px 16px;
   cursor: pointer;
   transition:
@@ -147,19 +145,12 @@ function cadence(turn: SchedulerTurn): string {
     translate var(--dur-1) var(--ease-out);
 
   &:hover {
-    background: var(--surface-2);
+    background: var(--cell);
   }
 
   &:active {
     translate: 0 1px;
   }
-}
-
-.sched-dock__row--working {
-  border-left-color: var(--pink-text);
-}
-.sched-dock__row--done {
-  border-left-color: var(--pink-text);
 }
 
 .sched-dock__row-top {
@@ -171,7 +162,7 @@ function cadence(turn: SchedulerTurn): string {
 .sched-dock__row-label {
   flex: 1;
   min-width: 0;
-  font-size: 13px;
+  font-size: var(--fs-body);
   font-weight: 600;
   color: var(--text);
   white-space: nowrap;
@@ -180,7 +171,7 @@ function cadence(turn: SchedulerTurn): string {
 }
 
 .sched-dock__row-sub {
-  font-size: 11.5px;
+  font-size: var(--fs-mono);
   color: var(--muted);
   white-space: nowrap;
   overflow: hidden;

@@ -3,8 +3,6 @@
 // in each SFC's scoped styles. Depends on @chalie/shared/styles/main.scss (tokens).
 
 :root {
-  --font-size-sm:  0.8125rem;
-
   // Layout — the input box and its trays (attachment preview, controls) all
   // share this width so they line up as one stacked unit above the dock.
   --dock-width:  min(80%, 1200px);
@@ -41,8 +39,6 @@ body {
   gap: var(--space-sm);
   padding: var(--space-sm) var(--space-md);
   background: var(--surface);
-  border: 1px solid var(--deny);
-  font-size: var(--font-size-sm);
   color: var(--deny-text);
   animation: rise var(--dur-2) var(--ease-out);
 }
@@ -65,8 +61,6 @@ body {
   gap: var(--space-sm);
   padding: var(--space-sm) var(--space-md);
   background: var(--surface);
-  border: 1px solid var(--ask);
-  font-size: var(--font-size-sm);
   color: var(--ask-text);
   animation: rise var(--dur-2) var(--ease-out);
 }
@@ -77,7 +71,7 @@ body {
   color: var(--muted);
   cursor: pointer;
   padding: 0 2px;
-  font-size: 1rem;
+  font-size: var(--fs-body);
   line-height: 1;
   display: flex;
   align-items: center;
@@ -99,8 +93,6 @@ body {
   gap: var(--space-sm);
   padding: var(--space-sm) var(--space-md);
   background: var(--surface);
-  border: 1px solid var(--pink);
-  font-size: var(--font-size-sm);
   color: var(--pink-text);
   animation: rise var(--dur-2) var(--ease-out);
 }
@@ -124,7 +116,6 @@ body {
   color: var(--on-pink);
   border: none;
   padding: 2px 12px;
-  font-size: var(--font-size-sm);
   font-weight: 500;
   cursor: pointer;
   transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
@@ -190,9 +181,8 @@ body {
   justify-content: space-between;
   height: 56px;
   padding: 0 var(--space-lg);
-  background: var(--bg);
-  border-bottom: 1px solid var(--line);
-  transition: background var(--dur-3) var(--ease-out), border-color var(--dur-3) var(--ease-out);
+  background: var(--surface);
+  transition: background var(--dur-3) var(--ease-out);
 }
 
 .presence-bar__right {
@@ -235,11 +225,10 @@ body {
   right: 0;
   z-index: 100;
   padding: var(--space-md) var(--space-lg);
-  // Flat ground on the app background — same fixed-chrome treatment as
-  // .presence-bar (token-driven, so it flips with the theme).
-  background: var(--bg);
+  // Surface band for the fixed chrome — same treatment as .presence-bar
+  // (token-driven, so it flips with the theme).
+  background: var(--surface);
   transition: background var(--dur-3) var(--ease-out);
-  border-top: 1px solid var(--control);
 }
 
 // Inline variant — the same composer rendered in-flow at the foot of the thread
@@ -248,7 +237,6 @@ body {
 .input-dock--inline {
   position: static;
   z-index: auto;
-  border-top: none;
 }
 
 .input-dock__outer {
@@ -270,7 +258,6 @@ body {
   padding: var(--space-md) var(--space-lg);
   color: var(--deny-text); // cascades to the icon (currentColor), text, and close
   background: var(--surface-2);
-  border: 1px solid var(--deny);
 }
 
 .dock-error__icon { flex: none; }
@@ -322,7 +309,6 @@ body {
   border: none;
   outline: none;
   color: var(--text);
-  font-size: 15px;
   line-height: 1.4;
   resize: none;
   field-sizing: content;
@@ -370,8 +356,6 @@ body {
 
 .loading-overlay__text {
   color: var(--muted);
-  font-size: 15px;
-  font-weight: 400;
   letter-spacing: 0.02em;
 }
 
@@ -379,7 +363,6 @@ body {
   background: none;
   border: none;
   color: var(--muted);
-  font-size: 13px;
   cursor: pointer;
   padding: 4px 8px;
   animation: fade var(--dur-2) var(--ease-out) 4s both;
@@ -416,8 +399,8 @@ body {
 
 // Action buttons (send / attach / voice)
 .btn-action {
-  width: 36px;
-  height: 36px;
+  width: var(--control-h);
+  height: var(--control-h);
   border: none;
   display: flex;
   align-items: center;
@@ -448,7 +431,7 @@ body {
   color: var(--muted);
 }
 
-.btn-action--attach svg { width: 18px; height: 18px; }
+.btn-action--attach svg { width: var(--icon); height: var(--icon); }
 
 .btn-action--attach:hover {
   background: var(--cell);
@@ -473,8 +456,8 @@ body {
 .voice-rec-btn {
   flex-shrink: 0;
   position: relative;
-  width: 36px;
-  height: 36px;
+  width: var(--control-h);
+  height: var(--control-h);
   background: var(--surface-2);
   color: var(--muted);
   cursor: pointer;
@@ -546,7 +529,7 @@ body {
   align-items: center;
   gap: 12px;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-mono);
   color: var(--muted);
 }
 
@@ -556,19 +539,19 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 24px;
+  height: var(--control-h);
   padding: 0 9px;
   background: transparent;
-  border: 1px solid var(--control);
+  border: none;
   cursor: pointer;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-mono);
   color: var(--muted);
-  transition: border-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+  transition: background-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
 }
 
 .thinking-select__trigger:hover {
-  border-color: var(--text);
+  background: var(--cell);
   color: var(--text);
 }
 
@@ -597,7 +580,6 @@ body {
   gap: 2px;
   padding: var(--space-xs);
   background: var(--surface);
-  border: 1px solid var(--line);
 }
 
 .thinking-select__menu.hidden { display: none; }
@@ -608,7 +590,7 @@ body {
   border: none;
   cursor: pointer;
   padding: var(--space-sm) var(--space-md);
-  font-size: var(--font-size-sm);
+  font-size: var(--fs-body);
   color: var(--text);
   transition: background-color var(--dur-1) var(--ease-out);
 }
@@ -634,7 +616,6 @@ body {
   width: 96px;
   height: 5px;
   background: var(--surface-2);
-  border: 1px solid var(--control);
   overflow: hidden;
 }
 
@@ -660,8 +641,6 @@ body {
   .input-dock { padding: var(--space-sm) 0; }
 
   .presence-bar { padding: 0 var(--space-md); }
-
-  .btn-action { width: 32px; height: 32px; }
 }
 
 // Transient toast (showToast): undo confirmations + provider-retry notices.
@@ -679,8 +658,6 @@ body {
   padding: var(--space-sm) var(--space-md);
   background: var(--surface-2);
   color: var(--text);
-  border: 1px solid var(--control);
-  font-size: var(--font-size-sm);
   opacity: 0;
   transition: opacity var(--dur-2) var(--ease-out),
               transform var(--dur-2) var(--ease-out);

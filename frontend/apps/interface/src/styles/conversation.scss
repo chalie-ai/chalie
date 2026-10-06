@@ -4,34 +4,24 @@
 // --------------------------------------------------------------------------
 // 0. Date divider — day-group marker in the spine
 // --------------------------------------------------------------------------
-// A centered mono date label flanked by hairline rules, separating turns by the
-// day they occurred on. Inserted imperatively by utils/daymarks.ts (so it must
-// be GLOBAL, not scoped — imperative nodes carry no scoped-style attribute).
+// A centered mono date label — the spacing around it separates turns by day,
+// no flanking rule line. Inserted imperatively by utils/daymarks.ts (so it
+// must be GLOBAL, not scoped — imperative nodes carry no scoped-style attr).
 .daymark {
   display: flex;
   align-items: center;
-  gap: 14px;
   margin: 6px 0 26px;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-mono);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--muted);
-}
-
-.daymark::before,
-.daymark::after {
-  content: '';
-  height: 1px;
-  flex: 1;
-  background: var(--line);
 }
 
 .speech-form {
   position: relative;
   padding: var(--space-lg);
   background: var(--surface);
-  border: 1px solid var(--line);
   animation: rise var(--dur-2) var(--ease-out);
 }
 
@@ -48,14 +38,13 @@
   max-width: 80%;
   margin-left: auto;
   background: var(--surface-2);
-  border: 1px solid var(--line);
   padding: 11px 15px;
 }
 
 // Names who wrote the row when it is not the user — a delegate transcript's
 // opening instruction comes from Chalie.
 .user-message__label {
-  font-size: 0.72rem;
+  font-size: var(--fs-mono);
   font-weight: 500;
   color: var(--muted);
 }
@@ -66,7 +55,6 @@
   white-space: pre-wrap;
   overflow-wrap: break-word;
   font-weight: 500;
-  font-size: 0.9375rem;
   line-height: 1.6;
   color: var(--text);
 }
@@ -88,7 +76,7 @@
   background: none;
   cursor: pointer;
   font-family: var(--font-mono);
-  font-size: 0.78rem;
+  font-size: var(--fs-mono);
   letter-spacing: 0.01em;
   color: var(--muted);
   transition: color var(--dur-1) var(--ease-out);
@@ -99,7 +87,6 @@
 }
 
 .speech-form--chalie {
-  border: none;
   background: none;
   align-self: stretch;
   width: 100%;
@@ -136,7 +123,7 @@
   background: none;
   cursor: pointer;
   font-family: var(--font-mono);
-  font-size: 0.82rem;
+  font-size: var(--fs-mono);
   line-height: 1.4;
   letter-spacing: -0.005em;
   color: var(--muted);
@@ -174,7 +161,7 @@
   gap: 12px;
   margin-top: 10px;
   font-family: var(--font-mono);
-  font-size: 0.66rem;
+  font-size: var(--fs-mono);
   letter-spacing: 0.02em;
   color: var(--muted);
   position: relative;
@@ -182,7 +169,7 @@
 }
 
 .speech-form__timestamp {
-  font-size: 0.72rem;
+  font-size: var(--fs-mono);
   color: var(--muted);
   letter-spacing: 0.04em;
 }
@@ -206,7 +193,7 @@
   }
 }
 
-// Footer action buttons (read-aloud, reply, copy). 26×26 ghost buttons.
+// Footer action buttons (read-aloud, reply, copy) — square ghost icon buttons.
 .speech-form__act-btn {
   background: transparent;
   border: 0;
@@ -216,8 +203,8 @@
   transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
   display: grid;
   place-items: center;
-  width: 26px;
-  height: 26px;
+  width: var(--control-h);
+  height: var(--control-h);
 }
 
 .speech-form__act-btn:hover {
@@ -278,12 +265,12 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  height: 24px;
+  height: var(--control-h);
   padding: 0;
   background: none;
   border: 0;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-mono);
   color: var(--muted);
   cursor: pointer;
   transition: color var(--dur-1) var(--ease-out);
@@ -346,7 +333,7 @@
   gap: 2px;
   padding: 2px 0 2px 14px;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-mono);
   line-height: 1.6;
   color: var(--muted);
 }
@@ -493,19 +480,19 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  height: 26px;
+  height: var(--control-h);
   padding: 0 10px 0 11px;
   cursor: pointer;
   background: var(--surface-2);
-  border: 1px solid var(--control);
+  border: none;
   color: var(--text);
-  font-size: 0.75rem;
+  font-size: var(--fs-mono);
   max-width: min(260px, 40%);
-  transition: border-color var(--dur-1) var(--ease-out), background var(--dur-1) var(--ease-out);
+  transition: background var(--dur-1) var(--ease-out);
 }
 
 .thread-pill:hover {
-  border-color: var(--text);
+  background: var(--cell);
 }
 
 .thread-pill__dot {
@@ -522,7 +509,7 @@
 }
 
 .thread-pill__chevron {
-  font-size: 15px;
+  font-size: var(--fs-body);
   line-height: 1;
   color: var(--muted);
   flex-shrink: 0;

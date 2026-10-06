@@ -287,7 +287,7 @@ onBeforeUnmount(() => {
     @pointerdown="markActive"
   >
     <div v-if="session.errorMessage" class="dock-error" role="alert">
-      <AlertTriangle class="dock-error__icon" :size="18" aria-hidden="true" />
+      <AlertTriangle class="dock-error__icon" :size="16" aria-hidden="true" />
       <span class="dock-error__text">{{ session.errorMessage }}</span>
       <button
         class="dock-error__close"
@@ -316,7 +316,7 @@ onBeforeUnmount(() => {
           :data-state="recorderState"
           @click="voiceStore.toggleRecording()"
         >
-          <Mic class="voice-rec-btn__mic" :size="18" />
+          <Mic class="voice-rec-btn__mic" :size="16" />
           <span class="voice-rec-btn__dot" aria-hidden="true"></span>
           <span class="voice-rec-btn__spinner" aria-hidden="true"></span>
         </button>
@@ -327,7 +327,7 @@ onBeforeUnmount(() => {
           aria-label="Attach"
           @click="openFilePicker"
         >
-          <Plus :size="20" />
+          <Plus :size="16" />
         </button>
 
         <textarea
@@ -348,7 +348,7 @@ onBeforeUnmount(() => {
           :disabled="!canSend"
           @click="handleSend()"
         >
-          <Send :size="20" />
+          <Send :size="16" />
         </button>
       </div>
     </div>
@@ -365,7 +365,7 @@ onBeforeUnmount(() => {
         >
           <span class="thinking-select__swirl" aria-hidden="true"></span>
           <span id="thinkingLabel" class="thinking-select__value">{{ levelLabel }}</span>
-          <ChevronDown :size="12" style="opacity: 0.6" />
+          <ChevronDown :size="16" style="opacity: 0.6" />
         </button>
         <div
           id="thinkingMenu"

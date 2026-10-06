@@ -93,7 +93,7 @@ async function onToggle(item: ListItem): Promise<void> {
 }
 
 .list-card__title {
-  font-size: 1.05rem;
+  font-size: var(--fs-title);
   font-weight: 500;
   letter-spacing: -0.005em;
   margin: 0;
@@ -102,7 +102,7 @@ async function onToggle(item: ListItem): Promise<void> {
 
 .list-card__progress {
   font-family: var(--font-mono);
-  font-size: 0.72rem;
+  font-size: var(--fs-mono);
   color: var(--muted);
   letter-spacing: 0.06em;
 }
@@ -136,13 +136,8 @@ async function onToggle(item: ListItem): Promise<void> {
   gap: 12px;
   align-items: flex-start;
   padding: 10px 0;
-  border-bottom: 1px solid var(--line);
   cursor: pointer;
   transition: background-color var(--dur-1) var(--ease-out);
-
-  &:last-child {
-    border-bottom: none;
-  }
 
   &:hover {
     background: var(--surface-2);
@@ -188,7 +183,7 @@ async function onToggle(item: ListItem): Promise<void> {
 }
 
 .list-card__text {
-  font-size: 0.94rem;
+  font-size: var(--fs-body);
   color: var(--text);
   line-height: 1.4;
 }

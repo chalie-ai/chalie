@@ -83,7 +83,7 @@ const title = computed(() => props.req.summary || actionLabel(props.req.action_i
 
       <div class="perm-card__header">
         <span class="perm-card__icon" aria-hidden="true">
-          <Info :size="14" />
+          <Info :size="16" />
         </span>
         <p class="perm-card__title">{{ title }}</p>
       </div>
@@ -116,7 +116,6 @@ const title = computed(() => props.req.summary || actionLabel(props.req.action_i
   // states below re-disable it mid enter/leave, which is intentional.
   pointer-events: auto;
   background: var(--surface);
-  border: 1px solid var(--line);
   overflow: hidden;
 }
 
@@ -156,12 +155,12 @@ const title = computed(() => props.req.summary || actionLabel(props.req.action_i
 
 .perm-card__lane-open {
   flex-shrink: 0;
+  min-height: var(--control-h);
   padding: 2px var(--space-xs);
   font-size: var(--fs-mono);
   font-weight: 500;
   line-height: 1.4;
-  border: 1px solid var(--control);
-  background: transparent;
+  background: var(--surface);
   color: var(--pink-text);
   cursor: pointer;
   transition:
@@ -191,14 +190,14 @@ const title = computed(() => props.req.summary || actionLabel(props.req.action_i
 }
 
 .perm-card__title {
-  font-size: 0.8125rem;
+  font-size: var(--fs-title);
   font-weight: 600;
   color: var(--text);
   margin: 0;
 }
 
 .perm-card__desc {
-  font-size: 0.8125rem;
+  font-size: var(--fs-body);
   color: var(--muted);
   margin: 0 0 var(--space-sm);
   line-height: 1.45;
@@ -214,42 +213,36 @@ const title = computed(() => props.req.summary || actionLabel(props.req.action_i
 }
 
 .perm-card__btn {
-  padding: 5px var(--space-sm);
-  font-size: 0.8125rem;
+  min-height: var(--control-h);
+  padding: 0 var(--space-sm);
+  border: none;
   font-weight: 500;
-  border: 1px solid transparent;
   cursor: pointer;
   transition:
     background-color var(--dur-1) var(--ease-out),
-    border-color var(--dur-1) var(--ease-out),
     color var(--dur-1) var(--ease-out),
     translate var(--dur-1) var(--ease-out);
-  line-height: 1.4;
 
   &:active {
     translate: 0 1px;
   }
 
   &--allow {
-    background: var(--surface);
-    border-color: var(--allow);
-    color: var(--allow-text);
+    background: var(--allow);
+    color: var(--on-pink);
 
     &:hover {
-      background: var(--allow);
-      color: var(--on-pink);
+      background: var(--text);
+      color: var(--bg);
     }
   }
 
   &--deny {
     background: var(--surface-2);
-    border-color: var(--control);
-    color: var(--muted);
+    color: var(--text);
 
     &:hover {
       background: var(--cell);
-      border-color: var(--text);
-      color: var(--text);
     }
   }
 }

@@ -57,14 +57,13 @@ defineProps<{ message: ConversationMessage }>();
 .chalie-code,
 .chalie-markup code {
   font-family: var(--font-mono);
-  font-size: 0.875em;
+  font-size: var(--fs-mono);
   background: var(--surface-2);
   padding: 0.1em 0.35em;
 }
 
 .chalie-markup pre {
   background: var(--surface-2);
-  border: 1px solid var(--line);
   padding: var(--space-md);
   overflow-x: auto;
   margin: 0.75em 0;
@@ -73,7 +72,7 @@ defineProps<{ message: ConversationMessage }>();
 .chalie-markup pre code {
   background: none;
   padding: 0;
-  font-size: 0.85em;
+  font-size: var(--fs-mono);
 }
 
 .chalie-markup strong {
@@ -106,7 +105,6 @@ defineProps<{ message: ConversationMessage }>();
 }
 
 .chalie-markup blockquote {
-  border-left: 2px solid var(--line);
   margin: 0.75em 0;
   padding: 0.25em 0 0.25em var(--space-md);
   color: var(--muted);
@@ -121,12 +119,10 @@ defineProps<{ message: ConversationMessage }>();
 .chalie-markup table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.875em;
 }
 
 .chalie-markup th,
 .chalie-markup td {
-  border: 1px solid var(--line);
   padding: 6px 10px;
   text-align: left;
 }

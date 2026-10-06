@@ -5,21 +5,14 @@
 
 .rich-card {
   background: var(--surface);
-  border: 1px solid var(--line);
   padding: 20px 22px;
   max-width: 480px;
   margin: 6px 0;
   animation: rise var(--dur-2) var(--ease-out) both;
 }
 
-.rich-card__divider {
-  height: 1px;
-  background: var(--line);
-  margin: 14px 0;
-}
-
 .rich-card__synthesis {
-  font-size: 0.8125rem;
+  font-size: var(--fs-body);
   color: var(--muted);
   font-style: italic;
   line-height: 1.5;

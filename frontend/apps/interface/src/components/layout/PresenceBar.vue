@@ -59,7 +59,7 @@ onBeforeUnmount(() => {
         title="Search threads (⌘K)"
         @click="session.openSearch()"
       >
-        <Search :size="18" aria-hidden="true" />
+        <Search :size="16" aria-hidden="true" />
       </button>
       <button
         id="schedulerDockBtn"
@@ -69,7 +69,7 @@ onBeforeUnmount(() => {
         title="Schedules"
         @click="session.openSchedulerDock()"
       >
-        <CalendarClock :size="18" aria-hidden="true" />
+        <CalendarClock :size="16" aria-hidden="true" />
       </button>
       <button
         id="taskDrawerBtn"
@@ -79,10 +79,10 @@ onBeforeUnmount(() => {
         title="Activity"
         @click="tasks.open()"
       >
-        <Clock :size="18" aria-hidden="true" />
+        <Clock :size="16" aria-hidden="true" />
       </button>
       <button id="settingsBtn" class="btn-icon" aria-label="Settings" @click="handleSettings">
-        <Brain :size="18" />
+        <Brain :size="16" />
       </button>
       <button
         id="themeBtn"
@@ -91,8 +91,8 @@ onBeforeUnmount(() => {
         title="Toggle light / dark"
         @click="handleThemeToggle"
       >
-        <Moon v-if="theme === 'dark'" :size="18" aria-hidden="true" />
-        <Sun v-else :size="18" aria-hidden="true" />
+        <Moon v-if="theme === 'dark'" :size="16" aria-hidden="true" />
+        <Sun v-else :size="16" aria-hidden="true" />
       </button>
     </div>
   </header>

@@ -340,7 +340,6 @@ onBeforeUnmount((): void => {
   grid-template-columns: 56px 1fr auto;
   gap: 16px;
   align-items: center;
-  border: none;
 }
 
 .timer-card__ring {
@@ -388,7 +387,7 @@ onBeforeUnmount((): void => {
 }
 
 .timer-card__title {
-  font-size: 0.96rem;
+  font-size: var(--fs-title);
   font-weight: 500;
   letter-spacing: -0.005em;
   margin: 0 0 2px;
@@ -400,7 +399,7 @@ onBeforeUnmount((): void => {
 
 .timer-card__time {
   font-family: var(--font-mono);
-  font-size: 0.78rem;
+  font-size: var(--fs-mono);
   color: var(--muted);
   letter-spacing: 0.04em;
 
@@ -416,10 +415,10 @@ onBeforeUnmount((): void => {
 }
 
 .timer-card__btn {
-  width: 32px;
-  height: 32px;
-  border: 1px solid var(--control);
-  background: transparent;
+  width: var(--control-h);
+  height: var(--control-h);
+  border: none;
+  background: var(--surface-2);
   color: var(--muted);
   display: inline-flex;
   align-items: center;
@@ -427,13 +426,13 @@ onBeforeUnmount((): void => {
   cursor: pointer;
   transition:
     color var(--dur-1) var(--ease-out),
-    border-color var(--dur-1) var(--ease-out),
+    background var(--dur-1) var(--ease-out),
     translate var(--dur-1) var(--ease-out);
   padding: 0;
 
   &:hover:not(:disabled) {
     color: var(--text);
-    border-color: var(--text);
+    background: var(--cell);
   }
 
   &:active:not(:disabled) {
@@ -446,8 +445,8 @@ onBeforeUnmount((): void => {
   }
 
   svg {
-    width: 12px;
-    height: 12px;
+    width: var(--icon);
+    height: var(--icon);
     display: block;
   }
 }

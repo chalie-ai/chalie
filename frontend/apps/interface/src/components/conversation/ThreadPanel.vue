@@ -220,13 +220,12 @@ onBeforeUnmount(() => {
           <ArrowLeft :size="16" />
           <span>Chalie</span>
         </button>
-        <div class="thread-panel__divider" aria-hidden="true" />
-        <Bot v-if="delegateMode" class="thread-panel__fork-glyph thread-panel__bot-glyph" :size="14" aria-hidden="true" />
+        <Bot v-if="delegateMode" class="thread-panel__fork-glyph thread-panel__bot-glyph" :size="16" aria-hidden="true" />
         <svg
           v-else
           class="thread-panel__fork-glyph"
-          width="14"
-          height="14"
+          width="16"
+          height="16"
           viewBox="0 0 24 24"
           fill="none"
           stroke="var(--pink-text)"
@@ -281,7 +280,6 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   background: var(--surface);
-  border-left: 1px solid var(--line);
   overflow: hidden;
 }
 
@@ -292,7 +290,6 @@ onBeforeUnmount(() => {
   gap: 11px;
   height: 46px;
   padding: 0 26px;
-  border-bottom: 1px solid var(--line);
 }
 
 .thread-panel__back {
@@ -305,7 +302,7 @@ onBeforeUnmount(() => {
   background: none;
   color: var(--muted);
   font:
-    500 13px var(--font-ui);
+    500 var(--fs-body) var(--font-ui);
   cursor: pointer;
   transition:
     color var(--dur-1) var(--ease-out),
@@ -320,13 +317,6 @@ onBeforeUnmount(() => {
 
 .thread-panel__back:active {
   translate: 0 1px;
-}
-
-.thread-panel__divider {
-  width: 1px;
-  height: 16px;
-  background: var(--control);
-  flex-shrink: 0;
 }
 
 .thread-panel__fork-glyph {
@@ -351,7 +341,7 @@ onBeforeUnmount(() => {
 
 .thread-panel__title {
   font:
-    600 14px var(--font-ui);
+    600 var(--fs-title) var(--font-ui);
   letter-spacing: -0.01em;
   color: var(--text);
   min-width: 0;
@@ -386,7 +376,7 @@ onBeforeUnmount(() => {
 
 .thread-panel__expired-note {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--fs-body);
   color: var(--muted);
 }
 

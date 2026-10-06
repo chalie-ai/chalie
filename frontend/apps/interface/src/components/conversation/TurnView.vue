@@ -398,7 +398,7 @@ function onOpenThread(): void {
 .turn-crashed,
 .turn-stopped {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--fs-body);
   font-style: italic;
   color: var(--muted);
 }

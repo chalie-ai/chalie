@@ -97,7 +97,7 @@ function open(att: ConversationAttachment): void {
           <component
             :is="att.is_image ? ImageIcon : FileText"
             class="user-attachments__icon"
-            :size="13"
+            :size="16"
           />
           <span class="user-attachments__name">{{ att.filename || 'attachment' }}</span>
         </button>

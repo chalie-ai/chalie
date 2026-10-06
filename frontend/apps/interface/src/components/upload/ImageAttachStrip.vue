@@ -8,6 +8,7 @@
  */
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useAttachmentsStore } from '../../stores/attachments';
+import { FileText, X } from '@lucide/vue';
 
 const attachments = useAttachmentsStore();
 
@@ -94,7 +95,7 @@ onBeforeUnmount(() => {
       </template>
 
       <template v-else>
-        <div class="image-preview__doc-icon" aria-hidden="true">📄</div>
+        <FileText :size="16" aria-hidden="true" />
         <span class="image-preview__doc-name">{{ truncate(preview.filename) }}</span>
       </template>
 
@@ -104,7 +105,7 @@ onBeforeUnmount(() => {
         aria-label="Remove attachment"
         @click="attachments.remove(index)"
       >
-        ×
+        <X :size="16" />
       </button>
     </div>
   </div>
@@ -121,7 +122,6 @@ onBeforeUnmount(() => {
   gap: var(--space-xs);
   padding: var(--space-sm);
   background: var(--surface-2);
-  border: 1px solid var(--control);
 
   &--drag {
     outline: 2px dashed var(--pink-text);
@@ -137,7 +137,6 @@ onBeforeUnmount(() => {
     height: 56px;
     overflow: hidden;
     background: var(--surface);
-    border: 1px solid var(--line);
     flex-shrink: 0;
 
     img {
@@ -157,13 +156,9 @@ onBeforeUnmount(() => {
     }
   }
 
-  &__doc-icon {
-    font-size: 18px;
-    line-height: 1;
-  }
-
   &__doc-name {
-    font-size: 10px;
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono);
     color: var(--muted);
     text-align: center;
     word-break: break-all;
@@ -180,12 +175,10 @@ onBeforeUnmount(() => {
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 16px;
-    height: 16px;
+    width: var(--icon);
+    height: var(--icon);
     border: none;
     padding: 0;
-    font-size: 12px;
-    line-height: 1;
     cursor: pointer;
     background: var(--surface);
     color: var(--text);

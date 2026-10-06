@@ -82,7 +82,7 @@ function toggleExpanded(i: number, event: MouseEvent): void {
         aria-label="Remove queued message"
         @click="remove(i)"
       >
-        <X :size="13" />
+        <X :size="16" />
       </button>
       <div
         class="pending__chip"
@@ -134,8 +134,8 @@ function toggleExpanded(i: number, event: MouseEvent): void {
   flex-shrink: 0;
   display: grid;
   place-items: center;
-  width: 20px;
-  height: 20px;
+  width: var(--control-h);
+  height: var(--control-h);
   padding: 0;
   border: none;
   background: none;
@@ -157,23 +157,19 @@ function toggleExpanded(i: number, event: MouseEvent): void {
   min-width: 0;
   max-width: 100%;
   padding: 7px 14px;
-  border: 1px solid var(--control);
   background: var(--surface-2);
   text-align: left;
   cursor: pointer;
-  transition:
-    border-color var(--dur-1) var(--ease-out),
-    background var(--dur-1) var(--ease-out);
+  transition: background var(--dur-1) var(--ease-out);
 }
 
 .pending__chip:hover {
-  border-color: var(--text);
   background: var(--cell);
 }
 
 .pending__text {
   display: block;
-  font-size: 0.875rem;
+  font-size: var(--fs-body);
   line-height: 1.45;
   color: var(--muted);
   white-space: pre-wrap;
@@ -197,7 +193,7 @@ function toggleExpanded(i: number, event: MouseEvent): void {
   padding: 0;
   border: none;
   background: none;
-  font-size: 0.8125rem;
+  font-size: var(--fs-body);
   font-weight: 500;
   color: var(--muted);
   cursor: pointer;

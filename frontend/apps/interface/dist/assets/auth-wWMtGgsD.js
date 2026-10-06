@@ -1,1 +1,0 @@
-import{i as a}from"./system-BwfdJC8O.js";const e={redirectOnAuthError:!1},o={login(r,t){return a.post("/api/auth/login",{username:r,password:t},e)},register(r,t){return a.post("/api/auth/register",{username:r,password:t},e)}};export{o as a};
