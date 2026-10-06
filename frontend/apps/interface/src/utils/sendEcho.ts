@@ -50,7 +50,7 @@ const ECHO_ROW_STYLE = [
 
 // Registered lazily, on first real use, rather than at this module's own
 // top level: turnDom.ts's default surface component (TurnView) transitively
-// imports stores/session.ts (TurnView → ActCycle → useSessionStore), which
+// imports stores/session.ts (TurnView → ActivityLine → useSessionStore), which
 // imports THIS module — a genuine module cycle. Calling `onTurnLanded` eagerly
 // at load time would run turnDom.ts's `_turnLandedHook = hook` assignment
 // WHILE turnDom.ts's own top-level `let _turnLandedHook` hasn't executed yet

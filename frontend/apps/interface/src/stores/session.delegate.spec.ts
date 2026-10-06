@@ -159,7 +159,7 @@ const TRIP = [msg('770', 'user', 'Plan the museum trip', 77), msg('771', 'assist
 
 /** A transcript that is still running shows the live working anchor; a settled
  *  one does not — the one DOM signature of working versus settled. */
-const showsWorking = (panel: VueWrapper): boolean => panel.element.querySelector('.act-cycle') !== null;
+const showsWorking = (panel: VueWrapper): boolean => panel.element.querySelector('.activity--live') !== null;
 
 const updatedFrame = (ref: { channel: string; turn_id: number }): WsPushEvent =>
   ({ status: 'updated', turn_id: ref.turn_id, channel: ref.channel }) as unknown as WsPushEvent;

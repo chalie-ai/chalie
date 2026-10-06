@@ -358,7 +358,7 @@ describe('dispatchDrift — turn_execution frame', () => {
   // assistant row, so TranscriptService never fires the 'updated' signal that
   // masks the same hole on 'completed'. Without a refetch here the rendered
   // block keeps the `working: true` it was last upserted with — TurnView keeps
-  // appending its live-act row and renders 'thinking…' forever — and `crashed`,
+  // appending its live activity line and renders 'Thinking…' forever — and `crashed`,
   // which only ever arrives over REST, never reaches the crash note built for
   // exactly this case. Force, because a terminal frame outranks the version
   // guard.

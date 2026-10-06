@@ -193,14 +193,13 @@
   margin-left: auto;
 }
 
-// Mobile: the trace-pill + thread-pill can't always share one row with the
-// timestamp and action buttons without spilling, so let the row wrap. Source
-// order already reads timestamp → pills → acts, and `margin-left:auto` on the
-// acts holds them at the right edge of whichever line they land on — so the
-// acts stay the rightmost control at every width. Do NOT `order:` the acts
-// ahead of the pills to force a two-line split: when the row DOES fit on one
-// line no wrap happens, and the reorder simply lands the pill to the RIGHT of
-// the actions.
+// Mobile: the thread-pill can't always share one row with the timestamp and
+// action buttons without spilling, so let the row wrap. Source order already
+// reads timestamp → pill → acts, and `margin-left:auto` on the acts holds them
+// at the right edge of whichever line it lands on — so the acts stay the
+// rightmost control at every width. Do NOT `order:` the acts ahead of the pill
+// to force a two-line split: when the row DOES fit on one line no wrap happens,
+// and the reorder simply lands the pill to the RIGHT of the actions.
 @media (max-width: 640px) {
   .speech-form__meta {
     flex-wrap: wrap;
@@ -246,46 +245,8 @@
 }
 
 // --------------------------------------------------------------------------
-// 9. Trace pill + expandable trace body
+// 9. Activity line — one quiet line per segment, above the answer
 // --------------------------------------------------------------------------
-.trace-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  height: 26px;
-  padding: 0 11px;
-  font-family: var(--font-mono);
-  font-size: 0.72rem;
-  color: var(--muted);
-  background: var(--surface-2);
-  border: 1px solid var(--control);
-  cursor: pointer;
-  white-space: nowrap;
-  flex-shrink: 0;
-  transition:
-    border-color var(--dur-1) var(--ease-out),
-    color var(--dur-1) var(--ease-out),
-    background var(--dur-1) var(--ease-out);
-}
-
-.trace-pill:hover,
-.trace-pill--open {
-  border-color: var(--text);
-  color: var(--text);
-}
-
-// Open also lifts the fill, so it stays distinct from a hovered closed pill.
-.trace-pill--open {
-  background: var(--cell);
-}
-
-// Static marker — the dot signals "has a trace", never activity: each row's own
-// dot carries its call's status, still-running calls included.
-.trace-pill__dot {
-  width: 6px;
-  height: 6px;
-  background: var(--pink);
-}
 
 .trace-body {
   display: grid;
@@ -303,44 +264,172 @@
   min-height: 0;
 }
 
-// Tool-call card (ToolCallList) under each row that called tools, the same
-// neutral surface whether its turn has finished or is still running. Rows run edge
-// to edge and stay square so the dividers are full-width straight rules — a
-// rounded row tapers its border-top.
-.calls {
-  overflow: hidden;
-  max-width: 100%;
-  border: 1px solid var(--line);
-  background: var(--surface-2);
-  line-height: 1.5;
-}
-
-// The left padding is the status dot's gutter.
-.call {
+.activity {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
+  column-gap: 8px;
+  width: 100%;
+  animation: rise var(--dur-2) var(--ease-out);
+}
+
+.activity__toggle,
+.activity__stop {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 24px;
+  padding: 0;
+  background: none;
+  border: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color var(--dur-1) var(--ease-out);
+}
+
+.activity__toggle:hover {
+  color: var(--text);
+}
+
+.activity__mark {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  background: var(--muted);
+}
+
+.activity--live .activity__mark {
+  background: var(--pink);
+  animation: working 1.4s ease-in-out infinite;
+}
+
+.activity--live .activity__label {
+  color: var(--text);
+}
+
+.activity__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity__fail {
+  color: var(--deny-text);
+}
+
+.activity__chev {
+  transition: rotate var(--dur-1) var(--ease-out);
+}
+
+.activity__toggle[aria-expanded='true'] .activity__chev {
+  rotate: 90deg;
+}
+
+.activity__stop {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.activity__stop:hover {
+  color: var(--deny-text);
+}
+
+.activity .trace-body {
+  flex-basis: 100%;
+}
+
+.activity__steps {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 0 2px 14px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.activity__thought summary {
+  cursor: pointer;
+}
+
+.activity__thought pre {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font: inherit;
+}
+
+.activity__prose,
+.activity__prose .speech-form__text {
+  color: var(--muted);
+  font-family: var(--font-ui);
+}
+
+.activity__pill {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+.activity__pill-label {
+  display: flex;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.activity__pill-summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity__pill--done {
+  color: var(--allow-text);
+}
+
+.activity__pill--error {
+  color: var(--deny-text);
+}
+
+// Tool-call rows (ToolCallList) — plain borderless lines, one per call:
+// status dot, summary first, tool name trailing muted on the right.
+.calls {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.call {
+  display: flex;
   align-items: baseline;
-  gap: 4px 10px;
-  padding: 5px 12px 5px 26px;
+  gap: 10px;
   overflow-wrap: anywhere;
 }
 
-.call + .call {
-  border-top: 1px solid var(--line);
-}
-
-// Pulled into the gutter by its margins, the dot takes no inline space and
-// centres on the first line, which it always shares with the chip.
 .call__dot {
   align-self: center;
+  flex-shrink: 0;
   width: 6px;
   height: 6px;
-  margin: 0 -2px 0 -14px;
 }
 
-.call--done .call__dot { background: var(--allow); }
-.call--error .call__dot { background: var(--deny); }
-.call--started .call__dot { background: var(--muted); }
+.call--done .call__dot {
+  background: var(--allow);
+}
+
+.call--error .call__dot {
+  background: var(--deny);
+}
+
+.call--started .call__dot {
+  background: var(--muted);
+}
 
 // Rule-colour fills sit under 3:1 on the light grounds, so they take the glyph
 // outline.
@@ -349,36 +438,25 @@
   outline: 1px solid var(--glyph-stroke);
 }
 
-// The transparent border reserves the room a failed call's status border takes,
-// so both chips are the same size.
-.call__fn {
-  max-width: 100%;
-  padding: 0 6px;
-  border: 1px solid transparent;
-  background: var(--cell);
-  color: var(--text);
-  font-family: var(--font-mono);
-  font-size: 0.72rem;
-  font-weight: 600;
-}
-
 .call__summary {
+  flex: 1;
   min-width: 0;
-  font-size: 0.78rem;
-  color: var(--muted);
 }
 
-.call--error .call__fn {
-  background: var(--surface);
-  border-color: var(--deny);
+.call__fn {
+  opacity: 0.7;
+  white-space: nowrap;
+}
+
+.call--error {
   color: var(--deny-text);
 }
 
 // A tool row whose call spawned a delegate turn is a button into that turn's
 // transcript. The reset clears only what a native button adds (its box, fill,
 // centring and shrink-to-fit width; the shared reset already inherits font and
-// colour), and :where() keeps it at zero specificity so a row's own padding and
-// layout still win: a `.call` row keeps its dot gutter.
+// colour), and :where() keeps it at zero specificity so the row's own layout
+// still wins.
 :where(.delegate-pill) {
   width: 100%;
   margin: 0;
@@ -397,19 +475,8 @@
   background: var(--surface-2);
 }
 
-// A tool-card row already stands on surface-2.
-.call.delegate-pill:hover,
-.call.delegate-pill:focus-visible {
-  background: var(--cell);
-}
-
 .delegate-pill:focus-visible {
   outline: 1.5px solid var(--muted);
-}
-
-// The tool card clips its rows, so a row's ring is drawn inside it.
-.call.delegate-pill:focus-visible {
-  outline-offset: -2px;
 }
 
 .delegate-pill__icon {
@@ -417,46 +484,6 @@
   margin-right: 4px;
   vertical-align: text-bottom;
   color: currentColor;
-}
-
-// --------------------------------------------------------------------------
-// 10. Thinking link + trace body (plain text, no pill background)
-// --------------------------------------------------------------------------
-.thinking-link {
-  display: inline-flex;
-  align-items: center;
-  font-size: 0.72rem;
-  color: var(--muted);
-  // It renders as an <a>, so the UA underline applies unless explicitly killed.
-  text-decoration: none;
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: color var(--dur-1) var(--ease-out);
-  background: none;
-  border: none;
-  padding: 0;
-  font-family: inherit;
-  line-height: inherit;
-}
-
-.thinking-link:hover {
-  color: var(--text);
-}
-
-.thinking-traces {
-  font-family: var(--font-mono);
-  font-size: 0.72rem;
-  color: var(--muted);
-  line-height: 1.5;
-}
-
-.thinking-trace pre {
-  margin: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-family: inherit;
-  font-size: inherit;
-  line-height: inherit;
 }
 
 // --------------------------------------------------------------------------
@@ -519,128 +546,4 @@
 .thread-pill--idle .thread-pill__dot {
   background: transparent;
   border: 1.5px solid var(--control);
-}
-
-// ACT cycle
-.act-cycle {
-  align-self: flex-start;
-  max-width: 90%;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 4px 0;
-  animation: rise var(--dur-2) var(--ease-out);
-}
-
-.act-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-height: 20px;
-}
-
-.act-logo {
-  width: 12px;
-  height: 12px;
-  background: var(--pink);
-  flex-shrink: 0;
-  animation: working 1.4s ease-in-out infinite;
-}
-
-// Bare-group anchor before any tool pill lands; evicted the moment one does.
-.act-placeholder {
-  font-size: var(--font-size-sm);
-  color: var(--muted);
-  animation: working 1.4s ease-in-out infinite;
-}
-
-.act-stop-btn {
-  background: transparent;
-  border: none;
-  color: var(--deny-text);
-  cursor: pointer;
-  padding: 4px;
-  transition: background var(--dur-1) var(--ease-out), translate var(--dur-1) var(--ease-out);
-  display: flex;
-  align-items: center;
-  flex-shrink: 0;
-}
-
-.act-stop-btn:hover { background: var(--surface-2); }
-.act-stop-btn:active { translate: 0 1px; }
-.act-stop-btn--stopping { opacity: 0.45; cursor: not-allowed; pointer-events: none; }
-
-// Indented under the logo (logo 12 + gap 12 = 24) to align with the row.
-.act-tools {
-  margin-left: 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-}
-
-.act-tools:empty {
-  display: none;
-}
-
-.act-tool {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  min-width: 220px;
-  max-width: 760px;
-  font-family: var(--font-mono);
-  font-size: 0.82rem;
-  line-height: 1.2;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: -0.005em;
-  animation: rise var(--dur-2) var(--ease-out);
-}
-
-.act-tool__name {
-  font-weight: 500;
-  white-space: nowrap;
-}
-
-.act-tool__label {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
-}
-
-.act-tool__summary {
-  color: var(--muted);
-  font-weight: 400;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.act-tool__status {
-  display: inline-flex;
-  align-items: center;
-  justify-content: flex-end;
-  font-variant-numeric: tabular-nums;
-  min-width: 32px;
-}
-
-.act-tool--running {
-  color: var(--muted);
-}
-
-.act-tool--done {
-  color: var(--allow-text);
-}
-
-.act-tool--error {
-  color: var(--deny-text);
-}
-
-// Live elapsed readout shown beside the spinner while a call runs.
-.act-tool__elapsed {
-  margin-left: 6px;
-  font-variant-numeric: tabular-nums;
 }

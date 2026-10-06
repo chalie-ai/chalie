@@ -236,15 +236,15 @@ describe('delegate frames are addressed by channel, never by the same-numbered u
     w.send({ ...call, state: 'started' });
     await flushPromises();
 
-    expect(w.delegateEl.querySelectorAll('.act-tool')).toHaveLength(1);
-    expect(w.userEl.querySelectorAll('.act-tool')).toHaveLength(0);
-    expect(w.otherDelegateEl.querySelectorAll('.act-tool')).toHaveLength(0);
+    expect(w.delegateEl.querySelectorAll('.activity__pill')).toHaveLength(1);
+    expect(w.userEl.querySelectorAll('.activity__pill')).toHaveLength(0);
+    expect(w.otherDelegateEl.querySelectorAll('.activity__pill')).toHaveLength(0);
 
     w.send({ ...call, state: 'done' });
     await flushPromises();
 
-    expect(w.delegateEl.querySelectorAll('.act-tool--done')).toHaveLength(1);
-    expect(w.userEl.querySelectorAll('.act-tool')).toHaveLength(0);
+    expect(w.delegateEl.querySelectorAll('.activity__pill--done')).toHaveLength(1);
+    expect(w.userEl.querySelectorAll('.activity__pill')).toHaveLength(0);
     // A tool-call frame is purely visual — it never fetches anything.
     expect(backend.userReads).toEqual([]);
     expect(backend.delegateReads).toEqual([]);
@@ -275,7 +275,7 @@ describe('delegate frames are addressed by channel, never by the same-numbered u
       // The user turn has a live tool pill of its own, which must survive.
       w.send({ tool_name: 'web_search', id: 31, turn_id: TURN, type: 'user', state: 'started', transcript_row_id: 50 });
       await flushPromises();
-      expect(w.userEl.querySelectorAll('.act-tool')).toHaveLength(1);
+      expect(w.userEl.querySelectorAll('.activity__pill')).toHaveLength(1);
       const otherBefore = w.otherDelegateEl.innerHTML;
       backend.delegate = delegateBlock(CH, false, [TASK, DELEGATE_ANSWER]);
 
@@ -285,7 +285,7 @@ describe('delegate frames are addressed by channel, never by the same-numbered u
       expect(backend.delegateReads).toEqual([{ turnId: TURN, channel: CH }]);
       expect(backend.userReads).toEqual([]);
       expect(w.delegateEl.textContent).toContain('The museum opens at nine.');
-      expect(w.userEl.querySelectorAll('.act-tool')).toHaveLength(1);
+      expect(w.userEl.querySelectorAll('.activity__pill')).toHaveLength(1);
       expect(w.otherDelegateEl.innerHTML).toBe(otherBefore);
       expect(w.turnDom.isTurnWorking(TURN, 'user')).toBe(true);
       expect(w.turnDom.isTurnDone(TURN, 'user')).toBe(false);
@@ -344,23 +344,23 @@ describe('a delegate call\'s live pill on its parent turn', () => {
 
     w.send({ ...call, state: 'started' });
     await flushPromises();
-    expect(w.userEl.querySelectorAll('.act-tool')).toHaveLength(1);
-    expect(w.userEl.querySelectorAll('button.act-tool')).toHaveLength(0);
+    expect(w.userEl.querySelectorAll('.activity__pill')).toHaveLength(1);
+    expect(w.userEl.querySelectorAll('button.activity__pill')).toHaveLength(0);
 
     // The backend re-sends `started` once the child turn exists.
     w.send({ ...call, state: 'started', delegate: ref });
     await flushPromises();
-    expect(w.userEl.querySelectorAll('.act-tool')).toHaveLength(1);
-    expect(w.userEl.querySelectorAll('button.act-tool')).toHaveLength(1);
+    expect(w.userEl.querySelectorAll('.activity__pill')).toHaveLength(1);
+    expect(w.userEl.querySelectorAll('button.activity__pill')).toHaveLength(1);
 
     w.send({ ...call, state: 'done' });
     await flushPromises();
-    expect(w.userEl.querySelectorAll('.act-tool')).toHaveLength(1);
-    expect(w.userEl.querySelectorAll('button.act-tool.act-tool--done')).toHaveLength(1);
+    expect(w.userEl.querySelectorAll('.activity__pill')).toHaveLength(1);
+    expect(w.userEl.querySelectorAll('button.activity__pill.activity__pill--done')).toHaveLength(1);
 
-    w.userEl.querySelector<HTMLButtonElement>('button.act-tool')!.click();
+    w.userEl.querySelector<HTMLButtonElement>('button.activity__pill')!.click();
     expect(w.session.panelDelegate).toEqual(ref);
     // The parent's pill never leaks onto a delegate turn that shares its id.
-    expect(w.delegateEl.querySelectorAll('.act-tool')).toHaveLength(0);
+    expect(w.delegateEl.querySelectorAll('.activity__pill')).toHaveLength(0);
   });
 });

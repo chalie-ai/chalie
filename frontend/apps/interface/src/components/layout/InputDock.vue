@@ -175,8 +175,9 @@ function onBeforeUnload(e: BeforeUnloadEvent): void {
 
 /** A turn was stopped/undone — restore its draft into the dock that owns its
  *  scope. Matched by turn_id (like the sibling `chalie:edit-queued` handler),
- *  not `isActiveDock`: the stop control lives in ActCycle/TurnView, never in
- *  an InputDock footer, so `activeDockKey` never points at the right dock. */
+ *  not `isActiveDock`: the stop control lives in the turn's activity line,
+ *  never in an InputDock footer, so `activeDockKey` never points at the right
+ *  dock. */
 function onTurnInterrupted(e: Event): void {
   const detail = (e as CustomEvent<{ text: string; turnId: number | null }>).detail;
   if (detail.turnId !== props.turnId) return;

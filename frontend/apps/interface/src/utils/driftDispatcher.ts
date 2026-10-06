@@ -353,7 +353,7 @@ function _dispatchTurnExecution(data: WsPushEvent): boolean {
   // The settled block has to be REFETCHED, not just marked done. Everything
   // above is a DOM-attribute effect; the rendered block is still the snapshot
   // taken while the turn was alive (`working: true`), so TurnView keeps
-  // appending its live-act row and renders "thinking…" forever — and, having
+  // appending its live activity line and renders "Thinking…" forever — and, having
   // just had its pills cleared, as the bare placeholder. `crashed` is the
   // deterministic case: it carries no `updated` signal of its own (only
   // TranscriptService.append_assistant and the gist daemon emit those), and a
