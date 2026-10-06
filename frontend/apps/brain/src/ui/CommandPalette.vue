@@ -150,7 +150,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onGlobalKeydown));
             :data-sub="item.path.split('/')[2] || ''"
             @click="selectItem(item)"
           >
-            <span class="cp-icon"><component :is="item.icon" :size="14" /></span>
+            <span class="cp-icon"><component :is="item.icon" :size="16" /></span>
             <span>{{ item.label }}</span>
             <span v-if="idx === selectedIdx" class="cp-hint">↵</span>
           </div>

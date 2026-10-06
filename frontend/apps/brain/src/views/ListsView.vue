@@ -138,7 +138,7 @@ async function deleteList(list: List): Promise<void> {
         newListName = '';
       "
     >
-      <Plus :size="14" /> New List
+      <Plus :size="16" /> New List
     </button>
   </div>
 
@@ -157,7 +157,7 @@ async function deleteList(list: List): Promise<void> {
       <div class="list-card-header" @click="toggle(list)">
         <div class="list-card-title">
           <span class="list-chev">
-            <component :is="expanded[String(list.id)] ? ChevronDown : ChevronRight" :size="14" />
+            <component :is="expanded[String(list.id)] ? ChevronDown : ChevronRight" :size="16" />
           </span>
           <span>{{ list.name }}</span>
           <span class="list-count">{{ c.done }}/{{ c.total }}</span>

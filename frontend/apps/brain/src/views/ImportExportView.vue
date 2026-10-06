@@ -74,7 +74,7 @@ async function confirmImport(): Promise<void> {
 
 <template>
   <div class="panel-header">
-    <h2><DatabaseBackup :size="20" /> Import / Export</h2>
+    <h2><DatabaseBackup :size="16" /> Import / Export</h2>
   </div>
 
   <div class="brain-overview">
@@ -94,7 +94,7 @@ async function confirmImport(): Promise<void> {
         />
       </label>
       <button class="btn btn-primary" @click="doExport">
-        <Download :size="14" /> Export Snapshot
+        <Download :size="16" /> Export Snapshot
       </button>
     </section>
 
@@ -118,7 +118,7 @@ async function confirmImport(): Promise<void> {
         />
       </label>
       <button class="btn btn-danger" @click="confirmImport">
-        <Upload :size="14" /> Import &amp; Restore
+        <Upload :size="16" /> Import &amp; Restore
       </button>
     </section>
   </div>

@@ -501,7 +501,6 @@ function _unbindKeyboard(): void {
   align-items: center;
   justify-content: center;
   background: transparent;
-  border: none;
   cursor: pointer;
   color: var(--text);
   padding: 0.25rem;

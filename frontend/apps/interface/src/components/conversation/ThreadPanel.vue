@@ -298,7 +298,6 @@ onBeforeUnmount(() => {
   gap: 7px;
   margin-left: -4px;
   padding: 5px 9px 5px 6px;
-  border: none;
   background: none;
   color: var(--muted);
   font:

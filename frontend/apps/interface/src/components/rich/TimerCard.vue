@@ -417,7 +417,6 @@ onBeforeUnmount((): void => {
 .timer-card__btn {
   width: var(--control-h);
   height: var(--control-h);
-  border: none;
   background: var(--surface-2);
   color: var(--muted);
   display: inline-flex;

@@ -103,7 +103,6 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKey));
   justify-content: center;
   width: var(--control-h);
   height: var(--control-h);
-  border: none;
   background: var(--surface-2);
   color: var(--text);
   cursor: pointer;

@@ -215,7 +215,6 @@ const title = computed(() => props.req.summary || actionLabel(props.req.action_i
 .perm-card__btn {
   min-height: var(--control-h);
   padding: 0 var(--space-sm);
-  border: none;
   font-weight: 500;
   cursor: pointer;
   transition:

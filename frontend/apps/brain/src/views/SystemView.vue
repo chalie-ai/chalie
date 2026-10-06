@@ -81,13 +81,13 @@ async function save(): Promise<void> {
 
 <template>
   <div class="panel-header">
-    <h2><Network :size="20" /> System</h2>
+    <h2><Network :size="16" /> System</h2>
   </div>
 
   <div v-if="loading" class="loading">Loading…</div>
 
   <div v-else-if="restarting" class="network-restart-banner">
-    <Lock :size="18" />
+    <Lock :size="16" />
     <span>Chalie is restarting… the page will reconnect automatically.</span>
   </div>
 
@@ -109,7 +109,7 @@ async function save(): Promise<void> {
           placeholder="e.g. chalie.example.com (blank = same-origin only)"
         />
       </label>
-      <button class="btn" @click="save"><Network :size="14" /> Save Domain</button>
+      <button class="btn" @click="save"><Network :size="16" /> Save Domain</button>
     </section>
 
     <!-- SSL / TLS card -->
@@ -145,7 +145,7 @@ async function save(): Promise<void> {
       </p>
 
       <button class="btn" :disabled="sslSaveBlocked" @click="save">
-        <Lock :size="14" /> Save SSL Settings
+        <Lock :size="16" /> Save SSL Settings
       </button>
     </section>
   </div>
@@ -164,10 +164,8 @@ async function save(): Promise<void> {
 }
 
 .network-ssl-warn {
-  font-size: 12px;
   color: var(--deny-text);
   background: var(--surface);
-  border: 1px solid var(--deny);
   padding: 8px 12px;
   margin: 8px 0;
   text-align: left;
@@ -179,9 +177,7 @@ async function save(): Promise<void> {
   gap: 10px;
   padding: 20px 24px;
   background: var(--surface);
-  border: 1px solid var(--ask);
   color: var(--ask-text);
-  font-size: 14px;
   font-weight: 500;
 }
 </style>

@@ -145,10 +145,10 @@ async function submitCreate(): Promise<void> {
 
 <template>
   <div class="panel-header">
-    <h2><BookOpen :size="20" /> Skills</h2>
+    <h2><BookOpen :size="16" /> Skills</h2>
     <div class="panel-header-actions">
       <button class="btn btn-primary btn-sm" @click="openCreate">
-        <Plus :size="14" /> New Skill
+        <Plus :size="16" /> New Skill
       </button>
     </div>
   </div>
@@ -159,7 +159,7 @@ async function submitCreate(): Promise<void> {
     <div class="provider-form-page">
       <div class="form-page-header">
         <button class="btn btn-sm" @click="viewMode = 'list'">
-          <ChevronLeft :size="14" /> Back
+          <ChevronLeft :size="16" /> Back
         </button>
         <h3>New Skill</h3>
       </div>
@@ -277,7 +277,7 @@ async function submitCreate(): Promise<void> {
           <div class="skill-card-header">
             <div class="skill-card-title clickable" @click="toggleExpand(skill)">
               <span class="skill-expand-icon">
-                <component :is="expandedId === skill.id ? ChevronDown : ChevronRight" :size="12" />
+                <component :is="expandedId === skill.id ? ChevronDown : ChevronRight" :size="16" />
               </span>
               <strong>{{ skill.title }}</strong>
               <span class="badge">v{{ skill.version }}</span>
@@ -300,10 +300,10 @@ async function submitCreate(): Promise<void> {
                 </label>
               </label>
               <button class="btn btn-sm" @click="startEdit(skill)">
-                <SquarePen :size="13" />
+                <SquarePen :size="16" />
               </button>
               <button class="btn btn-danger btn-sm" @click="deleteSkill(skill)">
-                <Trash2 :size="13" />
+                <Trash2 :size="16" />
               </button>
             </div>
           </div>
@@ -342,7 +342,7 @@ async function submitCreate(): Promise<void> {
         <div class="skill-card-header">
           <div class="skill-card-title clickable" @click="toggleExpand(skill)">
             <span class="skill-expand-icon">
-              <component :is="expandedId === skill.id ? ChevronDown : ChevronRight" :size="12" />
+              <component :is="expandedId === skill.id ? ChevronDown : ChevronRight" :size="16" />
             </span>
             <strong>{{ skill.title }}</strong>
             <span class="badge badge-muted">v{{ skill.version }}</span>
@@ -369,7 +369,7 @@ async function submitCreate(): Promise<void> {
               title="Copy &amp; Customise"
               @click="copySkill(skill)"
             >
-              <Copy :size="13" /> Customise
+              <Copy :size="16" /> Customise
             </button>
           </div>
         </div>

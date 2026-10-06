@@ -486,7 +486,7 @@ async function saveProvider(): Promise<void> {
     <div class="panel-header">
       <h2>LLM Providers</h2>
       <button class="btn btn-primary" @click="openWizard(null)">
-        <Plus :size="14" />
+        <Plus :size="16" />
         Add Provider
       </button>
     </div>
@@ -607,7 +607,7 @@ async function saveProvider(): Promise<void> {
     <div class="provider-wizard">
       <div class="form-page-header">
         <button class="btn btn-sm back-btn" @click="backFromPicker">
-          <ChevronLeft :size="14" />
+          <ChevronLeft :size="16" />
           Back
         </button>
         <h3>Choose a provider</h3>
@@ -635,7 +635,7 @@ async function saveProvider(): Promise<void> {
     <div class="provider-wizard">
       <div class="form-page-header">
         <button class="btn btn-sm back-btn" @click="backFromForm">
-          <ChevronLeft :size="14" />
+          <ChevronLeft :size="16" />
           {{ isEditing ? 'Back' : 'Providers' }}
         </button>
         <h3>{{ isEditing ? 'Edit Provider' : `Set up ${preset?.name ?? ''}` }}</h3>
@@ -699,7 +699,7 @@ async function saveProvider(): Promise<void> {
               :disabled="modelsFetchInFlight"
               @click="fetchModels"
             >
-              <RefreshCw :size="14" :class="{ spinning: modelsFetchInFlight }" />
+              <RefreshCw :size="16" :class="{ spinning: modelsFetchInFlight }" />
             </button>
           </div>
           <select id="pModel" v-model="formModel">

@@ -137,7 +137,6 @@ function toggleExpanded(i: number, event: MouseEvent): void {
   width: var(--control-h);
   height: var(--control-h);
   padding: 0;
-  border: none;
   background: none;
   color: var(--muted);
   cursor: pointer;
@@ -191,7 +190,6 @@ function toggleExpanded(i: number, event: MouseEvent): void {
   display: inline-block;
   margin-top: 2px;
   padding: 0;
-  border: none;
   background: none;
   font-size: var(--fs-body);
   font-weight: 500;

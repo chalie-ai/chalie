@@ -130,7 +130,7 @@ a { color: var(--pink-text); text-underline-offset: 3px; }
 ::selection { background: var(--pink); color: var(--on-pink); }
 
 button, input, textarea, select { font: inherit; color: inherit; }
-button { cursor: pointer; }
+button { cursor: pointer; border: 0; }
 button:disabled { cursor: not-allowed; }
 
 input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="color"]),

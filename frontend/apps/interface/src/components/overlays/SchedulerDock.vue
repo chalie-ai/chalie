@@ -137,7 +137,6 @@ function cadence(turn: SchedulerTurn): string {
   width: 100%;
   text-align: left;
   background: transparent;
-  border: none;
   padding: 10px 16px;
   cursor: pointer;
   transition:

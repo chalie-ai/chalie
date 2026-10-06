@@ -72,9 +72,9 @@ function isExpanded(item: NavItem): boolean {
               :data-expanded="isExpanded(item)"
               @click="navigate(item.id, item.sub ? item.sub[0].id : null)"
             >
-              <span class="nav-icon"><component :is="item.icon" :size="18" /></span>
+              <span class="nav-icon"><component :is="item.icon" :size="16" /></span>
               <span class="nav-label">{{ item.label }}</span>
-              <span v-if="item.sub" class="nav-chev"><ChevronRight :size="14" /></span>
+              <span v-if="item.sub" class="nav-chev"><ChevronRight :size="16" /></span>
             </button>
             <div v-if="item.sub" class="nav-sublist" :data-open="isExpanded(item)">
               <div>
@@ -101,7 +101,7 @@ function isExpanded(item: NavItem): boolean {
         aria-label="Toggle theme"
         @click="toggleTheme"
       >
-        <component :is="theme === 'dark' ? Sun : Moon" :size="18" />
+        <component :is="theme === 'dark' ? Sun : Moon" :size="16" />
       </button>
     </div>
   </aside>

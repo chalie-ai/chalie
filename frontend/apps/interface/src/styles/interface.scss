@@ -1,5 +1,5 @@
 // Structural/layout styles for the app shell (skeleton, fixed bars, ambient
-// layers, banners, loading overlay, keyframes). Component visual detail lives
+// layers, loading overlay, keyframes). Component visual detail lives
 // in each SFC's scoped styles. Depends on @chalie/shared/styles/main.scss (tokens).
 
 :root {
@@ -27,119 +27,6 @@ body {
 
 // Voice-button visibility is driven by a reactive flag on the input dock, not a
 // `body.voice-loading` class, so the legacy body-class CSS rule is not ported.
-
-.connection-banner {
-  position: fixed;
-  top: 56px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 1000;
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-  padding: var(--space-sm) var(--space-md);
-  background: var(--surface);
-  color: var(--deny-text);
-  animation: rise var(--dur-2) var(--ease-out);
-}
-
-.connection-banner__dot {
-  width: 6px;
-  height: 6px;
-  background: var(--deny);
-  animation: working 1.4s ease-in-out infinite;
-}
-
-.capability-alert-banner {
-  position: fixed;
-  top: 100px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 1000;
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-  padding: var(--space-sm) var(--space-md);
-  background: var(--surface);
-  color: var(--ask-text);
-  animation: rise var(--dur-2) var(--ease-out);
-}
-
-.banner-dismiss {
-  background: none;
-  border: none;
-  color: var(--muted);
-  cursor: pointer;
-  padding: 0 2px;
-  font-size: var(--fs-body);
-  line-height: 1;
-  display: flex;
-  align-items: center;
-  transition: color var(--dur-1) var(--ease-out);
-}
-
-.banner-dismiss:hover {
-  color: var(--ask-text);
-}
-
-.update-banner {
-  position: fixed;
-  top: 56px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 1000;
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-  padding: var(--space-sm) var(--space-md);
-  background: var(--surface);
-  color: var(--pink-text);
-  animation: rise var(--dur-2) var(--ease-out);
-}
-
-.update-banner__icon {
-  display: flex;
-  align-items: center;
-  color: var(--pink-text);
-}
-
-.update-banner__text {
-  color: var(--text);
-}
-
-.update-banner__text strong {
-  color: var(--pink-text);
-}
-
-.update-banner__action {
-  background: var(--pink);
-  color: var(--on-pink);
-  border: none;
-  padding: 2px 12px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
-}
-
-.update-banner__action:hover {
-  background: var(--text);
-  color: var(--bg);
-}
-
-.update-banner__dismiss {
-  background: none;
-  border: none;
-  color: var(--muted);
-  cursor: pointer;
-  padding: 2px;
-  display: flex;
-  align-items: center;
-  transition: color var(--dur-1) var(--ease-out);
-}
-
-.update-banner__dismiss:hover {
-  color: var(--text);
-}
 
 // Permission Stack — outer container fixed-positioning only; PermissionStack.vue
 // teleports cards inside and lays out the inner wrapper (.perm-stack-inner).
@@ -275,7 +162,6 @@ body {
   align-items: center;
   justify-content: center;
   padding: var(--space-xs);
-  border: none;
   background: transparent;
   color: inherit;
   cursor: pointer;
@@ -325,7 +211,7 @@ body {
 .loading-overlay {
   position: fixed;
   inset: 0;
-  // Must sit above every shell layer (bars at 100, banners at 1000); until the
+  // Must sit above every shell layer (bars at 100); until the
   // ready-gate is wired we layer the overlay on top so the dock can't poke through.
   z-index: 1100;
   background: var(--bg);
@@ -361,7 +247,6 @@ body {
 
 .loading-overlay__skip {
   background: none;
-  border: none;
   color: var(--muted);
   cursor: pointer;
   padding: 4px 8px;
@@ -401,7 +286,6 @@ body {
 .btn-action {
   width: var(--control-h);
   height: var(--control-h);
-  border: none;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -419,9 +303,6 @@ body {
 .thinking-select__item:active,
 .loading-overlay__skip:active,
 .chalie-toast__undo:active,
-.banner-dismiss:active,
-.update-banner__action:active,
-.update-banner__dismiss:active,
 .dock-error__close:active {
   translate: 0 1px;
 }
@@ -503,7 +384,6 @@ body {
 // Shared icon button — navbar, drawer close, update prompt, etc.
 .btn-icon {
   background: none;
-  border: none;
   color: var(--muted);
   cursor: pointer;
   padding: var(--space-sm);
@@ -542,7 +422,6 @@ body {
   height: var(--control-h);
   padding: 0 9px;
   background: transparent;
-  border: none;
   cursor: pointer;
   font-family: var(--font-mono);
   font-size: var(--fs-mono);
@@ -587,7 +466,6 @@ body {
 .thinking-select__item {
   text-align: left;
   background: transparent;
-  border: none;
   cursor: pointer;
   padding: var(--space-sm) var(--space-md);
   font-size: var(--fs-body);

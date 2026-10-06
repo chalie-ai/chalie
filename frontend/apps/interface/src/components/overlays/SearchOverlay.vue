@@ -174,7 +174,6 @@ function pick(item: ConversationThread): void {
   width: 100%;
   text-align: left;
   background: transparent;
-  border: none;
   padding: 10px 11px;
   cursor: pointer;
   color: var(--text);

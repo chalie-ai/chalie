@@ -177,7 +177,6 @@ onBeforeUnmount(() => {
     justify-content: center;
     width: var(--icon);
     height: var(--icon);
-    border: none;
     padding: 0;
     cursor: pointer;
     background: var(--surface);

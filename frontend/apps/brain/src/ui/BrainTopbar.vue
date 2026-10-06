@@ -25,7 +25,7 @@ function handleSearchKeydown(e: KeyboardEvent): void {
 <template>
   <header class="topbar">
     <button class="icon-btn hamburger" aria-label="Open menu" @click="shell.openMobileSidebar()">
-      <Menu :size="18" />
+      <Menu :size="16" />
     </button>
 
     <button
@@ -34,7 +34,7 @@ function handleSearchKeydown(e: KeyboardEvent): void {
       title="Toggle sidebar"
       @click="shell.toggleSidebar()"
     >
-      <PanelLeft :size="18" />
+      <PanelLeft :size="16" />
     </button>
 
     <div class="crumb">
@@ -54,7 +54,7 @@ function handleSearchKeydown(e: KeyboardEvent): void {
         @click="shell.openCommandPalette()"
         @keydown="handleSearchKeydown"
       >
-        <Search :size="14" />
+        <Search :size="16" />
         <span class="topbar-search-text">Search…</span>
         <kbd>⌘K</kbd>
       </button>

@@ -139,7 +139,7 @@ async function cancelSchedule(s: ScheduleItem): Promise<void> {
   <div class="panel-header">
     <h2>Scheduler</h2>
     <button class="btn btn-primary" @click="openForm(null)">
-      <Plus :size="14" /> New Schedule
+      <Plus :size="16" /> New Schedule
     </button>
   </div>
 
@@ -148,7 +148,7 @@ async function cancelSchedule(s: ScheduleItem): Promise<void> {
   <div v-else-if="formMode === 'form'" class="provider-form-page">
     <div class="form-page-header">
       <button class="btn btn-sm back-btn" @click="formMode = 'list'">
-        <ChevronLeft :size="14" /> Back
+        <ChevronLeft :size="16" /> Back
       </button>
       <h3>{{ editingId != null ? 'Edit Schedule' : 'New Schedule' }}</h3>
     </div>
@@ -276,7 +276,8 @@ async function cancelSchedule(s: ScheduleItem): Promise<void> {
   gap: 0.25rem;
 }
 .cron-field label {
-  font-size: 0.72rem;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.04em;

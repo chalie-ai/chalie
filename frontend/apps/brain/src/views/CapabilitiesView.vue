@@ -106,7 +106,7 @@ async function disconnect(c: Capability): Promise<void> {
     <div class="provider-form-page">
       <div class="form-page-header">
         <button class="btn btn-sm back-btn" @click="viewMode = 'list'">
-          <ChevronLeft :size="14" /> Back
+          <ChevronLeft :size="16" /> Back
         </button>
         <h3>{{ formCap.name }} {{ formConnected ? 'Settings' : 'Setup' }}</h3>
       </div>
