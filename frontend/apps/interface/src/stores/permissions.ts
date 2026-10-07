@@ -27,6 +27,8 @@ export interface PermissionRequest {
   action_id: string;
   /** The model's one-line summary of the gated action; empty when the backend sent none. */
   summary: string;
+  /** The instant the ask parked (ISO-8601 UTC with offset); empty when the backend sent none. */
+  asked_at: string;
   /** The turn the gate belongs to — decides the lane the card renders in. Null
    *  only for a frame that arrived without one (routed to the spine stack). */
   origin: PermissionOrigin | null;
@@ -61,6 +63,7 @@ export const usePermissionsStore = defineStore('permissions', {
         request_id: payload.request_id,
         action_id: payload.action_id,
         summary: typeof payload.summary === 'string' ? payload.summary : '',
+        asked_at: typeof payload.asked_at === 'string' ? payload.asked_at : '',
         origin: readOrigin(payload.origin),
       });
     },

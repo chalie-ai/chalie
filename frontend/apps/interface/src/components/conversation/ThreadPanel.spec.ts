@@ -69,7 +69,7 @@ async function fakeBackend(input: RequestInfo | URL): Promise<Response> {
 }
 
 function msg(id: string, role: ConversationMessage['role'], content: string, turnId: number): ConversationMessage {
-  return { id, role, content, timestamp: '2026-01-01 00:00:00', day: '2026-01-01', turn_id: turnId };
+  return { id, role, content, timestamp: '2026-01-01 00:00:00', day: '2026-01-01', created_at: '2026-01-01T00:00:00Z', turn_id: turnId };
 }
 
 function delegateBlock(ref: { channel: string; turn_id: number }, messages: ConversationMessage[], working = false): DelegateTurnBlock {

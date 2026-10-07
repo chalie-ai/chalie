@@ -583,7 +583,7 @@ describe('requestStop — only a message the cancel removes goes back to the doc
     extra: Partial<ConversationTurnBlock['messages'][number]> = {},
   ): ConversationTurnBlock['messages'][number] {
     return {
-      id: String(id), role, content, timestamp: '2026-01-01 00:00:00', day: '2026-01-01', turn_id: 12, ...extra,
+      id: String(id), role, content, timestamp: '2026-01-01 00:00:00', day: '2026-01-01', created_at: '2026-01-01T00:00:00Z', turn_id: 12, ...extra,
     };
   }
 
@@ -838,6 +838,7 @@ describe('reconnect reconcile', () => {
         request_id: 'gate-1',
         action_id: 'pim',
         summary: 'Read the inbox',
+        asked_at: '2026-10-07T06:32:11+00:00',
         origin: { type: ConfigType.USER, turn_id: 7, forked: true },
       },
     ]);
@@ -853,6 +854,7 @@ describe('reconnect reconcile', () => {
         request_id: 'gate-1',
         action_id: 'pim',
         summary: 'Read the inbox',
+        asked_at: '2026-10-07T06:32:11+00:00',
         origin: { type: 'user', turn_id: 7, forked: true },
       },
     ]);

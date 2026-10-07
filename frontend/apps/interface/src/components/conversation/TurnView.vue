@@ -13,6 +13,8 @@ import type {
   ConversationTurnBlock,
   DelegateTurnBlock,
 } from '../../api/conversation';
+import { usePermissionsStore } from '../../stores/permissions';
+import type { PermissionRequest } from '../../stores/permissions';
 import type { LiveToolPill } from '../../utils/liveActTrail';
 import { liveTrailsFor } from '../../utils/liveActTrail';
 import UserBubble from './UserBubble.vue';
@@ -47,19 +49,28 @@ const channel = computed(() => props.block.channel ?? null);
  *  store/composable needed. */
 const isForkedThread = computed(() => props.block.messages.some((m) => m.thread_message));
 
-/** The work of one assistant segment, drawn as ONE quiet, expandable line above
- *  the answer: every row between the segment's user row and its closing row —
- *  thinking, mid-turn prose, tool calls — folds into its steps. `answerId`
- *  names the closing row, which renders below the line instead of inside it.
- *  `live` marks the still-working segment, which also carries the turn's
- *  act-trail `pills` (derived from WS signals, spec §6.5) and the stop; before
- *  the first pill lands it is the "thinking…" anchor. */
+const permissions = usePermissionsStore();
+
+/** This turn's parked permission ask, if any: the first queued gate whose
+ *  `origin` names this view's (turn_id, type) identity — the same pair the
+ *  lane resolver matches a card's origin on. A subagent's gate inherits its
+ *  caller's origin, so it waits on the caller's line, never a delegate's. */
+const pendingAsk = computed<PermissionRequest | null>(() =>
+  channel.value == null
+    ? (permissions.queue.find((r) => r.origin?.turn_id === props.block.turn_id && r.origin.type === props.type) ?? null)
+    : null,
+);
+
+/** The still-working exchange, drawn as ONE quiet, expandable live line:
+ *  every row of the segment — thinking, mid-turn prose, tool calls — folds
+ *  into its steps, tracking the turn's act-trail `pills` (derived from WS
+ *  signals, spec §6.5) and carrying the stop; before the first pill lands it
+ *  is the "thinking…" anchor. When the exchange settles its work moves into
+ *  the footer below the answer, so no line stands above it. */
 interface ActivityRow {
   kind: 'activity';
   key: string;
   messages: ConversationMessage[];
-  answerId: string | null;
-  live: boolean;
   pills: LiveToolPill[];
 }
 
@@ -70,12 +81,15 @@ interface MsgRow {
 
 // The meta line under the row that closes an exchange: timestamp, actions, and
 // (on the last footer of a forked turn) the collapsed thread pill. The work
-// behind it lives in the activity line above. `standalone` marks one with no
-// bubble of its own above it — a closing row that said nothing.
+// behind it lives HERE — the exchange's rows and duration behind the work
+// toggle. `standalone` marks one with no bubble of its own above it — a
+// closing row that said nothing.
 interface FooterRow {
   kind: 'footer';
   message: ConversationMessage;
   standalone: boolean;
+  work: ConversationMessage[];
+  durationMs: number | null;
 }
 
 type DisplayRow = MsgRow | ActivityRow | FooterRow;
@@ -133,22 +147,25 @@ const droppedOnCancel = computed<Set<string>>(() => {
 
 const displayRows = computed<DisplayRow[]>(() => {
   // One segment is one exchange: it opens at a user row and closes on the row
-  // that closes it (closingRowIds). Every work row of the segment folds into
-  // ONE activity line above the answer; the answer keeps its bubble when it
-  // said something, and the closing row carries the segment's single footer.
-  // The line's key is the same live and settled (anchor + segment index), so
-  // it does not remount when the answer lands.
+  // that closes it (closingRowIds). The answer keeps its bubble when it said
+  // something, and the closing row carries the exchange's single footer — the
+  // exchange's work rows and duration folded into it. While the exchange is
+  // still working, its open work stands as the live activity line, keyed the
+  // same live and settled (anchor + segment index) so it does not remount
+  // when the answer lands.
   const rows: DisplayRow[] = [];
   // anchor = id of the most recent user row ('start' before the first one);
   // segIndex = segment counter within the current anchor (reset at each user
-  // row); pending = the work rows of the still-open segment; lastActivity =
-  // the activity row of the last CLOSED segment since the current user row —
-  // trailing work after an exchange's answer stays summarised in that
-  // exchange's line.
+  // row); pending = the work rows of the still-open exchange; lastFooter =
+  // the footer of the last CLOSED exchange since the current user row —
+  // trailing work after an exchange's answer stays in that exchange's footer;
+  // exchangeStart = created_at of the row that opened the open exchange, for
+  // its duration.
   let anchor = 'start';
   let segIndex = 0;
   let pending: ConversationMessage[] = [];
-  let lastActivity: ActivityRow | null = null;
+  let lastFooter: FooterRow | null = null;
+  let exchangeStart: string | null = null;
 
   for (const message of props.block.messages) {
     // The spine renders only through settle0 — drop thread reply rows. The
@@ -156,80 +173,77 @@ const displayRows = computed<DisplayRow[]>(() => {
     if (!props.fullThread && message.thread_message) continue;
 
     if (message.role === 'user') {
-      // A new exchange: flush the previous segment's open work as a bare
-      // activity row — no answer, no footer, its exchange never closed — then
-      // the user bubble itself.
-      if (pending.length) {
-        rows.push({ kind: 'activity', key: `activity-${anchor}-${segIndex}`, messages: pending, answerId: null, live: false, pills: [] });
+      if (message.joined) {
+        // A joined row continues the running exchange: its work and key stay
+        // the open segment's.
+        rows.push({ kind: 'msg', message });
+        lastFooter = null;
+        if (exchangeStart === null) exchangeStart = message.created_at;
+        continue;
       }
+      // A new exchange — the previous segment already closed on its closing
+      // row (closingRowIds), so nothing flushes. The user row's own tool_calls
+      // are the framework's turn-zero memory seed, never steps, so the
+      // exchange opens with empty work.
       rows.push({ kind: 'msg', message });
       anchor = message.id;
       segIndex = 0;
-      lastActivity = null;
-      // tool_calls on a user row are calls made before any provider call —
-      // they seed the work of the segment that follows.
-      pending = message.tool_calls?.length ? [message] : [];
+      lastFooter = null;
+      pending = [];
+      exchangeStart = message.created_at;
       continue;
     }
 
     if (closingRowIds.value.has(message.id)) {
-      // The segment closes: its whole work — this closing row included —
-      // summarises in one line above the answer, which keeps its bubble when it
+      // The exchange closes: its whole work — this closing row included —
+      // hands to the footer under the answer, which keeps its bubble when it
       // said something; a closing row that only called tools leaves its footer
       // standing alone.
       pending.push(message);
-      const activity: ActivityRow = {
-        kind: 'activity',
-        key: `activity-${anchor}-${segIndex}`,
-        messages: pending,
-        answerId: message.id,
-        live: false,
-        pills: [],
-      };
-      rows.push(activity);
       const hasBubble = message.content.trim().length > 0;
       if (hasBubble) rows.push({ kind: 'msg', message });
-      rows.push({ kind: 'footer', message, standalone: !hasBubble });
-      lastActivity = activity;
+      let durationMs: number | null = null;
+      if (exchangeStart !== null) {
+        const start = Date.parse(exchangeStart);
+        const end = Date.parse(message.created_at);
+        if (!Number.isNaN(start) && !Number.isNaN(end) && end - start >= 0) {
+          durationMs = end - start;
+        }
+      }
+      const footer: FooterRow = { kind: 'footer', message, standalone: !hasBubble, work: pending, durationMs };
+      rows.push(footer);
+      lastFooter = footer;
       segIndex += 1;
       pending = [];
+      exchangeStart = null;
       continue;
     }
 
-    // A work row of the open segment — or, after a closed one, trailing work
-    // that folds back into that exchange's line.
-    if (pending.length === 0 && lastActivity) {
-      lastActivity.messages.push(message);
+    // A work row of the open exchange — or, after a closed one, trailing work
+    // that stays with that exchange's footer.
+    if (pending.length === 0 && lastFooter) {
+      lastFooter.work.push(message);
     } else {
+      if (exchangeStart === null) exchangeStart = message.created_at;
       pending.push(message);
     }
   }
 
-  // Still working: the open segment renders as the LIVE activity line — same
-  // key as the row it settles into — carrying the act-trail pills (or a bare
-  // "thinking…" anchor before the first pill lands). Only when this render is
-  // the authoritative live view of the turn (thread panel, or a non-forked
-  // turn in the spine): a forked turn in the spine shows the thread pill's
-  // animated dot instead, so an inline live line would duplicate that
+  // Still working: the open exchange renders as the LIVE activity line —
+  // carrying the act-trail pills (or a bare "thinking…" anchor before the
+  // first pill lands) — on a key stable across live re-renders (anchor +
+  // segment index), so it does not remount as the pills tick. Only when this
+  // render is the authoritative live view of the turn (thread panel, or a
+  // non-forked turn in the spine): a forked turn in the spine shows the thread
+  // pill's animated dot instead, so an inline live line would duplicate that
   // indicator and misattribute thread activity to the top-level timeline.
   const liveView = props.block.working && (props.fullThread || !isForkedThread.value);
   if (liveView) {
     const pills = liveTrailsFor(channel.value ?? props.type, props.block.turn_id).flatMap((t) => t.pills);
-    rows.push({ kind: 'activity', key: `activity-${anchor}-${segIndex}`, messages: pending, answerId: null, live: true, pills });
-  } else if (pending.length) {
-    // Settled (or cancelled/crashed) with work that never closed — summarise
-    // it quietly; the drop below removes it if it carries nothing visible.
-    rows.push({ kind: 'activity', key: `activity-${anchor}-${segIndex}`, messages: pending, answerId: null, live: false, pills: [] });
+    rows.push({ kind: 'activity', key: `activity-${anchor}-${segIndex}`, messages: pending, pills });
   }
 
-  // A non-live line with no work behind it is just noise — the answer row
-  // alone is not work (it renders below): drop such lines.
-  return rows.filter((row) => {
-    if (row.kind !== 'activity' || row.live) return true;
-    return row.messages.some(
-      (m) => m.tool_calls?.length || m.thinking || (m.role === 'assistant' && m.content.trim() !== '' && m.id !== row.answerId),
-    );
-  });
+  return rows;
 });
 
 // Speaker-role grouping for the row rhythm.
@@ -314,16 +328,16 @@ function onOpenThread(): void {
         { 'msg-row--standalone': ar.row.kind === 'footer' && (ar.row as FooterRow).standalone },
       ]"
     >
-      <!-- The segment's ONE quiet activity line: its thinking, mid-turn prose
-           and tool calls folded into steps — live, it tracks the act-trail
-           pill and carries the stop. -->
+      <!-- The still-working exchange's LIVE activity line: its thinking,
+           mid-turn prose and tool calls folded into steps, tracking the
+           act-trail pill and carrying the stop. Settled, the exchange's work
+           lives in the footer under the answer instead. -->
       <ActivityLine
         v-if="ar.row.kind === 'activity'"
         :messages="(ar.row as ActivityRow).messages"
-        :answer-id="(ar.row as ActivityRow).answerId"
-        :live="(ar.row as ActivityRow).live"
         :pills="(ar.row as ActivityRow).pills"
         :undoable="channel == null"
+        :ask="pendingAsk"
       />
 
       <!-- The segment's single footer: timestamp and actions — and (on the
@@ -331,6 +345,8 @@ function onOpenThread(): void {
       <BubbleFooter
         v-else-if="ar.row.kind === 'footer'"
         :message="(ar.row as FooterRow).message"
+        :work="(ar.row as FooterRow).work"
+        :duration-ms="(ar.row as FooterRow).durationMs"
         :can-reply="canReply"
         :thread-pill="ar.key === lastFooterKey ? threadPill : null"
         @reply="onReply"

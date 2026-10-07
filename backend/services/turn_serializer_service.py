@@ -26,6 +26,7 @@ from services.database import Database
 from services.file_mapper_service import FileMapperService
 from services.locale_service import CHAT_DAY_FMT, CHAT_TIMESTAMP_FMT, format_date
 from services.rich_media_parser import parse as _parse_rich_media
+from services.time_utils import parse_utc
 from configs.channels import config_for
 from models.tool_call import ToolCall
 from models.transcript import Transcript
@@ -114,13 +115,18 @@ def _group_calls_by_transcript(calls: list[dict[str, object]]) -> dict[int, list
 
 
 def _base_message(r: dict[str, object]) -> dict[str, object]:
-    """The role/content/timestamp/day shape common to every projected message."""
+    """The role/content/timestamp/day/created_at shape common to every projected message."""
     return {
         "id": str(cast("int", r['id'])),
         "role": r['role'],
         "content": r['content'] or "",
         "timestamp": format_date(cast("str", r['created_at']), CHAT_TIMESTAMP_FMT, for_ui=True) or "",
         "day": format_date(cast("str", r['created_at']), CHAT_DAY_FMT, for_ui=True) or "",
+        # The row's creation instant as ISO-8601 UTC with its offset — the
+        # unformatted time a client needs to time ONE exchange (user row → reply
+        # row); the block-level duration_ms spans the whole turn, so it cannot.
+        # Stored as "YYYY-MM-DD HH:MM:SS", which browsers parse inconsistently.
+        "created_at": parse_utc(cast("str", r['created_at'])).isoformat(),
         "turn_id": r['turn_id'],
     }
 
@@ -386,8 +392,6 @@ class TurnSerializerService:
         this (channel, turn_id), i.e. a currently in-flight execution, not merely
         "never settled" — and ``duration_ms``, derived from the row span) are
         folded in."""
-        from services.time_utils import parse_utc
-
         latest = TurnExecution.latest(channel, turn_id)
         rows = Transcript.by_turn(channel, turn_id)
         rows = _drop_trailing_cancelled_orphan(rows, latest)

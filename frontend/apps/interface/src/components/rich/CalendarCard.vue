@@ -167,8 +167,8 @@ const dayGroups = computed<DayGroup[]>(() => {
 }
 
 .calendar-card__when {
-  background: var(--pink);
-  color: var(--on-pink);
+  background: var(--cell);
+  color: var(--text);
   padding: 6px 4px;
   text-align: center;
 }

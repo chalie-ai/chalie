@@ -170,8 +170,8 @@ const listContacts = computed<Contact[]>(() => {
 .ct__avatar {
   width: 56px;
   height: 56px;
-  background: var(--pink);
-  color: var(--on-pink);
+  background: var(--cell);
+  color: var(--text);
   display: flex;
   align-items: center;
   justify-content: center;

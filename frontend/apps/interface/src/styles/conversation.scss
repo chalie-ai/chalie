@@ -172,6 +172,30 @@
   letter-spacing: 0.04em;
 }
 
+// The work toggle — "N step(s) · Xm Ys" — sits right after the timestamp and
+// folds its step list open below the footer (the shared .trace-body collapse).
+.speech-form__work {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--control-h);
+  padding: 0;
+  background: none;
+  border: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  transition: color var(--dur-1) var(--ease-out);
+}
+
+.speech-form__work:hover {
+  color: var(--text);
+}
+
+.speech-form__work[aria-expanded='true'] .activity__chev {
+  rotate: 90deg;
+}
+
 .speech-form__acts {
   display: flex;
   gap: 2px;
@@ -278,26 +302,21 @@
   color: var(--text);
 }
 
+// The line is live-only: the mark pulses pink while the turn works, and the
+// label is full-strength text (not the muted work rows below it).
 .activity__mark {
   flex-shrink: 0;
   width: 6px;
   height: 6px;
-  background: var(--muted);
-}
-
-.activity--live .activity__mark {
   background: var(--pink);
   animation: working 1.4s ease-in-out infinite;
-}
-
-.activity--live .activity__label {
-  color: var(--text);
 }
 
 .activity__label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--text);
 }
 
 .activity__fail {
@@ -329,18 +348,15 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 2px 0 2px 14px;
+  padding: 2px 0;
   font-family: var(--font-mono);
   font-size: var(--fs-mono);
   line-height: 1.6;
   color: var(--muted);
 }
 
-.activity__thought summary {
-  cursor: pointer;
-}
-
-.activity__thought pre {
+// A reasoning trace — shown in the footer fold of a reply that only thought.
+.activity__trace {
   margin: 4px 0 0;
   white-space: pre-wrap;
   word-break: break-word;
@@ -383,7 +399,7 @@
 }
 
 // Tool-call rows (ToolCallList) — plain borderless lines, one per call:
-// status dot, summary first, tool name trailing muted on the right.
+// a status icon, then the summary; a delegate row ends with the robot icon.
 .calls {
   display: flex;
   flex-direction: column;
@@ -397,40 +413,22 @@
   overflow-wrap: anywhere;
 }
 
-.call__dot {
-  align-self: center;
+.call__mark {
   flex-shrink: 0;
-  width: 6px;
-  height: 6px;
+  align-self: center;
 }
 
-.call--done .call__dot {
-  background: var(--allow);
+.call--done .call__mark {
+  color: var(--allow-text);
 }
 
-.call--error .call__dot {
-  background: var(--deny);
-}
-
-.call--started .call__dot {
-  background: var(--muted);
-}
-
-// Rule-colour fills sit under 3:1 on the light grounds, so they take the glyph
-// outline.
-.call--done .call__dot,
-.call--error .call__dot {
-  outline: 1px solid var(--glyph-stroke);
+.call--started .call__mark {
+  color: var(--muted);
 }
 
 .call__summary {
   flex: 1;
   min-width: 0;
-}
-
-.call__fn {
-  opacity: 0.7;
-  white-space: nowrap;
 }
 
 .call--error {

@@ -61,7 +61,7 @@ const OTHER_CH = 'delegate:code_agent';
 const STARTED_AT = '2026-01-01T00:00:00Z';
 
 function msg(id: string, role: ConversationMessage['role'], content: string): ConversationMessage {
-  return { id, role, content, timestamp: '2026-01-01 00:00:00', day: '2026-01-01', turn_id: TURN };
+  return { id, role, content, timestamp: '2026-01-01 00:00:00', day: '2026-01-01', created_at: '2026-01-01T00:00:00Z', turn_id: TURN };
 }
 
 function userBlock(working: boolean, messages: ConversationMessage[]): ConversationTurnBlock {

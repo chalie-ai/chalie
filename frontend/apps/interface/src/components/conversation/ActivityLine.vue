@@ -1,14 +1,17 @@
 <script setup lang="ts">
 /**
- * ActivityLine — one quiet line per assistant segment, above the answer.
+ * ActivityLine — the one live line above a still-working exchange.
  *
- * It folds every intermediate row of the segment (thinking traces, mid-turn
- * prose, tool calls) into an expandable step list, so a turn reads as ONE
- * activity line plus its answer instead of one bubble + "N tools used" pill
- * per LLM call. Live, the same line tracks the current act-trail pill (the
- * last unresolved one) with a ticking elapsed time and a Stop button: stop via
- * readDomContext/lastUserText/session.requestStop, a 100 ms clock that ticks
- * only while a pill is unresolved, and the undoable/subagent aria-labels.
+ * It renders only while the turn works: the exchange's in-progress work
+ * (mid-turn prose and tool calls, via StepList) folded into an expandable
+ * step list, the current act-trail pills with a ticking elapsed time, and a
+ * Stop button (stop via readDomContext/lastUserText/session.requestStop, a
+ * 100 ms clock that ticks while a pill is unresolved or the line is parked
+ * on a permission ask). When the turn is parked on a gate, the label names
+ * the ask and a ticking "· waiting for you · Ns" note follows it — aged from
+ * the server's `asked_at` stamp, so it survives a reload. When the exchange
+ * settles its work moves into the answer's footer (BubbleFooter) below, so
+ * no line stands above a settled answer.
  */
 import { computed, onUnmounted, ref, watch } from 'vue';
 import { Bot } from '@lucide/vue';
@@ -17,75 +20,29 @@ import { readDomContext } from '../../utils/domContext';
 import { lastUserText } from '../../utils/turnDom';
 import type { LiveToolPill } from '../../utils/liveActTrail';
 import { useSessionStore } from '../../stores/session';
+import type { PermissionRequest } from '../../stores/permissions';
 import { delegatePillAttrs } from '../../composables/useDelegatePill';
-import ChalieBubble from './ChalieBubble.vue';
-import ToolCallList from './ToolCallList.vue';
+import StepList from './StepList.vue';
 
 const props = withDefaults(
   defineProps<{
-    /** The segment's rows, in order — the work this line summarises. */
+    /** The exchange's rows, in order — the work this line summarises. */
     messages: ConversationMessage[];
-    /** The answer row's id — excluded from the step list (it renders below). */
-    answerId: string | null;
-    /** True while the segment is working — live header + pills. */
-    live?: boolean;
-    /** The segment's live act-trail pills. */
+    /** The exchange's live act-trail pills. */
     pills?: LiveToolPill[];
     /** False where a stop interrupts without handing anything back to undo (a
      *  delegate's transcript). */
     undoable?: boolean;
+    /** The permission ask this turn is parked on, if any — the label names it
+     *  and a ticking "· waiting for you" note follows. */
+    ask?: PermissionRequest | null;
   }>(),
-  { live: false, pills: () => [], undoable: true },
+  { pills: () => [], undoable: true, ask: null },
 );
 
 const session = useSessionStore();
 const rootRef = ref<HTMLElement | null>(null);
 const expanded = ref(false);
-
-// ── Steps — the segment's work, in row order ─────────────────────────────────
-//
-// Each row contributes, in this order: its thinking (a 'thought' step), its
-// prose (a 'prose' step — unless it IS the answer row), its tool calls (a
-// 'calls' step). The answer row never becomes a prose step: it renders below
-// the line, not inside it.
-
-type ActivityStep =
-  | { kind: 'thought'; traces: string[]; durationMs: number }
-  | { kind: 'prose'; message: ConversationMessage }
-  | { kind: 'calls'; calls: NonNullable<ConversationMessage['tool_calls']> };
-
-const steps = computed<ActivityStep[]>(() => {
-  const out: ActivityStep[] = [];
-  for (const m of props.messages) {
-    if (m.thinking) {
-      out.push({ kind: 'thought', traces: m.thinking.traces, durationMs: m.thinking.duration_ms });
-    }
-    if (m.role === 'assistant' && m.content.trim() !== '' && String(m.id) !== props.answerId) {
-      out.push({ kind: 'prose', message: m });
-    }
-    if (m.tool_calls?.length) {
-      out.push({ kind: 'calls', calls: m.tool_calls });
-    }
-  }
-  return out;
-});
-
-// ── Header numbers ────────────────────────────────────────────────────────────
-
-const callCount = computed(() => props.messages.reduce((n, m) => n + (m.tool_calls?.length ?? 0), 0));
-const failCount = computed(() =>
-  props.messages.reduce((n, m) => n + (m.tool_calls?.filter((c) => c.state === 'error').length ?? 0), 0),
-);
-const thinkMs = computed(() => props.messages.reduce((n, m) => n + (m.thinking?.duration_ms ?? 0), 0));
-const proseCount = computed(() => steps.value.filter((s) => s.kind === 'prose').length);
-
-// "Xs" or "Xm Ys" — rounded seconds, the same reading as the thinking link.
-function formatDuration(ms: number): string {
-  const seconds = Math.round(ms / 1000);
-  const mins = Math.floor(seconds / 60);
-  const rem = seconds % 60;
-  return mins === 0 ? `${seconds}s` : `${mins}m ${rem}s`;
-}
 
 // ── Live state: the last unresolved pill + a ticking clock ──────────────────
 
@@ -96,11 +53,13 @@ const lastUnresolvedPill = computed<LiveToolPill | null>(() => {
   return null;
 });
 
-// Live timer: ticks ONLY while a pill is unresolved.
+// Live timer: ticks while anything on the line is counting — a pill still
+// unresolved, or the ask this turn is parked on (its "waiting" age ticks).
 const now = ref(Date.now());
 let timer: ReturnType<typeof setInterval> | null = null;
 
 const hasRunning = computed(() => props.pills.some((p) => !p.resolved));
+const clockLive = computed(() => hasRunning.value || props.ask != null);
 
 function stopClock(): void {
   if (timer) clearInterval(timer);
@@ -108,7 +67,7 @@ function stopClock(): void {
 }
 
 watch(
-  hasRunning,
+  clockLive,
   (running) => {
     if (running && !timer) {
       timer = setInterval(() => {
@@ -130,9 +89,11 @@ function pillSeconds(pill: LiveToolPill): string {
   return (ms / 1000).toFixed(1);
 }
 
-// Live label: the last unresolved pill's summary (or name) + its whole
-// elapsed seconds; before the first pill lands, the bare "Thinking…".
+// Live label: the parked ask's summary (or action id) while the turn waits
+// on a gate; otherwise the last unresolved pill's summary (or name) + its
+// whole elapsed seconds; before the first pill lands, the bare "Thinking…".
 const liveLabel = computed(() => {
+  if (props.ask) return props.ask.summary || props.ask.action_id;
   const pill = lastUnresolvedPill.value;
   if (!pill) return 'Thinking…';
   const base = pill.summary || pill.name;
@@ -140,18 +101,14 @@ const liveLabel = computed(() => {
   return `${base} · ${seconds}s`;
 });
 
-// Settled label: "N step(s)" (+ " · Xs" when any row thought), or a bare
-// "Thought for Xs" when the segment is thinking with no tools or prose.
-const settledLabel = computed(() => {
-  const n = callCount.value + proseCount.value;
-  if (n > 0) {
-    const base = `${n} step${n === 1 ? '' : 's'}`;
-    return thinkMs.value > 0 ? `${base} · ${formatDuration(thinkMs.value)}` : base;
-  }
-  return thinkMs.value > 0 ? `Thought for ${formatDuration(thinkMs.value)}` : '';
+// Whole seconds since the ask parked — 0 when the stamp is unparseable or in
+// the future (a clock skew); the server stamp is what makes it survive a
+// reload.
+const askSeconds = computed(() => {
+  if (!props.ask) return 0;
+  const parked = Date.parse(props.ask.asked_at);
+  return Number.isNaN(parked) ? 0 : Math.max(0, Math.floor((now.value - parked) / 1000));
 });
-
-const headerLabel = computed(() => (props.live ? liveLabel.value : settledLabel.value));
 
 // ── Stop ─────────────────────────────────────────────────────────────────────
 
@@ -169,13 +126,7 @@ async function onStop(): Promise<void> {
 </script>
 
 <template>
-  <!-- Nothing when the segment has no work and is not working. -->
-  <div
-    v-if="live || steps.length > 0"
-    ref="rootRef"
-    class="activity"
-    :class="{ 'activity--live': live }"
-  >
+  <div ref="rootRef" class="activity">
     <button
       class="activity__toggle"
       :aria-expanded="expanded"
@@ -183,13 +134,14 @@ async function onStop(): Promise<void> {
       @click="expanded = !expanded"
     >
       <span class="activity__mark" />
-      <span class="activity__label">{{ headerLabel }}</span>
-      <span v-if="!live && failCount > 0" class="activity__fail">· {{ failCount }} failed</span>
+      <span class="activity__label">{{ liveLabel }}</span>
+      <!-- Inherits the toggle's muted colour — only .activity__label is
+           text-coloured, so no style of its own. -->
+      <span v-if="ask" class="activity__wait">· waiting for you · {{ askSeconds }}s</span>
       <span class="activity__chev" aria-hidden="true">›</span>
     </button>
 
     <button
-      v-if="live"
       class="activity__stop"
       :aria-label="undoable ? 'Stop and undo' : 'Stop subagent'"
       :title="undoable ? 'Stop & undo' : 'Stop subagent'"
@@ -205,54 +157,40 @@ async function onStop(): Promise<void> {
       :inert="!expanded"
     >
       <div class="trace-body__inner">
+        <StepList :messages="messages" :answer-id="null" />
+
+        <!-- Live act-trail pills, one row per tool call still in this turn. -->
         <div class="activity__steps">
-          <template v-for="(step, i) in steps" :key="i">
-            <details v-if="step.kind === 'thought'" class="activity__thought">
-              <summary>Thought for {{ formatDuration(step.durationMs) }}</summary>
-              <pre v-for="(trace, j) in step.traces" :key="j">{{ trace }}</pre>
-            </details>
-            <ChalieBubble
-              v-else-if="step.kind === 'prose'"
-              :message="step.message"
-              class="activity__prose"
-            />
-            <ToolCallList v-else :calls="step.calls" />
-          </template>
-
-          <!-- Live act-trail pills, one row per tool call still in this turn. -->
-          <template v-if="live">
-            <component
-              :is="pill.delegate ? 'button' : 'div'"
-              v-for="pill in pills"
-              :key="pill.id"
-              v-bind="delegatePillAttrs(pill.delegate)"
-              class="activity__pill"
-              :class="{
-                'activity__pill--running': !pill.resolved,
-                'activity__pill--done': pill.resolved && pill.ok,
-                'activity__pill--error': pill.resolved && !pill.ok,
-              }"
-              :data-call-id="pill.id"
-              :data-transcript-row-id="pill.transcriptRowId"
-            >
-              <span class="activity__pill-label">
-                <span class="activity__pill-name">
-                  <Bot v-if="pill.delegate" class="delegate-pill__icon" :size="16" aria-hidden="true" />{{
-                    pill.name
-                  }}
-                </span>
-                <span v-if="pill.summary" class="activity__pill-summary">— {{ pill.summary }}</span>
+          <component
+            :is="pill.delegate ? 'button' : 'div'"
+            v-for="pill in pills"
+            :key="pill.id"
+            v-bind="delegatePillAttrs(pill.delegate)"
+            class="activity__pill"
+            :class="{
+              'activity__pill--running': !pill.resolved,
+              'activity__pill--done': pill.resolved && pill.ok,
+              'activity__pill--error': pill.resolved && !pill.ok,
+            }"
+            :data-call-id="pill.id"
+            :data-transcript-row-id="pill.transcriptRowId"
+          >
+            <span class="activity__pill-label">
+              <span class="activity__pill-summary">
+                <Bot v-if="pill.delegate" class="delegate-pill__icon" :size="16" aria-hidden="true" />{{
+                  pill.summary || pill.name
+                }}
               </span>
+            </span>
 
-              <span class="activity__pill-status">
-                <template v-if="!pill.resolved">
-                  <span class="activity__pill-elapsed">{{ pillSeconds(pill) }}s</span>
-                </template>
-                <template v-else-if="pill.ok">{{ pillSeconds(pill) }}s</template>
-                <template v-else>error</template>
-              </span>
-            </component>
-          </template>
+            <span class="activity__pill-status">
+              <template v-if="!pill.resolved">
+                <span class="activity__pill-elapsed">{{ pillSeconds(pill) }}s</span>
+              </template>
+              <template v-else-if="pill.ok">{{ pillSeconds(pill) }}s</template>
+              <template v-else>error</template>
+            </span>
+          </component>
         </div>
       </div>
     </div>

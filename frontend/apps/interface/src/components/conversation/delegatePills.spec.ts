@@ -28,6 +28,7 @@ import { Bot } from '@lucide/vue';
 import { ConfigType } from '@chalie/shared';
 import TurnView from './TurnView.vue';
 import ActivityLine from './ActivityLine.vue';
+import BubbleFooter from './BubbleFooter.vue';
 import { useSessionStore } from '../../stores/session';
 import { clearAll, finishLiveTool, setLiveToolDelegate, startLiveTool } from '../../utils/liveActTrail';
 import type { LiveToolPill } from '../../utils/liveActTrail';
@@ -91,8 +92,8 @@ function traceToggle(wrapper: VueWrapper): HTMLButtonElement {
 }
 
 /** The element a plain chip's own text sits in. */
-function labelOf(wrapper: VueWrapper, text: string): HTMLElement {
-  const holder = [...(wrapper.element as Element).querySelectorAll<HTMLElement>('*')].find((el) =>
+function labelOf(wrapper: { element: Element }, text: string): HTMLElement {
+  const holder = [...wrapper.element.querySelectorAll<HTMLElement>('*')].find((el) =>
     [...el.childNodes].some((n) => n.nodeType === Node.TEXT_NODE && (n.textContent ?? '').includes(text)));
   expect(holder).toBeDefined();
   return holder!;
@@ -118,13 +119,21 @@ const PLAIN_CALL: ToolCalls[number] = {
 function callsMessage(toolCalls: ToolCalls): ConversationMessage {
   return {
     id: '3011', role: 'assistant', content: '', timestamp: '2026-01-01 00:00:01',
-    day: '2026-01-01', turn_id: TURN, tool_calls: toolCalls,
+    day: '2026-01-01', created_at: '2026-01-01T00:00:00Z', turn_id: TURN, tool_calls: toolCalls,
   };
 }
 
+/** The settled assistant answer that closes the exchange: the same shape as
+ *  `callsMessage`'s row, with real content and its own id. */
+const ANSWER: ConversationMessage = {
+  id: '3012', role: 'assistant', content: 'The museum opens at nine.',
+  timestamp: '2026-01-01 00:00:02', day: '2026-01-01', created_at: '2026-01-01T00:00:02Z',
+  turn_id: TURN, settled: true,
+};
+
 function turnWith(working: boolean, toolCalls: ToolCalls): ConversationTurnBlock {
   const messages: ConversationMessage[] = [
-    { id: '3010', role: 'user', content: 'When does the museum open?', timestamp: '2026-01-01 00:00:00', day: '2026-01-01', turn_id: TURN },
+    { id: '3010', role: 'user', content: 'When does the museum open?', timestamp: '2026-01-01 00:00:00', day: '2026-01-01', created_at: '2026-01-01T00:00:00Z', turn_id: TURN },
     { ...callsMessage(toolCalls), content: 'Let me look that up.' },
   ];
   return {
@@ -138,8 +147,6 @@ describe('live pills while the turn works', () => {
     const wrapper = track(mount(ActivityLine, {
       props: {
         messages: [],
-        answerId: null,
-        live: true,
         pills: [
           livePill({ id: '31', delegate: REF }),
           livePill({ id: '32', name: 'web_search', resolved: true, ok: true, ms: 1800, delegate: { channel: 'delegate:web_search', turn_id: 13 } }),
@@ -153,7 +160,11 @@ describe('live pills while the turn works', () => {
     expect(wrapper.findAll('.activity__pill')).toHaveLength(3);
     const buttons = delegateButtons(wrapper);
     expect(buttons).toHaveLength(3);
-    for (const b of buttons) expectNamedByContent(b, 'web_search');
+    // One sentence per pill: 31 and 32 read by their summary, 33 — with no
+    // summary — by its name.
+    expectNamedByContent(buttons[0]!, 'museum hours');
+    expectNamedByContent(buttons[1]!, 'museum hours');
+    expectNamedByContent(buttons[2]!, 'web_search');
 
     buttons[0]!.click();
     expect(session.panelDelegate).toEqual(REF);
@@ -170,8 +181,6 @@ describe('live pills while the turn works', () => {
     const wrapper = track(mount(ActivityLine, {
       props: {
         messages: [],
-        answerId: null,
-        live: true,
         pills: [
           livePill({ id: '40', name: 'calendar', summary: 'todays agenda' }),
           livePill({ id: '41', name: 'weather', summary: '', resolved: true, ok: false }),
@@ -181,15 +190,17 @@ describe('live pills while the turn works', () => {
     const session = useSessionStore();
 
     expect(wrapper.findAll('.activity__pill')).toHaveLength(2);
-    expect(wrapper.text()).toContain('calendar');
+    // One sentence per chip: 40 by its summary, 41 — with no summary — by its
+    // name. A plain chip stays the plain element it always was: a div, not a
+    // button, with no Bot glyph.
+    expect(wrapper.text()).toContain('todays agenda');
     expect(wrapper.text()).toContain('weather');
-    expect(buttonsMentioning(wrapper, 'calendar')).toHaveLength(0);
-    expect(buttonsMentioning(wrapper, 'weather')).toHaveLength(0);
+    for (const pill of wrapper.findAll('.activity__pill')) expect(pill.element.tagName).toBe('DIV');
     expect(delegateButtons(wrapper)).toHaveLength(0);
 
     // Pressing a plain chip does nothing and never lands on a button.
-    for (const text of ['calendar', 'weather']) {
-      const label = labelOf(wrapper, text);
+    for (const [callId, text] of [['40', 'todays agenda'], ['41', 'weather']] as const) {
+      const label = labelOf(wrapper.find(`.activity__pill[data-call-id="${callId}"]`), text);
       expect(label.closest('button')).toBeNull();
       label.click();
     }
@@ -207,7 +218,9 @@ describe('live pills while the turn works', () => {
     setLiveToolDelegate(ConfigType.USER, TURN, 31, REF);
     await wrapper.vm.$nextTick();
     expect(delegateButtons(wrapper)).toHaveLength(1);
-    expect(buttonsMentioning(wrapper, 'calendar')).toHaveLength(0);
+    // The non-delegate pill (40) stays a plain chip, named by its summary.
+    expect(wrapper.find('.activity__pill[data-call-id="40"]').element.tagName).toBe('DIV');
+    expect(wrapper.text()).toContain('todays agenda');
 
     finishLiveTool(ConfigType.USER, TURN, 31, true);
     finishLiveTool(ConfigType.USER, TURN, 40, true);
@@ -219,39 +232,41 @@ describe('live pills while the turn works', () => {
   });
 });
 
-describe('settled pills on the activity line', () => {
+describe('settled steps in the answer\'s footer', () => {
   it('a delegate call is a named button with the Bot icon that opens its transcript, beside a plain call that is not a button', async () => {
-    const wrapper = track(mount(ActivityLine, {
+    // The settled exchange's work now folds into the answer's footer: the
+    // settled answer row (message) and the row that carried the calls (work).
+    const wrapper = track(mount(BubbleFooter, {
       props: {
-        messages: [callsMessage([DELEGATE_CALL, PLAIN_CALL])],
-        answerId: null,
-        live: false,
+        message: ANSWER,
+        work: [callsMessage([DELEGATE_CALL, PLAIN_CALL])],
       },
     }));
     const session = useSessionStore();
 
-    // Open the line the way a person does.
+    // Open the footer's step fold the way a person does.
     traceToggle(wrapper).click();
     await wrapper.vm.$nextTick();
 
     expect(wrapper.findAll('.call')).toHaveLength(2);
     const buttons = delegateButtons(wrapper);
     expect(buttons).toHaveLength(1);
-    expectNamedByContent(buttons[0]!, 'web_search');
-    expect(wrapper.text()).toContain('calendar');
-    expect(buttonsMentioning(wrapper, 'calendar')).toHaveLength(0);
+    // One sentence per row: the delegate row reads by its summary; the plain
+    // row's text stays a plain row, not a button.
+    expectNamedByContent(buttons[0]!, 'museum hours');
+    expect(wrapper.text()).toContain('todays agenda');
+    expect(buttonsMentioning(wrapper, 'todays agenda')).toHaveLength(0);
 
     buttons[0]!.click();
     expect(session.panelDelegate).toEqual(REF);
     expect(session.panelThreadId).toBeNull();
   });
 
-  it('a folded line keeps its delegate button out of the tab order, and unfolding brings it back', async () => {
-    const wrapper = track(mount(ActivityLine, {
+  it('a folded footer keeps its delegate button out of the tab order, and unfolding brings it back', async () => {
+    const wrapper = track(mount(BubbleFooter, {
       props: {
-        messages: [callsMessage([DELEGATE_CALL])],
-        answerId: null,
-        live: false,
+        message: ANSWER,
+        work: [callsMessage([DELEGATE_CALL])],
       },
     }));
     const [folded] = delegateButtons(wrapper);

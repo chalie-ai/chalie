@@ -313,7 +313,7 @@ class TestPendingPermissionRouteDocumentsListingEnvelope:
         assert _ref(envelope, "properties", "result", "items") == "#/definitions/PermissionRequestResponse"
 
         item = _at(swagger_spec, "definitions", "PermissionRequestResponse")
-        assert set(_strs(item, "required")) == {"request_id", "action_id", "summary", "origin"}
+        assert set(_strs(item, "required")) == {"request_id", "action_id", "summary", "origin", "asked_at"}
         assert _ref(item, "properties", "origin") == "#/definitions/PermissionOriginResponse"
 
         origin = _at(swagger_spec, "definitions", "PermissionOriginResponse")

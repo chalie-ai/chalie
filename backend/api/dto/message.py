@@ -33,7 +33,10 @@ class Message(DTO):
     year, so it is never parseable back into a date. ``day`` is the same
     instant as the user's local calendar day (``YYYY-MM-DD``), the machine-
     readable key the conversation spine groups its date dividers by; it exists
-    so the client never has to parse ``timestamp``. ``thread_message`` is set on
+    so the client never has to parse ``timestamp``. ``created_at`` is the row's
+    creation instant as ISO-8601 UTC with its offset — the raw time the client
+    needs to time one exchange (the turn-level ``duration_ms``
+    spans the whole turn, so it cannot). ``thread_message`` is set on
     rows from the turn's second user row onward — the fork-reply continuation
     (a turn that has any is a thread; the main spine renders only the opener).
     ``settled`` projects the transcript column on assistant rows — set only on
@@ -53,6 +56,7 @@ class Message(DTO):
     content: str
     timestamp: str
     day: str
+    created_at: str
     turn_id: int | None = None
     attachments: list[Attachment] | None = None
     tool_calls: list[Chip] | None = None

@@ -122,7 +122,7 @@ async function fakeBackend(input: RequestInfo | URL, init?: RequestInit): Promis
 }
 
 function msg(id: string, role: ConversationMessage['role'], content: string, turnId: number): ConversationMessage {
-  return { id, role, content, timestamp: '2026-01-01 00:00:00', day: '2026-01-01', turn_id: turnId };
+  return { id, role, content, timestamp: '2026-01-01 00:00:00', day: '2026-01-01', created_at: '2026-01-01T00:00:00Z', turn_id: turnId };
 }
 
 function delegateBlock(
@@ -159,7 +159,7 @@ const TRIP = [msg('770', 'user', 'Plan the museum trip', 77), msg('771', 'assist
 
 /** A transcript that is still running shows the live working anchor; a settled
  *  one does not — the one DOM signature of working versus settled. */
-const showsWorking = (panel: VueWrapper): boolean => panel.element.querySelector('.activity--live') !== null;
+const showsWorking = (panel: VueWrapper): boolean => panel.element.querySelector('.activity') !== null;
 
 const updatedFrame = (ref: { channel: string; turn_id: number }): WsPushEvent =>
   ({ status: 'updated', turn_id: ref.turn_id, channel: ref.channel }) as unknown as WsPushEvent;

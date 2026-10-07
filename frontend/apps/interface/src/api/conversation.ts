@@ -43,6 +43,8 @@ export interface ConversationMessage {
   timestamp: string;
   /** User-local calendar day `YYYY-MM-DD`, supplied by the backend for divider grouping. */
   day: string;
+  /** The row's creation time, ISO-8601 UTC with its offset — lets the chat time one exchange from its user row to its reply row. */
+  created_at: string;
   /**
    * The turn this row belongs to — a turn (thread) is many rows (input → steps →
    * synthesis → replies) sharing one `turn_id`; the feed groups by this. Null for

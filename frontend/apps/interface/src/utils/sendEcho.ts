@@ -129,6 +129,9 @@ export function mountSendEcho(
     // never day-grouped — it carries no `data-day`, so syncDaymarks skips it —
     // and the real row arrives stamped moments later.
     day: '',
+    // The client's send instant — the row's real created_at arrives with the
+    // refetch that replaces this echo.
+    created_at: new Date().toISOString(),
     turn_id: null,
     attachments: echoAttachments(files),
   };
