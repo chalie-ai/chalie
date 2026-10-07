@@ -118,12 +118,12 @@ _PAGE = (
     background:var(--bg);color:var(--text);
     font:15px/1.55 'Instrument Sans Variable',system-ui,-apple-system,sans-serif}
   main{text-align:center;padding:2rem}
-  .dot{width:18px;height:18px;margin:0 auto 1.5rem;
+  .dot{width:16px;height:16px;margin:0 auto 1.5rem;
     background:var(--pink);animation:working 1.4s ease-in-out infinite}
   @keyframes working{50%{opacity:.3}}
   @media (prefers-reduced-motion:reduce){.dot{animation:none}}
   h1{font-family:'Epilogue Variable',system-ui,sans-serif;
-    font-size:1.35rem;margin:0 0 .5rem;font-weight:800;letter-spacing:-.02em}
+    font-size:1.25rem;margin:0 0 .5rem;font-weight:800;letter-spacing:-.02em}
   p{margin:0 auto;color:var(--muted);max-width:34ch}
 </style>
 </head>
@@ -150,7 +150,7 @@ _PAGE = (
 
 
 # Same tokens as _PAGE, no pulse and no poll — this state is terminal. The detail
-# sits in a status panel: surface ground, 1px border in the deny colour.
+# sits in a status panel: surface ground, text in the deny colour.
 # %s is the escaped detail (what is missing).
 _FAIL_PAGE = (
     """<!doctype html>
@@ -163,9 +163,9 @@ _FAIL_PAGE = (
   """
     + _FONTS
     + """
-  :root{--bg:#0E0B10;--surface:#1B1620;--text:#F5F0F7;--muted:#A79FAF;--deny:#FF6B5E}
+  :root{--bg:#0E0B10;--surface:#1B1620;--text:#F5F0F7;--muted:#A79FAF;--deny-text:#FF6B5E}
   @media (prefers-color-scheme:light){
-    :root{--bg:#F5F0F7;--surface:#FFFFFF;--text:#0E0B10;--muted:#5B5363}
+    :root{--bg:#F5F0F7;--surface:#FFFFFF;--text:#0E0B10;--muted:#5B5363;--deny-text:#B83226}
   }
   html,body{height:100%%;margin:0}
   body{display:flex;align-items:center;justify-content:center;
@@ -173,10 +173,10 @@ _FAIL_PAGE = (
     font:15px/1.55 'Instrument Sans Variable',system-ui,-apple-system,sans-serif}
   main{text-align:center;padding:2rem;max-width:52ch}
   h1{font-family:'Epilogue Variable',system-ui,sans-serif;
-    font-size:1.35rem;margin:0 0 .75rem;font-weight:800;letter-spacing:-.02em}
-  code{display:block;margin:0 0 .75rem;padding:.6rem .8rem;
-    background:var(--surface);border:1px solid var(--deny);
-    font:14px/1.5 'JetBrains Mono Variable',ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:1.25rem;margin:0 0 .75rem;font-weight:800;letter-spacing:-.02em}
+  code{display:block;margin:0 0 .75rem;padding:8px 16px;
+    background:var(--surface);color:var(--deny-text);
+    font:12px/1.5 'JetBrains Mono Variable',ui-monospace,SFMono-Regular,Menlo,monospace;
     word-break:break-word;text-align:left}
   p{margin:0;color:var(--muted)}
 </style>

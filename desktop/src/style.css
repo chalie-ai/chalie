@@ -9,7 +9,7 @@
 }
 
 h1 {
-  font-size: 1.35rem;
+  font-size: var(--fs-title);
   margin: 0 0 var(--space-xs);
 }
 
@@ -31,7 +31,7 @@ fieldset {
 
 input {
   width: 100%;
-  padding: var(--space-sm);
+  padding: 0 var(--space-sm);
 }
 
 .choices {
@@ -68,11 +68,10 @@ input {
   margin: 0 0 var(--space-md);
   padding: var(--space-sm) var(--space-md);
   background: var(--surface);
-  border: 1px solid var(--line);
 }
 
 .message.error {
-  border-color: var(--deny);
+  color: var(--deny-text);
 }
 
 .message small {
@@ -86,7 +85,7 @@ input {
   overflow-y: auto;
   margin-bottom: var(--space-md);
   padding: var(--space-sm) var(--space-md);
-  border: 1px solid var(--line);
+  background: var(--surface);
   font-family: var(--font-mono);
   font-size: var(--fs-mono);
   white-space: pre-wrap;
