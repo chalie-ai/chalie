@@ -11,7 +11,8 @@
  * the ask and a ticking "· waiting for you · Ns" note follows it — aged from
  * the server's `asked_at` stamp, so it survives a reload. When the exchange
  * settles its work moves into the answer's footer (BubbleFooter) below, so
- * no line stands above a settled answer.
+ * no line stands above a settled answer. A parked ask is answered on the
+ * line itself (Deny/Allow).
  */
 import { computed, onUnmounted, ref, watch } from 'vue';
 import { Bot } from '@lucide/vue';
@@ -20,7 +21,8 @@ import { readDomContext } from '../../utils/domContext';
 import { lastUserText } from '../../utils/turnDom';
 import type { LiveToolPill } from '../../utils/liveActTrail';
 import { useSessionStore } from '../../stores/session';
-import type { PermissionRequest } from '../../stores/permissions';
+import { usePermissionsStore, type PermissionRequest } from '../../stores/permissions';
+import { actionLabel, waitedSeconds } from '../../utils/permissionAsk';
 import { delegatePillAttrs } from '../../composables/useDelegatePill';
 import StepList from './StepList.vue';
 
@@ -41,6 +43,7 @@ const props = withDefaults(
 );
 
 const session = useSessionStore();
+const permissions = usePermissionsStore();
 const rootRef = ref<HTMLElement | null>(null);
 const expanded = ref(false);
 
@@ -82,6 +85,21 @@ watch(
 
 onUnmounted(stopClock);
 
+// While this line shows an ask, the input dock leaves it out of its off-screen list.
+watch(
+  () => props.ask?.request_id,
+  (requestId, prevId) => {
+    if (prevId) permissions.unmarkShown(prevId);
+    if (requestId) permissions.markShown(requestId);
+  },
+  { immediate: true },
+);
+
+onUnmounted(() => {
+  const id = props.ask?.request_id;
+  if (id) permissions.unmarkShown(id);
+});
+
 function pillSeconds(pill: LiveToolPill): string {
   const ms = pill.resolved
     ? Math.max(0, pill.ms ?? 0)
@@ -93,21 +111,12 @@ function pillSeconds(pill: LiveToolPill): string {
 // on a gate; otherwise the last unresolved pill's summary (or name) + its
 // whole elapsed seconds; before the first pill lands, the bare "Thinking…".
 const liveLabel = computed(() => {
-  if (props.ask) return props.ask.summary || props.ask.action_id;
+  if (props.ask) return props.ask.summary || actionLabel(props.ask.action_id);
   const pill = lastUnresolvedPill.value;
   if (!pill) return 'Thinking…';
   const base = pill.summary || pill.name;
   const seconds = Math.max(0, Math.floor((now.value - pill.startedAt) / 1000));
   return `${base} · ${seconds}s`;
-});
-
-// Whole seconds since the ask parked — 0 when the stamp is unparseable or in
-// the future (a clock skew); the server stamp is what makes it survive a
-// reload.
-const askSeconds = computed(() => {
-  if (!props.ask) return 0;
-  const parked = Date.parse(props.ask.asked_at);
-  return Number.isNaN(parked) ? 0 : Math.max(0, Math.floor((now.value - parked) / 1000));
 });
 
 // ── Stop ─────────────────────────────────────────────────────────────────────
@@ -135,19 +144,36 @@ async function onStop(): Promise<void> {
     >
       <span class="activity__mark" />
       <span class="activity__label">{{ liveLabel }}</span>
-      <!-- Inherits the toggle's muted colour — only .activity__label is
-           text-coloured, so no style of its own. -->
-      <span v-if="ask" class="activity__wait">· waiting for you · {{ askSeconds }}s</span>
+      <span v-if="ask" class="activity__wait">· waiting for you · {{ waitedSeconds(ask.asked_at, now) }}s</span>
       <span class="activity__chev" aria-hidden="true">›</span>
     </button>
 
-    <button
-      class="activity__stop"
-      :aria-label="undoable ? 'Stop and undo' : 'Stop subagent'"
-      :title="undoable ? 'Stop & undo' : 'Stop subagent'"
-      type="button"
-      @click="onStop"
-    >Stop</button>
+    <span class="activity__controls">
+      <template v-if="ask">
+        <span v-if="ask.summary" class="activity__ask">{{ actionLabel(ask.action_id) }}</span>
+        <button
+          type="button"
+          class="activity__answer activity__answer--deny"
+          @click="permissions.respond(ask.request_id, false)"
+        >
+          Deny
+        </button>
+        <button
+          type="button"
+          class="activity__answer activity__answer--allow"
+          @click="permissions.respond(ask.request_id, true)"
+        >
+          Allow
+        </button>
+      </template>
+      <button
+        class="activity__stop"
+        :aria-label="undoable ? 'Stop and undo' : 'Stop subagent'"
+        :title="undoable ? 'Stop & undo' : 'Stop subagent'"
+        type="button"
+        @click="onStop"
+      >Stop</button>
+    </span>
 
     <!-- inert while folded: a delegate call row is a button, and the fold only
          collapses its height, so it would stay reachable by Tab unseen. -->

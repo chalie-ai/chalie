@@ -27,6 +27,7 @@ import { lsGet, lsSet } from '../../utils/storage';
 import { system } from '../../api';
 import ImageAttachStrip from '../upload/ImageAttachStrip.vue';
 import QueuedMessages from '../conversation/QueuedMessages.vue';
+import OffScreenAsks from './OffScreenAsks.vue';
 import { Plus, Mic, Send, X, AlertTriangle, ChevronDown } from '@lucide/vue';
 
 /**
@@ -298,6 +299,9 @@ onBeforeUnmount(() => {
         <X :size="16" />
       </button>
     </div>
+
+    <!-- Pending asks no live line on screen shows; active dock only, like the attach strip. -->
+    <OffScreenAsks v-if="isActiveDock" />
 
     <!-- Attachments are a shared store; render the pending strip only in the
          active dock so the footer and an open thread don't show duplicates. -->

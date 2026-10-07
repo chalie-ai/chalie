@@ -54,16 +54,15 @@ describe('enqueue', () => {
     ]);
   });
 
-  it('a frame without an origin (or a malformed one) queues with origin null — routed to the spine, never a guessed turn', () => {
+  it('drops a frame without an origin (or a malformed one) loudly — never a guessed turn', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     const store = usePermissionsStore();
     store.enqueue({ type: 'permission_request', request_id: 'a', action_id: 'search' });
     store.enqueue({ type: 'permission_request', request_id: 'b', action_id: 'search', origin: { type: 'user' } });
     store.enqueue({ type: 'permission_request', request_id: 'c', action_id: 'search', origin: 'nope' });
-    expect(store.queue.map((r) => [r.request_id, r.origin, r.summary])).toEqual([
-      ['a', null, ''],
-      ['b', null, ''],
-      ['c', null, ''],
-    ]);
+    expect(store.queue).toEqual([]);
+    expect(error).toHaveBeenCalledTimes(3);
+    error.mockRestore();
   });
 
   it('drops a frame missing request_id or action_id', () => {

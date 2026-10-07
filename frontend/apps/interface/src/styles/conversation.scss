@@ -319,6 +319,30 @@
   color: var(--text);
 }
 
+// The line wraps as two whole units on a narrow screen: the lead, whose label
+// ellipsizes, and the controls, whose action label ellipsizes.
+.activity__toggle,
+.activity__lead,
+.activity__controls {
+  min-width: 0;
+}
+
+.activity__lead,
+.activity__controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.activity__mark,
+.activity__origin,
+.activity__wait,
+.activity__chev,
+.activity__controls > button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
 .activity__fail {
   color: var(--deny-text);
 }
@@ -338,6 +362,49 @@
 
 .activity__stop:hover {
   color: var(--deny-text);
+}
+
+.activity__ask {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.activity__answer {
+  min-height: var(--control-h);
+  padding: 0 var(--space-sm);
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-1) var(--ease-out),
+    color var(--dur-1) var(--ease-out),
+    translate var(--dur-1) var(--ease-out);
+
+  &:active {
+    translate: 0 1px;
+  }
+
+  &--allow {
+    background: var(--allow);
+    color: var(--on-pink);
+
+    &:hover {
+      background: var(--text);
+      color: var(--bg);
+    }
+  }
+
+  &--deny {
+    background: var(--surface-2);
+    color: var(--text);
+
+    &:hover {
+      background: var(--cell);
+    }
+  }
 }
 
 .activity .trace-body {
@@ -396,6 +463,23 @@
 
 .activity__pill--error {
   color: var(--deny-text);
+}
+
+// Off-screen asks in the dock: the live line's muted mono type, at the composer's width.
+.offscreen-asks {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  max-width: var(--dock-width);
+  margin: 0 auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+  color: var(--muted);
+}
+
+.offscreen-asks:not(:empty) {
+  padding: 0 4px 10px;
 }
 
 // Tool-call rows (ToolCallList) — plain borderless lines, one per call:

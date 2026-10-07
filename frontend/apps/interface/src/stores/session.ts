@@ -154,7 +154,7 @@ export const useSessionStore = defineStore('session', {
         // Pending permission gates outlive the socket (the backend thread keeps
         // waiting; the WS frame was only the visual trigger) — re-read them on
         // every connect, first load and reconnect alike, so a reload or a drop
-        // brings the cards back instead of parking the turn for ever.
+        // brings the asks back instead of parking the turn for ever.
         void usePermissionsStore().refreshPending();
         // An open delegate panel froze with the socket and lost its live pills
         // on disconnect, and only a frame for its turn would re-read it.

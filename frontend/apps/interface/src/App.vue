@@ -10,7 +10,6 @@ import ThreadPanel from './components/conversation/ThreadPanel.vue';
 import SearchOverlay from './components/overlays/SearchOverlay.vue';
 import InputDock from './components/layout/InputDock.vue';
 import LoadingOverlay from './components/layout/LoadingOverlay.vue';
-import PermissionStack from './components/overlays/PermissionStack.vue';
 import TaskDrawer from './components/overlays/TaskDrawer.vue';
 import SchedulerDock from './components/overlays/SchedulerDock.vue';
 import VoicePlayerDialog from './components/voice/VoicePlayerDialog.vue';
@@ -88,13 +87,11 @@ onBeforeUnmount(() => {
   <!-- Thread search overlay — Cmd/Ctrl-K or the top-bar search button. -->
   <SearchOverlay />
 
-  <!-- Teleport targets for dialogs / permission cards -->
-  <div id="permStack" class="permission-stack"></div>
+  <!-- Teleport target for dialogs -->
   <div id="overlayRoot"></div>
 
-  <!-- PermissionStack teleports into #permStack; the rest self-render and
+  <!-- TaskDrawer, SchedulerDock and VoicePlayerDialog self-render and
        self-subscribe to bus events. -->
-  <PermissionStack />
   <TaskDrawer />
   <SchedulerDock />
   <VoicePlayerDialog />

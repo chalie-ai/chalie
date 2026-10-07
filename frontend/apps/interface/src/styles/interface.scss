@@ -28,35 +28,6 @@ body {
 // Voice-button visibility is driven by a reactive flag on the input dock, not a
 // `body.voice-loading` class, so the legacy body-class CSS rule is not ported.
 
-// Permission Stack — outer container fixed-positioning only; PermissionStack.vue
-// teleports cards inside and lays out the inner wrapper (.perm-stack-inner).
-.permission-stack {
-  position: fixed;
-  bottom: calc(var(--dock-height) + var(--space-md));
-  left: 50%;
-  transform: translateX(-50%);
-  width: min(480px, calc(100vw - var(--space-lg) * 2));
-  pointer-events: none;
-  z-index: 200;
-}
-
-// The thread panel's own lane — same container, but in flow above the panel's
-// dock (ThreadPanel.vue renders it) instead of fixed over the spine.
-.permission-stack--panel {
-  position: static;
-  transform: none;
-  width: 100%;
-  max-width: var(--dock-width);
-  align-self: center;
-  margin: 0 auto;
-  padding: 0 var(--space-lg);
-  z-index: auto;
-}
-
-.permission-stack--panel .perm-stack-inner:not(:empty) {
-  padding-bottom: var(--space-sm);
-}
-
 .presence-bar {
   position: fixed;
   top: 0;
