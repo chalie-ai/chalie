@@ -1,18 +1,13 @@
-@use 'tokens';
-@use 'reset';
+@use 'afterhours';
 
 /* ── Composable utilities (token-backed, theme-agnostic) ───────────────────
-   Vue templates bind classes; TS adds/removes classes; SCSS is the only home
-   of values. Colours resolve via the per-theme tokens in _tokens.scss. */
-.text-error     { color: var(--error); }
-.text-secondary { color: var(--text-secondary); }
-.text-tertiary  { color: var(--text-tertiary); }
-.text-xs        { font-size: var(--font-size-xs); }
+   Vue templates bind classes; TS adds/removes classes; styles are the only home
+   of values. Colours resolve via the per-theme tokens in afterhours.css. */
+.text-error     { color: var(--deny-text); }
 .clickable      { cursor: pointer; }
 
 /* Spacing utilities — only the steps actually consumed; the full scale lives
    in the --space-* tokens. Ad-hoc nudges snap to the nearest step. */
-.mt-sm { margin-top:    var(--space-sm); }
 .mt-lg { margin-top:    var(--space-lg); }
 .mb-lg { margin-bottom: var(--space-lg); }
 
@@ -21,7 +16,7 @@
 
 /* ── Layout primitives ─────────────────────────────────────────────────── */
 .page-container {
-  max-width: var(--page-max-width);
+  max-width: 640px;
   margin-inline: auto;
   margin-block: var(--space-lg);
   padding-inline: var(--space-md);

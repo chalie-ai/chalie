@@ -1,5 +1,5 @@
 <!-- Pending (queued) sends for one scope, floating just above that scope's
-     composer as blurred rounded chips — a clear "waiting to send" affordance.
+     composer as chips — a clear "waiting to send" affordance.
      Each chip clicks back into the composer for editing; its x removes it.
      The chips live inside the InputDock, so the scope is the dock's turn_id and
      dispatch is the session store's job. -->
@@ -82,7 +82,7 @@ function toggleExpanded(i: number, event: MouseEvent): void {
         aria-label="Remove queued message"
         @click="remove(i)"
       >
-        <X :size="13" />
+        <X :size="16" />
       </button>
       <div
         class="pending__chip"
@@ -134,52 +134,43 @@ function toggleExpanded(i: number, event: MouseEvent): void {
   flex-shrink: 0;
   display: grid;
   place-items: center;
-  width: 20px;
-  height: 20px;
+  width: var(--control-h);
+  height: var(--control-h);
   padding: 0;
-  border: none;
-  border-radius: 50%;
   background: none;
-  color: var(--text-tertiary);
+  color: var(--muted);
   cursor: pointer;
   transition:
-    color var(--duration-fast) ease,
-    background var(--duration-fast) ease;
+    color var(--dur-1) var(--ease-out),
+    background var(--dur-1) var(--ease-out);
 }
 
 .pending__remove:hover {
-  color: var(--error);
-  background: var(--border);
+  color: var(--text);
+  background: var(--surface-2);
 }
 
-// The floating chip: a translucent, blurred rounded box that hugs its text so a
-// queued message reads as "pending" against the conversation behind it.
+// The chip hugs its text so a queued message reads as "pending" against the
+// conversation behind it.
 .pending__chip {
   min-width: 0;
   max-width: 100%;
   padding: 7px 14px;
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  background: color-mix(in oklab, var(--bg-surface-2) 62%, transparent);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  background: var(--surface-2);
   text-align: left;
   cursor: pointer;
-  transition:
-    border-color var(--duration-fast) ease,
-    background var(--duration-fast) ease;
+  transition: background var(--dur-1) var(--ease-out);
 }
 
 .pending__chip:hover {
-  border-color: var(--border-strong);
-  background: color-mix(in oklab, var(--bg-surface-2) 78%, transparent);
+  background: var(--cell);
 }
 
 .pending__text {
   display: block;
-  font-size: 0.875rem;
+  font-size: var(--fs-body);
   line-height: 1.45;
-  color: var(--text-secondary);
+  color: var(--muted);
   white-space: pre-wrap;
   overflow-wrap: break-word;
 }
@@ -192,23 +183,22 @@ function toggleExpanded(i: number, event: MouseEvent): void {
 }
 
 .pending__chip:hover .pending__text {
-  color: var(--text-primary);
+  color: var(--text);
 }
 
 .pending__toggle {
   display: inline-block;
   margin-top: 2px;
   padding: 0;
-  border: none;
   background: none;
-  font-size: 0.8125rem;
+  font-size: var(--fs-body);
   font-weight: 500;
-  color: var(--text-tertiary);
+  color: var(--muted);
   cursor: pointer;
-  transition: color var(--duration-fast) ease;
+  transition: color var(--dur-1) var(--ease-out);
 }
 
 .pending__toggle:hover {
-  color: var(--accent-primary);
+  color: var(--text);
 }
 </style>

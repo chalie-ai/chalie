@@ -22,7 +22,9 @@ on lands here:
   a service (SQL only in Model/Query), every external effect (WS emit) fires from
   those services, and this controller never emits WS itself. The terminal-state
   frame and (on a crash) the user-facing crash toast are both broadcast by
-  :meth:`TurnExecutionService.finish`, not from here.
+  :meth:`TurnExecutionService.finish`, not from here; this controller only
+  holds back the frames pushed inside one of its own transactions until that
+  transaction commits.
 
 **The process/begin/_step contract (Dylan's ruling, §4.3):**
 
@@ -44,10 +46,13 @@ becomes the override, ``auto``/NULL leaves it unset so the deliberation gate
 decides normally.
 
 ``_step()`` is the **recursive** step loop: send → (compact-and-continue on
-over-cap) → store any prose → dispatch tool calls → recurse; it bottoms out when
-the model returns a turn with no tool calls. The first ``_step()`` is isolated onto
-the daemon thread by ``begin()``; every recursive call is synchronous within that
-thread. Synchronous text-consumers (delegate abilities, mcp_server, the
+over-cap) → store the call's own assistant row → dispatch tool calls → take in
+any message joined meanwhile → recurse; it bottoms out when the model returns a
+call with no tool calls. ``_settle()`` then stores that call's row and, in the
+same transaction, either ends the turn — the only row stored settled — or, when
+a message joined while the call was in flight, takes it in and steps again. The
+loop runs on the daemon thread ``begin()`` starts; every recursive call is
+synchronous within that thread. Synchronous text-consumers (delegate abilities, mcp_server, the
 user-synthesis generator) call ``process()`` then ``result()`` to join the
 thread and read the final text.
 """
@@ -58,11 +63,13 @@ import json
 import logging
 import re
 from collections import Counter
-from threading import Thread
+from collections.abc import Iterator
+from contextlib import contextmanager
+from threading import Thread, get_ident
 from typing import TYPE_CHECKING, Protocol, cast
 
 from configs.channels.user import UserConfig
-from configs.enums.channels import Channel
+from configs.enums.channels import WATCHABLE_DELEGATE_CHANNELS, Channel
 from configs.enums.provider_type import ProviderType
 from configs.enums.thinking_level import ThinkingLevel
 from exceptions import (
@@ -203,6 +210,17 @@ class MessageProcessor:
         # legitimately outgrow the window more than once as tools add output.
         self._context_limit_hits: int = 0
 
+        # Messages joined into this turn while it works. The loop takes them in
+        # only once a provider call and all its tools have returned: everything
+        # up to ``_consumed_through`` has been handed to the model, each batch
+        # filed under the assistant row it followed (the act trail renders it
+        # there, in the order the model saw it rather than the order it arrived).
+        self._consumed_through: int = 0
+        self.consumed_joins: dict[int, list[Transcript]] = {}
+        # Frames pushed by one thread while it holds an ``_atomic`` block, sent
+        # only once that block commits.
+        self._held: tuple[int, list[JsonSerializable | None]] | None = None
+
         # Infrastructure handles.
         self.db = Database()
 
@@ -221,16 +239,53 @@ class MessageProcessor:
     # ── websocket ────────────────────────────────────────────────────────────────
 
     def push_websocket(self, instance: "JsonSerializable | None") -> None:
-        """Emit ``instance`` to the frontend, gated by this turn's config — the one
-        pre-flight every spine service shares, so no emit site re-inlines it. A
-        turn broadcasts only when its config opts in (``BROADCASTS_STATE`` — the
-        ``user`` and ``scheduled`` types) AND carries an addressable routing type;
-        an internal channel (``type_value() is None``) never reaches the wire. Past
-        the gate this is a thin pass to ``Websocket.broadcast`` (itself a no-op on
-        ``None`` and when nobody is listening)."""
-        if not self.config.BROADCASTS_STATE or self.config.type_value() is None:
+        """Emit ``instance`` to the frontend, gated by this turn's channel and
+        config — the one pre-flight every spine service shares, so no emit site
+        re-inlines it (see :meth:`broadcast_as`). Inside :meth:`_atomic` the
+        frame is held until the writes it announces commit."""
+        held = self._held
+        if held is not None and held[0] == get_ident():
+            held[1].append(instance)
             return
-        Websocket.broadcast(instance)
+        self.broadcast_as(instance, self.channel, self.config)
+
+    @staticmethod
+    def broadcast_as(
+        instance: "JsonSerializable | None", channel: str, config: "ProcessorConfig | None",
+    ) -> None:
+        """Emit ``instance`` the way a turn on ``channel`` driven by ``config``
+        does — the one place that decides it, shared by :meth:`push_websocket`
+        and a cancel addressed to a turn this process does not hold (which knows
+        only the row's channel and the config its type resolves to, if any).
+
+        A watchable delegate turn (``WATCHABLE_DELEGATE_CHANNELS``) broadcasts
+        addressed by its channel, so a surface following it can stream it live.
+        Any other turn broadcasts only when its config opts in
+        (``BROADCASTS_STATE`` — the ``user`` and ``scheduled`` types) AND carries
+        an addressable routing type; an internal channel (no config, or
+        ``type_value() is None``) never reaches the wire. Past the gate this is
+        a thin pass to ``Websocket.broadcast`` (itself a no-op on ``None`` and
+        when nobody is listening)."""
+        if channel in WATCHABLE_DELEGATE_CHANNELS:
+            Websocket.broadcast(instance, channel=channel)
+        elif config is not None and config.BROADCASTS_STATE and config.type_value() is not None:
+            Websocket.broadcast(instance)
+
+    @contextmanager
+    def _atomic(self) -> Iterator[None]:
+        """One ``BEGIN IMMEDIATE`` transaction whose frames reach the wire only
+        after it commits: a surface told to refetch mid-transaction would read
+        the state from before it. A rollback drops them with the writes they
+        announced."""
+        frames: list[JsonSerializable | None] = []
+        self._held = (get_ident(), frames)
+        try:
+            with self.db.transaction():
+                yield
+        finally:
+            self._held = None
+        for frame in frames:
+            self.broadcast_as(frame, self.channel, self.config)
 
     # ── entrypoint ─────────────────────────────────────────────────────────────
 
@@ -291,6 +346,8 @@ class MessageProcessor:
                 raise ValueError("Invalid turn_id specified")
             self.uid = self._open_input_row()
             self.current_transcript_id = self.uid
+            if self.uid is not None:
+                self._consumed_through = self.uid
         self._land_attachments()
         self.turn_execution_service.open()
         self.metadata["turn_id"] = self.turn_id
@@ -304,8 +361,28 @@ class MessageProcessor:
             return None
         raw_level = self.metadata.get("thinking_level")
         return self.transcript_service.append_input(
-            self.raw_input, thinking_level=raw_level if isinstance(raw_level, str) else None,
+            self.raw_input,
+            thinking_level=raw_level if isinstance(raw_level, str) else None,
+            tool_call_id=cast("int | None", self.metadata.get("tool_call_id")),
         )
+
+    def join(self, text: str, *, spine_only: bool) -> TurnExecution | None:
+        """Send ``text`` into this thread's turn while it is still working,
+        instead of starting another: the message is written as a joined input
+        row and the running loop takes it in at its next boundary. Returns the
+        execution it joined, or ``None`` when there is nothing to join — no
+        execution working (or one already asked to stop), or, with
+        ``spine_only``, the one working is a reply rather than the thread's
+        own first exchange. The check and the write share one ``BEGIN
+        IMMEDIATE`` transaction with the loop's settle and with cancel, so the
+        row lands either before the turn ends — and the loop answers it — or
+        not at all. Built on an inert instance: no turn is driven here."""
+        with self._atomic():
+            execution = TurnExecution.joinable(self.channel, self.turn_id, spine_only=spine_only)
+            if execution is None:
+                return None
+            self.transcript_service.append_input(text, joined=True)
+        return execution
 
     def result(self) -> str:
         """Join the drive thread and return the turn's final text — the
@@ -318,34 +395,53 @@ class MessageProcessor:
     # ── the drive thread ───────────────────────────────────────────────────────
 
     def _drive(self) -> None:
-        """The daemon-thread body: run setup + the recursive step loop, then
-        stamp the terminal execution state. This is the ONLY place a turn's
-        terminal state is written — COMPLETED on a clean return, CANCELLED on a
-        mid-turn stop, CRASHED (with the reason) on any other exception. The WS
-        lifecycle frame for that terminal state — and, for CRASHED, the
-        user-facing crash toast — both fire inside ``finish`` (Rule 7)."""
+        """The daemon-thread body: run setup + the recursive step loop until a
+        call settles the turn, then run the post-turn work. This is the ONLY
+        path that writes a turn's terminal state — COMPLETED through
+        :meth:`_settle`, in the same transaction as the turn's terminal row,
+        CANCELLED on a mid-turn stop, CRASHED (with the reason) on any other
+        exception. The WS lifecycle frame for that terminal state — and, for
+        CRASHED, the user-facing crash toast — both fire inside ``finish``
+        (Rule 7). A call that would have ended the turn while a joined message
+        waits does not settle it: the loop steps again with that message in
+        view. Only a COMPLETED turn then runs its post-turn work and is
+        offered to the memory step, and only once its execution row is
+        closed: the step is a background turn of its own on this channel, so
+        it can never open beside a live loop or a row still marked working,
+        and this thread never waits on it."""
         try:
             self._setup()
-            self._result_text = self._step()
-            self.turn_execution_service.finish(TurnExecution.COMPLETED)
+            response = self._step()
+            while not self._settle(response):
+                response = self._step()
         except _TurnCancelled:
             self.turn_execution_service.finish(TurnExecution.CANCELLED)
+            return
         except Exception as exc:  # noqa: BLE001 — the drive thread is the last line of defence
             logger.exception("[MessageProcessor] turn %s crashed", self.turn_id)
             self.crash_exception = exc
             self.turn_execution_service.finish(TurnExecution.CRASHED, str(exc))
+            return
+        self._post_turn(response.text)
+        self._offer_memory_step()
 
-    def _step(self) -> str:
-        """One provider step, recursing until the model stops calling tools.
+    def _step(self) -> "ProviderResponse":
+        """One provider step, recursing until the model stops calling tools,
+        and returning that last call's response for :meth:`_settle` to store.
 
         Send → on ``ContextLimit``, compact and continue (re-enter with the
         transcript reviewer armed; a payload that will not shrink is let out
         after ``_CONTEXT_LIMIT_RECOVERY_LIMIT`` attempts rather than spun on)
-        → store any prose the model emitted → if it made no tool
-        calls the turn is done (end); otherwise dispatch the calls and recurse.
-        A cancel observed at the top of any step aborts the whole turn. Every
-        provider client is a single blocking, non-streaming call (§ llm_clients/*)
-        with no mid-flight abort hook, so a cancel requested while that call is
+        → if the call made no tool calls, return it unstored; otherwise store
+        its own assistant row with settled=0 — empty when the call carried no
+        prose — so the call's tool calls and thinking trace anchor to it,
+        dispatch the calls, take in any message joined meanwhile, and recurse.
+        A retried send and the empty-completion steer write no row and take
+        nothing in: a joined message is consumed only once a call and all its
+        tools have returned. A cancel observed at
+        the top of any step aborts the whole turn. Every provider client is a
+        single blocking, non-streaming call (§ llm_clients/*) with no
+        mid-flight abort hook, so a cancel requested while that call is
         in flight can only be observed once it returns — the checkpoint right
         after it, BEFORE the response is stored, is what makes that observation
         count: without it a cancel that lands mid-generation is silently
@@ -394,16 +490,55 @@ class MessageProcessor:
                 )
                 self._empty_completion_steer = True
                 return self._step()
-            formatted = self._store(response.text)
-            self._capture_thinking_trace(response)
-            self._end(response.text)
-            return formatted
+            return response
         self._guard_runaway(response.text, tool_calls)
-        if response.text:
-            self._store(response.text)
+        self._store(response.text, settled=False)
         self._capture_thinking_trace(response)
         self._dispatch_tools(tool_calls)
+        self._consume_joined()
         return self._step()
+
+    def _settle(self, response: "ProviderResponse") -> bool:
+        """Store the row of a call that made no tool calls and decide, in one
+        ``BEGIN IMMEDIATE`` transaction shared with :meth:`join` and with
+        cancel, whether it ends the turn. No joined message waiting: the row
+        is stored settled and the execution closes COMPLETED, together, so a
+        message can never join a turn that has already answered for the last
+        time. One waiting: the row is stored settled=0, the message is taken
+        in, and the caller steps again. Frames for these writes go out only
+        after the commit; a cancel that landed first aborts before anything is
+        written. Returns whether the turn is settled."""
+        with self._atomic():
+            if self.turn_execution_service.should_stop():
+                raise _TurnCancelled()
+            waiting = bool(self.transcript_service.joined_since(self._consumed_through))
+            formatted = self._store(response.text, settled=not waiting)
+            self._capture_thinking_trace(response)
+            if not waiting:
+                closed = self.turn_execution_service.finish(TurnExecution.COMPLETED)
+                if closed is None and self.execution is not None:
+                    # finish() logged and swallowed a failed write: roll the
+                    # terminal row back with it so the crash path closes the
+                    # turn, rather than commit a reply under a row still open.
+                    raise RuntimeError("the turn's execution could not be closed")
+        if waiting:
+            self._consume_joined()
+            return False
+        self._result_text = formatted
+        return True
+
+    def _consume_joined(self) -> None:
+        """Take in every message joined since the last boundary: file it under
+        the assistant row the model just wrote, so the act trail shows it after
+        that row's tool calls — the order the model sees it in."""
+        rows = self.transcript_service.joined_since(self._consumed_through)
+        if not rows:
+            return
+        anchor = self.current_transcript_id
+        if anchor is None:
+            raise RuntimeError(f"turn {self.turn_id}: joined messages arrived with no row to file them under")
+        self.consumed_joins.setdefault(anchor, []).extend(rows)
+        self._consumed_through = cast("int", rows[-1].id)
 
     # ── provider send ──────────────────────────────────────────────────────────
 
@@ -484,26 +619,28 @@ class MessageProcessor:
 
     # ── transcript writes ──────────────────────────────────────────────────────
 
-    def _store(self, text: str) -> str:
+    def _store(self, text: str, *, settled: bool) -> str:
         """Format the model's prose for its channel and, unless the config skips
-        the transcript, append it as this turn's assistant row (which pokes open
-        surfaces itself). Returns the formatted text."""
+        the transcript, append it as this provider call's assistant row (which
+        pokes open surfaces itself) — ``settled`` only for the turn's terminal
+        call. The new row becomes the anchor for everything the call goes on
+        to write. Returns the formatted text."""
         formatted = self._format(text or "")
         if self.config.skip_transcript:
             return formatted
-        self.current_transcript_id = self.transcript_service.append_assistant(formatted)
+        self.current_transcript_id = self.transcript_service.append_assistant(formatted, settled=settled)
         return formatted
 
     def _capture_thinking_trace(self, response: "ProviderResponse") -> None:
         """Persist one ``transcript_thinking`` row when the provider returned a
         non-empty ``thinking_block``. Skips entirely when ``skip_transcript`` is
         set (same gate as ``_store`` — those channels have no transcript anchor).
-        The trace is captured after the cancel checkpoint and after any prose
-        storage for this response, so the anchor is fresh:
+        The trace is captured after the cancel checkpoint and after this
+        response's row is stored, so the anchor is fresh:
         ``current_transcript_id if set else uid`` — exactly the rule
-        ``ToolCallService._transcript_id`` uses. A settled response anchors to
-        its own stored row; a tool-calls-only response (no prose) anchors to the
-        prior anchor, same as its tool calls."""
+        ``ToolCallService._transcript_id`` uses. A stored response anchors to
+        its own row, same as its tool calls; a thinking-only empty completion
+        stores no row and anchors to the turn's current anchor."""
         if self.config.skip_transcript:
             return
         trace = response.thinking_block
@@ -521,8 +658,8 @@ class MessageProcessor:
         TranscriptThinking.insert(transcript_id, trace, duration_ms, tokens)
 
     def _format(self, text: str) -> str:
-        """Render markdown to HTML for surface-broadcasting channels; pass raw
-        text through for background/silent channels (``RENDERS_HTML`` False).
+        """Render markdown to HTML for channels whose reply is rendered as HTML
+        (``RENDERS_HTML``); pass raw text through for every other channel.
         HTML branch is sanitized at the persist-time boundary so both the live
         WS send and the GET/refresh read paths inherit it."""
         if self.config.RENDERS_HTML:
@@ -604,15 +741,6 @@ class MessageProcessor:
 
     # ── turn end ───────────────────────────────────────────────────────────────
 
-    def _end(self, response_text: str) -> str:
-        """The terminal (no-tool) step: run the channel's post-turn work and the
-        episodic check, then return the raw response text. A cancel observed here
-        still aborts before any post-turn side-effect."""
-        if self.turn_execution_service.should_stop():
-            raise _TurnCancelled()
-        self._post_turn(response_text)
-        return response_text
-
     def _post_turn(self, response_text: str) -> None:
         """Dispatch this config's post-turn handler (§4.2), keyed on its stable
         transcript ``role``. The proactive-suggestion handler additionally
@@ -623,10 +751,7 @@ class MessageProcessor:
         nowhere to surface; scheduled self-surfaces in its own thread and the
         scheduler dock, with no user-channel relay, §13.9). Every handler is
         isolated — a failure is logged, never propagated, so post-turn work can
-        never fail an otherwise-complete turn. After the role dispatch, every
-        settle is offered to the memory-step service, which owns the scope/role
-        gates — a separate isolated block so a role-handler failure cannot
-        starve the memory step."""
+        never fail an otherwise-complete turn."""
         role = self.config.role
         try:
             if role == "user" and self.channel == Channel.USER:
@@ -636,18 +761,29 @@ class MessageProcessor:
                 self._disclose_to_human(response_text)
         except Exception as exc:  # noqa: BLE001 — post-turn work must never fail the turn
             logger.warning("[post_turn] %s handler failed (isolated): %s", role, exc)
+
+    def _offer_memory_step(self) -> None:
+        """Offer this completed turn to the memory-step service, which owns
+        the scope and role gates (a memory step never fires for its own
+        settle). Called from ``_drive`` after ``finish`` — never from inside
+        the step recursion — so the step starts only after the turn's final
+        provider call has settled and its execution row is closed. Isolated:
+        a failure is logged, never propagated."""
         try:
             from services.memory_step_service import MemoryStepService  # noqa: PLC0415
             MemoryStepService.instance().on_settle(self)
-        except Exception as exc:  # noqa: BLE001 — post-turn work must never fail the turn
-            logger.warning("[post_turn] memory step trigger failed (isolated): %s", exc)
+        except Exception as exc:  # noqa: BLE001 — the turn is already complete; log, never raise
+            logger.warning("[MessageProcessor] memory step trigger failed (isolated): %s", exc)
 
     def _voice_presynthesis(self) -> None:
-        """Kick background speech pre-synthesis for this turn's settled row on a
-        fire-and-forget daemon thread — the pipeline owns every gate and terminal
-        state, and running it inline would delay the turn-complete frame the
-        frontend waits on (``finish(COMPLETED)`` stamps after post-turn work)."""
-        settle_id = Transcript.settle0(self.channel, self.turn_id)
+        """Kick background speech pre-synthesis for the row this exchange just
+        settled — its terminal row, the current anchor once :meth:`_settle` has
+        stored it. Not the turn's settle0: in a reply that is still the opener's
+        answer. Runs on a fire-and-forget daemon thread — the pipeline owns
+        every gate and terminal state, and running it inline would hold the
+        drive thread, and with it the memory-step offer and any caller waiting
+        in :meth:`result`, for the length of a synthesis."""
+        settle_id = self.current_transcript_id
         if settle_id is None:
             return
         from services.voice_transcript_service import VoiceTranscriptService  # noqa: PLC0415

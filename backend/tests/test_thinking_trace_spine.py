@@ -268,6 +268,13 @@ def test_next_turn_execution_starts_clean(
     assert len(rows) == 1
     assert rows[0].thinking_trace == trace_1
 
+    # A reply into a thread that has no label yet launches the thread-gist
+    # delegate on a daemon thread, whose own provider call would race this
+    # turn's for the scripted responses below. A thread that already carries its
+    # label launches nothing, so this turn is the provider's only caller.
+    from models.thread_gist import ThreadGist
+    ThreadGist(channel=mp_1.channel, turn_id=mp_1.turn_id, gist="first turn").upsert()
+
     # Second turn — fresh MP, new scripted provider.
     trace_2 = "turn two reasoning"
     resp_2 = ProviderResponse(
@@ -281,6 +288,7 @@ def test_next_turn_execution_starts_clean(
     assert mp_2.turn_id is not None
 
     # The first (and only) request of turn 2 must not carry any thinking trace.
+    assert len(provider_2.requests) == 1, "turn 2 must be the provider's only caller"
     req_1 = provider_2.requests[0]
     messages = getattr(req_1, "messages", None)
     assert messages is not None and len(messages) >= 1
@@ -303,10 +311,10 @@ def test_tool_only_step_anchors_trace_with_its_calls(
     chat_provider: sqlite3.Connection,
 ) -> None:
     """Step 1 drives a tool call with EMPTY text (tools-only, no prose): the
-    tool branch skips ``_store``, so no assistant row exists yet and both the
-    tool call and the thinking trace anchor to the user input row
-    (``current_transcript_id or uid``). Direct id-equality against the tool
-    call's own anchor AND against ``mp.uid``."""
+    step still stores its own (empty, unsettled) assistant row BEFORE its tools
+    dispatch, so the tool call and the thinking trace anchor to that row — not
+    to the user input row. Direct id-equality against the tool call's own
+    anchor AND against the stored row's id."""
     trace_1 = "step one reasoning"
     trace_2 = "final settle reasoning"
 
@@ -330,18 +338,25 @@ def test_tool_only_step_anchors_trace_with_its_calls(
 
     thinking_rows = _thinking_rows_by_turn(mp.channel, mp.turn_id)
     tool_calls = _tool_call_rows(mp)
+    assistant_rows = _assistant_rows(mp)
 
     assert len(thinking_rows) == 2, f"expected 2 thinking rows, got {len(thinking_rows)}"
     # The turn-zero automatic memory recall records its own tool_calls row
-    # against the same input anchor — scope to the scripted probe call.
+    # against the user input row — scope to the scripted probe call.
     probe_calls = [c for c in tool_calls if c["tool_name"] == "noop_probe"]
     assert len(probe_calls) == 1, f"expected 1 probe call, got {len(probe_calls)}"
 
-    # The no-prose step's trace and its tool call share the exact same anchor,
-    # and that anchor is the exchange's user input row.
+    # The no-prose step is a row of its own: empty content, not yet settled.
+    assert [r["content"] for r in assistant_rows] == ["", "here is the answer"]
+    assert [r["settled"] for r in assistant_rows] == [0, 1]
+    step_row_id = cast("int", assistant_rows[0]["id"])
+
+    # Its trace and its tool call share that row as their anchor — never the
+    # user input row.
     anchor = cast("int", probe_calls[0]["transcript_id"])
-    assert thinking_rows[0].transcript_id == anchor
-    assert anchor == cast("int", mp.uid)
+    assert anchor == step_row_id
+    assert thinking_rows[0].transcript_id == step_row_id
+    assert anchor != cast("int", mp.uid)
 
 
 # ── Test 5: compaction cutoff suppresses pre-compaction traces in act_trail ──

@@ -47,6 +47,7 @@ class WebSearchConfig(ProcessorConfig):
     """``policy_channel`` is supplied by the caller (inherited from whoever
     invoked the tool) rather than hardcoded."""
 
+    RENDERS_HTML: ClassVar[bool] = True
     uses_delegate_provider: ClassVar[bool] = True
 
     # Pin thinking to LOW (the floor — "no thinking flag" at the provider) so a

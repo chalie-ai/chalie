@@ -19,31 +19,32 @@
  * stable id of its own until a brand-new send's POST resolves one.
  */
 import { defineStore } from 'pinia';
-import type { WsPushEvent } from '@chalie/shared';
+import type { DelegateRef, WsPushEvent } from '@chalie/shared';
 import { AuthError, ConfigType, getWebSocket, useConnectionStore } from '@chalie/shared';
 import { extractText } from '../composables/useMarkup';
-import { getHost } from '../api/index';
 import { conversation as convoApi } from '../api/conversation';
-import { dispatchDrift, registerSessionHooks } from '../utils/driftDispatcher';
+import { dispatchDrift, refetchDelegate, registerSessionHooks } from '../utils/driftDispatcher';
 import { reconcileCancelledTurn } from '../utils/cancelReconcile';
-import { clearLiveTurn } from '../utils/liveActTrail';
+import { clearDelegateFeeds, clearLiveTurn } from '../utils/liveActTrail';
 import { blockSpeechText } from '../utils/speech';
 import { clearSendEcho, mountSendEcho } from '../utils/sendEcho';
 import {
+  getTurnEl,
   isLaneWorking,
   isTurnWorking,
   liveWorkingKeys,
   markThreadLane,
+  resolveScopeContainer,
   setTurnDone,
   setTurnWorking,
   SPINE_LANE_TURN_ID,
   SPINE_LANE_TYPE,
   upsertTurnToSurfaces,
+  workingSpineTurnId,
 } from '../utils/turnDom';
 import { laneKey, useQueueStore } from './queue';
 import { useNotificationsStore } from './notifications';
 import { usePermissionsStore } from './permissions';
-import { useAmbientSensor } from '../composables/useAmbientSensor';
 
 /** Guard: init() must be idempotent (HMR / Vue StrictMode). */
 let _initialized = false;
@@ -60,7 +61,8 @@ export const useSessionStore = defineStore('session', {
      *  `_pendingByTurn` below), because the POST resolves as soon as the
      *  backend allocates the turn_id — execution proceeds in the background,
      *  so there is no ordering guarantee between the POST 200 and the WS
-     *  'working' frame that stamps the DOM. */
+     *  'working' frame that stamps the DOM. A join's turn is already working,
+     *  so its hold ends with its POST. */
     _pendingSends: new Set<string>(),
 
     /** `type:turnId` → laneKey for sends whose POST resolved but whose first
@@ -102,6 +104,10 @@ export const useSessionStore = defineStore('session', {
 
     /** ConfigType of the thread currently open in the panel (default user). */
     panelType: ConfigType.USER as string,
+
+    /** The delegate (subagent) turn watched in the panel, or null.
+     *  Exclusive with `panelThreadId`: the panel shows one or the other. */
+    panelDelegate: null as DelegateRef | null,
 
     /** True while the thread-search overlay is open (Cmd/Ctrl-K or the top-bar
      *  search button). The overlay self-fetches; this is pure open/close state. */
@@ -148,8 +154,12 @@ export const useSessionStore = defineStore('session', {
         // Pending permission gates outlive the socket (the backend thread keeps
         // waiting; the WS frame was only the visual trigger) — re-read them on
         // every connect, first load and reconnect alike, so a reload or a drop
-        // brings the cards back instead of parking the turn for ever.
+        // brings the asks back instead of parking the turn for ever.
         void usePermissionsStore().refreshPending();
+        // An open delegate panel froze with the socket and lost its live pills
+        // on disconnect, and only a frame for its turn would re-read it.
+        const delegate = this.panelDelegate;
+        if (delegate) void refetchDelegate(delegate.turn_id, delegate.channel);
       });
 
       ws.onDisconnect(() => {
@@ -177,6 +187,9 @@ export const useSessionStore = defineStore('session', {
           const turnId = Number(key.slice(idx + 1));
           setTurnWorking(turnId, type, false);
         }
+        // A delegate's terminal frame is lost the same way — drop its pills
+        // and timers now; reconnect re-reads the delegate panel, if open.
+        clearDelegateFeeds();
       });
 
       ws.onDrift((data: WsPushEvent) => {
@@ -252,15 +265,24 @@ export const useSessionStore = defineStore('session', {
      * no turn id at all).
      */
     isSurfaceBusy(threadId: number | null, type: string = ConfigType.USER): boolean {
+      if (this._isLaneHeld(threadId, type)) return true;
+      return threadId == null
+        ? isLaneWorking(SPINE_LANE_TYPE, SPINE_LANE_TURN_ID)
+        : isLaneWorking(type, threadId);
+    },
+
+    /** True while a lane is busy for a reason a join cannot answer: its own
+     *  send's POST is still in flight (no turn to join until it resolves), or
+     *  it was mid-turn when the socket dropped. */
+    _isLaneHeld(threadId: number | null, type: string): boolean {
       if (this._pendingSends.has(laneKey(threadId))) return true;
       // Offline snapshots count as busy: the backend may still be mid-turn
       // behind the dead socket even though the visual markers were cleared —
       // a send now should queue (drained after `_reconcileWorking`), not
       // silently drop the draft on the disconnected transport.
-      if (threadId == null) {
-        return this._offlineSpineWorking || isLaneWorking(SPINE_LANE_TYPE, SPINE_LANE_TURN_ID);
-      }
-      return this._offlineWorking.has(`${type}:${threadId}`) || isLaneWorking(type, threadId);
+      return threadId == null
+        ? this._offlineSpineWorking
+        : this._offlineWorking.has(`${type}:${threadId}`);
     },
 
     /**
@@ -271,8 +293,16 @@ export const useSessionStore = defineStore('session', {
      * a transient, DOM-only echo of the submitted text (`utils/sendEcho.ts`) so
      * the first paint after submit is never empty — cleared the moment real
      * content lands, the dispatch fails (`_onSendFailure`), or the turn is
-     * interrupted (`requestStop`). The busy branch already gets a visible chip
-     * from the queue store, so it gets no echo here.
+     * interrupted (`requestStop`).
+     *
+     * A text sent while its lane's turn is working JOINS that turn — the
+     * backend folds it in once the current call and its tools return. A
+     * thread reply posts to the thread as always; a spine follow-up posts to
+     * the spine's own working turn with `join`, which joins only that turn's
+     * spine work. A join gets no echo: its real row lands with the `updated`
+     * refetch the join triggers. Everything else on a busy lane queues
+     * instead (the queue store shows its chip): files, which a join refuses,
+     * a lane that is held (`_isLaneHeld`), and spine work with no turn to join.
      */
     async sendMessage(
       text: string,
@@ -285,7 +315,12 @@ export const useSessionStore = defineStore('session', {
 
       const body = text || FILE_PLACEHOLDER;
 
-      if (this.isSurfaceBusy(threadId, type)) {
+      const busy = this.isSurfaceBusy(threadId, type);
+      const joinId =
+        busy && !files.length && !this._isLaneHeld(threadId, type)
+          ? (threadId ?? workingSpineTurnId())
+          : null;
+      if (busy && joinId == null) {
         useQueueStore().enqueue(threadId, body, type, files, thinkingLevel);
         return;
       }
@@ -294,19 +329,27 @@ export const useSessionStore = defineStore('session', {
       this._pendingSends.add(key);
       // A reply IS the fork: claim the turn for its thread lane now rather than
       // waiting for the refetch to re-derive it, so the spine never counts this
-      // reply's work as its own during the round-trip in between.
-      if (threadId != null) markThreadLane(threadId, type);
+      // reply's work as its own during the round-trip in between. A join is no
+      // fork — it lands in whatever work the turn is already doing.
+      if (threadId != null && joinId == null) markThreadLane(threadId, type);
       let heldForFrame = false;
       try {
-        mountSendEcho(body, threadId, type, files);
+        const onFailure = (m: string): void => this._onSendFailure(m, threadId, type);
+        if (joinId == null) mountSendEcho(body, threadId, type, files);
         const result = await getWebSocket().send(
-          body, (m) => this._onSendFailure(m, threadId, type), files, threadId, type, thinkingLevel,
+          body,
+          onFailure,
+          files,
+          threadId ?? joinId,
+          type,
+          thinkingLevel,
+          threadId == null && joinId != null,
         );
         // POST resolved with the allocated turn_id but execution runs in the
         // background — keep the busy hold until the dispatcher observes the
         // turn's first `turn_execution` frame (unless one already beat the
-        // POST response here). `null` result = local send failure; nothing
-        // will ever arrive, release now.
+        // POST response here; a join's turn is already working). `null`
+        // result = local send failure; nothing will ever arrive, release now.
         if (result && !isTurnWorking(result.turn_id, result.type)) {
           this._pendingByTurn.set(`${result.type}:${result.turn_id}`, key);
           heldForFrame = true;
@@ -338,13 +381,12 @@ export const useSessionStore = defineStore('session', {
     /** Settle bookkeeping for a completed/crashed/offline-settled turn.
      *  `data-done` itself is already stamped by the caller (D16, see
      *  `driftDispatcher`'s turn_execution branch and `_reconcileWorking`
-     *  above) — this only drains queues, records ambient activity, and fires
-     *  an OS notification for the final reply when the tab is unfocused.
+     *  above) — this only drains queues and fires an OS notification for the
+     *  final reply when the tab is unfocused.
      *  Identical for every type — only the dock the settled thread lives in
      *  differs. */
     async _finishTurn(turnId: number, type: string = ConfigType.USER): Promise<void> {
       this._drainQueues();
-      useAmbientSensor().recordResponse();
 
       if (!document.hasFocus()) {
         // Fetched ONCE, here, for the notification — deliberately NOT read
@@ -376,8 +418,9 @@ export const useSessionStore = defineStore('session', {
     },
 
     /**
-     * Stop + undo the in-flight turn identified by `turnId`. Emits
-     * 'session:turn-interrupted' so InputDock can restore the textarea.
+     * Stop + undo the in-flight turn whose turn_id is `target`. Emits
+     * 'session:turn-interrupted' so InputDock can restore the textarea —
+     * only for a message the cancel removes from the transcript.
      * `type` (default user) names the owning thread's ProcessorConfig —
      * DELETE resolves the channel from it server-side, and turn_id alone is
      * only unique per channel, so a non-user thread's stop must carry its
@@ -388,40 +431,75 @@ export const useSessionStore = defineStore('session', {
      * from. `restoreText` is the exact text to hand back to that dock,
      * likewise read by the caller off the DOM (`data-user-text`, see
      * UserBubble.vue / turnDom's `lastUserText`) before this call.
+     *
+     * A delegate (subagent) turn is addressed by its DelegateRef instead of a
+     * turn_id. It has no type, dock, send echo or lane, and turnDom keeps no
+     * working marker for it, so `type`/`dockScope`/`restoreText` don't apply
+     * and nothing is undone: once the server accepts its DELETE, its stop is
+     * the same live-trail clear and a forced re-read of its post-cancel block
+     * — the read its WS 'cancelled' frame triggers too. Its stop control
+     * renders only while its block is working; a late click gets
+     * `no_active_turn`.
+     *
+     * Nothing changes until the server accepts the stop: a refused or failed
+     * DELETE surfaces in the dock's error banner and leaves the turn running,
+     * its stop control in place for a retry. The DELETE only stamps the turn's
+     * row server-side, so the wait is a single round-trip.
      */
     async requestStop(
-      turnId: number | null = null,
+      target: number | DelegateRef | null = null,
       type: string = ConfigType.USER,
       dockScope: number | null = null,
       restoreText: string = '',
     ): Promise<void> {
-      // D6: confirm turnId is genuinely still in flight (per the DOM's own
+      if (target != null && typeof target === 'object') {
+        if (!(await this._stop(target, type, "Couldn't stop the subagent. Try again."))) return;
+        clearLiveTurn(target.channel, target.turn_id);
+        await refetchDelegate(target.turn_id, target.channel, { force: true });
+        return;
+      }
+
+      // D6: confirm the turn is genuinely still in flight (per the DOM's own
       // data-working marker) before firing the DELETE — a stale/late click
       // could otherwise target an already-settled turn.
-      const stopId = turnId != null && isTurnWorking(turnId, type) ? turnId : null;
+      const stopId = target != null && isTurnWorking(target, type) ? target : null;
+
+      // Hand the text back only when the cancel takes its row out of the
+      // transcript — the turn's trailing user rows nothing has answered or
+      // joined after (TurnView marks them `data-dropped-on-cancel`). A joined
+      // message, or one the turn already answered, stays and must not be
+      // offered for sending a second time. Read off the dock's copy before
+      // the stop is sent: the DELETE fires the WS 'cancelled' frame before it
+      // answers, and that frame's refetch redraws the copy without those
+      // rows. With no copy to read, hand it back as before rather than risk
+      // losing it.
+      const dock = resolveScopeContainer(dockScope, type);
+      const copy = target != null && dock ? getTurnEl(target, type, dock) : null;
+      const handBack = copy == null || copy.querySelector('[data-dropped-on-cancel]') != null;
+
+      if (stopId != null && !(await this._stop(stopId, type, "Couldn't stop and undo. Try again."))) return;
 
       const text = restoreText === FILE_PLACEHOLDER ? '' : restoreText;
 
-      // Optimistic: hide the spinner/live pill trail immediately rather than
-      // waiting on the DELETE round-trip. The CONTENT refetch, however, must
-      // NOT start yet — the backend only strips a cancelled turn's orphan
-      // user row once cancel() has committed, so a fetch racing ahead of the
-      // DELETE can force-upsert stale pre-cancel content that nothing
-      // corrects if the WS 'cancelled' frame is dropped.
+      // The CONTENT refetch runs only after the DELETE: the backend only
+      // strips a cancelled turn's orphan user row once cancel() has
+      // committed, so a fetch racing ahead of it can force-upsert stale
+      // pre-cancel content that nothing corrects if the WS 'cancelled' frame
+      // is dropped.
       if (stopId != null) {
         setTurnWorking(stopId, type, false);
         clearLiveTurn(type, stopId);
       }
 
-      document.dispatchEvent(
-        new CustomEvent('session:turn-interrupted', { detail: { text, turnId: dockScope } }),
-      );
+      if (handBack) {
+        document.dispatchEvent(
+          new CustomEvent('session:turn-interrupted', { detail: { text, turnId: dockScope } }),
+        );
+      }
       // A cancelled/failed dispatch must never leave a ghost echo
       // bubble behind; dockScope is this dock's own scope identity, the same
       // one `sendMessage` mounted the echo under.
       clearSendEcho(dockScope, type);
-
-      await this._postInterrupt(stopId, type);
 
       if (stopId != null) {
         // Post-DELETE, the fetch reads authoritative post-cancel state — and
@@ -432,18 +510,19 @@ export const useSessionStore = defineStore('session', {
       }
     },
 
-    /** DELETE /api/threads/<turn_id>?type=<type> — best-effort interrupt, never throws. */
-    async _postInterrupt(turnId: number | null = null, type: string = ConfigType.USER): Promise<void> {
-      if (turnId == null) return;
+    /** Send the stop's DELETE. True once the server accepted it — a stop or a
+     *  `no_active_turn` ack — which also takes down this stop's own earlier
+     *  failure, so a successful retry leaves no stale banner; on any failure,
+     *  logs it, shows `failure` in the dock's error banner and returns false. */
+    async _stop(target: number | DelegateRef, type: string, failure: string): Promise<boolean> {
       try {
-        const host = getHost();
-        const base = host ? host.replace(/\/$/, '') : '';
-        await fetch(base + '/api/threads/' + turnId + '?type=' + encodeURIComponent(type), {
-          method: 'DELETE',
-          credentials: 'same-origin',
-        });
-      } catch {
-        // Best-effort — swallow.
+        await convoApi.stop(target, type);
+        if (this.errorMessage === failure) this.errorMessage = null;
+        return true;
+      } catch (err) {
+        console.error('[Session] Stop failed:', err);
+        this.errorMessage = failure;
+        return false;
       }
     },
 
@@ -489,14 +568,27 @@ export const useSessionStore = defineStore('session', {
      * its channel explicitly rather than risk an implicit `user` guess.
      */
     openThreadPanel(turnId: number, type: string): void {
+      this.panelDelegate = null;
       this.panelThreadId = turnId;
       this.panelType = type;
       setTurnDone(turnId, type, false);
     },
 
+    /**
+     * Open a delegate (subagent) turn in the slide-over panel to watch (and,
+     * while it runs, stop), replacing whatever it showed. ThreadPanel.vue
+     * watches panelDelegate and owns the fetch; a delegate turn has no type
+     * and no done marker.
+     */
+    openDelegatePanel(ref: DelegateRef): void {
+      this.panelThreadId = null;
+      this.panelDelegate = { channel: ref.channel, turn_id: ref.turn_id };
+    },
+
     /** Close the slide-over panel. */
     closeThreadPanel(): void {
       this.panelThreadId = null;
+      this.panelDelegate = null;
     },
 
     /** Open / close the thread-search overlay. */

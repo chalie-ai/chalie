@@ -1,22 +1,22 @@
 <p align="center">
-  <img src="logo.png" alt="Chalie" width="180">
+  <img src="logo.svg" alt="Chalie" width="120">
 </p>
 
 <h1 align="center">Chalie</h1>
 
 <p align="center">
-  <strong>It thinks while you're not looking.</strong><br>
-  An open-source personal AI that runs on your own machine — it remembers what matters, works while you're away, and asks before it acts.
+  <strong>Built for day 300.</strong><br>
+  An open-source personal AI that runs on your own machine — it remembers what matters and acts only within the rules you set.
 </p>
 
 <p align="center">
-  <a href="https://github.com/chalie-ai/chalie/tags"><img src="https://img.shields.io/github/v/tag/chalie-ai/chalie?style=for-the-badge&color=7c3aed" alt="Release"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-06b6d4?style=for-the-badge" alt="License"></a>
-  <a href="https://chalie.ai/blog/2026-06-23-ten-models-one-assistant/"><img src="https://img.shields.io/badge/benchmark-10%20models-ec4899?style=for-the-badge" alt="Benchmark"></a>
-  <a href="https://chalie.ai/docs"><img src="https://img.shields.io/badge/docs-chalie.ai-7c3aed?style=for-the-badge" alt="Docs"></a>
+  <a href="https://github.com/chalie-ai/chalie/tags"><img src="https://img.shields.io/github/v/tag/chalie-ai/chalie?style=for-the-badge&color=FF4FA3" alt="Release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-FF4FA3?style=for-the-badge" alt="License"></a>
+  <a href="https://chalie.ai/blog/2026-06-23-ten-models-one-assistant/"><img src="https://img.shields.io/badge/benchmark-10%20models-FF4FA3?style=for-the-badge" alt="Benchmark"></a>
+  <a href="https://chalie.ai/docs"><img src="https://img.shields.io/badge/docs-chalie.ai-FF4FA3?style=for-the-badge" alt="Docs"></a>
 </p>
 
-<p align="center"><strong>📖 <a href="https://chalie.ai/docs">Full documentation →</a></strong></p>
+<p align="center"><strong><a href="https://chalie.ai/docs">Full documentation →</a></strong></p>
 
 ```bash
 curl -fsSL https://chalie.ai/install | bash
@@ -25,26 +25,26 @@ chalie     # → http://localhost:31025
 
 > **Beta — on purpose.** The bar is software you'd trust with your own life's admin, and it isn't all the way there yet. Hit a sharp edge? [Open an issue](https://github.com/chalie-ai/chalie/issues) — we respond fast.
 
-<p align="center"><img src="assets/chalie-hero.png" alt="How Chalie works — it perceives, remembers, reasons, and acts on your behalf, behind an Allow / Ask / Deny gate" width="100%"></p>
+<p align="center"><img src="assets/chalie-hero.png" alt="Chalie at a glance — it remembers what matters across days, acts only within your Allow / Ask / Deny rules, and shows every step it takes" width="100%"></p>
 
 ## Why Chalie is different
 
-Most AI tools forget you the moment you close the tab. Chalie runs on your own machine as a **reasoning engine that keeps working while you step away**: it remembers what matters and lets the rest go, and acts only behind an **Allow / Ask / Deny** policy spanning you, its own background work, and other agents. One SQLite file, credentials encrypted at rest, zero telemetry, encrypted whole-instance backup — no Redis, no Postgres, no queue, just one Python process.
+Most AI tools forget you the moment you close the tab. Chalie runs on your own machine and is **built for day 300**: it remembers what matters and lets the rest go, and acts only within an **Allow / Ask / Deny** policy spanning your chats, its own background work, and other apps. One SQLite file, credentials encrypted at rest, zero telemetry, encrypted whole-instance backup — no Redis, no Postgres, no queue, just one Python process.
 
 ## What it can do today
 
 | | |
 |---|---|
-| 🧠 **Self-managing memory** | A background pass distills conversation into durable facts and remembered moments — recalled automatically, never something you save by hand. |
-| 🎯 **Goals & proactive research** | Spots goals from casual mentions; researches topics in the background before you ask. |
-| 👁 **Vision** | Reads photos, screenshots, and scans — and indexes them so you can find an image by what's in it. |
-| 🌐 **Real web browsing** | Drives a live browser: clicks, fills forms, scrolls, and inspects its own screenshots. |
-| 🔌 **MCP, in and out** | Connects to remote MCP servers and exposes its own tools to other agents. |
-| 📬 **Email, calendar, contacts** | IMAP, CalDAV, CardDAV — the accounts you already have. |
-| 🗓 **Scheduler** | Natural-language recurring jobs. |
-| 🧰 **Files, shell & code** | Searches files, runs guarded shell commands, and delegates coding tasks to an agent that writes and runs TypeScript in its own persistent, sandboxed workspace. |
-| 🎙 **Voice, fully local** | Moonshine STT + Kokoro TTS, both ONNX. No cloud transcription, ever. |
-| 💾 **Backup & restore** | Snapshot the whole instance to one file, optionally AES-256 encrypted. |
+| **Self-managing memory** | A background pass distills conversation into durable facts and remembered moments — recalled automatically, never something you save by hand. |
+| **Goals & proactive research** | Spots goals from casual mentions; researches topics in the background before you ask. |
+| **Vision** | Reads photos, screenshots, and scans — and indexes them so you can find an image by what's in it. |
+| **Real web browsing** | Drives a live browser: clicks, fills forms, scrolls, and inspects its own screenshots. |
+| **MCP, in and out** | Connects to remote MCP servers and exposes its own tools to other agents. |
+| **Email, calendar, contacts** | IMAP, CalDAV, CardDAV — the accounts you already have. |
+| **Scheduler** | Natural-language recurring jobs. |
+| **Files, shell & code** | Searches files, runs guarded shell commands, and delegates coding tasks to an agent that writes and runs TypeScript in its own persistent, sandboxed workspace. |
+| **Voice, fully local** | Moonshine STT + Kokoro TTS, both ONNX. No cloud transcription, ever. |
+| **Backup & restore** | Snapshot the whole instance to one file, optionally AES-256 encrypted. |
 
 ## Which model drives it best?
 
@@ -60,7 +60,7 @@ curl -fsSL https://chalie.ai/install | bash
 chalie     # → http://localhost:31025 · Anthropic, Gemini, OpenAI, +17 more, or any OpenAI-compatible host
 ```
 
-**Fully local with Ollama** — nothing leaves your network:
+**Fully local with Ollama** — nothing leaves your network except the web lookups you allow:
 ```bash
 ollama pull gemma4:31b   # the open model that placed in the benchmark's front pack
 ```
@@ -91,7 +91,7 @@ What the runtime itself needs — a model's own requirements are separate:
 
 | | |
 |---|---|
-| **Python 3.11+** | Already installed. The installer checks for it and deliberately never installs it, so distributions shipping something older — Ubuntu 22.04 (3.10), AlmaLinux 9 (3.9) — are refused until you supply one. |
+| **Python 3.11+** | Optional. A `python3` of 3.11 or newer already on `PATH` is always preferred and used as is. When there is none — a distribution shipping something older, like Ubuntu 22.04 (3.10) or AlmaLinux 9 (3.9), or a machine with no `python3` at all — the installer fetches a self-contained CPython 3.12 with [uv](https://docs.astral.sh/uv/) and builds Chalie's virtualenv from that, leaving your system Python untouched. |
 | **Root or `sudo`** | Linux only, for the system build packages and the CLI. macOS needs neither. |
 | **~2 GB RAM** | Resident set measured at 1.5–1.7 GB once the voice and embedding models have warmed up. Verified on a 4 GB machine; below that is untested. |
 | **~3 GB disk** | The Python virtualenv and native wheels, the Chromium build Playwright downloads, the local voice models, and Deno. |
@@ -99,7 +99,7 @@ What the runtime itself needs — a model's own requirements are separate:
 
 ## How it's built
 
-One Python process. Flask + `flask-sock` WebSocket. SQLite with `sqlite-vec` and FTS5 for semantic + lexical recall. Vanilla ES6 modules on the frontend — no build step. The whole cognitive runtime — memory, goals, scheduler, voice — runs as daemon threads inside that one process, and different cognitive functions can use different models.
+One Python process. Flask + `flask-sock` WebSocket. SQLite with `sqlite-vec` and FTS5 for semantic + lexical recall. A Vue frontend, shipped prebuilt. The whole cognitive runtime — memory, goals, scheduler, voice — runs as daemon threads inside that one process, and different cognitive functions can use different models.
 
 Curious? → [Architecture & internals](https://chalie.ai/docs) · [Schema](backend/schema.sql)
 
@@ -128,9 +128,9 @@ Full documentation lives at [chalie.ai](https://chalie.ai).
 
 | | |
 |---|---|
-| 📘 **[Guide](https://chalie.ai/guide)** | Setup, providers, and day-to-day usage. |
-| 🏗 **[Docs](https://chalie.ai/docs)** | Technical reference and architecture. |
-| 🤝 **[Contributing](https://chalie.ai/contribute)** | How to get involved and ship a PR. |
+| **[Guide](https://chalie.ai/guide)** | Setup, providers, and day-to-day usage. |
+| **[Docs](https://chalie.ai/docs)** | Technical reference and architecture. |
+| **[Contributing](https://chalie.ai/contribute)** | How to get involved and ship a PR. |
 
 ## Community
 

@@ -74,14 +74,13 @@ async function confirmImport(): Promise<void> {
 
 <template>
   <div class="panel-header">
-    <h2><DatabaseBackup :size="20" /> Import / Export</h2>
+    <h2><DatabaseBackup :size="16" /> Import / Export</h2>
   </div>
 
   <div class="brain-overview">
-    <div class="export-card">
-      <div class="export-card-icon"><Download :size="24" /></div>
-      <div class="export-card-label">Export a full snapshot</div>
-      <p class="form-hint">
+    <section>
+      <h4 class="section-head">Export a full snapshot</h4>
+      <p class="panel-desc">
         Downloads a single .zip that is a complete clone of this instance — databases, documents,
         skills, and secrets. Set a password to encrypt it with AES-256.
       </p>
@@ -95,14 +94,13 @@ async function confirmImport(): Promise<void> {
         />
       </label>
       <button class="btn btn-primary" @click="doExport">
-        <Download :size="14" /> Export Snapshot
+        <Download :size="16" /> Export Snapshot
       </button>
-    </div>
+    </section>
 
-    <div class="export-card">
-      <div class="export-card-icon"><Upload :size="24" /></div>
-      <div class="export-card-label">Restore from a snapshot</div>
-      <p class="form-hint">
+    <section>
+      <h4 class="section-head">Restore from a snapshot</h4>
+      <p class="panel-desc">
         Importing a snapshot <strong>completely wipes and overrides ALL existing data</strong> in
         this instance. This is a full restore, not a merge. The instance restarts to apply it.
       </p>
@@ -120,8 +118,8 @@ async function confirmImport(): Promise<void> {
         />
       </label>
       <button class="btn btn-danger" @click="confirmImport">
-        <Upload :size="14" /> Import &amp; Restore
+        <Upload :size="16" /> Import &amp; Restore
       </button>
-    </div>
+    </section>
   </div>
 </template>

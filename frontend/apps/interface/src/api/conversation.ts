@@ -1,4 +1,5 @@
 import { api } from '@chalie/shared';
+import type { DelegateRef } from '@chalie/shared';
 
 /** A single attachment served from /api/files/preview/<path> (URL is backend-provided). */
 export interface ConversationAttachment {
@@ -24,6 +25,16 @@ export interface ConversationSegment {
   created_at?: string | null;
 }
 
+/** One tool call's chip (see ConversationMessage.tool_calls). `delegate` names
+ *  the delegate turn the call spawned, once that turn wrote a transcript. */
+export interface ToolCallChip {
+  tool_name: string;
+  summary: string;
+  state: 'started' | 'done' | 'error';
+  ended_at: string | null;
+  delegate: DelegateRef | null;
+}
+
 /** One row inside a turn block (see ConversationTurnBlock.messages). */
 export interface ConversationMessage {
   id: string;
@@ -32,6 +43,8 @@ export interface ConversationMessage {
   timestamp: string;
   /** User-local calendar day `YYYY-MM-DD`, supplied by the backend for divider grouping. */
   day: string;
+  /** The row's creation time, ISO-8601 UTC with its offset — lets the chat time one exchange from its user row to its reply row. */
+  created_at: string;
   /**
    * The turn this row belongs to — a turn (thread) is many rows (input → steps →
    * synthesis → replies) sharing one `turn_id`; the feed groups by this. Null for
@@ -43,15 +56,15 @@ export interface ConversationMessage {
   /** Present on assistant turns — one or more content segments. */
   segments?: ConversationSegment[];
   /**
-   * The chips THIS row anchors — present on WHATEVER row drove the tools,
-   * including the user input row (a step-1 tool-only call anchors there before
-   * any assistant text). Each chip carries the ability's persisted `act_summary`
+   * The chips THIS row anchors — present on WHATEVER row drove the tools: a
+   * provider call's own assistant row (empty when that call only asked for
+   * tools), or the user input row for calls made before any provider call
+   * returned. Each chip carries the ability's persisted `act_summary`
    * plus its persisted lifecycle `state` (started/done/error) + `ended_at`, so a
    * refetched error stays a red pill instead of downgrading to a neutral chip.
-   * The refresh path renders them as a collapsed group beneath the row,
-   * mirroring how the live path collapses a superseded step.
+   * The refresh path renders them as this row's own tool-call card.
    */
-  tool_calls?: { tool_name: string; summary: string; state: string; ended_at: string | null }[];
+  tool_calls?: ToolCallChip[];
   /**
    * Set (true) on every row PAST this turn's settle0 — the reply continuation.
    * The main spine drops these (it renders only through settle0); a turn that
@@ -64,6 +77,11 @@ export interface ConversationMessage {
    * speaker button.
    */
   settled?: boolean;
+  /**
+   * True on a user row sent into the turn while it was working — it joined the
+   * running exchange instead of opening one. A cancel keeps such a row.
+   */
+  joined?: boolean;
   /**
    * Pre-synthesis outcome for a settled row, as of this fetch: 'ready' (audio
    * stored), 'failed' (gave up after its attempts), or absent/null for a row
@@ -122,6 +140,9 @@ export interface ConversationTurnBlock {
    * a bare tool-trace footer. Absent (undefined) on legacy/non-crashed blocks.
    */
   crashed?: boolean;
+  /** True when the turn's most recent execution was stopped — drives the
+   *  "stopped" note on a subagent's transcript panel. */
+  cancelled?: boolean;
   /** Row-span duration in ms (0 for a single-row turn). */
   duration_ms: number;
   messages: ConversationMessage[];
@@ -133,6 +154,24 @@ export interface ConversationTurnBlock {
    * fall back from.
    */
   type: string;
+  /** Null on a typed block — only a delegate read (DelegateTurnBlock) sets it. */
+  channel?: null;
+}
+
+/**
+ * A delegate (subagent) turn's block — the same shape, read by `channel`
+ * rather than `type`. A delegate has no ConfigType, so the block carries
+ * `type` null and echoes the channel it was read by. Its first `user` row is
+ * the task the caller handed over; an empty `messages` means the transcript
+ * has expired.
+ */
+export type DelegateTurnBlock = Omit<ConversationTurnBlock, 'type' | 'channel'> & { type: null; channel: string };
+
+/** The stop's ack: `cancelled` when a running turn was stopped, or reason
+ *  `no_active_turn` when it had already ended — a quiet ack, not an error. */
+export interface TurnStopResult {
+  cancelled: true | null;
+  reason: 'no_active_turn' | null;
 }
 
 interface ListingEnvelope<T> {
@@ -186,6 +225,45 @@ export const conversation = {
   thread(turnId: number, type?: string): Promise<ConversationTurnBlock> {
     const params = type ? `?type=${encodeURIComponent(type)}` : '';
     return api.get<SingleEnvelope<ConversationTurnBlock>>(`/api/threads/${turnId}${params}`).then((body) => body.result);
+  },
+
+  /**
+   * GET /api/threads/<turn_id>?channel= — one delegate turn's full block (the
+   * subagent panel's read + WS refetch). turn_id is unique only per channel,
+   * so the full `delegate:<name>` channel is always sent, and a block echoed
+   * back on any other channel rejects rather than reach a caller as this turn.
+   */
+  delegateThread(turnId: number, channel: string): Promise<DelegateTurnBlock> {
+    return api
+      .get<SingleEnvelope<DelegateTurnBlock>>(`/api/threads/${turnId}?channel=${encodeURIComponent(channel)}`)
+      .then((body) => {
+        const block = body.result;
+        if (block.channel !== channel) {
+          throw new Error(`delegate turn ${turnId} was read on ${channel} but came back on ${block.channel}`);
+        }
+        return block;
+      });
+  },
+
+  /**
+   * DELETE /api/threads/<turn_id>?type= (or ?channel= for a delegate turn) —
+   * stop a running turn. `type` is forwarded as `thread()` forwards it and is
+   * ignored for a delegate. Rejects on any failure, including a 200 whose ack
+   * is neither a stop nor `no_active_turn`: an unrecognised answer must never
+   * read as a stop that happened.
+   */
+  stop(target: number | DelegateRef, type?: string): Promise<TurnStopResult> {
+    const [turnId, params] =
+      typeof target === 'number'
+        ? [target, type ? `?type=${encodeURIComponent(type)}` : '']
+        : [target.turn_id, `?channel=${encodeURIComponent(target.channel)}`];
+    return api.del<SingleEnvelope<TurnStopResult>>(`/api/threads/${turnId}${params}`).then((body) => {
+      const ack = body.result;
+      if (ack?.cancelled !== true && ack?.reason !== 'no_active_turn') {
+        throw new Error(`stop of turn ${turnId} got an unrecognised ack: ${JSON.stringify(body)}`);
+      }
+      return ack;
+    });
   },
 
   /**

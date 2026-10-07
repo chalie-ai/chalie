@@ -108,14 +108,12 @@ onBeforeUnmount(() => {
 
 <style scoped lang="scss">
 // ── Scrim ──────────────────────────────────────────────────────────────────────
+// A transparent click-catcher: a click anywhere outside the panel closes it.
 
 .side-drawer__scrim {
   position: fixed;
   inset: 0;
-  background: var(--overlay-scrim, rgba(0, 0, 0, 0.35));
   z-index: 199;
-  opacity: 1;
-  transition: opacity 0.2s ease;
 
   &.hidden {
     display: none;
@@ -131,14 +129,12 @@ onBeforeUnmount(() => {
   height: 100%;
   width: 320px;
   max-width: 90vw;
-  background: var(--bg-2);
-  border-left: 1px solid var(--border);
-  box-shadow: -4px 0 24px var(--shadow, rgba(0, 0, 0, 0.15));
+  background: var(--surface);
   z-index: 200;
   display: flex;
   flex-direction: column;
   transform: translateX(100%);
-  transition: transform 0.25s ease;
+  transition: transform var(--dur-3) var(--ease-out);
   overflow: hidden;
 
   &.open {
@@ -155,22 +151,21 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: space-between;
   padding: 16px 16px 12px;
-  border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
 
 .side-drawer__title {
   margin: 0;
-  font-size: 15px;
+  font-size: var(--fs-title);
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--text);
 }
 
 .side-drawer__close {
-  color: var(--text-secondary);
+  color: var(--muted);
 
   &:hover {
-    color: var(--text-primary);
+    color: var(--text);
   }
 }
 

@@ -73,7 +73,7 @@ async function handleSubmit() {
         :disabled="pending"
       />
 
-      <button type="submit" :disabled="pending">
+      <button type="submit" class="btn btn-primary" :disabled="pending">
         {{ pending ? 'Signing in...' : 'Sign in' }}
       </button>
 
@@ -87,46 +87,31 @@ async function handleSubmit() {
   width: 100%;
   max-width: 420px;
   padding: 2.5rem 2rem;
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: var(--bs-border-radius-lg);
+  background: var(--surface);
 
   h1 {
-    font-size: 1.4rem;
+    font-size: var(--fs-title);
     font-weight: 500;
     margin-bottom: 0.25rem;
   }
 
   p {
-    color: var(--text-secondary);
-    font-size: 0.85rem;
+    color: var(--muted);
+    font-size: var(--fs-body);
     margin-bottom: 1.5rem;
   }
 
   label {
     display: block;
-    font-size: 0.8rem;
-    color: var(--text-secondary);
+    font-size: var(--fs-body);
+    color: var(--muted);
     margin-bottom: 0.35rem;
   }
 
   input {
     display: block;
     width: 100%;
-    padding: 0.6rem 0.75rem;
-    font-size: 0.9rem;
-    color: var(--text);
-    background: var(--bg-input);
-    border: 1px solid var(--border);
-    border-radius: var(--bs-border-radius);
     margin-bottom: 1rem;
-    outline: none;
-    transition: border-color 0.2s;
-    box-sizing: border-box;
-
-    &:focus {
-      border-color: var(--accent-primary);
-    }
 
     &:disabled {
       opacity: 0.6;
@@ -136,30 +121,12 @@ async function handleSubmit() {
 
   button[type='submit'] {
     width: 100%;
-    padding: 0.65rem;
-    font-size: 0.9rem;
-    font-weight: 500;
-    color: #fff;
-    background: var(--accent-primary);
-    border: none;
-    border-radius: var(--bs-border-radius);
-    cursor: pointer;
-    transition: opacity 0.2s;
-
-    &:hover:not(:disabled) {
-      opacity: 0.85;
-    }
-
-    &:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
   }
 }
 
 .login-error {
-  color: var(--error);
-  font-size: 0.8rem;
+  color: var(--deny-text);
+  font-size: var(--fs-body);
   margin-top: 0.75rem;
   min-height: 1.2em;
 }

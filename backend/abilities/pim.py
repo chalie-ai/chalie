@@ -8,17 +8,17 @@
 
 """PimAbility — delegate personal-information tasks to a focused agent.
 
-Mirrors WebSearchAbility structure-for-structure: an ability that builds its OWN
-``ProcessorConfig`` subclass (``PimConfig``) inside ``run()`` and calls
-``MessageProcessor.process()``. The delegate fetches live data from email,
-calendar, contacts, and memory.
+Mirrors WebSearchAbility structure-for-structure: an ability that hands its OWN
+``ProcessorConfig`` subclass (``PimConfig``) to ``DelegateAbility.delegate()``
+inside ``run()``. The delegate fetches live data from email, calendar,
+contacts, and memory.
 """
 
 from __future__ import annotations
 
 from typing import ClassVar
 
-from abilities._delegate import DelegateAbility, delegate_result
+from abilities._delegate import DelegateAbility
 from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 from configs.channels.pim import PimConfig
@@ -95,7 +95,6 @@ class PimAbility(DelegateAbility[DelegateParamsBag]):
 
     def run(self, params: DelegateParamsBag) -> ToolResult:
         from capabilities import load_capabilities  # noqa: PLC0415
-        from controllers.message_processor import MessageProcessor  # noqa: PLC0415
 
         # No mail provider connected → the delegate can only fail. Short-circuit with
         # the canonical not-connected contract (the same code + hint the calendar /
@@ -110,17 +109,7 @@ class PimAbility(DelegateAbility[DelegateParamsBag]):
                 hint="Configure the mail integration in the Brain dashboard.",
             )
 
-        mp = self.mp
-        if mp is None:
-            raise RuntimeError("pim.run() dispatched without a bound MessageProcessor")
-
-        # A gated tool inside the delegate prompts on the CALLER's turn — the
-        # delegate's own turn has no surface a human could answer from.
-        result = MessageProcessor.process(
-            PimConfig(mp.config.policy_channel),
-            raw_input=params.instructions,
-            metadata={"origin": mp.origin},
-        ).result()
-        return delegate_result(
-            result, hint="Rephrase the instruction or split it into smaller PIM tasks, then retry."
+        return self.delegate(
+            PimConfig, params.instructions,
+            hint="Rephrase the instruction or split it into smaller PIM tasks, then retry.",
         )

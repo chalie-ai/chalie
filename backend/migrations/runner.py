@@ -69,6 +69,7 @@ _STEPS: tuple[tuple[str, str], ...] = (
     ("usage-type-foreground-background-v1", "migrations.migration_018_usage_type_foreground_background"),
     ("user-synthesis-seed-v1", "migrations.migration_020_seed_user_synthesis"),
     ("mcp-server-token-removal-v1", "migrations.migration_021_drop_mcp_server_token"),
+    ("transcript-joined-column-v1", "migrations.migration_022_transcript_joined"),
 )
 
 # Extra wrapper-era sentinel stems a step's resolution must also satisfy:

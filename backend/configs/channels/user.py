@@ -20,6 +20,7 @@ class UserConfig(ProcessorConfig):
     else) on the drive thread."""
 
     RENDERS_HTML: ClassVar[bool] = True
+    RENDERS_CARDS: ClassVar[bool] = True
     BROADCASTS_STATE = True
     USAGE_TYPE = "foreground"
 

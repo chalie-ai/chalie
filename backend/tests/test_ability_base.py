@@ -66,21 +66,18 @@ def _getters(
 def _make_subclass(
     clsname: str,
     drop: "tuple[str, ...]" = (),
-    base: "type[Ability]" = Ability,
     **overrides: object,
 ) -> "type[Ability]":
     """Build an Ability subclass dynamically.
 
     ``drop`` names getters to OMIT (leaving the abstractmethod unfilled, so the
-    class stays abstract). ``base`` picks the parent (``Ability`` by default, or
-    ``DelegateAbility`` to exercise the delegate-only ``async`` injection).
-    ``overrides`` replace individual namespace members.
+    class stays abstract). ``overrides`` replace individual namespace members.
     """
     namespace = _getters()
     namespace.update(overrides)
     for member in drop:
         namespace.pop(member, None)
-    return type(clsname, (base,), namespace)
+    return type(clsname, (Ability,), namespace)
 
 
 # ---------------------------------------------------------------------------

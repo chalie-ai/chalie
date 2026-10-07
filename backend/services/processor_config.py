@@ -25,22 +25,35 @@ class ProcessorConfig(ABC):
 
     RENDERS_HTML: ClassVar[bool] = False
     """True → this channel's output is rendered to a human as HTML, which is one
-    fact with three consequences, all of which must move together:
+    fact with two consequences that must move together:
 
     * ``PromptService`` appends the response-format contract, so the model is
       told to emit ``markup.PROMPT_TAGS`` instead of markdown;
     * ``MessageProcessor._format`` converts and sanitises the reply at persist
-      time, so both the live send and the refresh read inherit the same markup;
-    * ``DispatchService`` assigns rich-media ordinals, whose ``<span id>`` pairing
-      only means anything on a rendered surface.
+      time, so both the live send and the refresh read inherit the same markup.
 
     Splitting these was the old bug: a channel told to emit HTML but not
     sanitised persists raw model markup, and a channel sanitised but not told
     emits markdown that survives conversion — ``markdown_to_html`` is an
     inline-only fallback and cannot rescue headings, lists, or tables.
 
-    Only UserConfig and ScheduledConfig set it. DiscoveryConfig deliberately does
-    not: it inherits UserConfig's *thinking*, never its user-facing identity."""
+    Rich-media cards are a separate gate: see ``RENDERS_CARDS``.
+
+    UserConfig, ScheduledConfig and the four watchable subagent channels
+    (WebSearchConfig, WebBrowseConfig, PimConfig, CodeAgentConfig) set it.
+    DiscoveryConfig deliberately does not: it inherits UserConfig's *thinking*,
+    never its user-facing identity. VisionConfig does not either: its output is
+    indexed text, never displayed."""
+
+    RENDERS_CARDS: ClassVar[bool] = False
+    """True → ``DispatchService`` assigns rich-media card ordinals on this
+    channel, so a rich tool result carries the ``<span id>`` card instruction
+    that pairs the reply to its ``tool_calls`` row.
+
+    Only the channels whose replies the user reads in the feed set it:
+    UserConfig and ScheduledConfig. Subagent channels render HTML but never
+    carry cards: their answer is handed to the calling agent, and a card span
+    there would pair against the caller's own ordinals."""
 
     BROADCASTS_STATE: ClassVar[bool] = False
     """True → this channel streams its live progress to its surface: the lean

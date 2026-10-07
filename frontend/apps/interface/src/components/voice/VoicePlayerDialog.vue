@@ -31,8 +31,8 @@
         :aria-label="isPlaying ? 'Pause' : 'Play'"
         @click="_togglePlayPause"
       >
-        <Pause v-if="isPlaying" :size="20" />
-        <Play v-else :size="20" />
+        <Pause v-if="isPlaying" :size="16" />
+        <Play v-else :size="16" />
       </button>
 
       <input
@@ -430,14 +430,11 @@ function _unbindKeyboard(): void {
   left: 50%;
   transform: translateX(-50%);
   z-index: 900;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 0.75rem;
+  background: var(--surface);
   padding: 0.75rem 1rem;
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.18);
   color: var(--text);
   min-width: 280px;
 
@@ -470,9 +467,8 @@ function _unbindKeyboard(): void {
   display: inline-block;
   width: 1.25rem;
   height: 1.25rem;
-  border: 2px solid var(--border);
-  border-top-color: var(--violet);
-  border-radius: 50%;
+  border: 2px solid var(--line);
+  border-top-color: var(--pink-text);
   animation: spin 0.7s linear infinite;
 }
 
@@ -480,8 +476,8 @@ function _unbindKeyboard(): void {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  color: var(--error);
-  font-size: 0.8125rem;
+  color: var(--deny-text);
+  font-size: var(--fs-body);
   margin: 0;
   width: 100%;
   max-width: 22rem;
@@ -505,33 +501,37 @@ function _unbindKeyboard(): void {
   align-items: center;
   justify-content: center;
   background: transparent;
-  border: none;
   cursor: pointer;
   color: var(--text);
-  border-radius: 50%;
   padding: 0.25rem;
   flex-shrink: 0;
-  transition: color 0.15s;
+  transition:
+    color var(--dur-1) var(--ease-out),
+    background-color var(--dur-1) var(--ease-out),
+    translate var(--dur-1) var(--ease-out);
 
   &:hover {
-    color: var(--violet);
+    color: var(--text);
+  }
+
+  &:active {
+    translate: 0 1px;
   }
 
   &--play {
     width: 2.25rem;
     height: 2.25rem;
-    background: var(--violet);
-    color: #fff;
-    border-radius: 50%;
+    background: var(--pink);
+    color: var(--on-pink);
 
     &:hover {
-      color: #fff;
-      opacity: 0.9;
+      background: var(--text);
+      color: var(--bg);
     }
   }
 
   &--close {
-    color: var(--text-tertiary);
+    color: var(--muted);
     margin-left: 0.25rem;
   }
 }
@@ -539,14 +539,15 @@ function _unbindKeyboard(): void {
 .voice-player__progress {
   flex: 1;
   min-width: 0;
-  accent-color: var(--violet);
+  accent-color: var(--pink);
   height: 4px;
   cursor: pointer;
 }
 
 .voice-player__time {
-  font-size: 0.75rem;
-  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+  color: var(--muted);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
   flex-shrink: 0;

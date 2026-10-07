@@ -69,7 +69,7 @@ function pick(item: ConversationThread): void {
     >
       <div class="search-modal" @click.stop>
         <div class="search-input-row">
-          <Search :size="16" stroke="var(--violet)" :stroke-width="2" />
+          <Search :size="16" stroke="var(--pink-text)" :stroke-width="2" />
           <input
             ref="inputEl"
             class="search-input"
@@ -109,25 +109,18 @@ function pick(item: ConversationThread): void {
   position: fixed;
   inset: 0;
   z-index: 1200;
-  background: var(--scrim-overlay);
-  backdrop-filter: blur(3px);
   display: flex;
   flex-direction: column;
   align-items: center;
   padding-top: 78px;
-  animation: overlayIn 0.15s ease;
-  font-family: Inter, sans-serif;
+  animation: fade var(--dur-2) var(--ease-out);
+  font-family: var(--font-ui);
 }
 
 .search-modal {
   width: 580px;
   max-width: 92vw;
-  background: var(--bg-2);
-  border: 1px solid color-mix(in oklab, var(--violet) 18%, transparent);
-  border-radius: 16px;
-  box-shadow:
-    0 24px 64px rgba(0, 0, 0, 0.6),
-    0 0 0 1px color-mix(in oklab, var(--violet) 8%, transparent);
+  background: var(--surface);
   overflow: hidden;
 }
 
@@ -136,31 +129,26 @@ function pick(item: ConversationThread): void {
   align-items: center;
   gap: 11px;
   padding: 14px 16px;
-  border-bottom: 1px solid var(--border);
 }
 
 .search-input {
   flex: 1;
   font:
-    400 14px Inter,
-    sans-serif;
-  color: var(--text-primary);
+    400 var(--fs-body) var(--font-ui);
+  color: var(--text);
   background: transparent;
   border: 0;
   outline: 0;
 }
 
 .search-input::placeholder {
-  color: var(--text-muted);
+  color: var(--muted);
 }
 
 .esc-chip {
   font:
-    600 10px Inter,
-    sans-serif;
-  color: var(--text-muted);
-  border: 1px solid var(--border-strong);
-  border-radius: 5px;
+    600 var(--fs-mono) var(--font-ui);
+  color: var(--muted);
   padding: 2px 6px;
   flex-shrink: 0;
 }
@@ -175,9 +163,8 @@ function pick(item: ConversationThread): void {
   padding: 22px;
   text-align: center;
   font:
-    400 13px Inter,
-    sans-serif;
-  color: var(--text-muted);
+    400 var(--fs-body) var(--font-ui);
+  color: var(--muted);
 }
 
 .result-row {
@@ -187,20 +174,25 @@ function pick(item: ConversationThread): void {
   width: 100%;
   text-align: left;
   background: transparent;
-  border: none;
-  border-radius: 10px;
   padding: 10px 11px;
   cursor: pointer;
-  color: var(--text-primary);
+  color: var(--text);
+  transition:
+    background-color var(--dur-1) var(--ease-out),
+    translate var(--dur-1) var(--ease-out);
 }
 
 .result-row:disabled {
   cursor: default;
-  opacity: 0.5;
+  color: var(--muted);
 }
 
 .result-row:not(:disabled):hover {
-  background: color-mix(in oklab, var(--violet) 8%, transparent);
+  background: var(--cell);
+}
+
+.result-row:not(:disabled):active {
+  translate: 0 1px;
 }
 
 .result-body {
@@ -214,9 +206,7 @@ function pick(item: ConversationThread): void {
 .result-name {
   display: block;
   font:
-    600 12.5px Inter,
-    sans-serif;
-  color: var(--text-primary);
+    600 var(--fs-body) var(--font-ui);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -225,9 +215,8 @@ function pick(item: ConversationThread): void {
 .result-snippet {
   display: block;
   font:
-    400 11.5px Inter,
-    sans-serif;
-  color: var(--text-tertiary);
+    400 var(--fs-body) var(--font-ui);
+  color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -235,13 +224,10 @@ function pick(item: ConversationThread): void {
 
 .result-tag {
   font:
-    600 9px Inter,
-    sans-serif;
+    600 var(--fs-mono) var(--font-ui);
   letter-spacing: 0.05em;
   text-transform: uppercase;
-  color: var(--text-muted);
-  border: 1px solid var(--border);
-  border-radius: 5px;
+  color: var(--muted);
   padding: 2px 6px;
   flex-shrink: 0;
 }

@@ -1,0 +1,244 @@
+/* Afterhours — the one visual foundation for every Chalie app surface: the chat
+   interface, the brain and the desktop setup window. Plain CSS so a surface without
+   a Sass toolchain can import it. The marketing site carries a mirrored copy of the
+   tokens; this file is the source of truth.
+
+   Flat and sharp: no radius, gradient, glow, shadow or blur anywhere. Depth comes
+   from the three grounds (bg → surface → surface-2): fills group things, and a
+   border marks only a text field or the focus ring. One control height, one icon
+   size, three text sizes (12 mono, 15 body, 20 title). Pink is the only accent
+   and is always a fill with night-coloured text on it. Every text colour clears
+   4.5:1 on all three grounds in both themes; --control clears 3:1. */
+
+@font-face {
+  font-family: 'Epilogue Variable';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url('@fontsource-variable/epilogue/files/epilogue-latin-wght-normal.woff2') format('woff2-variations');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Instrument Sans Variable';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 400 700;
+  src: url('@fontsource-variable/instrument-sans/files/instrument-sans-latin-wght-normal.woff2') format('woff2-variations');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'JetBrains Mono Variable';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 800;
+  src: url('@fontsource-variable/jetbrains-mono/files/jetbrains-mono-latin-wght-normal.woff2') format('woff2-variations');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg:           #0E0B10;
+  --surface:      #1B1620;
+  --surface-2:    #241E2A;
+  --text:         #F5F0F7;
+  --muted:        #A79FAF;
+  --line:         #2E2634;   /* dividers and quiet borders */
+  --cell:         #342C3B;   /* empty slots: tracks, unfilled bars */
+  --control:      #746B7D;   /* borders that mark something you can operate */
+  --pink:         #FF4FA3;
+  --pink-text:    #FF4FA3;
+  --on-pink:      #0E0B10;
+
+  /* Rule outcomes. Each pairs with a shape — Allow circle, Ask triangle, Deny octagon —
+     so colour is never the only signal. */
+  --allow:        #5CF2B8;
+  --ask:          #FFD23F;
+  --deny:         #FF6B5E;
+  --allow-text:   #5CF2B8;
+  --ask-text:     #FFD23F;
+  --deny-text:    #FF6B5E;
+  --glyph-stroke: transparent;
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+
+  --bg:           #F5F0F7;
+  --surface:      #FFFFFF;
+  --surface-2:    #EBE4EF;
+  --text:         #0E0B10;
+  --muted:        #5B5363;
+  --line:         #DDD4E2;
+  --cell:         #E3DAE8;
+  --control:      #857C8E;
+  --pink-text:    #C20A6C;
+
+  --allow-text:   #09744F;
+  --ask-text:     #7A5D00;
+  --deny-text:    #B83226;
+  /* The glyph fills sit under 3:1 on the light grounds, so they gain an outline. */
+  --glyph-stroke: #0E0B10;
+}
+
+:root {
+  --font-display: 'Epilogue Variable', system-ui, sans-serif;
+  --font-ui:      'Instrument Sans Variable', system-ui, sans-serif;
+  --font-mono:    'JetBrains Mono Variable', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --ease-out:     cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-1:        120ms;     /* press, hover */
+  --dur-2:        200ms;     /* arrivals: messages, cards, toasts */
+  --dur-3:        320ms;     /* panels, theme change, bars filling */
+
+  --space-xs:     4px;
+  --space-sm:     8px;
+  --space-md:     16px;
+  --space-lg:     24px;
+  --space-xl:     40px;
+  --control-h:    32px;      /* every button, input, select and segmented control */
+  --icon:         16px;      /* every inline icon */
+  --fs-mono:      0.75rem;   /* 12px: mono labels, times, counts */
+  --fs-body:      0.9375rem; /* 15px: all reading and control text */
+  --fs-title:     1.25rem;   /* 20px: page and card titles */
+}
+
+/* ── Base ─────────────────────────────────────────────────────────────── */
+
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 400 var(--fs-body)/1.55 var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+  transition: background-color var(--dur-3) var(--ease-out), color var(--dur-3) var(--ease-out);
+}
+
+h1, h2, h3, h4 {
+  font-family: var(--font-display);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.05;
+}
+h1 { font-weight: 900; letter-spacing: -0.03em; }
+
+code, kbd, pre, samp { font-family: var(--font-mono); }
+a { color: var(--pink-text); text-underline-offset: 3px; }
+::selection { background: var(--pink); color: var(--on-pink); }
+
+button, input, textarea, select { font: inherit; color: inherit; }
+button { cursor: pointer; border: 0; }
+button:disabled { cursor: not-allowed; }
+
+input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="color"]),
+textarea,
+select {
+  background: var(--surface-2);
+  border: 1px solid var(--control);
+  border-radius: 0;
+  color: var(--text);
+  transition: border-color var(--dur-1) var(--ease-out);
+}
+input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="color"]),
+select { min-height: var(--control-h); }
+input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="color"]):hover,
+textarea:hover,
+select:hover { border-color: var(--muted); }
+::placeholder { color: var(--muted); opacity: 1; }
+input[type="checkbox"], input[type="radio"], input[type="range"], progress { accent-color: var(--pink); }
+
+:focus { outline: none; }
+:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; }
+
+* { scrollbar-width: thin; scrollbar-color: var(--control) transparent; }
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--control); }
+
+/* ── Shared primitives ────────────────────────────────────────────────── */
+
+/* Buttons. Secondary is the default; primary is the one pink fill on a screen. */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-sm);
+  min-height: var(--control-h);
+  padding: 0 var(--space-md);
+  border: none;
+  border-radius: 0;
+  background: var(--surface-2);
+  color: var(--text);
+  font: 600 var(--fs-body)/1 var(--font-ui);
+  text-decoration: none;
+  transition: background-color var(--dur-1) var(--ease-out),
+              color var(--dur-1) var(--ease-out),
+              translate var(--dur-1) var(--ease-out);
+}
+.btn:hover:not(:disabled) { background: var(--cell); }
+.btn:active:not(:disabled) { translate: 0 1px; }
+.btn:disabled { opacity: 0.45; }
+.btn-primary { background: var(--pink); color: var(--on-pink); }
+.btn-primary:hover:not(:disabled) { background: var(--text); color: var(--bg); }
+.btn-danger { background: var(--surface-2); color: var(--deny-text); }
+.btn-danger:hover:not(:disabled) { background: var(--deny); color: var(--on-pink); }
+
+/* A file input's own button can't take a class; it reads as a secondary button. */
+::file-selector-button {
+  margin-right: var(--space-sm);
+  padding: 6px 10px;
+  min-height: var(--control-h);
+  border: none;
+  border-radius: 0;
+  background: var(--surface-2);
+  color: var(--text);
+  font: 600 var(--fs-mono)/1 var(--font-ui);
+  cursor: pointer;
+  transition: background-color var(--dur-1) var(--ease-out);
+}
+::file-selector-button:hover { background: var(--cell); }
+
+/* Mono label: times, keys, section labels. */
+.lbl {
+  font: 500 var(--fs-mono)/1.2 var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.tag {
+  display: inline-block;
+  padding: 5px 7px;
+  background: var(--surface-2);
+  font: 500 var(--fs-mono)/1 var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* JS toggles these by name. */
+.hidden { display: none !important; }
+.form-group { margin-bottom: var(--space-md); }
+
+/* ── Motion ───────────────────────────────────────────────────────────── */
+/* Subtle by rule: 120–320ms, eased out, small distances. All of it is off under
+   reduced motion. */
+
+@keyframes rise     { from { opacity: 0; translate: 0 6px; } }
+@keyframes slide-in { from { opacity: 0; translate: 16px 0; } }
+@keyframes fade     { from { opacity: 0; } }
+@keyframes fill     { from { scale: 0 1; } }
+@keyframes working  { 50% { opacity: 0.3; } }
+@keyframes spin     { to { rotate: 360deg; } }
+
+@media (prefers-reduced-motion: reduce) {
+  /* Near-zero, not none: code waiting on transitionend/animationend still gets it. */
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

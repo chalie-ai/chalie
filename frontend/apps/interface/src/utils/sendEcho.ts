@@ -16,10 +16,10 @@
  * data, and invisible to `isSurfaceBusy` (no `data-working`). It reuses
  * `UserBubble.vue` directly for its content so the text/attachment styling
  * (global, unscoped — see conversation.scss) is pixel-identical to the real
- * bubble; the surrounding avatar-gutter row layout lives in TurnView.vue's
- * OWN scoped stylesheet, unreachable from an imperative mount outside its
- * component tree, so that offset is reproduced here via the same global
- * tokens TurnView itself uses.
+ * bubble; the surrounding row layout lives in TurnView.vue's OWN scoped
+ * stylesheet, unreachable from an imperative mount outside its component
+ * tree, so it is reproduced here via the same global tokens TurnView itself
+ * uses.
  */
 import { createVNode, render } from 'vue';
 import type { ConversationAttachment, ConversationMessage } from '../api/conversation';
@@ -39,20 +39,18 @@ function scopeKey(threadId: number | null, type: string): string {
   return threadId == null ? `spine:${type}` : `${type}:${threadId}`;
 }
 
-// Mirrors TurnView's `.msg-row--lead` (new-speaker spacing) plus its
-// `.msg-row__gutter` + gap offset (avatar width + 18px) via the SAME global
-// tokens TurnView itself reads — see module doc comment for why the scoped
-// rule itself can't be reused here.
+// Mirrors TurnView's `.msg-row` + `.msg-row--lead` (dock width, new-speaker
+// spacing) via the SAME global tokens TurnView itself reads — see module doc
+// comment for why the scoped rule itself can't be reused here.
 const ECHO_ROW_STYLE = [
   'width: 100%',
   'max-width: var(--dock-width)',
   'margin: 30px auto 0',
-  'padding-left: calc(var(--avatar-size) + 18px)',
 ].join('; ');
 
 // Registered lazily, on first real use, rather than at this module's own
 // top level: turnDom.ts's default surface component (TurnView) transitively
-// imports stores/session.ts (TurnView → ActCycle → useSessionStore), which
+// imports stores/session.ts (TurnView → ActivityLine → useSessionStore), which
 // imports THIS module — a genuine module cycle. Calling `onTurnLanded` eagerly
 // at load time would run turnDom.ts's `_turnLandedHook = hook` assignment
 // WHILE turnDom.ts's own top-level `let _turnLandedHook` hasn't executed yet
@@ -131,6 +129,9 @@ export function mountSendEcho(
     // never day-grouped — it carries no `data-day`, so syncDaymarks skips it —
     // and the real row arrives stamped moments later.
     day: '',
+    // The client's send instant — the row's real created_at arrives with the
+    // refetch that replaces this echo.
+    created_at: new Date().toISOString(),
     turn_id: null,
     attachments: echoAttachments(files),
   };

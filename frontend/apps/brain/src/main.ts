@@ -1,4 +1,3 @@
-import './styles/fonts.css';
 import '@chalie/shared/styles/main.scss';
 import './styles/brain.scss';
 import { createApp } from 'vue';

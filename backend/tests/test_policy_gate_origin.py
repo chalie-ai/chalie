@@ -23,6 +23,7 @@ import sqlite3
 import threading
 import time
 from collections.abc import Iterator
+from datetime import datetime, timedelta
 from typing import cast
 from unittest.mock import patch
 
@@ -221,12 +222,17 @@ def test_user_turn_ask_prompts_on_that_turn_with_summary(
     requests = recorder.of_type("permission_request")
     assert len(requests) == 1, recorder.frames
     rid = requests[0]["request_id"]
+    # The park instant rides on the frame as ISO-8601 UTC — it must parse back
+    # to an aware UTC datetime so a reloaded client can age the live line.
+    asked_at = datetime.fromisoformat(cast(str, requests[0]["asked_at"]))
+    assert asked_at.tzinfo is not None and asked_at.utcoffset() == timedelta(0)
     assert requests[0] == {
         "type": "permission_request",
         "request_id": rid,
         "action_id": "gate_probe",
         "summary": _SUMMARY,
         "origin": {"type": "user", "turn_id": mp.turn_id, "forked": False},
+        "asked_at": asked_at.isoformat(timespec="seconds"),
     }
     assert recorder.of_type("permission_resolved") == [{"type": "permission_resolved", "request_id": rid}]
     assert rid not in _permission_gates

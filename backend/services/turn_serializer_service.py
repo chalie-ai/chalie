@@ -21,10 +21,12 @@ import sqlite3
 import urllib.parse
 from typing import cast
 
+from abilities._registry import AbilityRegistry
 from services.database import Database
 from services.file_mapper_service import FileMapperService
 from services.locale_service import CHAT_DAY_FMT, CHAT_TIMESTAMP_FMT, format_date
 from services.rich_media_parser import parse as _parse_rich_media
+from services.time_utils import parse_utc
 from configs.channels import config_for
 from models.tool_call import ToolCall
 from models.transcript import Transcript
@@ -56,6 +58,7 @@ def _fetch_tool_calls_for_transcripts(transcript_ids: list[int]) -> list[dict[st
     tc_rows = ToolCall.by_transcripts(transcript_ids)
     return [
         {
+            "id": tc.id,
             "transcript_id": tc.transcript_id,
             "tool_name": tc.tool_name,
             "params": tc.params,
@@ -112,36 +115,48 @@ def _group_calls_by_transcript(calls: list[dict[str, object]]) -> dict[int, list
 
 
 def _base_message(r: dict[str, object]) -> dict[str, object]:
-    """The role/content/timestamp/day shape common to every projected message."""
+    """The role/content/timestamp/day/created_at shape common to every projected message."""
     return {
         "id": str(cast("int", r['id'])),
         "role": r['role'],
         "content": r['content'] or "",
         "timestamp": format_date(cast("str", r['created_at']), CHAT_TIMESTAMP_FMT, for_ui=True) or "",
         "day": format_date(cast("str", r['created_at']), CHAT_DAY_FMT, for_ui=True) or "",
+        # The row's creation instant as ISO-8601 UTC with its offset — the
+        # unformatted time a client needs to time ONE exchange (user row → reply
+        # row); the block-level duration_ms spans the whole turn, so it cannot.
+        # Stored as "YYYY-MM-DD HH:MM:SS", which browsers parse inconsistently.
+        "created_at": parse_utc(cast("str", r['created_at'])).isoformat(),
         "turn_id": r['turn_id'],
     }
 
 
 def _apply_user_fields(msg: dict[str, object], r: dict[str, object], attachments_by_id: dict[int, list[dict[str, object]]]) -> None:
+    msg["joined"] = bool(r['joined'])
     attachments = attachments_by_id.get(cast("int", r['id']))
     if attachments:
         msg["attachments"] = attachments
 
 
-def _tool_call_chips(own_calls: list[dict[str, object]]) -> list[dict[str, object]]:
+def _tool_call_chips(
+    own_calls: list[dict[str, object]], delegates: dict[int, dict[str, object]],
+) -> list[dict[str, object]]:
     """Chips for whatever transcript row anchors these calls — the user input row
-    or an assistant text row alike. A step-1 tool-only call (the commonest shape)
-    anchors to the user row, so chips are role-agnostic (the ratified feed vision:
-    tool calls render under WHATEVER row anchors them). Each chip carries the
+    or an assistant row alike. A model tool call anchors to its own provider
+    call's assistant row (empty when that call carried no prose), while the
+    turn-zero memory seed, written before any provider call returns, anchors to
+    the user row, so chips are role-agnostic (the ratified feed vision: tool
+    calls render under WHATEVER row anchors them). Each chip carries the
     persisted ``state`` + ``ended_at`` so a refetched error stays an error pill,
-    not a downgraded neutral chip."""
+    not a downgraded neutral chip, and ``delegate`` — the child turn the call
+    spawned, from ``delegates`` — so a settled pill still opens its transcript."""
     return [
         {
             "tool_name": c["tool_name"],
             "summary": c["summary"],
             "state": c["state"],
             "ended_at": c["ended_at"],
+            "delegate": delegates.get(cast("int", c["id"])),
         }
         for c in own_calls
         if c["tool_name"] != _COMPACTOR_TOOL
@@ -178,8 +193,9 @@ def _voice_states(rows: list[dict[str, object]]) -> dict[int, str]:
 def _thinking_states(rows: list[dict[str, object]]) -> dict[int, list[dict[str, object]]]:
     """Thinking traces per transcript row, in one batch query.
 
-    Traces anchor to WHATEVER row drove the tools — the user input row for
-    step-1 tool-only calls, or an assistant row for later steps — so the id
+    Traces anchor to WHATEVER row is the anchor when they are captured — a
+    stored provider call's own assistant row, or the user input row for a
+    thinking-only empty completion before any call's row exists — so the id
     list includes ALL rows, not just assistant rows. Returns a map from
     transcript_id to a list of trace dicts (traces in row order); rows with no
     thinking rows are absent from the map so the serializer can omit the
@@ -210,10 +226,10 @@ def _rows_to_messages(rows: list[dict[str, object]]) -> list[dict[str, object]]:
         conn, [cast("int", r['id']) for r in rows if r['role'] == 'user']
     )
 
-    # Resolve turn scope from EVERY row, not just assistant rows: a step-1
-    # tool-only call anchors to the user input row, and a turn whose only row
-    # so far is that input row has zero assistant rows — keying off assistant
-    # ids alone would resolve to an empty scope and silently drop its chips.
+    # Resolve turn scope from EVERY row, not just assistant rows: the turn-zero
+    # memory seed anchors to the user input row, and a turn whose only row so
+    # far is that input row has zero assistant rows — keying off assistant ids
+    # alone would resolve to an empty scope and silently drop its chips.
     turn_scope_ids = Transcript.turn_scope_ids(
         [cast("int", r['id']) for r in rows]
     )
@@ -222,6 +238,13 @@ def _rows_to_messages(rows: list[dict[str, object]]) -> list[dict[str, object]]:
     turn_calls = _fetch_tool_calls_for_transcripts(turn_scope_ids)
     # Group by transcript_id for per-row chip lookup.
     calls_by_transcript = _group_calls_by_transcript(turn_calls)
+    # One lookup for the turn's delegate calls, bounded by their lifetimes, and
+    # none at all when it ran no watchable delegate.
+    delegates = Transcript.delegate_turns({
+        cast("int", c["id"]): (cast("str", c["created_at"]), cast("str | None", c["ended_at"]))
+        for c in turn_calls
+        if AbilityRegistry.is_watchable_delegate(cast("str", c["tool_name"]))
+    })
 
     # Rich-media spans resolve PER ACT CYCLE, not per turn. A turn_id spans the
     # whole thread — many user requests — and each request runs its own ACT loop
@@ -230,16 +253,18 @@ def _rows_to_messages(rows: list[dict[str, object]]) -> list[dict[str, object]]:
     # both carry ``image_preview_1``; resolving an assistant row's span against
     # the FLAT turn scope returns the turn's FIRST such call for every card
     # (every image card rendered the first image). Scope each assistant
-    # row to its cycle instead: reset at every user row (the cycle boundary),
-    # accumulate any assistant-anchored calls, and resolve the span within that
-    # window — the one scope where the per-request ordinal is unique.
+    # row to its cycle instead: reset at every user row that opens a request
+    # (the cycle boundary) — a joined row is read by the request already
+    # running, so it continues that cycle — accumulate any assistant-anchored
+    # calls, and resolve the span within that window — the one scope where the
+    # per-request ordinal is unique.
     voice_states = _voice_states(rows)
     thinking_states = _thinking_states(rows)
     cycle_calls: list[dict[str, object]] = []
     for r in rows:
         msg = _base_message(r)
         own = calls_by_transcript.get(cast("int", r['id']), [])
-        chips = _tool_call_chips(own)
+        chips = _tool_call_chips(own, delegates)
         if chips:
             msg["tool_calls"] = chips
         own_thinking = thinking_states.get(cast("int", r['id']))
@@ -250,7 +275,7 @@ def _rows_to_messages(rows: list[dict[str, object]]) -> list[dict[str, object]]:
                 "tokens": sum(cast("int", t["tokens"]) for t in own_thinking),
             }
         if r['role'] == 'user':
-            cycle_calls = list(own)
+            cycle_calls = cycle_calls + own if r['joined'] else list(own)
             _apply_user_fields(msg, r, attachments_by_id)
         else:
             cycle_calls = cycle_calls + own
@@ -284,7 +309,7 @@ def _drop_trailing_cancelled_orphan(
     thread and the model's view of it cannot disagree. ``latest`` is fetched
     once by the caller."""
     return rows[:TurnExecution.cancelled_orphan_cutoff(
-        [cast("str", r["role"]) for r in rows], latest,
+        [(cast("str", r["role"]), bool(r["joined"])) for r in rows], latest,
     )]
 
 
@@ -299,30 +324,34 @@ class TurnSerializerService:
     a refetching client needs to keep addressing the right channel, since
     ``channel`` alone isn't recoverable from a turn_id (a thread refetched
     without the right ``type`` would otherwise silently resolve to the wrong
-    channel and render as an empty block).
+    channel and render as an empty block). A delegate turn has no ConfigType:
+    it is read by ``channel`` with ``config_type`` None, and the block echoes
+    that ``channel`` instead.
 
     Returns the WHOLE turn (no floor) projected into messages, with every row
     from the turn's SECOND user-role row onward tagged ``thread_message: true``
     — the reply continuation the main spine drops (it renders only the opener)
     and whose mere presence makes the turn a thread (the feed shows the
     opener). The opener is one user row plus every assistant row that follows
-    it (interim "let me check…" rows AND the final settled reply alike) up to
-    (not including) the next user row a reply appends — so the boundary keys
+    it (each provider call's row — "let me check…" prose, an empty tool-only
+    step AND the final settled reply alike) up to (not including) the next
+    user row a reply appends — so the boundary keys
     on the second user row's id, the one thing about a reply that is both
     structural (a fresh input row, not a column flip) and immutable once
     written. Neither ``Transcript.settle0`` NOR "first assistant row" work
-    here: settle0 is deliberately mutable (a reply's own tool activity
-    unsettles the ORIGINAL exchange's row via ``TranscriptService.unsettle()``,
-    so re-querying it retroactively erases every row's tag), and "first
-    assistant row" wrongly tags a single-exchange turn's own final reply once
-    an interim assistant row (a tool-using turn's "let me check…" row) precedes
-    it. The collapsed-feed metadata (gist, preview, last activity) and the
+    here: settle0 names only the terminal row of whichever exchange settled
+    first, so an opener that crashed or was cancelled before settling hands it
+    to a reply's terminal row and leaves the reply's own rows untagged; and
+    "first assistant row" wrongly tags a single-exchange turn's own final reply
+    once an earlier provider call's row (a "let me check…" or tool-only step
+    row) precedes it. The collapsed-feed metadata (gist, preview, last
+    activity) and the
     turn-level render state (``working`` — an open ``turn_executions`` row for
     this (channel, turn_id), i.e. a currently in-flight execution, not merely
     "never settled" — and ``duration_ms``, derived from the row span) are
     folded in."""
 
-    def serialize(self, channel: str, turn_id: int, config_type: str = _TYPE) -> dict[str, object]:
+    def serialize(self, channel: str, turn_id: int, config_type: str | None = _TYPE) -> dict[str, object]:
         """The single turn-block getter — the REST single/batch reads and the WS
         refetch all flow through here, so one fetch fully determines a turn's render
         with no signal memory.
@@ -333,36 +362,48 @@ class TurnSerializerService:
         a refetching client needs to keep addressing the right channel, since
         ``channel`` alone isn't recoverable from a turn_id (a thread refetched
         without the right ``type`` would otherwise silently resolve to the wrong
-        channel and render as an empty block).
+        channel and render as an empty block). A delegate turn has no
+        ConfigType: it is read by ``channel`` with ``config_type`` None, and the
+        block echoes that ``channel`` instead (``type`` null). Its input row is
+        written under the tool's role yet is the turn's input — the task the
+        caller handed over — so it renders as a ``user`` message.
 
         Returns the WHOLE turn (no floor) projected into messages, with every row
-        from the turn's SECOND user-role row onward tagged ``thread_message: true``
+        from the turn's SECOND non-joined user-role row onward tagged
+        ``thread_message: true``
         — the reply continuation the main spine drops (it renders only the opener)
         and whose mere presence makes the turn a thread (the feed shows the
         opener). The opener is one user row plus every assistant row that follows
-        it (interim "let me check…" rows AND the final settled reply alike) up to
-        (not including) the next user row a reply appends — so the boundary keys
-        on the second user row's id, the one thing about a reply that is both
-        structural (a fresh input row, not a column flip) and immutable once
-        written. Neither ``Transcript.settle0`` NOR "first assistant row" work
-        here: settle0 is deliberately mutable (a reply's own tool activity
-        unsettles the ORIGINAL exchange's row via ``TranscriptService.unsettle()``,
-        so re-querying it retroactively erases every row's tag), and "first
-        assistant row" wrongly tags a single-exchange turn's own final reply once
-        an interim assistant row (a tool-using turn's "let me check…" row) precedes
-        it. The collapsed-feed metadata (gist, preview, last activity) and the
+        it (each provider call's row — "let me check…" prose, an empty tool-only
+        step AND the final settled reply alike), plus any joined user row (a
+        message sent into the opener while it was working, read by that same
+        exchange), up to (not including) the next user row a reply appends — so
+        the boundary keys on the second non-joined user row's id, the one thing
+        about a reply that is both structural (a fresh input row, not a column
+        flip) and immutable once written. Neither ``Transcript.settle0`` NOR
+        "first assistant row" work here: settle0 names only the terminal row of whichever exchange settled
+        first, so an opener that crashed or was cancelled before settling hands it
+        to a reply's terminal row and leaves the reply's own rows untagged; and
+        "first assistant row" wrongly tags a single-exchange turn's own final reply
+        once an earlier provider call's row (a "let me check…" or tool-only step
+        row) precedes it. The collapsed-feed metadata (gist, preview, last
+        activity) and the
         turn-level render state (``working`` — an open ``turn_executions`` row for
         this (channel, turn_id), i.e. a currently in-flight execution, not merely
         "never settled" — and ``duration_ms``, derived from the row span) are
         folded in."""
-        from services.time_utils import parse_utc
-
         latest = TurnExecution.latest(channel, turn_id)
         rows = Transcript.by_turn(channel, turn_id)
         rows = _drop_trailing_cancelled_orphan(rows, latest)
+        # Only a delegate's input row carries a tool_call_id: it is the stamp
+        # linking the row to the call that spawned the turn, and nothing else
+        # has written the column since rows gained a turn_id.
+        for r in rows:
+            if r["tool_call_id"] is not None:
+                r["role"] = "user"
         messages = _rows_to_messages(rows)
 
-        user_ids = [cast("int", r["id"]) for r in rows if r["role"] == "user"]
+        user_ids = [cast("int", r["id"]) for r in rows if r["role"] == "user" and not r["joined"]]
         boundary = user_ids[1] if len(user_ids) > 1 else None
         for m in messages:
             if boundary is not None and int(cast("str", m["id"])) >= boundary:
@@ -382,6 +423,7 @@ class TurnSerializerService:
             "duration_ms": duration_ms,
             "messages": messages,
             "type": config_type,
+            "channel": channel if config_type is None else None,
             # True when the turn's most recent execution ended CRASHED — an unhandled
             # step exception, or a process death the boot sweep stamped. A crash that
             # produced no reply row is otherwise indistinguishable from a normal empty
@@ -390,6 +432,10 @@ class TurnSerializerService:
             # stop_reason is deliberately NOT exposed: it is raw str(exc)/"process
             # death", never user-displayable, so the FE renders a fixed message.
             "crashed": bool(latest and latest.state == TurnExecution.CRASHED),
+            # True when the turn's most recent execution was stopped. A stopped
+            # subagent's transcript otherwise just ends after its task, which
+            # reads as an empty answer, so its panel needs this to say "stopped".
+            "cancelled": bool(latest and latest.state == TurnExecution.CANCELLED),
         }
 
     def bulk_gists(self, channel: str, turn_ids: list[int]) -> dict[int, str]:

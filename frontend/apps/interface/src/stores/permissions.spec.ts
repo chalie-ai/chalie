@@ -28,6 +28,7 @@ const liveFrame = {
   request_id: 'r1',
   action_id: 'pim',
   summary: 'Read the inbox',
+  asked_at: '2026-10-07T06:32:11+00:00',
   origin: { type: 'user', turn_id: 7, forked: true },
 };
 
@@ -46,20 +47,22 @@ describe('enqueue', () => {
     const store = usePermissionsStore();
     store.enqueue(liveFrame);
     expect(store.queue).toEqual([
-      { request_id: 'r1', action_id: 'pim', summary: 'Read the inbox', origin: { type: 'user', turn_id: 7, forked: true } },
+      {
+        request_id: 'r1', action_id: 'pim', summary: 'Read the inbox',
+        asked_at: '2026-10-07T06:32:11+00:00', origin: { type: 'user', turn_id: 7, forked: true },
+      },
     ]);
   });
 
-  it('a frame without an origin (or a malformed one) queues with origin null — routed to the spine, never a guessed turn', () => {
+  it('drops a frame without an origin (or a malformed one) loudly — never a guessed turn', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     const store = usePermissionsStore();
     store.enqueue({ type: 'permission_request', request_id: 'a', action_id: 'search' });
     store.enqueue({ type: 'permission_request', request_id: 'b', action_id: 'search', origin: { type: 'user' } });
     store.enqueue({ type: 'permission_request', request_id: 'c', action_id: 'search', origin: 'nope' });
-    expect(store.queue.map((r) => [r.request_id, r.origin, r.summary])).toEqual([
-      ['a', null, ''],
-      ['b', null, ''],
-      ['c', null, ''],
-    ]);
+    expect(store.queue).toEqual([]);
+    expect(error).toHaveBeenCalledTimes(3);
+    error.mockRestore();
   });
 
   it('drops a frame missing request_id or action_id', () => {
@@ -82,8 +85,14 @@ describe('refreshPending', () => {
     const store = usePermissionsStore();
     store.enqueue(liveFrame); // arrived over the socket before the fetch answered
     pendingMock.mockResolvedValue([
-      { request_id: 'r1', action_id: 'pim', summary: 'Read the inbox', origin: { type: 'user', turn_id: 7, forked: true } },
-      { request_id: 'r2', action_id: 'email.send', summary: 'Send the reply', origin: { type: 'scheduled', turn_id: 3, forked: false } },
+      {
+        request_id: 'r1', action_id: 'pim', summary: 'Read the inbox',
+        asked_at: '2026-10-07T06:32:11+00:00', origin: { type: 'user', turn_id: 7, forked: true },
+      },
+      {
+        request_id: 'r2', action_id: 'email.send', summary: 'Send the reply',
+        asked_at: '2026-10-07T06:33:05+00:00', origin: { type: 'scheduled', turn_id: 3, forked: false },
+      },
     ]);
 
     await store.refreshPending();
@@ -93,6 +102,7 @@ describe('refreshPending', () => {
       request_id: 'r2',
       action_id: 'email.send',
       summary: 'Send the reply',
+      asked_at: '2026-10-07T06:33:05+00:00',
       origin: { type: 'scheduled', turn_id: 3, forked: false },
     });
   });

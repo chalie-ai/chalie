@@ -125,9 +125,9 @@ class ProviderDbService:
         host points at no server, and no later edit short of supplying the host
         can make it mean anything.
         """
-        from services.llm_clients.registry import client_class_for  # noqa: PLC0415
+        from services.llm_clients.registry import PROVIDERS_BY_PLATFORM  # noqa: PLC0415
 
-        client = client_class_for(platform)
+        client = PROVIDERS_BY_PLATFORM.get(platform)
         if client is None or not client.REQUIRES_HOST or client.DEFAULT_BASE_URL:
             return
 

@@ -418,15 +418,18 @@ CREATE TABLE IF NOT EXISTS transcript (
     -- copied forward from a release that predates it valid; the value is computed
     -- at insert time by transcript_service.
     turn_id     INTEGER,
-    -- Positive settle flag: 1 on assistant rows that carry no model-driven tool
-    -- (the turn's settle0). Written as 1 by write_assistant_row / append;
-    -- ActTrail.start() demotes to 0 when a settling tool is recorded against the
-    -- row. Internal passes (chat_history_compactor, thinking) never demote.
+    -- Positive settle flag: 1 only on the assistant row that ends an exchange
+    -- (its last provider call: no tool calls and no joined message waiting).
+    -- Written once at insert, never changed.
     settled     INTEGER NOT NULL DEFAULT 0,
     -- Per-turn thinking level chosen by the sender (auto|medium|high); NULL =
     -- legacy row or not-yet-set, lets a later query distinguish "chose auto"
     -- from "never set".
-    thinking_level TEXT
+    thinking_level TEXT,
+    -- 1 on a user row sent into the turn while it was still working: the
+    -- running exchange reads it at its next boundary instead of a new
+    -- exchange opening for it.
+    joined      INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_transcript_channel ON transcript(channel, created_at);

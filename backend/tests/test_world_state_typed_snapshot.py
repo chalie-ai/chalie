@@ -61,22 +61,6 @@ class TestWorldStateTypedSnapshot:
         snap = ws.snapshot()
         assert snap["current_device_class"] == "phone"
 
-    # ── absorb: local_time ───────────────────────────────────────────────
-
-    def test_absorb_local_time_string_updates_snapshot(self, ws: WorldState) -> None:
-        time_str = "2026-04-25T14:30:00+00:00"
-        sig = Signal(source="/health", kind="local_time", payload={"local_time": time_str})
-        ws.absorb(sig)
-        snap = ws.snapshot()
-        assert snap["current_local_time"] is not None
-        assert isinstance(snap["current_local_time"], datetime)
-
-    def test_absorb_local_time_without_value_ignored(self, ws: WorldState) -> None:
-        sig = Signal(source="/health", kind="local_time", payload={})
-        ws.absorb(sig)
-        snap = ws.snapshot()
-        assert snap["current_local_time"] is None
-
     # ── snapshot: unset fields return None ───────────────────────────────
 
     def test_snapshot_returns_none_for_unset_fields(self, ws: WorldState) -> None:
@@ -84,7 +68,6 @@ class TestWorldStateTypedSnapshot:
         assert snap["last_user_message_at"] is None
         assert snap["last_heartbeat_at"] is None
         assert snap["current_device_class"] is None
-        assert snap["current_local_time"] is None
 
     # ── unknown signal kinds silently ignored ────────────────────────────
 
@@ -96,4 +79,3 @@ class TestWorldStateTypedSnapshot:
         assert snap["last_user_message_at"] is None
         assert snap["last_heartbeat_at"] is None
         assert snap["current_device_class"] is None
-        assert snap["current_local_time"] is None

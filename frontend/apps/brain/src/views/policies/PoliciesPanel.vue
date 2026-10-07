@@ -110,7 +110,7 @@ onMounted(load);
   <div v-else class="policies-grid">
     <div v-for="c in categories" :key="c.cat" class="policy-category">
       <h4 class="section-head">
-        <span v-if="c.isMcp" class="badge badge-cyan">MCP</span>
+        <span v-if="c.isMcp" class="badge">MCP</span>
         {{ c.cat }}
       </h4>
       <div v-for="{ r, label } in c.rows" :key="r.permission" class="policy-rule">

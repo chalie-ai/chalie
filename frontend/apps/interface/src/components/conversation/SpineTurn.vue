@@ -47,7 +47,7 @@ const pillStatus = computed<'working' | 'done' | 'thread' | 'idle'>(() => {
   return 'idle';
 });
 
-// A forked turn's thread opener now rides INLINE on its settle0 footer meta line
+// A forked turn's thread opener now rides INLINE on its closing footer meta line
 // (rendered by BubbleFooter), not as a separate pill row. We hand TurnView the
 // status + gist label; null for a non-forked turn leaves the footer pill-free.
 const threadPill = computed<{ status: 'working' | 'done' | 'thread' | 'idle'; label: string } | null>(

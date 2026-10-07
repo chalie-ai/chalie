@@ -1,0 +1,97 @@
+#app {
+  max-width: 30rem;
+  margin-inline: auto;
+  padding: var(--space-xl) var(--space-lg);
+}
+
+.mark {
+  margin-bottom: var(--space-lg);
+}
+
+h1 {
+  font-size: var(--fs-title);
+  margin: 0 0 var(--space-xs);
+}
+
+.lead {
+  margin: 0 0 var(--space-lg);
+  color: var(--muted);
+}
+
+fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.form-group .lbl {
+  display: block;
+  margin-bottom: var(--space-xs);
+}
+
+input {
+  width: 100%;
+  padding: 0 var(--space-sm);
+}
+
+.choices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.choices .btn {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-xs);
+  padding: var(--space-md);
+  line-height: 1.4;
+  text-align: left;
+}
+
+.choices small {
+  font-weight: 400;
+}
+
+/* On the pink fill it keeps the button's own text colour. */
+.choices .btn:not(.btn-primary) small {
+  color: var(--muted);
+}
+
+.actions {
+  display: flex;
+  gap: var(--space-sm);
+  align-items: center;
+}
+
+.message {
+  margin: 0 0 var(--space-md);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--surface);
+}
+
+.message.error {
+  color: var(--deny-text);
+}
+
+.message small {
+  display: block;
+  color: var(--muted);
+  word-break: break-word;
+}
+
+.output {
+  height: 12rem;
+  overflow-y: auto;
+  margin-bottom: var(--space-md);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--surface);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.output p {
+  margin: 0;
+}

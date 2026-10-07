@@ -486,7 +486,7 @@ async function saveProvider(): Promise<void> {
     <div class="panel-header">
       <h2>LLM Providers</h2>
       <button class="btn btn-primary" @click="openWizard(null)">
-        <Plus :size="14" />
+        <Plus :size="16" />
         Add Provider
       </button>
     </div>
@@ -533,7 +533,7 @@ async function saveProvider(): Promise<void> {
               >
             </div>
             <div class="provider-meta">
-              <span :class="`badge badge-${p.platform}`">{{ p.platform }}</span>
+              <span class="badge badge-muted">{{ p.platform }}</span>
               <span
                 v-if="p.supports_vision"
                 class="badge badge-success"
@@ -545,7 +545,7 @@ async function saveProvider(): Promise<void> {
             </div>
           </div>
           <div class="provider-actions">
-            <button class="btn btn-sm btn-secondary" @click="openWizard(p.id)">Edit</button>
+            <button class="btn btn-sm" @click="openWizard(p.id)">Edit</button>
             <button
               class="btn btn-sm btn-danger"
               :disabled="providerRoles(p.id).length > 0"
@@ -606,8 +606,8 @@ async function saveProvider(): Promise<void> {
   <template v-else-if="mode === 'picker'">
     <div class="provider-wizard">
       <div class="form-page-header">
-        <button class="btn btn-secondary btn-sm back-btn" @click="backFromPicker">
-          <ChevronLeft :size="14" />
+        <button class="btn btn-sm back-btn" @click="backFromPicker">
+          <ChevronLeft :size="16" />
           Back
         </button>
         <h3>Choose a provider</h3>
@@ -634,8 +634,8 @@ async function saveProvider(): Promise<void> {
   <template v-else-if="mode === 'form'">
     <div class="provider-wizard">
       <div class="form-page-header">
-        <button class="btn btn-secondary btn-sm back-btn" @click="backFromForm">
-          <ChevronLeft :size="14" />
+        <button class="btn btn-sm back-btn" @click="backFromForm">
+          <ChevronLeft :size="16" />
           {{ isEditing ? 'Back' : 'Providers' }}
         </button>
         <h3>{{ isEditing ? 'Edit Provider' : `Set up ${preset?.name ?? ''}` }}</h3>
@@ -664,7 +664,7 @@ async function saveProvider(): Promise<void> {
             v-if="!keyRevealed"
             id="pKeyReveal"
             type="button"
-            class="btn btn-secondary"
+            class="btn"
             :disabled="revealingKey"
             @click="revealApiKey"
           >
@@ -699,7 +699,7 @@ async function saveProvider(): Promise<void> {
               :disabled="modelsFetchInFlight"
               @click="fetchModels"
             >
-              <RefreshCw :size="14" :class="{ spinning: modelsFetchInFlight }" />
+              <RefreshCw :size="16" :class="{ spinning: modelsFetchInFlight }" />
             </button>
           </div>
           <select id="pModel" v-model="formModel">
@@ -721,10 +721,10 @@ async function saveProvider(): Promise<void> {
         </div>
 
         <div class="form-actions">
-          <button type="button" class="btn btn-secondary" @click="cancelForm">Cancel</button>
+          <button type="button" class="btn" @click="cancelForm">Cancel</button>
           <button
             type="button"
-            class="btn btn-secondary"
+            class="btn"
             :disabled="testing"
             @click="testConnection"
           >

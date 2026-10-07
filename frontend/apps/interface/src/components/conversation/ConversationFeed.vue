@@ -142,7 +142,7 @@ onBeforeUnmount(() => {
     </div>
 
     <div v-if="!hasMoreRef" class="history-end-pill">
-      <span class="history-end-pill__label">End of thread history</span>
+      <span class="tag">End of thread history</span>
     </div>
 
     <div ref="turnsRef" class="conversation-spine__turns" />
@@ -159,9 +159,8 @@ onBeforeUnmount(() => {
 .history-loader__spinner {
   width: 18px;
   height: 18px;
-  border: 2px solid color-mix(in oklab, var(--violet) 20%, transparent);
-  border-top-color: var(--violet);
-  border-radius: 50%;
+  border: 2px solid var(--line);
+  border-top-color: var(--pink-text);
   animation: spin 0.7s linear infinite;
 }
 
@@ -169,15 +168,5 @@ onBeforeUnmount(() => {
   display: flex;
   justify-content: center;
   padding: 16px 0 8px;
-}
-
-.history-end-pill__label {
-  font-size: 11px;
-  color: var(--text-muted);
-  background: color-mix(in oklab, var(--text) 3%, transparent);
-  border: 1px solid color-mix(in oklab, var(--text) 7%, transparent);
-  border-radius: 20px;
-  padding: 4px 14px;
-  letter-spacing: 0.04em;
 }
 </style>

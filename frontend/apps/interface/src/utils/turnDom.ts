@@ -1,7 +1,7 @@
 import { createVNode, render } from 'vue';
 import type { App, AppContext, Component } from 'vue';
 import TurnView from '../components/conversation/TurnView.vue';
-import type { ConversationTurnBlock } from '../api/conversation';
+import type { ConversationTurnBlock, DelegateTurnBlock } from '../api/conversation';
 import { clearLiveTurnsForToolCallsResolved } from './liveActTrail';
 
 let appContext: AppContext | null = null;
@@ -32,9 +32,26 @@ export function getTurnEl(
  *  only unique per type, so scanning by type would require already knowing
  *  the answer). Used to recover a WS frame's identity when the frame itself
  *  omits `type` rather than guessing it. Null when no copy is rendered
- *  anywhere yet. */
+ *  anywhere yet. A delegate turn's copy carries no type at all, so it can
+ *  never answer for a same-id typed turn. */
 export function findTurnType(turnId: number): string | null {
-  return document.querySelector<HTMLElement>(`[data-turn-id="${turnId}"]`)?.dataset.type ?? null;
+  return (
+    document.querySelector<HTMLElement>(`[data-turn-id="${turnId}"][data-type]`)?.dataset.type ??
+    null
+  );
+}
+
+/** A delegate turn's element inside one surface's container. Delegate copies
+ *  are stamped `data-channel` and never `data-type`, so no typed lookup can
+ *  reach them, and this one cannot reach a typed copy. */
+function getDelegateTurnEl(
+  turnId: number,
+  channel: string,
+  container: ParentNode,
+): HTMLElement | null {
+  return container.querySelector<HTMLElement>(
+    `[data-turn-id="${turnId}"][data-channel="${CSS.escape(channel)}"]`,
+  );
 }
 
 /** Every rendered copy of a turn, across ALL surfaces — used by effects that
@@ -132,6 +149,18 @@ export function isLaneWorking(laneType: string, laneTurnId: number): boolean {
   return spine.container.querySelector('[data-working]:not([data-lane-turn-id])') != null;
 }
 
+/** The spine's own working turn — the one a spine follow-up joins. The same
+ *  match as the spine branch of `isLaneWorking`, narrowed to a marker that
+ *  names its turn; the newest when more than one is working, null when none
+ *  is. */
+export function workingSpineTurnId(): number | null {
+  const els = _surfaces
+    .get(SPINE_SURFACE_ID)
+    ?.container.querySelectorAll('[data-working][data-turn-id]:not([data-lane-turn-id])');
+  const newest = els?.[els.length - 1];
+  return newest ? readTurnId(newest) : null;
+}
+
 /** Claim a turn for its own thread lane on every rendered copy. Called when a
  *  reply is sent into it: the reply proves the fork immediately, whereas
  *  `stampWorking` can only re-derive it once the refetch carrying the new
@@ -188,15 +217,21 @@ export function lastUserText(turnHost: ParentNode): string {
  * merged with `{ block, type }` on every mount (event handlers included —
  * Vue resolves an `onX` prop to the matching `emit('x', ...)`). `accepts`
  * filters which turn_ids render here (default: every turn of this type).
+ *
+ * A surface is addressed by EITHER a ConfigType or a delegate turn's full
+ * channel, never both: typed fan-out skips channel surfaces and the delegate
+ * upsert skips typed ones, so a delegate's turn_id — which collides with user
+ * turn ids — can only ever render where its channel was registered.
  */
-export interface Surface {
+interface SurfaceBase {
   id: string;
-  type: string;
   container: HTMLElement;
   component: Component;
   props?: Record<string, unknown>;
   accepts?: (turnId: number) => boolean;
 }
+export type Surface = SurfaceBase &
+  ({ type: string; channel?: never } | { channel: string; type?: never });
 
 const _surfaces = new Map<string, Surface>();
 
@@ -249,7 +284,7 @@ export interface UpsertOptions {
   force?: boolean;
 }
 
-function blockVersion(block: ConversationTurnBlock): number {
+function blockVersion(block: Pick<ConversationTurnBlock, 'messages'>): number {
   let v = 0;
   for (const m of block.messages) {
     const n = Number.parseInt(m.id, 10);
@@ -271,28 +306,36 @@ export function upsertTurn(
   extraProps: Record<string, unknown> = {},
   options: UpsertOptions = {},
 ): HTMLElement | null {
-  const version = blockVersion(block);
-  const existing = getTurnEl(block.turn_id, type, container);
+  const host = placeHost(getTurnEl(block.turn_id, type, container), container, block, options);
+  if (!host) return null;
+  mount(host, component, { block, type, ...extraProps });
+  stampWorking(host, block, type);
+  notifyUpserted({ turnId: block.turn_id, type });
+  return host;
+}
 
+/** The host a block renders into, version-guarded (see `upsertTurn`): the
+ *  existing copy's wrapper, or a new one slotted into `container` in turn
+ *  order. Null when the block is strictly older than what is rendered. */
+function placeHost(
+  existing: HTMLElement | null,
+  container: HTMLElement,
+  block: Pick<ConversationTurnBlock, 'turn_id' | 'messages'>,
+  options: UpsertOptions,
+): HTMLElement | null {
+  const version = blockVersion(block);
   if (existing) {
     const host = existing.parentElement!;
     const currentVersion = Number.parseInt(host.dataset.version ?? '-1', 10);
     if (!options.force && currentVersion > version) return null;
     host.dataset.version = String(version);
     stampDay(host, block);
-    mount(host, component, block, type, extraProps);
-    stampWorking(host, block, type);
-    notifyUpserted(block.turn_id, type);
     return host;
   }
-
   const host = document.createElement('div');
   host.dataset.version = String(version);
   stampDay(host, block);
   insertInOrder(container, host, block.turn_id);
-  mount(host, component, block, type, extraProps);
-  stampWorking(host, block, type);
-  notifyUpserted(block.turn_id, type);
   return host;
 }
 
@@ -300,7 +343,7 @@ export function upsertTurn(
  *  YYYY-MM-DD) so the date-divider reconciler (utils/daymarks.ts) can group
  *  turns by day without re-parsing timestamps. Left unset when no message
  *  carries the key — such a turn simply joins the group above it. */
-function stampDay(host: HTMLElement, block: ConversationTurnBlock): void {
+function stampDay(host: HTMLElement, block: Pick<ConversationTurnBlock, 'messages'>): void {
   const day = block.messages[0]?.day;
   if (day) host.dataset.day = day;
 }
@@ -383,7 +426,7 @@ export function upsertTurnToSurfaces(
   // live). Fired here, the one shared upsert path every fetched block passes
   // through — the DOM-contract port of the retired buffer's `_writeTurn`
   // call, without which a mid-turn refetch renders the frozen pill AND its
-  // collapsed chip side by side until the turn settles.
+  // persisted chip side by side until the turn settles.
   clearLiveTurnsForToolCallsResolved(
     type,
     block.turn_id,
@@ -414,20 +457,53 @@ export function upsertTurnToSurfaces(
   if (applied) _turnLandedHook?.(block.turn_id, type, isNewTopLevelTurn);
 }
 
-function mount(
-  host: HTMLElement,
-  component: Component,
-  block: ConversationTurnBlock,
-  type: string,
-  extraProps: Record<string, unknown>,
-): void {
-  const vnode = createVNode(component, { block, type, ...extraProps });
+/** True if a surface is registered to render this exact delegate turn — the
+ *  dispatcher fetches a delegate block only when one is. */
+export function hasDelegateSurface(channel: string, turnId: number): boolean {
+  for (const surface of _surfaces.values()) {
+    if (surface.channel !== channel) continue;
+    if (surface.accepts && !surface.accepts(turnId)) continue;
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Render a delegate turn's block on every surface registered for its exact
+ * channel whose `accepts` passes. A delegate turn has no type, no lane and no
+ * send echo, so nothing here records working/done state or fires the land
+ * hook; the block itself carries everything its render needs.
+ */
+export function upsertDelegateTurn(block: DelegateTurnBlock, options: UpsertOptions = {}): void {
+  const { channel } = block;
+  clearLiveTurnsForToolCallsResolved(
+    channel,
+    block.turn_id,
+    block.messages.some((m) => m.tool_calls?.length),
+  );
+  for (const surface of _surfaces.values()) {
+    if (surface.channel !== channel) continue;
+    if (surface.accepts && !surface.accepts(block.turn_id)) continue;
+    const existing = getDelegateTurnEl(block.turn_id, channel, surface.container);
+    const host = placeHost(existing, surface.container, block, options);
+    if (!host) continue;
+    mount(host, surface.component, { block, ...surface.props });
+    notifyUpserted({ turnId: block.turn_id, channel });
+  }
+}
+
+function mount(host: HTMLElement, component: Component, props: Record<string, unknown>): void {
+  const vnode = createVNode(component, props);
   vnode.appContext = appContext;
   render(vnode, host);
 }
 
-function notifyUpserted(turnId: number, type: string): void {
-  document.dispatchEvent(new CustomEvent('turn-upserted', { detail: { turnId, type } }));
+/** Tell listeners a turn re-rendered. A typed turn is named by `type`; a
+ *  delegate turn by its `channel`. */
+function notifyUpserted(
+  detail: { turnId: number; type: string } | { turnId: number; channel: string },
+): void {
+  document.dispatchEvent(new CustomEvent('turn-upserted', { detail }));
 }
 
 /** Find the right slot in `container` so children stay sorted by turn_id. */

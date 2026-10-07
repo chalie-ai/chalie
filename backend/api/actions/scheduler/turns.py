@@ -15,7 +15,6 @@ from flask.typing import ResponseReturnValue
 
 from api.action import Action
 from api.endpoint import DocumentedResponse
-from exceptions import NotFoundError
 from api.response.scheduler_turn import SchedulerTurn
 from models.scheduled_item import ScheduledItem
 from models.thread_gist import ThreadGist
@@ -36,8 +35,7 @@ class SchedulerTurns(Action):
         channel=schedule, turn_id) — read separately and merged here, each
         model owning its own table's SQL rather than a cross-table JOIN.
         """
-        if not self.is_create(id):
-            raise NotFoundError("Not found")
+        self.require_create_sentinel(id)
         schedules = ScheduledItem.recent()
         gists = ThreadGist.bulk_get(ScheduledItem.SCHEDULE_CHANNEL, [cast(int, s.id) for s in schedules])
         items = [

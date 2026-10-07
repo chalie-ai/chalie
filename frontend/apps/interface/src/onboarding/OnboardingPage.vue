@@ -16,7 +16,7 @@ let nextId = 0;
 const toasts = ref<Toast[]>([]);
 
 // Drop from the queue after the 3s visible window; the TransitionGroup leave
-// transition plays the 0.3s fade-out.
+// transition plays the fade-out.
 const TOAST_VISIBLE_MS = 3000;
 
 function showToast(message: string, type: Toast['type'] = 'info'): void {
@@ -114,7 +114,7 @@ async function handleAccountSubmit(): Promise<void> {
           />
         </div>
         <div class="form-actions">
-          <button type="submit" class="btn-primary" :disabled="pending">
+          <button type="submit" class="btn btn-primary" :disabled="pending">
             {{ pending ? 'Creating...' : 'Create Account' }}
           </button>
         </div>
@@ -130,38 +130,6 @@ async function handleAccountSubmit(): Promise<void> {
 </template>
 
 <style scoped lang="scss">
-:global(body::before) {
-  content: '';
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  pointer-events: none;
-  background:
-    radial-gradient(
-      600px circle at 30% 20%,
-      color-mix(in srgb, var(--accent-primary) 6%, transparent),
-      transparent 60%
-    ),
-    radial-gradient(
-      500px circle at 70% 75%,
-      color-mix(in srgb, var(--accent-tertiary) 4%, transparent),
-      transparent 60%
-    );
-  animation: ambient-breathe 20s ease-in-out infinite;
-}
-
-@keyframes ambient-breathe {
-  0%,
-  100% {
-    transform: scale(1);
-    opacity: 0.8;
-  }
-  50% {
-    transform: scale(1.06);
-    opacity: 1;
-  }
-}
-
 .ob-container {
   width: 100%;
   display: flex;
@@ -173,9 +141,7 @@ async function handleAccountSubmit(): Promise<void> {
   width: 100%;
   max-width: 500px;
   padding: 40px;
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: var(--bs-border-radius-lg);
+  background: var(--surface);
 }
 
 .ob-card-header {
@@ -183,34 +149,31 @@ async function handleAccountSubmit(): Promise<void> {
   margin-bottom: 32px;
 
   h1 {
-    font-size: 1.4rem;
+    font-size: var(--fs-title);
     font-weight: 500;
     margin-bottom: 0.25rem;
   }
 
   p {
-    color: var(--text-secondary);
-    font-size: 0.85rem;
+    color: var(--muted);
+    font-size: var(--fs-body);
     margin-bottom: 0;
   }
 }
 
 .warning-box {
-  border-radius: 6px;
   padding: 16px;
   margin-bottom: 24px;
-  background: color-mix(in srgb, var(--error) 8%, transparent);
-  border: 1px solid color-mix(in srgb, var(--error) 35%, transparent);
-  border-left: 3px solid var(--error);
+  background: var(--surface-2);
 
   h3 {
-    color: var(--error);
-    font-size: 13px;
+    color: var(--deny-text);
+    font-size: var(--fs-body);
     margin-bottom: 8px;
   }
 
   p {
-    font-size: 13px;
+    font-size: var(--fs-body);
     color: var(--text);
     line-height: 1.6;
     margin-bottom: 6px;
@@ -226,28 +189,14 @@ async function handleAccountSubmit(): Promise<void> {
 
   label {
     display: block;
-    font-size: 0.8rem;
-    color: var(--text-secondary);
+    font-size: var(--fs-body);
+    color: var(--muted);
     margin-bottom: 0.35rem;
   }
 
   input {
     display: block;
     width: 100%;
-    padding: 0.6rem 0.75rem;
-    font-size: 0.9rem;
-    color: var(--text);
-    background: var(--bg-input);
-    border: 1px solid var(--border);
-    border-radius: var(--bs-border-radius);
-    outline: none;
-    transition: border-color 0.2s;
-    box-sizing: border-box;
-
-    &:focus {
-      border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
-      box-shadow: 0 0 8px color-mix(in srgb, var(--accent-primary) 6%, transparent);
-    }
 
     &:disabled {
       opacity: 0.6;
@@ -264,24 +213,6 @@ async function handleAccountSubmit(): Promise<void> {
 
 .btn-primary {
   flex: 1;
-  padding: 0.65rem;
-  font-size: 0.9rem;
-  font-weight: 500;
-  border-radius: var(--bs-border-radius);
-  cursor: pointer;
-  transition: opacity 0.2s;
-  color: #fff;
-  background: var(--accent-primary);
-  border: none;
-
-  &:hover:not(:disabled) {
-    opacity: 0.85;
-  }
-
-  &:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
 }
 
 .toast-container {
@@ -296,40 +227,26 @@ async function handleAccountSubmit(): Promise<void> {
 }
 
 .toast {
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  background: var(--surface-2);
   padding: 12px 16px;
-  font-size: 13px;
+  font-size: var(--fs-body);
   font-weight: 500;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
   pointer-events: auto;
-  animation: slideIn 0.3s ease;
+  animation: rise var(--dur-2) var(--ease-out);
 
   &.toast-success {
-    border-left: 3px solid var(--success);
+    color: var(--allow-text);
   }
   &.toast-error {
-    border-left: 3px solid var(--error);
+    color: var(--deny-text);
   }
   &.toast-info {
-    border-left: 3px solid var(--accent-primary);
-  }
-}
-
-@keyframes slideIn {
-  from {
-    transform: translateX(400px);
-    opacity: 0;
-  }
-  to {
-    transform: translateX(0);
-    opacity: 1;
+    color: var(--pink-text);
   }
 }
 
 .toast-leave-active {
-  transition: opacity 0.3s ease;
+  transition: opacity var(--dur-2) var(--ease-out);
 }
 .toast-leave-to {
   opacity: 0;
@@ -344,9 +261,6 @@ async function handleAccountSubmit(): Promise<void> {
     left: 10px;
     right: 10px;
     bottom: 10px;
-  }
-  .toast {
-    font-size: 12px;
   }
 }
 </style>

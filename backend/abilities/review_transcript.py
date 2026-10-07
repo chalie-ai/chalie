@@ -109,13 +109,19 @@ class ReviewTranscriptAbility(ReviewWindowAbility[ReviewTranscriptParamsBag]):
             if params.include_subagent_transcripts
             else [Channel.USER.value]
         )
-        return (
+        records = (
             Transcript.filter_in("channel", channels)
             .filter("created_at", lo, ">=")
             .filter("created_at", hi, "<=")
             .order_by("created_at ASC, id ASC")
             .select("channel", "role", "content", "created_at")
         )
+        # An assistant row with no text is a provider call that only made tool
+        # calls: there is no wording in it to re-read.
+        return [
+            rec for rec in records
+            if rec["role"] != "assistant" or str(rec["content"] or "").strip()
+        ]
 
     def _row(self, rec: "dict[str, object]", ordinal: int) -> "dict[str, object]":
         # Content is NOT clipped: this tool exists so the model can re-read EXACT

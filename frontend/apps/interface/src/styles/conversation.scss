@@ -1,55 +1,28 @@
 // Conversation component styles. Colors use CSS-var tokens for dark+light (Rule 7).
-// Depends on @chalie/shared/styles/main.scss + interface.scss loaded first (tokens, keyframes).
+// Depends on @chalie/shared/styles/main.scss (tokens, keyframes) + interface.scss loaded first.
 
 // --------------------------------------------------------------------------
 // 0. Date divider — day-group marker in the spine
 // --------------------------------------------------------------------------
-// A centered mono date label flanked by hairline rules, separating turns by the
-// day they occurred on. Inserted imperatively by utils/daymarks.ts (so it must
-// be GLOBAL, not scoped — imperative nodes carry no scoped-style attribute).
+// A centered mono date label — the spacing around it separates turns by day,
+// no flanking rule line. Inserted imperatively by utils/daymarks.ts (so it
+// must be GLOBAL, not scoped — imperative nodes carry no scoped-style attr).
 .daymark {
   display: flex;
   align-items: center;
-  gap: 14px;
   margin: 6px 0 26px;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-mono);
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--text-tertiary);
-}
-
-.daymark::before,
-.daymark::after {
-  content: '';
-  height: 1px;
-  flex: 1;
-  background: var(--border);
+  color: var(--muted);
 }
 
 .speech-form {
   position: relative;
   padding: var(--space-lg);
-  border-radius: 18px;
-  background: var(--bg-chalie);
-  backdrop-filter: blur(16px) saturate(120%);
-  -webkit-backdrop-filter: blur(16px) saturate(120%);
-  border: 1px solid var(--border);
-  box-shadow: var(--shadow-card);
-  animation: formEntry 200ms var(--ease-out) both;
-  transition: background 420ms ease, border-color 400ms ease, box-shadow 400ms ease;
-}
-
-// Neon accent stripe — left for Chalie (violet), right for user (cyan)
-.speech-form::before {
-  content: '';
-  position: absolute;
-  top: 14px;
-  bottom: 14px;
-  width: 2px;
-  border-radius: 2px;
-  z-index: 1;
-  pointer-events: none;
+  background: var(--surface);
+  animation: rise var(--dur-2) var(--ease-out);
 }
 
 // --------------------------------------------------------------------------
@@ -64,16 +37,16 @@
   gap: var(--space-sm);
   max-width: 80%;
   margin-left: auto;
-  background: var(--bg-surface-2);
-  border: 1px solid var(--border);
-  border-radius: 18px 18px 6px 18px;
+  background: var(--surface-2);
   padding: 11px 15px;
-  // The clamped-text fade (.user-text--clamped::after) resolves against
-  // --row-fade-bg. --bg-surface-2 is translucent, so publish the bubble's
-  // actual composited (opaque) appearance here instead of letting the fade
-  // fall back to the page background — otherwise the fade barely occludes
-  // the text and leaves a visible seam against the bubble.
-  --row-fade-bg: var(--user-bubble-fade);
+}
+
+// Names who wrote the row when it is not the user — a delegate transcript's
+// opening instruction comes from Chalie.
+.user-message__label {
+  font-size: var(--fs-mono);
+  font-weight: 500;
+  color: var(--muted);
 }
 
 .user-text {
@@ -82,85 +55,42 @@
   white-space: pre-wrap;
   overflow-wrap: break-word;
   font-weight: 500;
-  font-size: 0.9375rem;
   line-height: 1.6;
-  color: var(--text-primary);
+  color: var(--text);
 }
 
-// Collapsed long message: clamp to 5 lines with a soft fade hinting at more text
-// below. The fade resolves to --row-fade-bg, a custom property the hosting
-// surface publishes (bubble / feed / panel) so it matches whichever backdrop
-// the row sits on, in both the dark and light themes. .user-message publishes
-// its own opaque composited colour (see --user-bubble-fade in _tokens.scss)
-// since --bg-surface-2 itself is translucent and would barely occlude the text.
+// Collapsed long message: clamp to 5 lines; the clamp ends the last line in an
+// ellipsis, hinting at more text below.
 .user-text--clamped {
   display: -webkit-box;
   -webkit-line-clamp: 5;
   line-clamp: 5;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  position: relative;
-}
-
-.user-text--clamped::after {
-  content: '';
-  position: absolute;
-  inset-inline: 0;
-  bottom: 0;
-  height: 2.4em;
-  background: linear-gradient(to bottom, transparent, var(--row-fade-bg));
-  pointer-events: none;
 }
 
 .user-text__toggle {
   align-self: flex-start;
   padding: 0;
-  border: none;
   background: none;
   cursor: pointer;
   font-family: var(--font-mono);
-  font-size: 0.78rem;
+  font-size: var(--fs-mono);
   letter-spacing: 0.01em;
-  color: var(--text-tertiary);
-  transition: color 150ms ease;
+  color: var(--muted);
+  transition: color var(--dur-1) var(--ease-out);
 }
 
 .user-text__toggle:hover {
-  color: var(--accent-primary);
-}
-
-// Hard no-shadow guard inside bubbles
-.speech-form,
-.speech-form *,
-.speech-form::before,
-.speech-form::after,
-.speech-form *::before,
-.speech-form *::after {
-  box-shadow: none !important;
-  text-shadow: none !important;
+  color: var(--text);
 }
 
 .speech-form--chalie {
-  border: none;
-  box-shadow: none;
-  border-radius: 0;
   background: none;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
   align-self: stretch;
   width: 100%;
   max-width: 100%;
   padding: 0;
-}
-
-// No accent stripe on Chalie — full-bleed text on the spine
-.speech-form--chalie::before {
-  display: none;
-}
-
-// Faded messages — outside working memory
-.message--faded {
-  opacity: 0.75;
 }
 
 .speech-form__text {
@@ -188,24 +118,22 @@
   gap: var(--space-sm);
   max-width: 100%;
   padding: 1px 0;
-  border: none;
   background: none;
   cursor: pointer;
   font-family: var(--font-mono);
-  font-size: 0.82rem;
+  font-size: var(--fs-mono);
   line-height: 1.4;
   letter-spacing: -0.005em;
-  color: var(--text-secondary);
-  transition: color 150ms ease;
+  color: var(--muted);
+  transition: color var(--dur-1) var(--ease-out);
 }
 
 .user-attachments__item:hover {
-  color: var(--accent-primary);
+  color: var(--text);
 }
 
 .user-attachments__icon {
   flex-shrink: 0;
-  opacity: 0.7;
 }
 
 .user-attachments__name {
@@ -231,18 +159,41 @@
   gap: 12px;
   margin-top: 10px;
   font-family: var(--font-mono);
-  font-size: 0.66rem;
+  font-size: var(--fs-mono);
   letter-spacing: 0.02em;
-  color: var(--text-tertiary);
+  color: var(--muted);
   position: relative;
   z-index: 2;
 }
 
 .speech-form__timestamp {
-  font-size: 0.72rem;
-  color: var(--text-tertiary);
-  opacity: 0.85;
+  font-size: var(--fs-mono);
+  color: var(--muted);
   letter-spacing: 0.04em;
+}
+
+// The work toggle — "N step(s) · Xm Ys" — sits right after the timestamp and
+// folds its step list open below the footer (the shared .trace-body collapse).
+.speech-form__work {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--control-h);
+  padding: 0;
+  background: none;
+  border: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  transition: color var(--dur-1) var(--ease-out);
+}
+
+.speech-form__work:hover {
+  color: var(--text);
+}
+
+.speech-form__work[aria-expanded='true'] .activity__chev {
+  rotate: 90deg;
 }
 
 .speech-form__acts {
@@ -251,55 +202,40 @@
   margin-left: auto;
 }
 
-// Mobile: the trace-pill + thread-pill can't always share one row with the
-// timestamp and action buttons without spilling, so let the row wrap. Source
-// order already reads timestamp → pills → acts, and `margin-left:auto` on the
-// acts holds them at the right edge of whichever line they land on — so the
-// acts stay the rightmost control at every width. Do NOT `order:` the acts
-// ahead of the pills to force a two-line split: when the row DOES fit on one
-// line no wrap happens, and the reorder simply lands the pill to the RIGHT of
-// the actions.
+// Mobile: the thread-pill can't always share one row with the timestamp and
+// action buttons without spilling, so let the row wrap. Source order already
+// reads timestamp → pill → acts, and `margin-left:auto` on the acts holds them
+// at the right edge of whichever line it lands on — so the acts stay the
+// rightmost control at every width. Do NOT `order:` the acts ahead of the pill
+// to force a two-line split: when the row DOES fit on one line no wrap happens,
+// and the reorder simply lands the pill to the RIGHT of the actions.
 @media (max-width: 640px) {
   .speech-form__meta {
     flex-wrap: wrap;
   }
 }
 
-// Footer action buttons (read-aloud, reply, copy). 26×26 ghost buttons that take
-// a per-action accent on hover.
+// Footer action buttons (read-aloud, reply, copy) — square ghost icon buttons.
 .speech-form__act-btn {
   background: transparent;
   border: 0;
-  color: var(--text-tertiary);
+  color: var(--muted);
   cursor: pointer;
   padding: 0;
-  border-radius: 7px;
-  transition: background var(--duration-fast), color var(--duration-fast);
+  transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
   display: grid;
   place-items: center;
-  width: 26px;
-  height: 26px;
+  width: var(--control-h);
+  height: var(--control-h);
 }
 
 .speech-form__act-btn:hover {
-  background: color-mix(in oklab, var(--text-primary) 8%, transparent);
-  color: var(--text-primary);
-}
-
-.speech-form__act-btn--speak:hover {
-  color: var(--cyan);
-}
-
-.speech-form__act-btn--reply:hover {
-  color: var(--violet);
-}
-
-.speech-form__act-btn--copy:hover {
-  color: var(--accent-primary);
+  background: var(--surface-2);
+  color: var(--text);
 }
 
 // Speech is synthesized in the background, so the speaker button reports a
-// pipeline it did not start. Pending breathes rather than spins — synthesis
+// pipeline it did not start. Pending pulses rather than spins — synthesis
 // takes seconds and a still button reads as a dead one; failed is terminal, so
 // it goes red and stops responding instead of inviting a press that can only
 // fail again. Both drop the hover accent by refusing pointer events.
@@ -310,62 +246,21 @@
 }
 
 .speech-form__act-btn--pending {
-  animation: speak-breathe 1.8s ease-in-out infinite;
+  animation: working 1.4s ease-in-out infinite;
 }
 
 .speech-form__act-btn--failed {
-  color: var(--error);
-  opacity: 0.65;
-}
-
-@keyframes speak-breathe {
-  0%,
-  100% { opacity: 0.8; }
-  50% { opacity: 0.25; }
+  color: var(--deny-text);
 }
 
 // --------------------------------------------------------------------------
-// 9. Trace pill + expandable trace body
+// 9. Activity line — one quiet line per segment, above the answer
 // --------------------------------------------------------------------------
-.trace-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  height: 26px;
-  padding: 0 11px;
-  font-family: var(--font-mono);
-  font-size: 0.72rem;
-  color: var(--text-secondary);
-  background: var(--bg-surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
-  cursor: pointer;
-  white-space: nowrap;
-  flex-shrink: 0;
-  transition: border-color var(--duration-fast), color var(--duration-fast), background var(--duration-fast);
-}
-
-.trace-pill:hover,
-.trace-pill--open {
-  border-color: var(--border-strong);
-  color: var(--text-primary);
-}
-
-// Static marker — the trace pill only ever rides a SETTLED exchange's footer (or
-// a collapsed group of already-finished calls), so the dot signals "has a trace",
-// not live activity. Live work is shown by the separate "thinking…" trail / the
-// thread pill's own pulsing dot.
-.trace-pill__dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--accent-primary);
-}
 
 .trace-body {
   display: grid;
   grid-template-rows: 0fr;
-  transition: grid-template-rows 220ms ease;
+  transition: grid-template-rows var(--dur-2) var(--ease-out);
 }
 
 .trace-body--open {
@@ -378,82 +273,284 @@
   min-height: 0;
 }
 
-.calls {
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--bg-surface-2);
-  padding: 5px;
-  max-width: 100%;
+.activity {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 8px;
+  width: 100%;
+  animation: rise var(--dur-2) var(--ease-out);
+}
+
+.activity__toggle,
+.activity__stop {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: var(--control-h);
+  padding: 0;
+  background: none;
+  border: 0;
   font-family: var(--font-mono);
-  font-size: 0.72rem;
-  line-height: 1.5;
+  font-size: var(--fs-mono);
+  color: var(--muted);
+  cursor: pointer;
+  transition: color var(--dur-1) var(--ease-out);
+}
+
+.activity__toggle:hover {
+  color: var(--text);
+}
+
+// The line is live-only: the mark pulses pink while the turn works, and the
+// label is full-strength text (not the muted work rows below it).
+.activity__mark {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  background: var(--pink);
+  animation: working 1.4s ease-in-out infinite;
+}
+
+.activity__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+// The line wraps as two whole units on a narrow screen: the lead, whose label
+// ellipsizes, and the controls, whose action label ellipsizes.
+.activity__toggle,
+.activity__lead,
+.activity__controls {
+  min-width: 0;
+}
+
+.activity__lead,
+.activity__controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.activity__mark,
+.activity__origin,
+.activity__wait,
+.activity__chev,
+.activity__controls > button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.activity__fail {
+  color: var(--deny-text);
+}
+
+.activity__chev {
+  transition: rotate var(--dur-1) var(--ease-out);
+}
+
+.activity__toggle[aria-expanded='true'] .activity__chev {
+  rotate: 90deg;
+}
+
+.activity__stop {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.activity__stop:hover {
+  color: var(--deny-text);
+}
+
+.activity__ask {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.activity__answer {
+  min-height: var(--control-h);
+  padding: 0 var(--space-sm);
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-1) var(--ease-out),
+    color var(--dur-1) var(--ease-out),
+    translate var(--dur-1) var(--ease-out);
+
+  &:active {
+    translate: 0 1px;
+  }
+
+  &--allow {
+    background: var(--allow);
+    color: var(--on-pink);
+
+    &:hover {
+      background: var(--text);
+      color: var(--bg);
+    }
+  }
+
+  &--deny {
+    background: var(--surface-2);
+    color: var(--text);
+
+    &:hover {
+      background: var(--cell);
+    }
+  }
+}
+
+.activity .trace-body {
+  flex-basis: 100%;
+}
+
+.activity__steps {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+// A reasoning trace — shown in the footer fold of a reply that only thought.
+.activity__trace {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font: inherit;
+}
+
+.activity__prose,
+.activity__prose .speech-form__text {
+  color: var(--muted);
+  font-family: var(--font-ui);
+}
+
+.activity__pill {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+.activity__pill-label {
+  display: flex;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.activity__pill-summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity__pill--done {
+  color: var(--allow-text);
+}
+
+.activity__pill--error {
+  color: var(--deny-text);
+}
+
+// Off-screen asks in the dock: the live line's muted mono type, at the composer's width.
+.offscreen-asks {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  max-width: var(--dock-width);
+  margin: 0 auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+  color: var(--muted);
+}
+
+.offscreen-asks:not(:empty) {
+  padding: 0 4px 10px;
+}
+
+// Tool-call rows (ToolCallList) — plain borderless lines, one per call:
+// a status icon, then the summary; a delegate row ends with the robot icon.
+.calls {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .call {
-  padding: 8px 10px;
-  border-radius: 8px;
   display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+  overflow-wrap: anywhere;
 }
 
-.call + .call {
-  border-top: 1px solid var(--border);
+.call__mark {
+  flex-shrink: 0;
+  align-self: center;
 }
 
-.call__fn {
-  color: var(--accent-primary);
-  font-weight: 600;
+.call--done .call__mark {
+  color: var(--allow-text);
+}
+
+.call--started .call__mark {
+  color: var(--muted);
 }
 
 .call__summary {
-  color: var(--text-secondary);
+  flex: 1;
+  min-width: 0;
 }
 
-.call--error .call__fn {
-  color: var(--error);
+.call--error {
+  color: var(--deny-text);
 }
 
-// --------------------------------------------------------------------------
-// 10. Thinking link + trace body (plain text, no pill background)
-// --------------------------------------------------------------------------
-.thinking-link {
-  display: inline-flex;
-  align-items: center;
-  font-size: 0.72rem;
-  color: var(--text-tertiary);
-  opacity: 0.85;
-  // It renders as an <a>, so the UA underline applies unless explicitly killed.
-  text-decoration: none;
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: opacity var(--duration-fast);
-  background: none;
-  border: none;
-  padding: 0;
-  font-family: inherit;
-  line-height: inherit;
-}
-
-.thinking-link:hover {
-  opacity: 1;
-}
-
-.thinking-traces {
-  font-family: var(--font-mono);
-  font-size: 0.72rem;
-  color: var(--text-tertiary);
-  opacity: 0.85;
-  line-height: 1.5;
-}
-
-.thinking-trace pre {
+// A tool row whose call spawned a delegate turn is a button into that turn's
+// transcript. The reset clears only what a native button adds (its box, fill,
+// centring and shrink-to-fit width; the shared reset already inherits font and
+// colour), and :where() keeps it at zero specificity so the row's own layout
+// still wins.
+:where(.delegate-pill) {
+  width: 100%;
   margin: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-family: inherit;
-  font-size: inherit;
-  line-height: inherit;
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: left;
+}
+
+.delegate-pill {
+  cursor: pointer;
+}
+
+.delegate-pill:hover,
+.delegate-pill:focus-visible {
+  background: var(--surface-2);
+}
+
+.delegate-pill:focus-visible {
+  outline: 1.5px solid var(--muted);
+}
+
+.delegate-pill__icon {
+  flex-shrink: 0;
+  margin-right: 4px;
+  vertical-align: text-bottom;
+  color: currentColor;
 }
 
 // --------------------------------------------------------------------------
@@ -463,26 +560,23 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  height: 26px;
+  height: var(--control-h);
   padding: 0 10px 0 11px;
-  border-radius: var(--radius-full);
   cursor: pointer;
-  background: color-mix(in oklab, var(--violet) 5%, var(--bg-surface-2));
-  border: 1px solid color-mix(in oklab, var(--violet) 16%, var(--border));
-  color: var(--text-primary);
-  font-size: 0.75rem;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: var(--fs-mono);
   max-width: min(260px, 40%);
-  transition: border-color var(--duration-fast), background var(--duration-fast);
+  transition: background var(--dur-1) var(--ease-out);
 }
 
 .thread-pill:hover {
-  border-color: color-mix(in oklab, var(--violet) 30%, var(--border));
+  background: var(--cell);
 }
 
 .thread-pill__dot {
   width: 7px;
   height: 7px;
-  border-radius: 50%;
   flex-shrink: 0;
 }
 
@@ -494,255 +588,28 @@
 }
 
 .thread-pill__chevron {
-  font-size: 15px;
+  font-size: var(--fs-body);
   line-height: 1;
-  color: var(--text-tertiary);
+  color: var(--muted);
   flex-shrink: 0;
 }
 
+// Working and done match the thread-activity dots: working pulses pink, done is
+// a steady marker.
 .thread-pill--working .thread-pill__dot {
-  background: var(--status-main);
-  animation: pulseV 1.4s ease-in-out infinite;
+  background: var(--pink);
+  animation: working 1.4s ease-in-out infinite;
 }
 
 .thread-pill--done .thread-pill__dot {
-  background: var(--cyan);
+  background: var(--text);
 }
 
 .thread-pill--thread .thread-pill__dot {
-  background: var(--violet);
+  background: var(--pink);
 }
 
 .thread-pill--idle .thread-pill__dot {
   background: transparent;
-  border: 1.5px solid color-mix(in oklab, var(--text-primary) 30%, transparent);
-}
-
-// Escalation form (critic)
-.speech-form--escalation {
-  border-color: color-mix(in oklab, var(--warning) 25%, transparent);
-  box-shadow: 0 0 16px color-mix(in oklab, var(--warning) 6%, transparent);
-  margin-top: var(--space-lg);
-}
-
-.speech-form--escalation::before {
-  background: linear-gradient(
-    180deg,
-    transparent 0%,
-    color-mix(in oklab, var(--warning) 85%, transparent) 20%,
-    color-mix(in oklab, var(--warning) 85%, transparent) 80%,
-    transparent 100%
-  );
-  box-shadow: 0 0 8px color-mix(in oklab, var(--warning) 60%, transparent), 0 0 18px color-mix(in oklab, var(--warning) 33%, transparent);
-}
-
-.speech-form--escalation::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, color-mix(in oklab, var(--warning) 30%, transparent), transparent);
-  pointer-events: none;
-}
-
-// ACT cycle
-.act-cycle {
-  align-self: flex-start;
-  max-width: 90%;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 4px 0;
-  animation: formEntry 200ms var(--ease-out) both;
-}
-
-.act-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-height: 20px;
-}
-
-.act-logo {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: var(--violet);
-  flex-shrink: 0;
-  animation: act-logo-pulse 1.4s ease-in-out infinite;
-}
-
-// Bare-group anchor before any tool pill lands; evicted the moment one does.
-.act-placeholder {
-  font-size: var(--font-size-sm);
-  color: var(--text-tertiary);
-  animation: act-logo-pulse 1.4s ease-in-out infinite;
-}
-
-.act-stop-btn {
-  background: transparent;
-  border: none;
-  color: var(--error);
-  cursor: pointer;
-  padding: 4px;
-  border-radius: 4px;
-  opacity: 0.7;
-  transition: opacity 180ms ease, transform 180ms ease;
-  display: flex;
-  align-items: center;
-  flex-shrink: 0;
-}
-
-.act-stop-btn:hover { opacity: 1; transform: scale(1.15); }
-.act-stop-btn:active { transform: scale(0.9); }
-.act-stop-btn--stopping { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
-
-// Indented under the logo (logo 12 + gap 12 = 24) to align with the row.
-.act-tools {
-  margin-left: 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-}
-
-.act-tools:empty {
-  display: none;
-}
-
-.act-tool {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  min-width: 220px;
-  max-width: 760px;
-  font-family: var(--font-mono);
-  font-size: 0.82rem;
-  line-height: 1.2;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: -0.005em;
-  animation: formEntry 200ms var(--ease-out) both;
-}
-
-.act-tool__name {
-  font-weight: 500;
-  white-space: nowrap;
-}
-
-.act-tool__label {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
-}
-
-.act-tool__summary {
-  color: var(--text-secondary);
-  font-weight: 400;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.act-tool__status {
-  display: inline-flex;
-  align-items: center;
-  justify-content: flex-end;
-  font-variant-numeric: tabular-nums;
-  min-width: 32px;
-}
-
-.act-tool--running {
-  color: color-mix(in oklab, var(--text-primary) 75%, transparent);
-}
-
-.act-tool--done {
-  color: var(--success);
-  opacity: 0.9;
-}
-
-.act-tool--error {
-  color: var(--error);
-  opacity: 0.5;
-}
-
-// Live elapsed readout shown beside the spinner while a call runs.
-.act-tool__elapsed {
-  margin-left: 6px;
-  font-variant-numeric: tabular-nums;
-}
-
-// Superseded step (tools done, replaced by next bubble): drop name pill + timer,
-// keep only the summaries indented to align with the live tool list.
-.act-cycle--collapsed {
-  gap: 2px;
-  padding: 0 0 2px;
-}
-
-.act-summaries {
-  margin-left: 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 0; // act-trail rows condensed to line-height gaps only
-}
-
-.act-tool__summary--collapsed {
-  white-space: normal;
-  overflow: visible;
-  line-height: 1.4;
-  font-size: 0.82rem;
-  font-family: var(--font-mono);
-}
-
-// A run of superseded steps folds behind the same trace-pill the footer uses:
-// the pill sits on its own line (sized to its own content, never stretched) and
-// the expanded step list stacks directly beneath it.
-.act-group {
-  align-self: flex-start;
-  max-width: 90%;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 6px;
-}
-
-.act-group__content {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-// Inside the folded group there is no live logo to indent under, so drop the
-// 24px summary indent — the expanded trail then lines up under the pill (no
-// rightward jump on expand).
-.act-group .act-summaries {
-  margin-left: 0;
-}
-
-@keyframes act-logo-pulse {
-  0%, 100% { opacity: 0.55; }
-  50%      { opacity: 1; }
-}
-
-// Meta-mode badge (cognitive signal)
-.meta-mode-badge {
-  font-size: 0.6rem;
-  letter-spacing: 0.06em;
-  padding: 1px 6px;
-  border-radius: 3px;
-  background: color-mix(in oklab, var(--text) 5%, transparent);
-  border: 1px solid color-mix(in oklab, var(--text) 8%, transparent);
-  color: color-mix(in oklab, var(--text-primary) 50%, transparent);
-  margin-left: 8px;
-  vertical-align: middle;
-  animation: meta-fade-in 150ms ease both;
-}
-
-@keyframes meta-fade-in {
-  from { opacity: 0; }
-  to   { opacity: 1; }
+  border: 1.5px solid var(--control);
 }

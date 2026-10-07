@@ -12,10 +12,9 @@ A ``turn_executions`` row is the single source of truth for "is this turn
 still running, and did someone ask it to stop" — every read derives from the
 DB (§6.6: no fabricated in-memory row). Absorbs the old ``ExecutionTracker``
 handle: ``self.mp`` IS the per-turn handle, so there is nothing left to hold
-separately. Cross-instance cancel (§6.7) derives its broadcast gate from the
-target turn's own row, never from the canceller's ``self.mp.config``, since
-the canceller may be an inert MP built for a channel other than the one that
-opened the turn.
+separately. Cross-instance cancel (§6.7) is addressed by (channel, turn_id)
+alone and derives its broadcast from the target turn's own row, since the
+canceller holds no MP for the turn it stops.
 """
 
 from __future__ import annotations
@@ -25,11 +24,12 @@ from typing import TYPE_CHECKING
 
 from configs.channels import config_for
 from models.turn_execution import TurnExecution
+from services.database import Database
 from services.time_utils import utc_now
-from services.websocket import Websocket
 
 if TYPE_CHECKING:
     from controllers.message_processor import MessageProcessor
+    from services.processor_config import ProcessorConfig
 
 logger = logging.getLogger(__name__)
 
@@ -84,58 +84,77 @@ class TurnExecutionService:
         return bool(row.cancel_requested) if row is not None else False
 
     def cancel(self) -> TurnExecution | None:
+        """Cancel this MP's own turn — :meth:`cancel_turn` addressed by
+        ``self.mp``'s (channel, turn_id), for a turn's own self-cancelling
+        ability. The closed row becomes ``self.mp.execution``."""
+        execution = self.cancel_turn(self.mp.channel, self.mp.turn_id)
+        if execution is not None:
+            self.mp.execution = execution
+        return execution
+
+    @classmethod
+    def cancel_turn(cls, channel: str, turn_id: int) -> TurnExecution | None:
         """The single cancel-request chokepoint (§2.7): both DELETE
-        /api/threads/<turn_id> (an inert MP built for the target turn) and a
-        turn's own self-cancelling ability route through here — and, per
-        Dylan's ruling, the single AUTHORITY for the turn's terminal state.
-        Every provider client is one blocking, non-streaming call with no
-        mid-flight abort hook (§ llm_clients/*), so the running turn cannot
-        physically be stopped the instant this is called — the in-flight call
-        is left to finish server-side, and :meth:`MessageProcessor._step`'s
-        cancel checkpoint discards its response instead of storing it. Ending
-        the turn's LIFECYCLE does not have to wait for that: this stamps the
-        live (``ended_at IS NULL``) row for this (channel, turn_id) CANCELLED
-        with ``ended_at`` set right here, synchronously, so the WS frame and
-        the DB state both flip the instant cancel is requested rather than
-        after the full generation wall-clock. The row IS the cross-request
-        handle, since the turn is (almost always) running in another
-        thread/instance; ``turn_id`` is a per-channel monotonic counter, not
-        globally unique, so the match is channel-scoped. The broadcast
-        gate/type derives from the target row, NOT ``self.mp.config`` (§6.7)
-        — the canceller may hold a config for a different channel than the
-        one that opened the turn. :meth:`finish` becomes a no-op once it
-        observes this row already terminal — the row closed here always
-        wins, never resurrected or overwritten by the doomed turn's own
-        eventual finish()."""
+        /api/threads/<turn_id> (addressed by the turn's type or, for a
+        watchable delegate turn, its channel) and a turn's own self-cancelling
+        ability (:meth:`cancel`) route through here — and the single AUTHORITY
+        for the turn's terminal state. Every provider client is one blocking,
+        non-streaming call with no mid-flight abort hook (§ llm_clients/*), so
+        the running turn cannot physically be stopped the instant this is
+        called — the in-flight call is left to finish server-side, and
+        :meth:`MessageProcessor._step`'s cancel checkpoint discards its
+        response instead of storing it. Ending the
+        turn's LIFECYCLE does not have to wait for that: this stamps the live
+        (``ended_at IS NULL``) row for this (channel, turn_id) CANCELLED with
+        ``ended_at`` set right here, synchronously, so the WS frame and the DB
+        state both flip the instant cancel is requested rather than after the
+        full generation wall-clock. The row IS the cross-request handle, since
+        the turn is (almost always) running in another thread/instance;
+        ``turn_id`` is a per-channel monotonic counter, not globally unique, so
+        the match is channel-scoped. The broadcast derives from the target row
+        alone (§6.7) — its channel and the config its type resolves to — and
+        goes out exactly as that turn's own frames do
+        (:meth:`MessageProcessor.broadcast_as`). :meth:`finish` becomes a
+        no-op once it observes this row already terminal — the row closed here
+        always wins, never resurrected or overwritten by the doomed turn's own
+        eventual finish(). The read and the write share one ``BEGIN
+        IMMEDIATE`` transaction, so a turn settling or a message joining on
+        another thread lands wholly before or wholly after it."""
+        from controllers.message_processor import MessageProcessor  # noqa: PLC0415 — the MP imports this module
+
         try:
-            execution = TurnExecution.open_turn(self.mp.channel, self.mp.turn_id)
-            if execution is None:
-                return None
-            execution.cancel_requested = True
-            execution.state = TurnExecution.CANCELLED
-            execution.ended_at = utc_now().isoformat()
-            execution.save()
+            with Database.transaction():
+                execution = TurnExecution.open_turn(channel, turn_id)
+                if execution is None:
+                    return None
+                execution.cancel_requested = True
+                execution.state = TurnExecution.CANCELLED
+                execution.ended_at = utc_now().isoformat()
+                execution.save()
         except Exception as exc:
             logger.warning(
                 "[TurnExecutionService] cancel failed for channel=%s turn_id=%s: %s",
-                self.mp.channel, self.mp.turn_id, exc,
+                channel, turn_id, exc,
             )
             return None
-        self.mp.execution = execution
-
-        # Gate on the target ROW's type (see docstring): no type → no
-        # addressable config → no broadcast; a stale/unknown type must not
-        # raise into the caller, so it too falls through to no broadcast.
-        if execution.type is not None:
-            try:
-                if config_for(execution.type).BROADCASTS_STATE:
-                    Websocket.broadcast(execution)
-            except ValueError as exc:
-                logger.warning(
-                    "[TurnExecutionService] unknown config type=%r for turn_id=%s — no broadcast: %s",
-                    execution.type, execution.turn_id, exc,
-                )
+        MessageProcessor.broadcast_as(execution, execution.channel, cls._row_config(execution))
         return execution
+
+    @staticmethod
+    def _row_config(execution: TurnExecution) -> ProcessorConfig | None:
+        """The config a row's type resolves to — ``None`` for a row with no
+        type (a delegate or internal turn). A stale/unknown type must not raise
+        into the caller, so it is logged and treated as no config."""
+        if execution.type is None:
+            return None
+        try:
+            return config_for(execution.type)
+        except ValueError as exc:
+            logger.warning(
+                "[TurnExecutionService] unknown config type=%r for turn_id=%s — no broadcast: %s",
+                execution.type, execution.turn_id, exc,
+            )
+            return None
 
     def finish(self, state: str, stop_reason: str | None = None) -> TurnExecution | None:
         """Stamp the terminal state ONCE — ``cancel_requested`` is never
@@ -223,8 +242,8 @@ class TurnExecutionService:
         a per-channel counter) — for a caller that holds no live execution
         for it, e.g. the scheduler deciding whether a first-fire's turn
         survived cancellation before persisting its ``turn_id`` for series
-        continuity (mirrors ``cancel``'s pattern: an inert MP built for the
-        target (channel, turn_id) reads it via ``self.mp``)."""
+        continuity (an inert MP built for the target (channel, turn_id) reads
+        it via ``self.mp``)."""
         try:
             return (
                 TurnExecution.filter("channel", self.mp.channel)

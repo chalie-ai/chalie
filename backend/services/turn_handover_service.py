@@ -5,7 +5,7 @@ records unconditionally and the trail render drops every call at or below it, so
 the tool work, thinking and interim prose of the turn that triggered compaction
 vanish with nothing left in their place. ``chat_history_compactor`` cannot fill
 that gap — it reads ``transcript_service.read()``, which floors every turn at its
-``settle0`` and therefore skips the unsettled turn entirely.
+``settle0`` and therefore skips the in-flight turn entirely.
 
 This pass owns exactly that gap. It reads the turn currently in flight — its
 transcript rows plus the RAW tool-call results, deliberately unfiltered by the
