@@ -266,6 +266,7 @@ const artMotion = computed<'spin' | 'drift' | ''>(() => {
 /* Card-specific rules only; base .rich-card chrome lives globally in base_card.css. */
 
 .rich-card.weather-card {
+  --weather-violet: #7B5CFF;
   padding: 0;
   overflow: hidden;
   width: 100%;
@@ -273,7 +274,8 @@ const artMotion = computed<'spin' | 'drift' | ''>(() => {
   margin-bottom: var(--space-md);
 }
 
-/* Tinted ground: pink over --surface by day, deeper plum (pink over --bg) at night. */
+/* Neon sky: a pink → violet gradient over --bg, deeper at night. The weather card is
+   the one surface the flat foundation lets carry a gradient and a glow. */
 .weather-card__body {
   position: relative;
   overflow: hidden;
@@ -283,11 +285,19 @@ const artMotion = computed<'spin' | 'drift' | ''>(() => {
   gap: 14px;
   padding: 18px 22px;
   color: var(--text);
-  background: color-mix(in oklab, var(--pink) 9%, var(--surface));
+  background: linear-gradient(
+    135deg,
+    color-mix(in oklab, var(--pink) 26%, var(--bg)),
+    color-mix(in oklab, var(--weather-violet) 22%, var(--bg))
+  );
 }
 
 .weather-card__body--night {
-  background: color-mix(in oklab, var(--pink) 7%, var(--bg));
+  background: linear-gradient(
+    135deg,
+    color-mix(in oklab, var(--pink) 14%, var(--bg)),
+    color-mix(in oklab, var(--weather-violet) 20%, var(--bg))
+  );
 }
 
 /* Readout, chips and caption sit above the corner artwork. */
@@ -379,13 +389,14 @@ const artMotion = computed<'spin' | 'drift' | ''>(() => {
   color: var(--text);
 }
 
-/* Oversized condition glyph as artwork, cropped off the bottom-right corner. */
+/* Oversized condition glyph as glowing artwork, cropped off the bottom-right corner. */
 .weather-card__art {
   position: absolute;
   right: -90px;
   bottom: -120px;
   z-index: 0;
-  color: color-mix(in oklab, var(--pink) 30%, transparent);
+  color: var(--pink);
+  filter: drop-shadow(0 0 14px color-mix(in oklab, var(--pink) 70%, transparent));
   pointer-events: none;
 }
 
@@ -411,7 +422,7 @@ const artMotion = computed<'spin' | 'drift' | ''>(() => {
 .weather-card__rail {
   display: grid;
   grid-template-columns: repeat(8, 1fr);
-  background: var(--surface-2);
+  background: color-mix(in oklab, var(--weather-violet) 9%, var(--surface-2));
 }
 
 .weather-card__hour {

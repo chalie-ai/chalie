@@ -570,19 +570,23 @@ input[type='email'],
 input[type='number'],
 input[type='datetime-local'],
 input[type='time'],
-textarea,
-select {
+textarea {
   width: 100%;
   padding: 0 12px;
 }
 
 textarea { padding-block: 8px; }
 
+// Padding and the chevron come from the foundation.
 select {
+  width: 100%;
   cursor: pointer;
 
   option { background: var(--surface); color: var(--text); }
 }
+
+// A role picker holds one provider name; the full content width only stretched it.
+select.role-select { max-width: 380px; }
 
 input[type='checkbox'] {
   appearance: none;

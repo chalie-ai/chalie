@@ -439,6 +439,7 @@ function _unbindKeyboard(): void {
   min-width: 280px;
 
   margin: 0;
+  border: 0;
   max-width: none;
   max-height: none;
   outline: none;

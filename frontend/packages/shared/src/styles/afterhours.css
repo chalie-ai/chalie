@@ -3,11 +3,12 @@
    a Sass toolchain can import it. The marketing site carries a mirrored copy of the
    tokens; this file is the source of truth.
 
-   Flat and sharp: no radius, gradient, glow, shadow or blur anywhere. Depth comes
-   from the three grounds (bg → surface → surface-2): fills group things, and a
-   border marks only a text field or the focus ring. One control height, one icon
-   size, three text sizes (12 mono, 15 body, 20 title). Pink is the only accent
-   and is always a fill with night-coloured text on it. Every text colour clears
+   Flat and sharp: no radius, gradient, glow, shadow or blur anywhere but the
+   weather card's sky. Depth comes from the three grounds (bg → surface → surface-2):
+   fills group things, and a border marks only a text field or the focus ring. One
+   control height, one icon size, three text sizes (12 mono, 15 body, 20 title).
+   Pink is the only accent (the weather sky adds a violet) and is always a fill
+   with night-coloured text on it. Every text colour clears
    4.5:1 on all three grounds in both themes; --control clears 3:1. */
 
 @font-face {
@@ -60,6 +61,8 @@
   --ask-text:     #FFD23F;
   --deny-text:    #FF6B5E;
   --glyph-stroke: transparent;
+  /* A select's open chevron, stroked in --muted (an image can't read a variable). */
+  --chevron:      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23A79FAF' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 }
 
 [data-theme="light"] {
@@ -80,6 +83,7 @@
   --deny-text:    #B83226;
   /* The glyph fills sit under 3:1 on the light grounds, so they gain an outline. */
   --glyph-stroke: #0E0B10;
+  --chevron:      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%235B5363' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 }
 
 :root {
@@ -144,6 +148,12 @@ select {
 }
 input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="color"]),
 select { min-height: var(--control-h); }
+/* The native select draws its own arrow and box; ours is the chevron in the end padding. */
+select {
+  appearance: none;
+  padding: 0 36px 0 12px;
+  background: var(--surface-2) var(--chevron) no-repeat right 10px center;
+}
 input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="color"]):hover,
 textarea:hover,
 select:hover { border-color: var(--muted); }

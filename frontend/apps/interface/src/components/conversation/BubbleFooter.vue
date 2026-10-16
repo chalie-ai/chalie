@@ -89,10 +89,20 @@ function onCopy(): void {
 // ── Work toggle — the steps behind this answer, folded open below the footer ─
 //
 // Owner ruling: the work sits below the answer, in its footer. The label shows
-// "N step(s)" (+ the exchange's duration) when the answer did any work,
-// "thought for Xs" when it only thought, and nothing for a plain reply.
+// "N step(s)" (+ the exchange's duration) when the answer did any work, and
+// "thought for Xs" whenever it reasoned — beside the steps label on a tool
+// turn — each opening its own list; the step list itself never carries the
+// reasoning. Nothing for a plain reply.
 
-const open = ref(false);
+type Panel = 'steps' | 'thought';
+
+const panel = ref<Panel | null>(null);
+
+/** One fold, one open panel: open `which`'s list, close it when it is the
+ *  open one, switch to it when the other is open. */
+function togglePanel(which: Panel): void {
+  panel.value = panel.value === which ? null : which;
+}
 
 const stepCount = computed(
   () =>
@@ -113,16 +123,21 @@ function formatDuration(ms: number): string {
   return mins === 0 ? `${seconds}s` : `${mins}m ${seconds % 60}s`;
 }
 
-const label = computed<string | null>(() => {
-  if (stepCount.value > 0) {
-    const n = stepCount.value;
-    const base = `${n} step${n === 1 ? '' : 's'}`;
-    return props.durationMs && props.durationMs > 0 ? `${base} · ${formatDuration(props.durationMs)}` : base;
-  }
-  return thinkMs.value > 0 ? `thought for ${formatDuration(thinkMs.value)}` : null;
+// "N step(s)" (+ the exchange's duration) — null when the answer did no work.
+const stepsLabel = computed<string | null>(() => {
+  if (stepCount.value === 0) return null;
+  const n = stepCount.value;
+  const base = `${n} step${n === 1 ? '' : 's'}`;
+  return props.durationMs && props.durationMs > 0 ? `${base} · ${formatDuration(props.durationMs)}` : base;
 });
 
-// Reasoning traces for the no-work fallback list (a reply that only thought).
+// "thought for Xs" — null when the exchange never reasoned.
+const thoughtLabel = computed<string | null>(
+  () => (thinkMs.value > 0 ? `thought for ${formatDuration(thinkMs.value)}` : null),
+);
+
+// Reasoning traces for the thought panel — a reply that only thought, or a
+// tool turn that reasoned alongside its steps.
 const thinkTraces = computed(() => props.work.flatMap((m) => m.thinking?.traces ?? []));
 </script>
 
@@ -131,17 +146,28 @@ const thinkTraces = computed(() => props.work.flatMap((m) => m.thinking?.traces 
     <div class="speech-form__meta">
       <span class="speech-form__timestamp">{{ message.timestamp }}</span>
 
-      <!-- The work behind this answer — "N step(s) · Xm Ys" (or "thought for
-           Xs"), folding its step list open below the footer. -->
+      <!-- The work behind this answer — "N step(s) · Xm Ys" (plus "thought
+           for Xs" beside it whenever the exchange reasoned), each folding its
+           own list open below the footer. -->
       <button
-        v-if="label"
+        v-if="stepsLabel"
         type="button"
         class="speech-form__work"
-        :aria-expanded="open"
-        @click="open = !open"
+        :aria-expanded="panel === 'steps'"
+        @click="togglePanel('steps')"
       >
-        · {{ label }}
+        · {{ stepsLabel }}
         <span v-if="failCount" class="activity__fail"> · {{ failCount }} failed</span>
+        <span class="activity__chev" aria-hidden="true">›</span>
+      </button>
+      <button
+        v-if="thoughtLabel"
+        type="button"
+        class="speech-form__work"
+        :aria-expanded="panel === 'thought'"
+        @click="togglePanel('thought')"
+      >
+        · {{ thoughtLabel }}
         <span class="activity__chev" aria-hidden="true">›</span>
       </button>
 
@@ -196,18 +222,19 @@ const thinkTraces = computed(() => props.work.flatMap((m) => m.thinking?.traces 
     </div>
 
     <!-- inert while folded: a delegate call row is a button, and the fold only
-         collapses its height, so it would stay reachable by Tab unseen. With no
-         steps at all, a plain reply that only thought shows its reasoning
-         traces instead. -->
+         collapses its height, so it would stay reachable by Tab unseen. The
+         open panel names the content — the step list under steps (it stays in
+         the DOM while folded, height-collapsed), the reasoning traces under
+         thought. A reply that only thought has nothing but traces. -->
     <div
-      v-if="label"
+      v-if="stepsLabel || thoughtLabel"
       class="trace-body"
-      :class="{ 'trace-body--open': open }"
-      :inert="!open"
+      :class="{ 'trace-body--open': panel !== null }"
+      :inert="panel === null"
     >
       <div class="trace-body__inner">
         <StepList
-          v-if="stepCount"
+          v-if="stepCount && panel !== 'thought'"
           :messages="work"
           :answer-id="message.id"
         />

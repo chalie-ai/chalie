@@ -326,6 +326,27 @@ describe('tool-call placement — settled work in the footer under the answer, w
     expect(fold.text()).not.toContain('which file has it?');
   });
 
+  it('a tool turn that also reasoned gets a second footer link — "thought for X" — that opens its reasoning traces apart from its step list', async () => {
+    const wrapper = mount(TurnView, { props: { block: threeCallTurn(), type: ConfigType.USER, fullThread: false } });
+
+    // The steps link stays first and unchanged; the thought link sits beside
+    // it (the exchange's one reasoned step ran 2s).
+    const footer = wrapper.findAll('.msg-row')[2]!;
+    const [steps, thought] = footer.findAll('.speech-form__work');
+    expect(steps.text()).toContain('4 steps');
+    expect(thought.text()).toContain('thought for 2s');
+    expect(steps.attributes('aria-expanded')).toBe('false');
+    expect(thought.attributes('aria-expanded')).toBe('false');
+
+    await thought.trigger('click');
+    expect(thought.attributes('aria-expanded')).toBe('true');
+    // Only the thought panel is open: the steps link reports it closed.
+    expect(steps.attributes('aria-expanded')).toBe('false');
+    const fold = footer.find('.trace-body');
+    expect(fold.text()).toContain('which file has it?');
+    expect(fold.text()).not.toContain('interim');
+  });
+
   it('only the row that closes the exchange carries the timestamp and actions', () => {
     const wrapper = mount(TurnView, { props: { block: threeCallTurn(), type: ConfigType.USER, fullThread: false } });
 

@@ -172,8 +172,9 @@
   letter-spacing: 0.04em;
 }
 
-// The work toggle — "N step(s) · Xm Ys" — sits right after the timestamp and
-// folds its step list open below the footer (the shared .trace-body collapse).
+// The work toggles — "N step(s) · Xm Ys" and "thought for Xs" — sit right after
+// the timestamp and fold their list open below the footer (the shared .trace-body
+// collapse).
 .speech-form__work {
   display: inline-flex;
   align-items: center;
