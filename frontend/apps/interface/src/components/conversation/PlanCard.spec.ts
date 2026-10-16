@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
 /**
- * PlanCard — the plan's checklist: a head counting the done (and cancelled)
- * tasks, then each task's title behind a mark that names its status — a
+ * PlanCard — the plan's checklist: a head counting the done tasks (the
+ * cancelled ones too, for screen readers) over a bar with one segment per
+ * task, then each task's title behind a mark that names its status — a
  * square to do or in progress, a check done, a minus cancelled — with the
  * status also read out for screen readers.
  *
@@ -35,10 +36,15 @@ function mountCard(tasks: PlanTask[]) {
 const frames = () => new Promise((r) => setTimeout(r, 50));
 
 describe('PlanCard', () => {
-  it('counts the done and cancelled tasks in its head and lists every task in order, its status on its row', () => {
+  it('counts the done and cancelled tasks in its head, lights a bar segment per task, and lists every task in order, its status on its row', () => {
     const wrapper = mountCard(TASKS);
 
-    expect(wrapper.find('.plan-card__head').text()).toBe('Plan · 1 of 4 done · 1 cancelled');
+    expect(wrapper.find('.plan-card__count').text()).toBe('1/4');
+    expect(wrapper.find('.plan-card__summary').text()).toBe('1 of 4 done, 1 cancelled');
+    expect(wrapper.findAll('.plan-card__bar i').map((s) => s.classes())).toEqual([
+      ['plan-card__segment--done'], ['plan-card__segment--in_progress'],
+      ['plan-card__segment--cancelled'], ['plan-card__segment--todo'],
+    ]);
     const rows = wrapper.findAll('.plan-task');
     expect(rows.map((r) => r.find('.plan-task__title').text())).toEqual(TASKS.map((t) => t.title));
     expect(rows.map((r) => r.classes().find((c) => c.startsWith('plan-task--')))).toEqual([
@@ -52,7 +58,7 @@ describe('PlanCard', () => {
   it('leaves the cancelled count out of the head when nothing was cancelled', () => {
     const wrapper = mountCard([task(1, 'Find your location', 'done'), task(2, 'Report the weather', 'todo')]);
 
-    expect(wrapper.find('.plan-card__head').text()).toBe('Plan · 1 of 2 done');
+    expect(wrapper.find('.plan-card__summary').text()).toBe('1 of 2 done');
   });
 
   it('marks a done task with a check, a cancelled one with a minus, and an open one with a square', () => {

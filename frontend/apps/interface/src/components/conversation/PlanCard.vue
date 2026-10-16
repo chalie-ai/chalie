@@ -1,8 +1,10 @@
-<!-- The plan the agent keeps while it works one message: its tasks in order,
-     each with a mark that moves with the task — a grey square to do, a pulsing
-     pink square in progress, a check drawn in when done, a minus drawn in (the
-     title struck through) when cancelled. Live it stands sticky under the
-     message it plans; settled it opens from the footer's plan link. -->
+<!-- The plan the agent keeps while it works one message: a head counting the
+     done tasks over a bar lit segment by segment, then its tasks in order, each
+     with a mark that moves with the task — a dim tile to do, a glowing pink
+     tile in progress, a check drawn in when done, a minus drawn in (the title
+     struck through) when cancelled. Like the weather card it sits on a neon
+     ground. Live it stands sticky under the message it plans; settled it opens
+     from the footer's plan link. -->
 <script setup lang="ts">
 import { computed } from 'vue';
 import type { PlanTask } from '../../api/conversation';
@@ -29,8 +31,13 @@ const STATUS_TEXT: Record<PlanTask['status'], string> = {
 <template>
   <section class="plan-card" aria-label="Plan">
     <p class="plan-card__head">
-      <span class="plan-card__label">Plan</span> · {{ doneCount }} of {{ tasks.length }} done<template v-if="cancelledCount"> · {{ cancelledCount }} cancelled</template>
+      <span class="plan-card__label">Plan</span>
+      <span class="plan-card__count" aria-hidden="true">{{ doneCount }}/{{ tasks.length }}</span>
+      <span class="plan-card__summary">{{ doneCount }} of {{ tasks.length }} done<template v-if="cancelledCount">, {{ cancelledCount }} cancelled</template></span>
     </p>
+    <div class="plan-card__bar" aria-hidden="true">
+      <i v-for="t in tasks" :key="t.number" :class="`plan-card__segment--${t.status}`" />
+    </div>
     <ol class="plan-card__tasks">
       <li
         v-for="t in tasks"
@@ -46,12 +53,12 @@ const STATUS_TEXT: Record<PlanTask['status'], string> = {
             <svg
               v-if="t.status === 'done' || t.status === 'cancelled'"
               :key="t.status"
-              width="16"
-              height="16"
+              width="14"
+              height="14"
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
-              stroke-width="2"
+              stroke-width="3"
               stroke-linecap="round"
               stroke-linejoin="round"
             >
@@ -68,23 +75,60 @@ const STATUS_TEXT: Record<PlanTask['status'], string> = {
 </template>
 
 <style scoped lang="scss">
+// Neon ground, opaque so the sticky card hides the thread scrolling under it.
+// Its strength is the most that keeps the light theme's pink label at 4.5:1.
 .plan-card {
-  width: min(100%, 520px);
-  padding: 8px 15px 10px;
-  background: var(--surface);
+  width: 100%;
+  padding: 14px 16px 10px;
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--pink) 14%, var(--bg)),
+    color-mix(in srgb, var(--violet) 12%, var(--bg))
+  );
 }
 
 .plan-card__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
   margin: 0;
-  line-height: 24px;
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono);
-  letter-spacing: 0.02em;
-  color: var(--muted);
 }
 
 .plan-card__label {
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+  letter-spacing: 0.08em;
   text-transform: uppercase;
+  color: var(--pink-text);
+}
+
+.plan-card__count {
+  font-family: var(--font-display);
+  font-size: var(--fs-title);
+  color: var(--text);
+}
+
+// One segment per task: lit and glowing once done, fading in while in
+// progress, the dim track otherwise.
+.plan-card__bar {
+  display: flex;
+  height: 2px;
+  margin: 8px 0;
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+
+  i {
+    flex: 1;
+    transition: box-shadow var(--dur-3) var(--ease-out);
+  }
+}
+
+.plan-card__segment--done {
+  background: var(--pink);
+  box-shadow: 0 0 8px var(--pink);
+}
+
+.plan-card__segment--in_progress {
+  background: linear-gradient(90deg, var(--pink), transparent);
 }
 
 .plan-card__tasks {
@@ -93,19 +137,23 @@ const STATUS_TEXT: Record<PlanTask['status'], string> = {
   list-style: none;
 }
 
+// The in-progress row's band runs to the card's edges.
 .plan-task {
   display: flex;
   align-items: center;
-  gap: 10px;
-  min-height: 28px;
+  gap: 12px;
+  min-height: 34px;
+  margin: 0 -16px;
+  padding: 0 16px;
   font-size: var(--fs-body);
-  color: var(--text);
-  transition: color var(--dur-2) var(--ease-out);
+  color: var(--muted);
+  transition: color var(--dur-2) var(--ease-out), background-color var(--dur-2) var(--ease-out);
 }
 
-.plan-task--done,
-.plan-task--cancelled {
-  color: var(--muted);
+.plan-task--in_progress {
+  background: color-mix(in srgb, var(--pink) 12%, transparent);
+  font-weight: 500;
+  color: var(--text);
 }
 
 .plan-task--cancelled .plan-task__title {
@@ -123,17 +171,23 @@ const STATUS_TEXT: Record<PlanTask['status'], string> = {
 
 .plan-task--done .plan-task__mark {
   color: var(--allow-text);
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--allow-text) 70%, transparent));
+}
+
+.plan-task--cancelled .plan-task__mark {
+  background: color-mix(in srgb, var(--text) 14%, transparent);
 }
 
 .plan-task__square {
-  width: 6px;
-  height: 6px;
-  background: var(--cell);
+  width: 16px;
+  height: 16px;
+  background: color-mix(in srgb, var(--text) 14%, transparent);
 }
 
 .plan-task--in_progress .plan-task__square {
   background: var(--pink);
-  animation: working 1.4s ease-in-out infinite;
+  box-shadow: 0 0 14px 2px color-mix(in srgb, var(--pink) 80%, transparent);
+  animation: plan-glow 1.4s ease-in-out infinite;
 }
 
 .plan-task__mark path {
@@ -141,7 +195,8 @@ const STATUS_TEXT: Record<PlanTask['status'], string> = {
   stroke-dashoffset: 0;
 }
 
-// Read by screen readers only — the mark carries the status visually.
+// Read by screen readers only — the count and the marks carry it visually.
+.plan-card__summary,
 .plan-task__status {
   position: absolute;
   width: 1px;
@@ -152,13 +207,17 @@ const STATUS_TEXT: Record<PlanTask['status'], string> = {
 }
 
 // A mark that just changed: a square pops in, a check or minus draws its
-// stroke. Declared after the in-progress pulse so the pop wins while it runs.
+// stroke. Declared after the in-progress glow so the pop wins while it runs.
 .plan-mark-enter-active.plan-task__square {
   animation: plan-pop var(--dur-2) var(--ease-out);
 }
 
 .plan-mark-enter-active path {
   animation: plan-draw var(--dur-3) var(--ease-out);
+}
+
+@keyframes plan-glow {
+  50% { box-shadow: 0 0 4px color-mix(in srgb, var(--pink) 40%, transparent); }
 }
 
 @keyframes plan-pop {

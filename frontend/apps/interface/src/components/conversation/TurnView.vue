@@ -284,13 +284,11 @@ const rowEntries = computed<RowEntry[]>(() => {
   return displayRows.value.map((row) => {
     // Activity lines, footers and plans have no user branch to match, so they
     // fall into 'chalie' — keeping them grouped with the chalie rows so
-    // speaker-change spacing stays correct. The plan sits in Chalie's column
-    // but hangs off the message it plans: it continues that message, and the
-    // chalie row after it opens Chalie's side.
+    // speaker-change spacing stays correct.
     const role: RowRole = row.kind === 'msg' && row.message.role === 'user' ? 'user' : 'chalie';
     const key = row.kind === 'msg' ? `msg-${row.message.id}` : row.kind === 'footer' ? `footer-${row.message.id}` : row.key;
-    const isLead = row.kind !== 'plan' && role !== prevRole;
-    prevRole = row.kind === 'plan' ? 'user' : role;
+    const isLead = role !== prevRole;
+    prevRole = role;
     return { key, role, isLead, row };
   });
 });
@@ -435,20 +433,20 @@ function onOpenThread(): void {
 }
 
 // The live plan stays in view under the fixed 56px top bar while the work runs
-// — or at the top of the thread panel, which scrolls its own body. Its fill
-// steps up a shade there, where the panel's ground is already the surface.
+// — or at the top of the thread panel, which scrolls its own body. It opens
+// Chalie's side, and the live line under it reads as its caption.
 .msg-row--plan {
   position: sticky;
   top: 56px;
   z-index: 3;
 }
 
-.turn-view--panel .msg-row--plan {
-  top: 0;
+.msg-row--plan + .msg-row--cont {
+  margin-top: 12px;
 }
 
-.turn-view--panel :deep(.plan-card) {
-  background: var(--surface-2);
+.turn-view--panel .msg-row--plan {
+  top: 0;
 }
 
 // The meta's top margin spaces a footer from its own bubble; a footer with no
