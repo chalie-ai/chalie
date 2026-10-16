@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import type { ConversationMessage } from '../../api/conversation';
+import type { ConversationMessage, PlanTask } from '../../api/conversation';
 import { messagePlaintext } from '../../utils/speech';
 import { emit as busEmit } from '../../composables/useEventBus';
 import { useVoiceTranscriptsStore } from '../../stores/voiceTranscripts';
 import { voice } from '../../api/voice';
 import { Copy, Reply, Volume2 } from '@lucide/vue';
 import StepList from './StepList.vue';
+import PlanCard from './PlanCard.vue';
 
 const props = withDefaults(defineProps<{
   message: ConversationMessage;
@@ -17,11 +18,14 @@ const props = withDefaults(defineProps<{
   work?: ConversationMessage[];
   /** The exchange's wall-clock duration in ms, read next to the step count. */
   durationMs?: number | null;
+  /** The plan the exchange kept, behind the plan link ("plan N/M"). */
+  plan?: PlanTask[];
 }>(), {
   canReply: false,
   threadPill: null,
   work: () => [],
   durationMs: null,
+  plan: () => [],
 });
 
 const emit = defineEmits<{ reply: []; openThread: [] }>();
@@ -92,9 +96,10 @@ function onCopy(): void {
 // "N step(s)" (+ the exchange's duration) when the answer did any work, and
 // "thought for Xs" whenever it reasoned — beside the steps label on a tool
 // turn — each opening its own list; the step list itself never carries the
-// reasoning. Nothing for a plain reply.
+// reasoning. "plan N/M" beside them opens the plan the exchange kept. Nothing
+// for a plain reply.
 
-type Panel = 'steps' | 'thought';
+type Panel = 'steps' | 'thought' | 'plan';
 
 const panel = ref<Panel | null>(null);
 
@@ -136,6 +141,13 @@ const thoughtLabel = computed<string | null>(
   () => (thinkMs.value > 0 ? `thought for ${formatDuration(thinkMs.value)}` : null),
 );
 
+// "plan N/M" — done tasks of all; null when the exchange kept no plan.
+const planLabel = computed<string | null>(() =>
+  props.plan.length > 0
+    ? `plan ${props.plan.filter((t) => t.status === 'done').length}/${props.plan.length}`
+    : null,
+);
+
 // Reasoning traces for the thought panel — a reply that only thought, or a
 // tool turn that reasoned alongside its steps.
 const thinkTraces = computed(() => props.work.flatMap((m) => m.thinking?.traces ?? []));
@@ -168,6 +180,16 @@ const thinkTraces = computed(() => props.work.flatMap((m) => m.thinking?.traces 
         @click="togglePanel('thought')"
       >
         · {{ thoughtLabel }}
+        <span class="activity__chev" aria-hidden="true">›</span>
+      </button>
+      <button
+        v-if="planLabel"
+        type="button"
+        class="speech-form__work"
+        :aria-expanded="panel === 'plan'"
+        @click="togglePanel('plan')"
+      >
+        · {{ planLabel }}
         <span class="activity__chev" aria-hidden="true">›</span>
       </button>
 
@@ -223,18 +245,20 @@ const thinkTraces = computed(() => props.work.flatMap((m) => m.thinking?.traces 
 
     <!-- inert while folded: a delegate call row is a button, and the fold only
          collapses its height, so it would stay reachable by Tab unseen. The
-         open panel names the content — the step list under steps (it stays in
-         the DOM while folded, height-collapsed), the reasoning traces under
-         thought. A reply that only thought has nothing but traces. -->
+         open panel names the content — the plan under plan, the step list
+         under steps (it stays in the DOM while folded, height-collapsed), the
+         reasoning traces under thought. A reply that only thought has nothing
+         but traces. -->
     <div
-      v-if="stepsLabel || thoughtLabel"
+      v-if="stepsLabel || thoughtLabel || planLabel"
       class="trace-body"
       :class="{ 'trace-body--open': panel !== null }"
       :inert="panel === null"
     >
       <div class="trace-body__inner">
+        <PlanCard v-if="panel === 'plan'" :tasks="plan" />
         <StepList
-          v-if="stepCount && panel !== 'thought'"
+          v-else-if="stepCount && panel !== 'thought'"
           :messages="work"
           :answer-id="message.id"
         />

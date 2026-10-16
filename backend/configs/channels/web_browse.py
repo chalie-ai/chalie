@@ -21,6 +21,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, ClassVar
 
 from abilities.browser import BrowserAbility
+from abilities.plan import PlanAbility
 from abilities.recall import Recall
 from abilities.read import ReadAbility
 from abilities.vision import VisionAbility
@@ -52,11 +53,11 @@ class WebBrowseConfig(ProcessorConfig):
             channel=Channel.DELEGATE_WEB_BROWSE.value,
             role="web_browse",
             policy_channel=policy_channel,
-            always_available=[*_WEB_BROWSE_TOOLS, Recall.NAME],
+            always_available=[*_WEB_BROWSE_TOOLS, Recall.NAME, PlanAbility.NAME],
             skip_transcript=False,  # uid + own transcript row, or the
             skip_input_row=False,   # act-trail dies and the loop runs blind
             suppress_history=True,
-            memory_seed=False,
+            memory_seed=True,
         )
 
     @property

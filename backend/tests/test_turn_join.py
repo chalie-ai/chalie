@@ -46,6 +46,7 @@ from services.provider_api import ProviderApiRequest
 from services.transcript_service import TranscriptService
 from services.turn_serializer_service import get_service as _serializer
 from tests.test_act_trail_exchange_scope import _assistant_row, _bare_mp, _input_row, _tool_call
+from tests.helpers import NO_PLAN, is_planning_request
 
 pytestmark = pytest.mark.unit
 
@@ -91,6 +92,8 @@ class _Provider:
         return 200000
 
     def send(self, dto: ProviderApiRequest) -> ProviderResponse:
+        if is_planning_request(dto):
+            return NO_PLAN
         with self._lock:
             self.bodies.append(str(dto.messages[0]["content"]))
             response = self._queue.pop(0) if self._queue else self._TERMINAL

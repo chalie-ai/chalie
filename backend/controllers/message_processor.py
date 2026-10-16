@@ -68,6 +68,8 @@ from contextlib import contextmanager
 from threading import Thread, get_ident
 from typing import TYPE_CHECKING, Protocol, cast
 
+from abilities.plan import PlanAbility
+from abilities.recall import Recall
 from configs.channels.user import UserConfig
 from configs.enums.channels import WATCHABLE_DELEGATE_CHANNELS, Channel
 from configs.enums.provider_type import ProviderType
@@ -79,6 +81,7 @@ from exceptions import (
     ProviderRetriesExhaustedError,
     RunAwayLoop,
 )
+from models.plan_task import PlanTask
 from models.provider_request import ProviderRequest
 from models.turn_execution import TurnExecution
 from models.transcript import Transcript
@@ -131,6 +134,10 @@ _EMPTY_COMPLETION_STEER = (
 #: will survive the next one too — recursing past this is an infinite loop, not
 #: persistence.
 _CONTEXT_LIMIT_RECOVERY_LIMIT = 3
+# The planning pre-pass offers only these tools, and sends at most this many
+# requests: room for a recall or two before the plan, never an open loop.
+_PLANNING_TOOLS = (Recall.NAME, PlanAbility.NAME)
+_PLANNING_STEP_LIMIT = 3
 
 
 class _TurnCancelled(Exception):
@@ -179,6 +186,9 @@ class MessageProcessor:
         self.thinking_override: str | None = None
         self.turn_handover: str = ""
         self.seeding_turn_zero: bool = False
+        # Raised while the planning pre-pass runs (``_plan_turn``): the prompt
+        # then asks for a plan instead of showing one.
+        self.planning: bool = False
         self._placed_attachments: list[str] = []
         self._trigger_channel: str | None = cast("str | None", self.metadata.get("trigger_channel"))
         self._trigger_turn_id: int | None = cast("int | None", self.metadata.get("trigger_turn_id"))
@@ -429,41 +439,23 @@ class MessageProcessor:
         """One provider step, recursing until the model stops calling tools,
         and returning that last call's response for :meth:`_settle` to store.
 
-        Send → on ``ContextLimit``, compact and continue (re-enter with the
-        transcript reviewer armed; a payload that will not shrink is let out
-        after ``_CONTEXT_LIMIT_RECOVERY_LIMIT`` attempts rather than spun on)
+        Send through :meth:`_send_fitting` (compacting on ``ContextLimit``)
         → if the call made no tool calls, return it unstored; otherwise store
         its own assistant row with settled=0 — empty when the call carried no
         prose — so the call's tool calls and thinking trace anchor to it,
         dispatch the calls, take in any message joined meanwhile, and recurse.
         A retried send and the empty-completion steer write no row and take
         nothing in: a joined message is consumed only once a call and all its
-        tools have returned. A cancel observed at
-        the top of any step aborts the whole turn. Every provider client is a
+        tools have returned. A cancel observed before any send aborts the
+        whole turn. Every provider client is a
         single blocking, non-streaming call (§ llm_clients/*) with no
         mid-flight abort hook, so a cancel requested while that call is
-        in flight can only be observed once it returns — the checkpoint right
-        after it, BEFORE the response is stored, is what makes that observation
+        in flight can only be observed once it returns — the checkpoint in
+        :meth:`_send_fitting` right after it, BEFORE the response is stored, is what makes that observation
         count: without it a cancel that lands mid-generation is silently
         ignored and the full response is persisted and rendered as if the turn
         had completed normally."""
-        if self.turn_execution_service.should_stop():
-            raise _TurnCancelled()
-        try:
-            response = self._send_with_retry(self._build_request())
-        except ContextLimit as limit:
-            # Compaction is the only lever here, so a hit that survives it is
-            # not a retry — it is a request that cannot be made to fit (one
-            # oversized turn, a window smaller than the prompt itself). Let it
-            # out rather than recursing forever on an unshrinkable payload.
-            self._context_limit_hits += 1
-            if self._context_limit_hits > _CONTEXT_LIMIT_RECOVERY_LIMIT:
-                raise
-            limit.recover()
-            return self._step()
-        self._context_limit_hits = 0
-        if self.turn_execution_service.should_stop():
-            raise _TurnCancelled()
+        response = self._send_fitting()
         tool_calls = response.tool_calls
         if not tool_calls:
             if not (response.text or "").strip() and not self._tool_invocations:
@@ -497,6 +489,30 @@ class MessageProcessor:
         self._dispatch_tools(tool_calls)
         self._consume_joined()
         return self._step()
+
+    def _send_fitting(self) -> "ProviderResponse":
+        """Send this step's request, checking for a cancel before every attempt
+        and again once the answer lands, before anything is stored. On
+        ``ContextLimit``, compact and send again; compaction is the only lever
+        here, so a hit that survives it is not a retry — it is a request that
+        cannot be made to fit (one oversized turn, a window smaller than the
+        prompt itself) — and it is let out after
+        ``_CONTEXT_LIMIT_RECOVERY_LIMIT`` attempts rather than spun on."""
+        while True:
+            if self.turn_execution_service.should_stop():
+                raise _TurnCancelled()
+            try:
+                response = self._send_with_retry(self._build_request())
+            except ContextLimit as limit:
+                self._context_limit_hits += 1
+                if self._context_limit_hits > _CONTEXT_LIMIT_RECOVERY_LIMIT:
+                    raise
+                limit.recover()
+                continue
+            self._context_limit_hits = 0
+            if self.turn_execution_service.should_stop():
+                raise _TurnCancelled()
+            return response
 
     def _settle(self, response: "ProviderResponse") -> bool:
         """Store the row of a call that made no tool calls and decide, in one
@@ -828,8 +844,8 @@ class MessageProcessor:
 
     def _setup(self) -> None:
         """Pre-loop setup: seed the always-available tools, gate thinking on the
-        ``user`` channel, seed the turn-zero flashback + any attachments, and
-        ingest the reply's parent gist on a fork."""
+        ``user`` channel, seed the turn-zero flashback + any attachments, ingest
+        the reply's parent gist on a fork, then plan the message."""
         self.active_tools = list(self.config.always_available or [])
         # Resolve thinking override from the transcript row written by begin()
         # (the current turn's input row). medium/high becomes the override,
@@ -840,6 +856,49 @@ class MessageProcessor:
             self._run_thinking_gate()
         self._seed_turn_zero()
         self._maybe_fire_gist()
+        self._plan_turn()
+
+    def _plan_turn(self) -> None:
+        """The planning pre-pass: before the loop's first step, the model plans
+        the message with only ``recall`` and ``plan`` callable, while
+        ``PromptService`` shows it the planning instruction and every other tool
+        as a catalogue. Runs on a config that pins the plan tool, for a message
+        with an input row. Stops once a plan is stored, when the model calls no
+        tool it may call, or after ``_PLANNING_STEP_LIMIT`` sends; a message
+        left unplanned reaches the loop with the instruction to create its plan
+        first.
+
+        Writes no assistant row and no thinking trace and leaves the runaway
+        tallies alone: its calls anchor to the input row, where the act trail
+        shows them to the loop. A call to any other tool is logged, not run —
+        dispatch itself runs any registered tool — and, with nothing run, the
+        next send would repeat this one, so planning ends there."""
+        message_id = self.uid
+        if PlanAbility.NAME not in self.active_tools or message_id is None:
+            return
+        pinned = self.active_tools
+        self.active_tools = [name for name in pinned if name in _PLANNING_TOOLS]
+        self.planning = True
+        try:
+            for _ in range(_PLANNING_STEP_LIMIT):
+                tool_calls = self._send_fitting().tool_calls
+                if not tool_calls:
+                    return
+                allowed = [call for call in tool_calls if call["name"] in self.active_tools]
+                if len(allowed) < len(tool_calls):
+                    logger.warning(
+                        "[MessageProcessor] turn %s: planning skipped calls to %s",
+                        self.turn_id,
+                        sorted({cast("str", call["name"]) for call in tool_calls} - set(self.active_tools)),
+                    )
+                if not allowed:
+                    return
+                self._dispatch_tools(allowed)
+                if PlanTask.next_position(message_id) > 1:
+                    return
+        finally:
+            self.active_tools = pinned
+            self.planning = False
 
     def _run_thinking_gate(self) -> None:
         """Pick this turn's thinking level: an explicit override wins outright;

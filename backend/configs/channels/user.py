@@ -4,6 +4,7 @@ from typing import ClassVar
 
 from abilities.find_tools import FindToolsAbility
 from abilities.image_preview import ImagePreviewAbility
+from abilities.plan import PlanAbility
 from abilities.recall import Recall
 from configs.channels._common import DEFAULT_ALWAYS_AVAILABLE
 from configs.enums.channels import Channel
@@ -30,7 +31,7 @@ class UserConfig(ProcessorConfig):
             channel=Channel.USER.value,
             role="user",
             policy_channel=PolicyChannel.CHAT,
-            always_available=DEFAULT_ALWAYS_AVAILABLE,
+            always_available=[*DEFAULT_ALWAYS_AVAILABLE, PlanAbility.NAME],
             skip_transcript=False,
             skip_input_row=bool(_metadata.get("hidden_input")),
             suppress_history=False,

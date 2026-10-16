@@ -46,6 +46,7 @@ from services.database import Database
 from services.garbage_collector_service import GarbageCollectorService
 from services.tool_call_service import ToolCallService
 from services.websocket import Websocket
+from tests.helpers import NO_PLAN, is_planning_request
 
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 
@@ -84,7 +85,9 @@ class _ScriptedProvider:
     def get_context_limit(self) -> int:
         return 200000
 
-    def send(self, _dto: object) -> ProviderResponse:
+    def send(self, dto: object) -> ProviderResponse:
+        if is_planning_request(dto):
+            return NO_PLAN
         with self._lock:
             if self._sends >= len(self._responses):
                 return self._TERMINAL
@@ -118,6 +121,8 @@ class _HeldChildProvider(_ScriptedProvider):
         self.gate_opened = False
 
     def send(self, dto: object) -> ProviderResponse:
+        if is_planning_request(dto):
+            return NO_PLAN
         with self._lock:
             self._calls += 1
             is_child_first_call = self._calls == 2

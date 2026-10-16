@@ -12,6 +12,7 @@ import type {
   ConversationMessage,
   ConversationTurnBlock,
   DelegateTurnBlock,
+  PlanTask,
 } from '../../api/conversation';
 import { usePermissionsStore } from '../../stores/permissions';
 import type { PermissionRequest } from '../../stores/permissions';
@@ -21,6 +22,7 @@ import UserBubble from './UserBubble.vue';
 import ChalieBubble from './ChalieBubble.vue';
 import ActivityLine from './ActivityLine.vue';
 import BubbleFooter from './BubbleFooter.vue';
+import PlanCard from './PlanCard.vue';
 
 const props = withDefaults(
   defineProps<{
@@ -82,17 +84,27 @@ interface MsgRow {
 // The meta line under the row that closes an exchange: timestamp, actions, and
 // (on the last footer of a forked turn) the collapsed thread pill. The work
 // behind it lives HERE — the exchange's rows and duration behind the work
-// toggle. `standalone` marks one with no bubble of its own above it — a
-// closing row that said nothing.
+// toggle, and the plan it kept behind the plan link. `standalone` marks one
+// with no bubble of its own above it — a closing row that said nothing.
 interface FooterRow {
   kind: 'footer';
   message: ConversationMessage;
   standalone: boolean;
   work: ConversationMessage[];
   durationMs: number | null;
+  plan: PlanTask[];
 }
 
-type DisplayRow = MsgRow | ActivityRow | FooterRow;
+/** The still-working exchange's plan, standing sticky under the message it
+ *  plans and ticking as the agent works it. Settled, it moves behind the
+ *  footer's plan link. */
+interface PlanRow {
+  kind: 'plan';
+  key: string;
+  tasks: PlanTask[];
+}
+
+type DisplayRow = MsgRow | ActivityRow | FooterRow | PlanRow;
 
 /** Ids of the rows that close an exchange. An exchange opens at each user row
  *  — except one that joined the running turn, which stays inside the exchange
@@ -160,12 +172,18 @@ const displayRows = computed<DisplayRow[]>(() => {
   // the footer of the last CLOSED exchange since the current user row —
   // trailing work after an exchange's answer stays in that exchange's footer;
   // exchangeStart = created_at of the row that opened the open exchange, for
-  // its duration.
+  // its duration; plan = the plan the current user row opened (a joined row's
+  // tasks land on it), planAt = where its live card goes — right under that
+  // row — and planClosed = its exchange has closed, so the plan sits behind
+  // the footer instead.
   let anchor = 'start';
   let segIndex = 0;
   let pending: ConversationMessage[] = [];
   let lastFooter: FooterRow | null = null;
   let exchangeStart: string | null = null;
+  let plan: PlanTask[] = [];
+  let planAt = 0;
+  let planClosed = false;
 
   for (const message of props.block.messages) {
     // The spine renders only through settle0 — drop thread reply rows. The
@@ -191,6 +209,9 @@ const displayRows = computed<DisplayRow[]>(() => {
       lastFooter = null;
       pending = [];
       exchangeStart = message.created_at;
+      plan = message.plan ?? [];
+      planAt = rows.length;
+      planClosed = false;
       continue;
     }
 
@@ -210,9 +231,10 @@ const displayRows = computed<DisplayRow[]>(() => {
           durationMs = end - start;
         }
       }
-      const footer: FooterRow = { kind: 'footer', message, standalone: !hasBubble, work: pending, durationMs };
+      const footer: FooterRow = { kind: 'footer', message, standalone: !hasBubble, work: pending, durationMs, plan };
       rows.push(footer);
       lastFooter = footer;
+      planClosed = true;
       segIndex += 1;
       pending = [];
       exchangeStart = null;
@@ -241,6 +263,7 @@ const displayRows = computed<DisplayRow[]>(() => {
   if (liveView) {
     const pills = liveTrailsFor(channel.value ?? props.type, props.block.turn_id).flatMap((t) => t.pills);
     rows.push({ kind: 'activity', key: `activity-${anchor}-${segIndex}`, messages: pending, pills });
+    if (plan.length > 0 && !planClosed) rows.splice(planAt, 0, { kind: 'plan', key: `plan-${anchor}`, tasks: plan });
   }
 
   return rows;
@@ -259,13 +282,15 @@ interface RowEntry {
 const rowEntries = computed<RowEntry[]>(() => {
   let prevRole: RowRole | null = null;
   return displayRows.value.map((row) => {
-    // Activity lines and footers have no user branch to match, so they fall
-    // into 'chalie' — keeping them grouped with the chalie rows so
-    // speaker-change spacing stays correct.
+    // Activity lines, footers and plans have no user branch to match, so they
+    // fall into 'chalie' — keeping them grouped with the chalie rows so
+    // speaker-change spacing stays correct. The plan sits in Chalie's column
+    // but hangs off the message it plans: it continues that message, and the
+    // chalie row after it opens Chalie's side.
     const role: RowRole = row.kind === 'msg' && row.message.role === 'user' ? 'user' : 'chalie';
-    const key = row.kind === 'msg' ? `msg-${row.message.id}` : row.kind === 'activity' ? row.key : `footer-${row.message.id}`;
-    const isLead = role !== prevRole;
-    prevRole = role;
+    const key = row.kind === 'msg' ? `msg-${row.message.id}` : row.kind === 'footer' ? `footer-${row.message.id}` : row.key;
+    const isLead = row.kind !== 'plan' && role !== prevRole;
+    prevRole = row.kind === 'plan' ? 'user' : role;
     return { key, role, isLead, row };
   });
 });
@@ -310,6 +335,7 @@ function onOpenThread(): void {
 <template>
   <div
     class="turn-view"
+    :class="{ 'turn-view--panel': fullThread }"
     :data-turn-id="block.turn_id"
     :data-type="channel ? undefined : type"
     :data-channel="channel ?? undefined"
@@ -325,15 +351,20 @@ function onOpenThread(): void {
       :class="[
         `msg-row--${ar.role}`,
         ar.isLead ? 'msg-row--lead' : 'msg-row--cont',
-        { 'msg-row--standalone': ar.row.kind === 'footer' && (ar.row as FooterRow).standalone },
+        {
+          'msg-row--standalone': ar.row.kind === 'footer' && (ar.row as FooterRow).standalone,
+          'msg-row--plan': ar.row.kind === 'plan',
+        },
       ]"
     >
+      <PlanCard v-if="ar.row.kind === 'plan'" :tasks="(ar.row as PlanRow).tasks" />
+
       <!-- The still-working exchange's LIVE activity line: its thinking,
            mid-turn prose and tool calls folded into steps, tracking the
            act-trail pill and carrying the stop. Settled, the exchange's work
            lives in the footer under the answer instead. -->
       <ActivityLine
-        v-if="ar.row.kind === 'activity'"
+        v-else-if="ar.row.kind === 'activity'"
         :messages="(ar.row as ActivityRow).messages"
         :pills="(ar.row as ActivityRow).pills"
         :undoable="channel == null"
@@ -347,6 +378,7 @@ function onOpenThread(): void {
         :message="(ar.row as FooterRow).message"
         :work="(ar.row as FooterRow).work"
         :duration-ms="(ar.row as FooterRow).durationMs"
+        :plan="(ar.row as FooterRow).plan"
         :can-reply="canReply"
         :thread-pill="ar.key === lastFooterKey ? threadPill : null"
         @reply="onReply"
@@ -400,6 +432,23 @@ function onOpenThread(): void {
 }
 .msg-row--cont {
   margin-top: 6px;
+}
+
+// The live plan stays in view under the fixed 56px top bar while the work runs
+// — or at the top of the thread panel, which scrolls its own body. Its fill
+// steps up a shade there, where the panel's ground is already the surface.
+.msg-row--plan {
+  position: sticky;
+  top: 56px;
+  z-index: 3;
+}
+
+.turn-view--panel .msg-row--plan {
+  top: 0;
+}
+
+.turn-view--panel :deep(.plan-card) {
+  background: var(--surface-2);
 }
 
 // The meta's top margin spaces a footer from its own bubble; a footer with no

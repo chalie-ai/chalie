@@ -98,6 +98,21 @@ export interface ConversationMessage {
    * anchored to the row.
    */
   thinking?: { traces: string[]; duration_ms: number; tokens: number };
+  /**
+   * The plan the agent keeps while it works this message, as of this fetch.
+   * Present only on a user row that opens a request (never a joined one — its
+   * tasks land on the plan it joined) and only once a plan was made —
+   * absent/null otherwise. Tasks in task order.
+   */
+  plan?: PlanTask[] | null;
+}
+
+/** One task of a message's plan. `number` is the 1-based task number. */
+export interface PlanTask {
+  number: number;
+  title: string;
+  task: string;
+  status: 'todo' | 'in_progress' | 'done' | 'cancelled';
 }
 
 /** Collapsed thread metadata returned by /api/threads/all. */

@@ -23,6 +23,7 @@ from typing import ClassVar
 
 from abilities.find_tools import FindToolsAbility
 from abilities.image_preview import ImagePreviewAbility
+from abilities.plan import PlanAbility
 from configs.channels._common import DEFAULT_ALWAYS_AVAILABLE
 from configs.enums.channels import Channel
 from configs.enums.config_type import ConfigTypeEnum
@@ -55,7 +56,7 @@ class ScheduledConfig(ProcessorConfig):
             # SUBCONSCIOUS is the silent-housekeeping family that seeds the web
             # delegates deny; borrowing it here hard-blocked scheduled web work.
             policy_channel=PolicyChannel.CHAT,
-            always_available=list(DEFAULT_ALWAYS_AVAILABLE),
+            always_available=[*DEFAULT_ALWAYS_AVAILABLE, PlanAbility.NAME],
             skip_transcript=False,
             skip_input_row=False,
             suppress_history=False,
