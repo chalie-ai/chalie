@@ -10,6 +10,7 @@ import { useSessionStore } from '../../stores/session';
 import { useAutoscroll } from '../../composables/useAutoscroll';
 import { registerSurface, unregisterSurface, upsertTurnToSurfaces, evictOldestAbove, nextTicket, SPINE_SURFACE_ID } from '../../utils/turnDom';
 import { syncDaymarks } from '../../utils/daymarks';
+import { preloadRichCards } from '../rich/richRegistry';
 import SpineTurn from './SpineTurn.vue';
 
 const PAGE_SIZE = 20;
@@ -40,6 +41,9 @@ async function _fetchPage(pageOffset: number): Promise<number> {
   // `UpsertOptions.ticket`).
   const ticket = nextTicket();
   const { blocks } = await convoApi.batch(ids, ConfigType.USER);
+  // The scroll that follows a page load measures final heights only if the
+  // page's rich cards are already in the DOM, not still fetching their chunks.
+  await preloadRichCards(blocks.flatMap((b) => b.messages.flatMap((m) => m.segments ?? [])));
   for (const block of blocks) {
     upsertTurnToSurfaces(block, ConfigType.USER, { ticket });
   }
