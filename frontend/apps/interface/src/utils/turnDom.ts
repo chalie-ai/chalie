@@ -282,6 +282,35 @@ export interface UpsertOptions {
    *  completed/crashed settle, where the turn is immutable and the settled
    *  block must land (see driftDispatcher's terminal-branch comment). */
   force?: boolean;
+  /** This read's place in request order: a `nextTicket()` taken BEFORE the
+   *  read was sent. A block whose ticket is older than the last one applied to
+   *  its turn is dropped whole, `force` or not. The version can't order two
+   *  reads of a turn that gained no rows in between, so without this a slow
+   *  early read repaints over a later one (a settle, a cancel reconcile).
+   *  Omitted: the block is applied and nothing is recorded. */
+  ticket?: number;
+}
+
+// The highest ticket applied per turn, keyed like `workingKey` (by type, or by
+// channel for a delegate turn). A high-water mark rather than "only the newest
+// read lands": when the newest read fails, an older one still applies. Never
+// pruned: turn_ids are never reissued, and a removed turn's mark is what stops
+// an older read from bringing it back.
+let _lastTicket = 0;
+const _appliedTickets = new Map<string, number>();
+
+/** Take the ticket for a read about to be sent (see `UpsertOptions.ticket`). */
+export function nextTicket(): number {
+  return ++_lastTicket;
+}
+
+/** False when `ticket` is older than the last one applied under `key`;
+ *  otherwise records it. An untracked read is always admitted. */
+function admitTicket(key: string, ticket: number | undefined): boolean {
+  if (ticket === undefined) return true;
+  if (ticket < (_appliedTickets.get(key) ?? 0)) return false;
+  _appliedTickets.set(key, ticket);
+  return true;
 }
 
 function blockVersion(block: Pick<ConversationTurnBlock, 'messages'>): number {
@@ -421,6 +450,10 @@ export function upsertTurnToSurfaces(
   type: string,
   options: UpsertOptions = {},
 ): void {
+  // An out-of-order read is dropped before it touches anything, so it can't
+  // clear live pills either.
+  if (!admitTicket(workingKey(block.turn_id, type), options.ticket)) return;
+
   // §6.5 step 4 — the block's persisted tool_calls supersede its RESOLVED
   // live pills (an unresolved pill, a step still running, is left to finish
   // live). Fired here, the one shared upsert path every fetched block passes
@@ -476,6 +509,7 @@ export function hasDelegateSurface(channel: string, turnId: number): boolean {
  */
 export function upsertDelegateTurn(block: DelegateTurnBlock, options: UpsertOptions = {}): void {
   const { channel } = block;
+  if (!admitTicket(workingKey(block.turn_id, channel), options.ticket)) return;
   clearLiveTurnsForToolCallsResolved(
     channel,
     block.turn_id,
@@ -531,8 +565,11 @@ function readTurnId(el: Element): number | null {
   return Number.isNaN(num) ? null : num;
 }
 
-/** Remove a turn's rendered host from EVERY surface (no-op when absent). */
-export function removeTurn(turnId: number, type: string): void {
+/** Remove a turn's rendered host from EVERY surface (no-op when absent). A
+ *  ticketed removal is a read's result like an upsert (see
+ *  `UpsertOptions.ticket`): dropped when older, recorded otherwise. */
+export function removeTurn(turnId: number, type: string, ticket?: number): void {
+  if (!admitTicket(workingKey(turnId, type), ticket)) return;
   for (const el of getAllTurnEls(turnId, type)) {
     const host = el.parentElement;
     if (host) {

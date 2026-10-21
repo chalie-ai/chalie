@@ -28,7 +28,8 @@ import { system } from '../../api';
 import ImageAttachStrip from '../upload/ImageAttachStrip.vue';
 import QueuedMessages from '../conversation/QueuedMessages.vue';
 import OffScreenAsks from './OffScreenAsks.vue';
-import { Plus, Mic, Send, X, AlertTriangle, ChevronDown } from '@lucide/vue';
+import DockError from './DockError.vue';
+import { Plus, Mic, Send, ChevronDown } from '@lucide/vue';
 
 /**
  * `turnId` is the only thing that distinguishes a thread reply from a main-dock
@@ -287,18 +288,7 @@ onBeforeUnmount(() => {
     @focusin="markActive"
     @pointerdown="markActive"
   >
-    <div v-if="session.errorMessage" class="dock-error" role="alert">
-      <AlertTriangle class="dock-error__icon" :size="16" aria-hidden="true" />
-      <span class="dock-error__text">{{ session.errorMessage }}</span>
-      <button
-        class="dock-error__close"
-        type="button"
-        aria-label="Dismiss error"
-        @click="session.errorMessage = null"
-      >
-        <X :size="16" />
-      </button>
-    </div>
+    <DockError />
 
     <!-- Pending asks no live line on screen shows; active dock only, like the attach strip. -->
     <OffScreenAsks v-if="isActiveDock" />

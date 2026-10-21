@@ -18,8 +18,11 @@ class Chip(DTO):
     persisted lifecycle ``state`` (started/done/error) + ``ended_at`` so a
     refetched turn re-renders the true pill state — an error stays red on reload
     rather than downgrading to a neutral chip. ``delegate`` names the delegate
-    turn the call spawned, when it wrote a transcript, so the pill opens it."""
+    turn the call spawned, when it wrote a transcript, so the pill opens it.
+    ``id`` is the tool_calls row id — the id the live tool-call frame keys its
+    pill on."""
 
+    id: int
     tool_name: str
     summary: str
     state: str

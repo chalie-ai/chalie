@@ -28,6 +28,8 @@ export interface ConversationSegment {
 /** One tool call's chip (see ConversationMessage.tool_calls). `delegate` names
  *  the delegate turn the call spawned, once that turn wrote a transcript. */
 export interface ToolCallChip {
+  /** The tool_calls row id — the same id a live pill is keyed on. */
+  id: number;
   tool_name: string;
   summary: string;
   state: 'started' | 'done' | 'error';

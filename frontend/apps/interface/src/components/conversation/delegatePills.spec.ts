@@ -109,10 +109,10 @@ function livePill(over: Partial<LiveToolPill>): LiveToolPill {
 type ToolCalls = NonNullable<ConversationMessage['tool_calls']>;
 
 const DELEGATE_CALL: ToolCalls[number] = {
-  tool_name: 'web_search', summary: 'museum hours', state: 'done', ended_at: null, delegate: REF,
+  id: 51, tool_name: 'web_search', summary: 'museum hours', state: 'done', ended_at: null, delegate: REF,
 };
 const PLAIN_CALL: ToolCalls[number] = {
-  tool_name: 'calendar', summary: 'todays agenda', state: 'done', ended_at: null, delegate: null,
+  id: 52, tool_name: 'calendar', summary: 'todays agenda', state: 'done', ended_at: null, delegate: null,
 };
 
 /** The assistant row carrying `toolCalls` — a segment whose only work was tools. */

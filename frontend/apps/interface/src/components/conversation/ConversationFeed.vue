@@ -8,7 +8,7 @@ import { ConfigType } from '@chalie/shared';
 import { conversation as convoApi } from '../../api/conversation';
 import { useSessionStore } from '../../stores/session';
 import { useAutoscroll } from '../../composables/useAutoscroll';
-import { registerSurface, unregisterSurface, upsertTurnToSurfaces, evictOldestAbove, SPINE_SURFACE_ID } from '../../utils/turnDom';
+import { registerSurface, unregisterSurface, upsertTurnToSurfaces, evictOldestAbove, nextTicket, SPINE_SURFACE_ID } from '../../utils/turnDom';
 import { syncDaymarks } from '../../utils/daymarks';
 import SpineTurn from './SpineTurn.vue';
 
@@ -35,9 +35,13 @@ async function _fetchPage(pageOffset: number): Promise<number> {
   const ids = threads.map((t) => t.turn_id).filter((id): id is number => id != null);
   if (!ids.length) return threads.length;
 
+  // Ticketed: a running turn in this page can settle while the read is out,
+  // and its settle must not be repainted by this older snapshot (see turnDom's
+  // `UpsertOptions.ticket`).
+  const ticket = nextTicket();
   const { blocks } = await convoApi.batch(ids, ConfigType.USER);
   for (const block of blocks) {
-    upsertTurnToSurfaces(block, ConfigType.USER);
+    upsertTurnToSurfaces(block, ConfigType.USER, { ticket });
   }
   return threads.length;
 }

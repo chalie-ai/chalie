@@ -153,7 +153,7 @@ describe('upsertTurnToSurfaces — fan-out', () => {
 
     const b = block(1, [10]);
     b.messages[0].tool_calls = [
-      { tool_name: 'search', summary: 's', state: 'done', ended_at: null, delegate: null },
+      { id: 100, tool_name: 'search', summary: 's', state: 'done', ended_at: null, delegate: null },
     ];
     upsertTurnToSurfaces(b, 'user');
 
@@ -251,6 +251,52 @@ describe('removeTurn', () => {
     removeTurn(2, 'user');
     document.removeEventListener('turn-state-changed', listener);
     expect(listener).toHaveBeenCalledOnce();
+  });
+});
+
+describe('ticket — a read older than the last one applied to its turn is dropped', () => {
+  it('drops an older read whole even when forced and newer by version, and still applies one that was never overtaken', async () => {
+    const { registerSurface, upsertTurnToSurfaces, nextTicket } = await freshTurnDom();
+    const { startLiveTool, finishLiveTool, liveTrailsFor } = await import('./liveActTrail');
+    const container = document.createElement('div');
+    registerSurface({ id: 'x', type: 'user', container, component: StubComponent });
+    const older = nextTicket();
+    const newer = nextTicket();
+
+    upsertTurnToSurfaces(block(1, [10]), 'user', { ticket: newer });
+    // A step that finished after the newer read: its pill shows it until a
+    // read carrying its chip lands.
+    startLiveTool('user', 1, 5, 'web_search');
+    finishLiveTool('user', 1, 5, true);
+    // Everything but the ticket says apply: a higher version, and `force`.
+    const stale = block(1, [10, 11], { working: true });
+    stale.messages[1]!.tool_calls = [
+      { id: 6, tool_name: 'recall', summary: '', state: 'done', ended_at: null, delegate: null },
+    ];
+    upsertTurnToSurfaces(stale, 'user', { force: true, ticket: older });
+    expect(container.firstElementChild!.getAttribute('data-version')).toBe('10');
+    // Dropped before it touches anything: a stale read carrying chips would
+    // otherwise clear the finished pill it doesn't know about.
+    expect(liveTrailsFor('user', 1)[0]?.pills.map((p) => p.id)).toEqual(['5']);
+
+    // The mark is per turn: the same older ticket still lands on another turn.
+    upsertTurnToSurfaces(block(2, [20]), 'user', { ticket: older });
+    expect(container.children).toHaveLength(2);
+  });
+
+  it('an older read cannot bring back a turn a newer read removed', async () => {
+    const { registerSurface, upsertTurnToSurfaces, removeTurn, nextTicket } = await freshTurnDom();
+    const container = document.body.appendChild(document.createElement('div'));
+    registerSurface({ id: 'x', type: 'user', container, component: StubComponent });
+    upsertTurnToSurfaces(block(1, [10]), 'user');
+    const older = nextTicket();
+    const newer = nextTicket();
+
+    removeTurn(1, 'user', newer);
+    upsertTurnToSurfaces(block(1, [10], { working: true }), 'user', { ticket: older });
+
+    expect(container.children).toHaveLength(0);
+    container.remove();
   });
 });
 

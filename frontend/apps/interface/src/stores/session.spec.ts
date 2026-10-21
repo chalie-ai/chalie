@@ -684,6 +684,37 @@ describe('requestStop — only a message the cancel removes goes back to the doc
     expect(received).toEqual([{ text: 'what about Florence?', turnId: 12 }]);
   });
 
+  it('a stop whose answer is lost after its cancelled frame already redrew the copy still hands the stripped reply back, with no failure banner', async () => {
+    const opener = [row(1, 'user', 'plan my trip to Rome'), row(2, 'assistant', 'Rome it is', { settled: true })];
+    const { session, turnDom, TurnView } = await spineRendering(turn12(opener, false));
+    const panel = document.body.appendChild(document.createElement('div'));
+    turnDom.registerSurface({
+      id: 'panel', type: ConfigType.USER, container: panel, component: TurnView,
+      props: { fullThread: true }, accepts: (id) => id === 12,
+    });
+    turnDom.upsertTurnToSurfaces(
+      turn12([...opener, row(3, 'user', 'what about Florence?', { thread_message: true })], true), ConfigType.USER,
+    );
+    const restoreText = turnDom.lastUserText(panel);
+    threadMock.mockResolvedValue(turn12(opener, false));
+    vi.spyOn(console, 'error').mockImplementation(() => { /* the lost answer is still logged */ });
+    const { reconcileCancelledTurn } = await import('../utils/cancelReconcile');
+    // The server commits the cancel and its frame redraws the copy — then the
+    // answer to the stop is lost on the way back.
+    stopMock.mockImplementationOnce(async () => {
+      await reconcileCancelledTurn(12, ConfigType.USER);
+      expect(panel.querySelector('[data-user-text="what about Florence?"]')).toBeNull();
+      throw new Error('HTTP 504');
+    });
+    const { received, stop } = listenForRestores();
+
+    await session.requestStop(12, ConfigType.USER, 12, restoreText);
+    stop();
+
+    expect(session.errorMessage).toBeNull();
+    expect(received).toEqual([{ text: 'what about Florence?', turnId: 12 }]);
+  });
+
   it('a failed refetch after the cancel still leaves the opener handed back to the dock', async () => {
     const { session, turnDom, spine } = await spineRendering(turn12([row(1, 'user', 'plan my trip to Rome')], true));
     threadMock.mockRejectedValue(new Error('network down'));
@@ -790,7 +821,9 @@ describe('requestStop — DELETE only fires for a confirmed in-flight turn', () 
 describe('requestStop — a stop that fails', () => {
   it('says so in the dock banner and undoes nothing, leaving the turn running and stoppable; a retry then stops it and takes the banner down', async () => {
     const { session, turnDom } = await freshSession();
-    threadMock.mockResolvedValue(stubBlock(14, false));
+    // The re-read after the refused DELETE finds the turn still running; the
+    // retry's reconcile then reads it stopped.
+    threadMock.mockResolvedValueOnce(stubBlock(14, true)).mockResolvedValue(stubBlock(14, false));
     const logged = vi.spyOn(console, 'error').mockImplementation(() => { /* asserted below */ });
     const handBacks: unknown[] = [];
     document.addEventListener('session:turn-interrupted', (e) => { handBacks.push((e as CustomEvent).detail); });
@@ -803,7 +836,8 @@ describe('requestStop — a stop that fails', () => {
     expect(logged).toHaveBeenCalled();
     expect(turnDom.isTurnWorking(14, ConfigType.USER)).toBe(true);
     expect(handBacks).toEqual([]);
-    expect(threadMock).not.toHaveBeenCalled();
+    // The one read is the re-read that found it still running: nothing reconciled.
+    expect(threadMock).toHaveBeenCalledTimes(1);
 
     await session.requestStop(14, ConfigType.USER, 14, 'draft');
 
@@ -825,6 +859,61 @@ describe('requestStop — a stop that fails', () => {
     expect(session.errorMessage).toBe('Provider quota exceeded');
     expect(turnDom.isTurnWorking(15, ConfigType.USER)).toBe(false);
     expect(threadMock).toHaveBeenCalledWith(15, ConfigType.USER);
+  });
+
+  /** A spine to render into, with the dock's send echo standing in for the
+   *  message the turn is working on. */
+  async function spineWithEcho(text: string) {
+    const ctx = await freshSession();
+    const spine = document.body.appendChild(document.createElement('div'));
+    ctx.turnDom.registerSurface({
+      id: ctx.turnDom.SPINE_SURFACE_ID, type: ConfigType.USER, container: spine, component: StubComponent,
+    });
+    ctx.sendEcho.mountSendEcho(text, null, ConfigType.USER);
+    expect(spine.querySelector('[data-send-echo]')).not.toBeNull();
+    return { ...ctx, spine };
+  }
+
+  it('takes a stop whose answer was lost as accepted when the turn is found stopped: the banner an earlier refusal left comes down, the message goes back to the dock and its echo is gone', async () => {
+    const { session, turnDom, spine } = await spineWithEcho('draft');
+    vi.spyOn(console, 'error').mockImplementation(() => { /* the lost answer is still logged */ });
+    const handBacks: unknown[] = [];
+    document.addEventListener('session:turn-interrupted', (e) => { handBacks.push((e as CustomEvent).detail); });
+    // The first stop is refused and the turn keeps running; the retry stops
+    // it, but its answer never arrives.
+    stopMock.mockRejectedValueOnce(new Error('HTTP 500')).mockRejectedValueOnce(new Error('HTTP 502'));
+    threadMock
+      .mockResolvedValueOnce(stubBlock(16, true))
+      .mockResolvedValue({ ...(stubBlock(16, false) as object), cancelled: true, type: ConfigType.USER });
+
+    turnDom.setTurnWorking(16, ConfigType.USER, true);
+    await session.requestStop(16, ConfigType.USER, null, 'draft');
+    expect(session.errorMessage).toBe("Couldn't stop and undo. Try again.");
+    expect(handBacks).toEqual([]);
+
+    await session.requestStop(16, ConfigType.USER, null, 'draft');
+
+    expect(session.errorMessage).toBeNull();
+    expect(handBacks).toEqual([{ text: 'draft', turnId: null }]);
+    expect(spine.querySelector('[data-send-echo]')).toBeNull();
+    expect(turnDom.isTurnWorking(16, ConfigType.USER)).toBe(false);
+  });
+
+  it('still says the stop failed when the answer was lost and the turn cannot be re-read: the message and its echo stay put', async () => {
+    const { session, turnDom, spine } = await spineWithEcho('draft');
+    vi.spyOn(console, 'error').mockImplementation(() => { /* both failures are logged */ });
+    const handBacks: unknown[] = [];
+    document.addEventListener('session:turn-interrupted', (e) => { handBacks.push((e as CustomEvent).detail); });
+    stopMock.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    threadMock.mockRejectedValue(new TypeError('Failed to fetch'));
+
+    turnDom.setTurnWorking(17, ConfigType.USER, true);
+    await session.requestStop(17, ConfigType.USER, null, 'draft');
+
+    expect(session.errorMessage).toBe("Couldn't stop and undo. Try again.");
+    expect(handBacks).toEqual([]);
+    expect(spine.querySelector('[data-send-echo]')).not.toBeNull();
+    expect(turnDom.isTurnWorking(17, ConfigType.USER)).toBe(true);
   });
 });
 

@@ -202,9 +202,30 @@ describe('opening a delegate transcript', () => {
 
     expect(reads).toHaveLength(1);
     expect(session.errorMessage).toBeTruthy();
+    // Reported where the user is looking: on the panel, not the dimmed dock under it.
+    expect(panel.find('aside [role="alert"]').text()).toContain(session.errorMessage);
     expect(panel.find('output').exists()).toBe(false);
     expect(panel.element.querySelector('[data-turn-id]')).toBeNull();
     expect(panel.text()).not.toContain('Transcript expired');
+  });
+
+  it('shows an error raised while the transcript is open, such as a failed stop, on the panel itself, and dismisses it from there', async () => {
+    serve = () => delegateBlock(SEARCH, [TASK, ANSWER]);
+    const { panel, session } = openPanel();
+
+    session.openDelegatePanel(SEARCH);
+    await flushPromises();
+    expect(panel.find('[role="alert"]').exists()).toBe(false);
+
+    session.errorMessage = "Couldn't stop the subagent. Try again.";
+    await flushPromises();
+
+    const alert = panel.find('aside [role="alert"]');
+    expect(alert.text()).toContain("Couldn't stop the subagent. Try again.");
+
+    await alert.find('button[aria-label="Dismiss error"]').trigger('click');
+    expect(session.errorMessage).toBeNull();
+    expect(panel.find('[role="alert"]').exists()).toBe(false);
   });
 
   it('puts keyboard focus on the back button when it opens, and returns it to the pill that opened it when it closes', async () => {
@@ -300,5 +321,24 @@ describe('moving between transcripts', () => {
     expect(session.panelDelegate).toBeNull();
     expect(session.panelThreadId).toBeNull();
     expect(panel.find('[role="dialog"]').exists()).toBe(false);
+  });
+
+  it('a typed thread shows an error once, above its own reply box, and a delegate opened over it keeps showing it', async () => {
+    serve = (read) => (read.channel ? delegateBlock(SEARCH, [TASK, ANSWER]) : userThread(77, TRIP));
+    const { panel, session } = openPanel();
+
+    session.openThreadPanel(77, 'user');
+    await flushPromises();
+    session.errorMessage = 'Provider quota exceeded';
+    await flushPromises();
+    const alerts = panel.findAll('aside [role="alert"]');
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0].text()).toContain('Provider quota exceeded');
+    expect(panel.find('footer [role="alert"]').exists()).toBe(true);
+
+    session.openDelegatePanel(SEARCH);
+    await flushPromises();
+    expect(panel.find('textarea').exists()).toBe(false);
+    expect(panel.findAll('aside [role="alert"]').map((a) => a.text())).toEqual(['Provider quota exceeded']);
   });
 });

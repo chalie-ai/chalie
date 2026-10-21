@@ -30,13 +30,19 @@
  * line above its answer; only a still-working one rides the live activity
  * line.
  */
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mount } from '@vue/test-utils';
 import type { VueWrapper } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import { ConfigType } from '@chalie/shared';
 import TurnView from './TurnView.vue';
 import type { ConversationMessage, ConversationTurnBlock, DelegateTurnBlock } from '../../api/conversation';
+import {
+  clearAll,
+  clearLiveTurnsForToolCallsResolved,
+  finishLiveTool,
+  startLiveTool,
+} from '../../utils/liveActTrail';
 
 function msg(
   id: string,
@@ -85,10 +91,13 @@ function row(
 
 type ToolCalls = NonNullable<ConversationMessage['tool_calls']>;
 
-/** One finished call per name, as the backend sends a row's chips. */
+let nextCallId = 9000;
+
+/** One finished call per name, as the backend sends a row's chips — each with
+ *  its own tool_calls row id, none shared with a live pill. */
 function calls(...names: string[]): ToolCalls {
   return names.map((tool_name) => ({
-    tool_name, summary: `ran ${tool_name}`, state: 'done' as const, ended_at: null, delegate: null,
+    id: nextCallId++, tool_name, summary: `ran ${tool_name}`, state: 'done' as const, ended_at: null, delegate: null,
   }));
 }
 
@@ -145,6 +154,11 @@ beforeEach(() => {
   setActivePinia(createPinia());
 });
 
+// Live pills live in module state shared across mounts; reset it between tests.
+afterEach(() => {
+  clearAll(ConfigType.USER);
+});
+
 describe('live act-trail visibility — working turn on the spine', () => {
   it('renders the live-act row for a NON-forked working turn', () => {
     const turnId = 101;
@@ -196,6 +210,48 @@ describe('live act-trail visibility — working turn on the spine', () => {
     // per turn_id, never flickering away when a continuation starts streaming.
     // Only a still-streaming exchange's own footer is withheld.
     expect(wrapper.findAll('.speech-form__meta')).toHaveLength(1);
+  });
+
+  it('a running call shows once — as its live pill while it runs, then as its stored chip once the pill clears', async () => {
+    // One call, two sources: the live frame opens a pill keyed on the call's
+    // tool_calls row id, and a refetch mid-call returns the same call as a
+    // `started` chip carrying that id. An earlier finished call has no pill.
+    const turnId = 104;
+    const chip = (id: number, tool_name: string, state: ToolCalls[number]['state']): ToolCalls[number] => ({
+      id, tool_name, summary: `ran ${tool_name}`, state, ended_at: null, delegate: null,
+    });
+    const rows = (running: ToolCalls[number]): ConversationMessage[] => [
+      row('1040', 'user', 'find the museum hours', turnId),
+      row('1041', 'assistant', 'let me look', turnId, { tool_calls: [chip(76, 'read', 'done')] }),
+      row('1042', 'assistant', '', turnId, { tool_calls: [running] }),
+    ];
+    startLiveTool(ConfigType.USER, turnId, 77, 'web_search');
+
+    const wrapper = mount(TurnView, {
+      props: { block: block(turnId, rows(chip(77, 'web_search', 'started'))), type: ConfigType.USER, fullThread: false },
+    });
+    const chipNames = (): string[] => wrapper.findAll('.call__summary').map((e) => e.text());
+    const pillNames = (): string[] => wrapper.findAll('.activity__pill-summary').map((e) => e.text());
+
+    // While it runs: the pill alone shows it, and the earlier call keeps its
+    // stored step. Both sit in the one live activity line.
+    expect(pillNames()).toEqual(['web_search']);
+    expect(chipNames()).toEqual(['ran read']);
+    expect(layout(wrapper)).toEqual(['user:find the museum hours', 'live']);
+
+    // It finishes: the resolved pill still holds it until the refetch lands.
+    finishLiveTool(ConfigType.USER, turnId, 77, true);
+    await wrapper.vm.$nextTick();
+    expect(pillNames()).toEqual(['web_search']);
+    expect(chipNames()).toEqual(['ran read']);
+
+    // The refetch lands the finished chip and drops the resolved pill: now the
+    // stored step shows the call, once.
+    clearLiveTurnsForToolCallsResolved(ConfigType.USER, turnId, true);
+    await wrapper.setProps({ block: block(turnId, rows(chip(77, 'web_search', 'done'))) });
+    expect(pillNames()).toEqual([]);
+    expect(chipNames()).toEqual(['ran read', 'ran web_search']);
+    expect(layout(wrapper)).toEqual(['user:find the museum hours', 'live']);
   });
 });
 

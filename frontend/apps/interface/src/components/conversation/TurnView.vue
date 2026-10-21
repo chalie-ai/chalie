@@ -167,7 +167,24 @@ const displayRows = computed<DisplayRow[]>(() => {
   let lastFooter: FooterRow | null = null;
   let exchangeStart: string | null = null;
 
-  for (const message of props.block.messages) {
+  // Only the authoritative live view of the turn (thread panel, or a
+  // non-forked turn in the spine) draws the act-trail pills: a forked turn in
+  // the spine shows the thread pill's animated dot instead, so an inline live
+  // line would duplicate that indicator and misattribute thread activity to
+  // the top-level timeline. A running call shows as its pill, and a refetch
+  // also returns it as a `started` chip: a chip whose pill is live is dropped,
+  // so the call shows once — the pill while it runs, the stored chip once the
+  // pill clears.
+  const liveView = props.block.working && (props.fullThread || !isForkedThread.value);
+  const pills = liveView
+    ? liveTrailsFor(channel.value ?? props.type, props.block.turn_id).flatMap((t) => t.pills)
+    : [];
+  const liveIds = new Set(pills.map((p) => p.id));
+
+  for (const stored of props.block.messages) {
+    const calls = stored.tool_calls ?? [];
+    const kept = calls.filter((c) => !liveIds.has(String(c.id)));
+    const message = kept.length === calls.length ? stored : { ...stored, tool_calls: kept };
     // The spine renders only through settle0 — drop thread reply rows. The
     // thread panel (fullThread) renders the WHOLE thread, continuations included.
     if (!props.fullThread && message.thread_message) continue;
@@ -232,14 +249,8 @@ const displayRows = computed<DisplayRow[]>(() => {
   // Still working: the open exchange renders as the LIVE activity line —
   // carrying the act-trail pills (or a bare "thinking…" anchor before the
   // first pill lands) — on a key stable across live re-renders (anchor +
-  // segment index), so it does not remount as the pills tick. Only when this
-  // render is the authoritative live view of the turn (thread panel, or a
-  // non-forked turn in the spine): a forked turn in the spine shows the thread
-  // pill's animated dot instead, so an inline live line would duplicate that
-  // indicator and misattribute thread activity to the top-level timeline.
-  const liveView = props.block.working && (props.fullThread || !isForkedThread.value);
+  // segment index), so it does not remount as the pills tick.
   if (liveView) {
-    const pills = liveTrailsFor(channel.value ?? props.type, props.block.turn_id).flatMap((t) => t.pills);
     rows.push({ kind: 'activity', key: `activity-${anchor}-${segIndex}`, messages: pending, pills });
   }
 

@@ -13,12 +13,14 @@ import {
   registerSurface,
   unregisterSurface,
   clearSurfaceContainer,
+  nextTicket,
   upsertDelegateTurn,
   upsertTurnToSurfaces,
 } from '../../utils/turnDom';
 import { delegateName } from '../../utils/delegateChannel';
 import TurnView from './TurnView.vue';
 import InputDock from '../layout/InputDock.vue';
+import DockError from '../layout/DockError.vue';
 
 const PANEL_SURFACE_ID = 'thread-panel';
 
@@ -71,6 +73,10 @@ async function _openTurn(turnId: number, type: string): Promise<void> {
   });
 
   session.threadExpanding = true;
+  // Ticketed: opened on a running turn, this read can answer after the settle's
+  // and would repaint "thinking…" on every surface (see turnDom's
+  // `UpsertOptions.ticket`).
+  const ticket = nextTicket();
   try {
     const block = await convoApi.thread(turnId, type);
     if (session.panelThreadId !== turnId || session.panelType !== type) return; // superseded
@@ -83,7 +89,7 @@ async function _openTurn(turnId: number, type: string): Promise<void> {
       );
     }
     heading.value = block.gist || block.preview || 'Thread';
-    upsertTurnToSurfaces(block, block.type);
+    upsertTurnToSurfaces(block, block.type, { ticket });
     hydrated.value = true;
   } catch {
     if (session.panelThreadId !== turnId || session.panelType !== type) return; // superseded
@@ -120,12 +126,13 @@ async function _openDelegate(target: DelegateRef): Promise<void> {
     accepts: (id) => id === target.turn_id,
   });
 
+  const ticket = nextTicket(); // same race as `_open`, against the delegate's settle
   try {
     const block = await convoApi.delegateThread(target.turn_id, target.channel);
     if (!isOpenDelegate(target)) return; // superseded
     hydrated.value = true;
     expired.value = block.messages.length === 0;
-    if (!expired.value) upsertDelegateTurn(block);
+    if (!expired.value) upsertDelegateTurn(block, { ticket });
   } catch (err) {
     if (!isOpenDelegate(target)) return; // superseded
     console.warn('[ThreadPanel] delegate turn', target.turn_id, 'on', target.channel, 'failed to load', err);
@@ -252,6 +259,11 @@ onBeforeUnmount(() => {
         <div ref="turnsRef" class="thread-panel__turns" />
       </div>
 
+      <!-- A delegate transcript has no dock of its own, and the main dock sits
+           dimmed under this panel, so its errors (a failed stop, a failed
+           load) show here. A thread's own dock shows them itself. -->
+      <DockError v-if="session.panelThreadId == null" class="thread-panel__error" />
+
       <InputDock
         v-if="session.panelThreadId != null"
         dock-id="thread_view_dock"
@@ -347,6 +359,14 @@ onBeforeUnmount(() => {
   min-height: 0;
   overflow-y: auto;
   padding: var(--space-md) 0 var(--space-lg);
+}
+
+// Panel placement of the shared error banner: it spans the panel with the
+// dock's own gutter, since there is no composer here to line up with.
+.thread-panel__error {
+  flex-shrink: 0;
+  max-width: none;
+  margin: 0 var(--space-lg) var(--space-md);
 }
 
 .thread-panel__loader {
