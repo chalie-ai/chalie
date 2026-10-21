@@ -33,12 +33,12 @@ const STATUS_TEXT: Record<PlanTask['status'], string> = {
              plan shows its marks still. The other marks are drawn inline:
              the draw-in animation needs `pathLength` on the glyph itself. -->
         <Transition name="plan-mark" mode="out-in" :duration="{ enter: 320, leave: 0 }">
-          <CircleDashed v-if="t.status === 'todo'" key="todo" :size="16" />
+          <CircleDashed v-if="t.status === 'todo'" key="todo" :size="13" />
           <svg
             v-else
             :key="t.status"
-            width="16"
-            height="16"
+            width="13"
+            height="13"
             viewBox="0 0 24 24"
             fill="none"
             stroke="currentColor"
@@ -110,8 +110,8 @@ const STATUS_TEXT: Record<PlanTask['status'], string> = {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 16px;
-  height: 16px;
+  width: 13px;
+  height: 13px;
   flex-shrink: 0;
 }
 
