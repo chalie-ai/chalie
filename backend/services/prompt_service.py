@@ -33,12 +33,16 @@ import base64
 import logging
 from typing import TYPE_CHECKING, cast
 
+from abilities._registry import AbilityRegistry
+from abilities.find_tools import FindToolsAbility
+from abilities.plan import PlanAbility
 from abilities.recall import Recall
 from configs.channels.external_agent import EAMPConfig
 from configs.channels.memory_step import PROMPT_CHANNEL as MEMORY_STEP_PROMPT_CHANNEL
 from configs.channels.user import UserConfig
 from configs.enums.channels import Channel
 from exceptions import UnroutedPromptChannel
+from models.plan_task import PlanTask
 from models.tool_call import ToolCall
 from models.transcript import Transcript
 from models.transcript_thinking import TranscriptThinking
@@ -94,6 +98,37 @@ _HANDOVER_FRAME = (
     "Trust it: do not re-verify or repeat completed work; continue from the "
     "pending list.\n\n{handover}"
 )
+
+#: Under the plan block on every step of a message's exchange: how to keep the
+#: plan current. The block is re-read from the database each step, so a status
+#: change shows on the very next request. A step's tool calls run in order, so
+#: a status change riding just before the call it tracks costs no step of its
+#: own and shows while that call runs.
+_PLAN_INSTRUCTION = (
+    "Above is your plan for the current message. Keep it current as you work, "
+    "but never spend a response on the plan alone. Tool calls in one response "
+    "run in order, so put each status change in the same response as the work "
+    "it tracks, just before that work's call: "
+    f'{PlanAbility.NAME}(action="update", task=<number>, status="in_progress") as a '
+    'task starts, status="done" once it is finished, "cancelled" when it is no '
+    "longer needed. When new work appears — including a message the user sends "
+    f'while you work — add it with {PlanAbility.NAME}(action="add"). Before your final '
+    "answer, close every open task together in one response."
+)
+#: The planning pre-pass's ask (``mp.planning``), shown above the catalogue of
+#: the tools the model will have once its plan is saved.
+_PLANNING_INSTRUCTION = (
+    "Based on the user message and the memory available, identify a plan of "
+    "action. Your plan should be between 1 & 10 steps. The plan should include "
+    "the specific tasks you will need to perform to complete the task the user "
+    f"asked you to perform. Use the '{PlanAbility.NAME}' tool to organise your thought and keep "
+    "a to-do list of tasks in between compaction.\n\n"
+    f"Right now you can call only `{Recall.NAME}`, to look up more memory, and `{PlanAbility.NAME}`: "
+    f'save the plan with {PlanAbility.NAME}(action="create"). The tools in the catalogue below '
+    "become available once the plan is saved — plan with them in mind, but do "
+    "not call them now."
+)
+_NO_PLAN = f'You have no plan for the current message yet — create one first with {PlanAbility.NAME}(action="create").'
 
 #: The tag list the model is given, rendered from the sanitiser's own authority
 #: (``markup.PROMPT_TAGS``) so widening or narrowing the contract rewrites this
@@ -195,6 +230,15 @@ class PromptService:
         return UserSynthesisRow.latest_content() or _USER_DEFINITION_FALLBACK
 
     def user_prompt(self) -> str:
+        """The turn's user-message body (:meth:`_channel_prompt`), followed by
+        the current message's plan (:meth:`_plan_section`) on a config that
+        pins the plan tool. The plan goes last so the history and trail above
+        it stay a stable, cacheable prefix while its statuses change."""
+        body = self._channel_prompt()
+        plan = self._plan_section()
+        return f"{body}\n\n{plan}" if plan else body
+
+    def _channel_prompt(self) -> str:
         """The turn's user-message body, ported from each config's
         ``get_user_prompt``.
 
@@ -393,6 +437,43 @@ class PromptService:
         return "\n".join(parts)
 
     # ── dispatch + safe-fragment helpers ─────────────────────────────────────
+
+    def _plan_section(self) -> str:
+        """The current message's plan as a ``[plan]`` block plus how to keep it
+        current, or the instruction to create one when there is none yet.
+        Read from the database on every step, keyed by this exchange's input
+        row, so it reflects the latest update and leaves the context once the
+        exchange settles. ``""`` when the config does not pin the plan tool or
+        the turn has no input row."""
+        if PlanAbility.NAME not in self.mp.config.always_available or self.mp.uid is None:
+            return ""
+        if self.mp.planning:
+            return self._planning_section()
+        tasks = PlanTask.for_transcript(self.mp.uid)
+        if not tasks:
+            return _NO_PLAN
+        lines = "\n".join(f"{t.position}. [{t.status}] {t.title} — {t.task}" for t in tasks)
+        return f"[plan]\n{lines}\n[end:plan]\n{_PLAN_INSTRUCTION}"
+
+    def _planning_section(self) -> str:
+        """The planning pre-pass's ask: the instruction, then every tool the
+        config pins beyond ``recall`` and ``plan`` — and, when it pins
+        ``find_tools``, the roster that tool loads from — as a catalogue the
+        model plans with but cannot call yet."""
+        pinned = self.mp.config.always_available
+        lines: list[str] = []
+        for name in pinned:
+            if name in (Recall.NAME, PlanAbility.NAME):
+                continue
+            try:
+                ability = AbilityRegistry.get(name)
+            except KeyError:  # build_tools logs an unknown pinned name every request
+                continue
+            lines.append(f"- `{name}`: {ability.get_search_tooltip() or ability.get_summary()}")
+        catalogue = "\n".join(lines)
+        if FindToolsAbility.NAME in pinned:
+            catalogue += f"\n\nTools `{FindToolsAbility.NAME}` can load:\n{FindToolsAbility.tools_index()}"
+        return f"{_PLANNING_INSTRUCTION}\n\n[tool_catalogue]\n{catalogue}\n[end:tool_catalogue]"
 
     def _channel(self) -> str:
         """The dispatch key: the config's ``prompt_channel`` override, or its

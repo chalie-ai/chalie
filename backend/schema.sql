@@ -526,6 +526,24 @@ CREATE TABLE IF NOT EXISTS voice_transcript (
 );
 
 -- ────────────────────────────────────────────────────────────────
+-- PLAN TASKS — the plan the agent keeps while it works one message.
+-- One row per task, keyed by the message's input (user) transcript row;
+-- position is the 1-based task number the model refers to. Read into the
+-- model's context only while that message's exchange is working;
+-- transcript delete cascades.
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS plan_tasks (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    transcript_id INTEGER NOT NULL REFERENCES transcript(id) ON DELETE CASCADE,
+    position      INTEGER NOT NULL,
+    title         TEXT    NOT NULL,
+    task          TEXT    NOT NULL,
+    status        TEXT    NOT NULL DEFAULT 'todo'
+                  CHECK (status IN ('todo', 'in_progress', 'done', 'cancelled')),
+    UNIQUE (transcript_id, position)
+);
+
+-- ────────────────────────────────────────────────────────────────
 -- TRANSCRIPT THINKING — chain-of-thought traces per transcript anchor
 -- Multiple rows per transcript_id are expected (one per thinking pass).
 -- ────────────────────────────────────────────────────────────────

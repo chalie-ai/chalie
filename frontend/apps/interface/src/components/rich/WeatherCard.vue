@@ -266,7 +266,6 @@ const artMotion = computed<'spin' | 'drift' | ''>(() => {
 /* Card-specific rules only; base .rich-card chrome lives globally in base_card.css. */
 
 .rich-card.weather-card {
-  --weather-violet: #7B5CFF;
   padding: 0;
   overflow: hidden;
   width: 100%;
@@ -288,7 +287,7 @@ const artMotion = computed<'spin' | 'drift' | ''>(() => {
   background: linear-gradient(
     135deg,
     color-mix(in oklab, var(--pink) 26%, var(--bg)),
-    color-mix(in oklab, var(--weather-violet) 22%, var(--bg))
+    color-mix(in oklab, var(--violet) 22%, var(--bg))
   );
 }
 
@@ -296,7 +295,7 @@ const artMotion = computed<'spin' | 'drift' | ''>(() => {
   background: linear-gradient(
     135deg,
     color-mix(in oklab, var(--pink) 14%, var(--bg)),
-    color-mix(in oklab, var(--weather-violet) 20%, var(--bg))
+    color-mix(in oklab, var(--violet) 20%, var(--bg))
   );
 }
 
@@ -422,7 +421,7 @@ const artMotion = computed<'spin' | 'drift' | ''>(() => {
 .weather-card__rail {
   display: grid;
   grid-template-columns: repeat(8, 1fr);
-  background: color-mix(in oklab, var(--weather-violet) 9%, var(--surface-2));
+  background: color-mix(in oklab, var(--violet) 9%, var(--surface-2));
 }
 
 .weather-card__hour {

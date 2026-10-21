@@ -41,6 +41,7 @@ from models.turn_execution import TurnExecution
 from services.memory_step_service import memory_step_config
 from services.turn_serializer_service import get_service as _serializer
 from services.websocket import Websocket
+from tests.helpers import NO_PLAN, is_planning_request
 
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 
@@ -61,7 +62,9 @@ class _ScriptedProvider:
     def get_context_limit(self) -> int:
         return 200000
 
-    def send(self, _dto: object) -> ProviderResponse:
+    def send(self, dto: object) -> ProviderResponse:
+        if is_planning_request(dto):
+            return NO_PLAN
         if self.sends >= len(self._responses):
             return self._TERMINAL
         response = self._responses[self.sends]

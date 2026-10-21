@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, ClassVar
 
 from abilities.recall import Recall
 from abilities.news import NewsAbility
+from abilities.plan import PlanAbility
 from abilities.read import ReadAbility
 from abilities.search import SearchAbility
 from abilities.web_fetch import WebFetchAbility
@@ -62,11 +63,11 @@ class WebSearchConfig(ProcessorConfig):
             channel=Channel.DELEGATE_WEB_SEARCH.value,
             role="web_search",
             policy_channel=policy_channel,
-            always_available=[*tools, Recall.NAME],
+            always_available=[*tools, Recall.NAME, PlanAbility.NAME],
             skip_transcript=False,  # write a delegate-channel transcript row so
             skip_input_row=False,   # _setup assigns the uid the act-trail needs
             suppress_history=True,
-            memory_seed=False,
+            memory_seed=True,
         )
 
     @property

@@ -39,6 +39,7 @@ from models.voice_transcript import VoiceTranscript
 from services.file_mapper_service import FileMapperService
 from services.voice_transcript_service import VoiceTranscriptService
 from services.websocket import Websocket
+from tests.helpers import NO_PLAN, is_planning_request
 
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 
@@ -86,7 +87,9 @@ class _ToolThenReplyProvider:
     def get_context_limit(self) -> int:
         return 120_000
 
-    def send(self, _dto: object) -> ProviderResponse:
+    def send(self, dto: object) -> ProviderResponse:
+        if is_planning_request(dto):
+            return NO_PLAN
         self._sent += 1
         if self._sent == 1:
             return ProviderResponse(

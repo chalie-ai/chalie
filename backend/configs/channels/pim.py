@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, ClassVar
 from abilities.calendar import CalendarAbility
 from abilities.contacts import ContactsAbility
 from abilities.email import EmailAbility
+from abilities.plan import PlanAbility
 from abilities.recall import Recall
 
 from configs.enums.channels import Channel
@@ -47,11 +48,11 @@ class PimConfig(ProcessorConfig):
             channel=Channel.DELEGATE_PIM.value,
             role="pim",
             policy_channel=policy_channel,
-            always_available=[EmailAbility.NAME, CalendarAbility.NAME, ContactsAbility.NAME, Recall.NAME],
+            always_available=[EmailAbility.NAME, CalendarAbility.NAME, ContactsAbility.NAME, Recall.NAME, PlanAbility.NAME],
             skip_transcript=False,  # write a delegate-channel transcript row so
             skip_input_row=False,   # _setup assigns the uid the act-trail needs
             suppress_history=True,
-            memory_seed=False,
+            memory_seed=True,
         )
 
     @property

@@ -28,6 +28,7 @@ from services.locale_service import CHAT_DAY_FMT, CHAT_TIMESTAMP_FMT, format_dat
 from services.rich_media_parser import parse as _parse_rich_media
 from services.time_utils import parse_utc
 from configs.channels import config_for
+from models.plan_task import PlanTask
 from models.tool_call import ToolCall
 from models.transcript import Transcript
 from models.transcript_thinking import TranscriptThinking
@@ -218,6 +219,24 @@ def _thinking_states(rows: list[dict[str, object]]) -> dict[int, list[dict[str, 
     return by_id
 
 
+def _plan_states(rows: list[dict[str, object]]) -> dict[int, list[dict[str, object]]]:
+    """Batch-load the plan of every message that opens a request (a user row
+    that is not joined — a joined message adds to the running plan instead of
+    getting its own). Returns a map from transcript_id to its tasks in task
+    order (ids rise with position inside one plan); rows with no plan are
+    absent so the serializer can omit the field."""
+    opener_ids = [cast("int", r["id"]) for r in rows if r["role"] == "user" and not r["joined"]]
+    by_id: dict[int, list[dict[str, object]]] = {}
+    for task in PlanTask.for_transcripts(opener_ids):
+        by_id.setdefault(task.transcript_id, []).append({
+            "number": task.position,
+            "title": task.title,
+            "task": task.task,
+            "status": task.status,
+        })
+    return by_id
+
+
 def _rows_to_messages(rows: list[dict[str, object]]) -> list[dict[str, object]]:
     """Project raw transcript rows (oldest-first) into the conversation message
     shape — attachments for user rows, rich-media segments for assistant rows,
@@ -263,6 +282,7 @@ def _rows_to_messages(rows: list[dict[str, object]]) -> list[dict[str, object]]:
     # per-request ordinal is unique.
     voice_states = _voice_states(rows)
     thinking_states = _thinking_states(rows)
+    plan_states = _plan_states(rows)
     cycle_calls: list[dict[str, object]] = []
     for r in rows:
         msg = _base_message(r)
@@ -280,6 +300,9 @@ def _rows_to_messages(rows: list[dict[str, object]]) -> list[dict[str, object]]:
         if r['role'] == 'user':
             cycle_calls = cycle_calls + own if r['joined'] else list(own)
             _apply_user_fields(msg, r, attachments_by_id)
+            plan = plan_states.get(cast("int", r['id']))
+            if plan is not None:
+                msg["plan"] = plan
         else:
             cycle_calls = cycle_calls + own
             _apply_assistant_fields(msg, cycle_calls)

@@ -21,6 +21,17 @@ class Thinking(DTO):
     tokens: int
 
 
+class PlanTask(DTO):
+    """One task of the plan the agent kept while working a message: its
+    1-based ``number``, short ``title``, the ``task`` itself, and ``status`` —
+    ``todo``, ``in_progress``, ``done`` or ``cancelled``."""
+
+    number: int
+    title: str
+    task: str
+    status: str
+
+
 class Message(DTO):
     """One transcript row.
 
@@ -49,6 +60,9 @@ class Message(DTO):
     summed ``duration_ms`` and ``tokens``); absent on rows with no thinking
     rows. ``joined`` projects the transcript column on user rows — true on a
     message sent into the turn while it was working, which a cancel keeps.
+    ``plan`` carries, on a message's input row, the plan the agent kept while
+    working it, tasks in number order; ``None`` on rows with no plan — a joined
+    row never has one, its tasks join the plan of the message it joined.
     """
 
     id: str
@@ -66,3 +80,4 @@ class Message(DTO):
     joined: bool | None = None
     voice_state: str | None = None
     thinking: Thinking | None = None
+    plan: list[PlanTask] | None = None

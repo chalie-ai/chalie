@@ -191,11 +191,11 @@ def test_pim_prompt_carries_the_verbatim_disconnected_message() -> None:
 
 
 def test_pim_delegate_pins_exactly_its_toolset() -> None:
-    """The delegate is pinned exactly to its four tools — the three personal-info
-    tools it owns plus memory — no more, no less."""
+    """The delegate is pinned exactly to its five tools — the three personal-info
+    tools it owns, memory, and its plan — no more, no less."""
     always_available = PimConfig(PolicyChannel.CHAT).always_available
-    assert set(always_available) == {"email", "calendar", "contacts", "recall"}, (
-        f"pim delegate must pin exactly email/calendar/contacts/recall. "
+    assert set(always_available) == {"email", "calendar", "contacts", "recall", "plan"}, (
+        f"pim delegate must pin exactly email/calendar/contacts/recall/plan. "
         f"always_available={always_available!r}"
     )
 

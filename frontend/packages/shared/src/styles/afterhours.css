@@ -4,12 +4,12 @@
    tokens; this file is the source of truth.
 
    Flat and sharp: no radius, gradient, glow, shadow or blur anywhere but the
-   weather card's sky. Depth comes from the three grounds (bg → surface → surface-2):
-   fills group things, and a border marks only a text field or the focus ring. One
-   control height, one icon size, three text sizes (12 mono, 15 body, 20 title).
-   Pink is the only accent (the weather sky adds a violet) and is always a fill
-   with night-coloured text on it. Every text colour clears
-   4.5:1 on all three grounds in both themes; --control clears 3:1. */
+   weather card's sky and the plan card. Depth comes from the three grounds
+   (bg → surface → surface-2): fills group things, and a border marks only a text
+   field or the focus ring. One control height, one icon size, three text sizes
+   (12 mono, 15 body, 20 title). Pink is the only accent (those two neon grounds
+   add a violet) and is always a fill with night-coloured text on it. Every text
+   colour clears 4.5:1 on all three grounds in both themes; --control clears 3:1. */
 
 @font-face {
   font-family: 'Epilogue Variable';
@@ -51,6 +51,7 @@
   --pink:         #FF4FA3;
   --pink-text:    #FF4FA3;
   --on-pink:      #0E0B10;
+  --violet:       #7B5CFF;   /* second hue of the neon grounds only */
 
   /* Rule outcomes. Each pairs with a shape — Allow circle, Ask triangle, Deny octagon —
      so colour is never the only signal. */

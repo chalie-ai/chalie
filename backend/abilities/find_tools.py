@@ -63,7 +63,7 @@ class FindToolsAbility(Ability):
     )
 
     def get_summary(self) -> str:
-        return f"{self._INTRO}\n\n**Available Tools**\n{self._build_tools_index()}"
+        return f"{self._INTRO}\n\n**Available Tools**\n{self.tools_index()}"
 
     def get_examples(self) -> list[str]:
         from abilities.read import ReadAbility  # noqa: PLC0415
@@ -160,7 +160,7 @@ class FindToolsAbility(Ability):
             return ""
 
     @staticmethod
-    def _build_tools_index() -> str:
+    def tools_index() -> str:
         """The full discoverable roster grouped under its category headings — the
         same text on every request, whatever is already loaded.
 

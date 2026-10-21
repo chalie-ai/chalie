@@ -41,6 +41,7 @@ from models.provider_response import ProviderResponse
 from models.turn_execution import TurnExecution
 from services.policy_manager import _ASK_NO_SURFACE, _permission_gates
 from services.websocket import Websocket
+from tests.helpers import NO_PLAN, is_planning_request
 
 pytestmark = pytest.mark.unit
 
@@ -97,7 +98,9 @@ class _ScriptedProvider:
     def get_context_limit(self) -> int:
         return 200000
 
-    def send(self, _dto: object) -> ProviderResponse:
+    def send(self, dto: object) -> ProviderResponse:
+        if is_planning_request(dto):
+            return NO_PLAN
         if self.sends >= len(self._responses):
             return self._TERMINAL
         response = self._responses[self.sends]
