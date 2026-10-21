@@ -1,23 +1,19 @@
-<!-- The plan the agent keeps while it works one message: a head counting the
-     done tasks over a bar lit segment by segment, then its tasks in order, each
-     with a mark that moves with the task — a dim tile to do, a glowing pink
-     tile in progress, a check drawn in when done, a minus drawn in (the title
-     struck through) when cancelled. Like the weather card it sits on a neon
-     ground. Live it stands sticky under the message it plans; settled it opens
-     from the footer's plan link. -->
+<!-- The plan the agent keeps while it works one message: a rounded card on a
+     soft neon ground, a head counting the done tasks over a gapped bar, then
+     its tasks in order, each with a mark that moves with the task — a dashed
+     circle to do, a spinning arc in progress, a check-circle drawn in when
+     done, a slashed circle (the title struck through) when cancelled. Live it
+     stands sticky under the message it plans; settled it opens from the
+     footer's plan link. -->
 <script setup lang="ts">
 import { computed } from 'vue';
+import { CircleDashed } from '@lucide/vue';
 import type { PlanTask } from '../../api/conversation';
 
 const props = defineProps<{ tasks: PlanTask[] }>();
 
 const doneCount = computed(() => props.tasks.filter((t) => t.status === 'done').length);
 const cancelledCount = computed(() => props.tasks.filter((t) => t.status === 'cancelled').length);
-
-// The marks are drawn inline rather than as icon components: the draw-in
-// animation needs `pathLength` on the path itself.
-const CHECK_PATH = 'M20 6 9 17l-5-5';
-const MINUS_PATH = 'M5 12h14';
 
 // The mark is decoration; the status is read out with the title.
 const STATUS_TEXT: Record<PlanTask['status'], string> = {
@@ -48,23 +44,35 @@ const STATUS_TEXT: Record<PlanTask['status'], string> = {
         <span class="plan-task__mark" aria-hidden="true">
           <!-- A status change swaps the mark, and the new one animates in; the
                first render does not animate, so a reload or an opened settled
-               plan shows its marks still. -->
+               plan shows its marks still. The other marks are drawn inline:
+               the draw-in animation needs `pathLength` on the glyph itself. -->
           <Transition name="plan-mark" mode="out-in" :duration="{ enter: 320, leave: 0 }">
+            <CircleDashed v-if="t.status === 'todo'" key="todo" :size="16" />
             <svg
-              v-if="t.status === 'done' || t.status === 'cancelled'"
+              v-else
               :key="t.status"
-              width="14"
-              height="14"
+              width="16"
+              height="16"
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
-              stroke-width="3"
+              stroke-width="2"
               stroke-linecap="round"
               stroke-linejoin="round"
             >
-              <path pathLength="1" :d="t.status === 'done' ? CHECK_PATH : MINUS_PATH" />
+              <template v-if="t.status === 'in_progress'">
+                <circle class="plan-task__track" cx="12" cy="12" r="10" />
+                <path class="plan-task__spin" d="M22 12a10 10 0 0 0-10-10" />
+              </template>
+              <template v-else>
+                <circle cx="12" cy="12" r="10" />
+                <path
+                  pathLength="1"
+                  class="plan-task__glyph"
+                  :d="t.status === 'done' ? 'm8 12 3 3 5-6' : 'M8 16 16 8'"
+                />
+              </template>
             </svg>
-            <span v-else :key="t.status" class="plan-task__square" />
           </Transition>
         </span>
         <span class="plan-task__title">{{ t.title }}</span>
@@ -75,15 +83,16 @@ const STATUS_TEXT: Record<PlanTask['status'], string> = {
 </template>
 
 <style scoped lang="scss">
-// Neon ground, opaque so the sticky card hides the thread scrolling under it.
-// Its strength is the most that keeps the light theme's pink label at 4.5:1.
+// Soft neon ground, opaque so the sticky card hides the thread scrolling
+// under it.
 .plan-card {
   width: 100%;
-  padding: 14px 16px 10px;
+  padding: 14px 16px 8px;
+  border-radius: 12px;
   background: linear-gradient(
     135deg,
-    color-mix(in srgb, var(--pink) 14%, var(--bg)),
-    color-mix(in srgb, var(--violet) 12%, var(--bg))
+    color-mix(in srgb, var(--pink) 6%, var(--bg)),
+    color-mix(in srgb, var(--violet) 6%, var(--bg))
   );
 }
 
@@ -108,27 +117,34 @@ const STATUS_TEXT: Record<PlanTask['status'], string> = {
   color: var(--text);
 }
 
-// One segment per task: lit and glowing once done, fading in while in
-// progress, the dim track otherwise.
+// One segment per task: the dim track, solid pink once done, a pulsing
+// pink while in progress, an outlined gap when cancelled. The states sit
+// inside the bar so they outrank the track's colour.
 .plan-card__bar {
   display: flex;
-  height: 2px;
-  margin: 8px 0;
-  background: color-mix(in srgb, var(--text) 12%, transparent);
+  gap: 4px;
+  height: 3px;
+  margin: 10px 0 6px;
 
   i {
     flex: 1;
-    transition: box-shadow var(--dur-3) var(--ease-out);
+    border-radius: 2px;
+    background: var(--cell);
   }
-}
 
-.plan-card__segment--done {
-  background: var(--pink);
-  box-shadow: 0 0 8px var(--pink);
-}
+  .plan-card__segment--done {
+    background: var(--pink);
+  }
 
-.plan-card__segment--in_progress {
-  background: linear-gradient(90deg, var(--pink), transparent);
+  .plan-card__segment--in_progress {
+    background: color-mix(in srgb, var(--pink) 45%, var(--cell));
+    animation: plan-fade 1.6s ease-in-out infinite;
+  }
+
+  .plan-card__segment--cancelled {
+    background: transparent;
+    box-shadow: inset 0 0 0 1px var(--cell);
+  }
 }
 
 .plan-card__tasks {
@@ -137,23 +153,23 @@ const STATUS_TEXT: Record<PlanTask['status'], string> = {
   list-style: none;
 }
 
-// The in-progress row's band runs to the card's edges.
 .plan-task {
   display: flex;
   align-items: center;
-  gap: 12px;
-  min-height: 34px;
-  margin: 0 -16px;
-  padding: 0 16px;
+  gap: 10px;
+  min-height: 32px;
   font-size: var(--fs-body);
-  color: var(--muted);
-  transition: color var(--dur-2) var(--ease-out), background-color var(--dur-2) var(--ease-out);
+  color: var(--text);
+  transition: color var(--dur-2) var(--ease-out);
 }
 
 .plan-task--in_progress {
-  background: color-mix(in srgb, var(--pink) 12%, transparent);
   font-weight: 500;
-  color: var(--text);
+}
+
+.plan-task--done,
+.plan-task--cancelled {
+  color: var(--muted);
 }
 
 .plan-task--cancelled .plan-task__title {
@@ -169,28 +185,29 @@ const STATUS_TEXT: Record<PlanTask['status'], string> = {
   flex-shrink: 0;
 }
 
+.plan-task--todo .plan-task__mark,
+.plan-task--cancelled .plan-task__mark {
+  color: var(--muted);
+}
+
+.plan-task--in_progress .plan-task__mark {
+  color: var(--pink-text);
+}
+
 .plan-task--done .plan-task__mark {
   color: var(--allow-text);
-  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--allow-text) 70%, transparent));
 }
 
-.plan-task--cancelled .plan-task__mark {
-  background: color-mix(in srgb, var(--text) 14%, transparent);
+.plan-task__track {
+  opacity: 0.22;
 }
 
-.plan-task__square {
-  width: 16px;
-  height: 16px;
-  background: color-mix(in srgb, var(--text) 14%, transparent);
+.plan-task__spin {
+  transform-origin: 12px 12px;
+  animation: plan-spin 1s linear infinite;
 }
 
-.plan-task--in_progress .plan-task__square {
-  background: var(--pink);
-  box-shadow: 0 0 14px 2px color-mix(in srgb, var(--pink) 80%, transparent);
-  animation: plan-glow 1.4s ease-in-out infinite;
-}
-
-.plan-task__mark path {
+.plan-task__glyph {
   stroke-dasharray: 1;
   stroke-dashoffset: 0;
 }
@@ -206,18 +223,23 @@ const STATUS_TEXT: Record<PlanTask['status'], string> = {
   white-space: nowrap;
 }
 
-// A mark that just changed: a square pops in, a check or minus draws its
-// stroke. Declared after the in-progress glow so the pop wins while it runs.
-.plan-mark-enter-active.plan-task__square {
+// A mark that just changed: the to-do and in-progress marks pop in, a done
+// or cancelled glyph draws its stroke.
+.plan-task--todo .plan-mark-enter-active,
+.plan-task--in_progress .plan-mark-enter-active {
   animation: plan-pop var(--dur-2) var(--ease-out);
 }
 
-.plan-mark-enter-active path {
+.plan-mark-enter-active .plan-task__glyph {
   animation: plan-draw var(--dur-3) var(--ease-out);
 }
 
-@keyframes plan-glow {
-  50% { box-shadow: 0 0 4px color-mix(in srgb, var(--pink) 40%, transparent); }
+@keyframes plan-fade {
+  50% { opacity: 0.45; }
+}
+
+@keyframes plan-spin {
+  to { transform: rotate(360deg); }
 }
 
 @keyframes plan-pop {

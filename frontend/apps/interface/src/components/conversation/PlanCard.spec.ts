@@ -3,8 +3,8 @@
  * PlanCard — the plan's checklist: a head counting the done tasks (the
  * cancelled ones too, for screen readers) over a bar with one segment per
  * task, then each task's title behind a mark that names its status — a
- * square to do or in progress, a check done, a minus cancelled — with the
- * status also read out for screen readers.
+ * dashed circle to do, a spinning arc in progress, a check-circle done, a
+ * slashed circle cancelled — with the status also read out for screen readers.
  *
  * A status change swaps the mark and the new one animates in; the card's
  * first render does not animate, so a reload or an opened settled plan shows
@@ -61,14 +61,15 @@ describe('PlanCard', () => {
     expect(wrapper.find('.plan-card__summary').text()).toBe('1 of 2 done');
   });
 
-  it('marks a done task with a check, a cancelled one with a minus, and an open one with a square', () => {
+  it('marks a done task with a check, a running one with a spinner, a cancelled one with a slash, and an open one with a dashed circle', () => {
     const wrapper = mountCard(TASKS);
     const marks = wrapper.findAll('.plan-task__mark');
 
-    expect(marks[0]!.find('path').attributes('d')).toBe('M20 6 9 17l-5-5');
-    expect(marks[1]!.find('.plan-task__square').exists()).toBe(true);
-    expect(marks[2]!.find('path').attributes('d')).toBe('M5 12h14');
-    expect(marks[3]!.find('.plan-task__square').exists()).toBe(true);
+    expect(marks[0]!.find('.plan-task__glyph').attributes('d')).toBe('m8 12 3 3 5-6');
+    expect(marks[1]!.find('.plan-task__spin').exists()).toBe(true);
+    expect(marks[2]!.find('.plan-task__glyph').attributes('d')).toBe('M8 16 16 8');
+    expect(marks[3]!.findAll('path')).toHaveLength(8);
+    expect(marks[3]!.find('circle').exists()).toBe(false);
     // The mark is decoration — the status is read out with the title.
     expect(marks.every((m) => m.attributes('aria-hidden') === 'true')).toBe(true);
   });
@@ -85,13 +86,13 @@ describe('PlanCard', () => {
     await frames();
 
     // The same row, patched in place: its mark swapped to the check, which is
-    // animating in; the untouched task's square is not.
+    // animating in; the untouched task's dashed circle is not.
     const rows = wrapper.findAll('.plan-task');
     expect(rows[0]!.element).toBe(row);
     expect(rows[0]!.classes()).toContain('plan-task--done');
     const entering = wrapper.findAll('.plan-mark-enter-active');
     expect(entering).toHaveLength(1);
-    expect(entering[0]!.find('path').attributes('d')).toBe('M20 6 9 17l-5-5');
+    expect(entering[0]!.find('.plan-task__glyph').attributes('d')).toBe('m8 12 3 3 5-6');
     expect(rows[1]!.find('.plan-mark-enter-active').exists()).toBe(false);
 
     // The animation ends on its 320ms enter duration.
