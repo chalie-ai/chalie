@@ -101,14 +101,19 @@ _HANDOVER_FRAME = (
 
 #: Under the plan block on every step of a message's exchange: how to keep the
 #: plan current. The block is re-read from the database each step, so a status
-#: change shows on the very next request.
+#: change shows on the very next request. A step's tool calls run in order, so
+#: a status change riding just before the call it tracks costs no step of its
+#: own and shows while that call runs.
 _PLAN_INSTRUCTION = (
-    "Above is your plan for the current message. Work through it in order. "
-    f'Mark a task in_progress with {PlanAbility.NAME}(action="update", task=<number>, '
-    'status="in_progress") when you start it, done when it is finished, and '
-    "cancelled when it is no longer needed. When new work appears — including a "
-    f'message the user sends while you work — add it with {PlanAbility.NAME}(action="add"). '
-    "Close every task, done or cancelled, before you give your final answer."
+    "Above is your plan for the current message. Keep it current as you work, "
+    "but never spend a response on the plan alone. Tool calls in one response "
+    "run in order, so put each status change in the same response as the work "
+    "it tracks, just before that work's call: "
+    f'{PlanAbility.NAME}(action="update", task=<number>, status="in_progress") as a '
+    'task starts, status="done" once it is finished, "cancelled" when it is no '
+    "longer needed. When new work appears — including a message the user sends "
+    f'while you work — add it with {PlanAbility.NAME}(action="add"). Before your final '
+    "answer, close every open task together in one response."
 )
 #: The planning pre-pass's ask (``mp.planning``), shown above the catalogue of
 #: the tools the model will have once its plan is saved.
