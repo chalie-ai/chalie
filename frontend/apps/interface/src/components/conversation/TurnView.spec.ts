@@ -860,7 +860,6 @@ describe('the plan — live under its message, settled behind the footer', () =>
     const rows = wrapper.findAll('.msg-row');
     expect(rows[1]!.classes()).toEqual(expect.arrayContaining(['msg-row--chalie', 'msg-row--lead']));
     expect(rows[2]!.classes()).toContain('msg-row--cont');
-    expect(rows[1]!.find('.plan-card__count').text()).toBe('1/3');
     expect(rows[1]!.findAll('.plan-task__title').map((t) => t.text())).toEqual(['task 1', 'task 2', 'task 3']);
     expect(taskStatuses(wrapper)).toEqual(['done', 'in_progress', 'todo']);
     // Nothing has settled, so there is no footer and no plan link yet.
@@ -877,7 +876,6 @@ describe('the plan — live under its message, settled behind the footer', () =>
 
     expect(wrapper.find('.plan-card').element).toBe(card);
     expect(taskStatuses(wrapper)).toEqual(['done', 'in_progress', 'todo']);
-    expect(wrapper.find('.plan-card__count').text()).toBe('1/3');
   });
 
   it('keeps the one card under the message that opened the request when a message joins it mid-work', () => {
@@ -927,7 +925,7 @@ describe('the plan — live under its message, settled behind the footer', () =>
 
     expect(link.attributes('aria-expanded')).toBe('true');
     expect(wrapper.find('.trace-body').classes()).toContain('trace-body--open');
-    expect(wrapper.find('.trace-body .plan-card__summary').text()).toBe('2 of 3 done, 1 cancelled');
+    expect(wrapper.find('.trace-body .plan-card').exists()).toBe(true);
     expect(taskStatuses(wrapper)).toEqual(['done', 'cancelled', 'done']);
 
     await link.trigger('click');
@@ -971,7 +969,7 @@ describe('the plan — live under its message, settled behind the footer', () =>
     expect(layout(panel)).toEqual([
       'user:what is the weather', 'bubble:Sunny, 24°.', 'footer', 'user:and tomorrow', 'plan', 'live',
     ]);
-    expect(panel.find('.msg-row--plan .plan-card__count').text()).toBe('0/1');
+    expect(panel.find('.msg-row--plan .plan-task').classes()).toContain('plan-task--in_progress');
     expect(panel.classes()).toContain('turn-view--panel');
   });
 });

@@ -1,10 +1,9 @@
 // @vitest-environment happy-dom
 /**
- * PlanCard — the plan's checklist: a head counting the done tasks (the
- * cancelled ones too, for screen readers) over a bar with one segment per
- * task, then each task's title behind a mark that names its status — a
- * dashed circle to do, a spinning arc in progress, a check-circle done, a
- * slashed circle cancelled — with the status also read out for screen readers.
+ * PlanCard — the plan's checklist and nothing else: each task's title behind
+ * a mark that names its status — a dashed circle to do, a spinning arc in
+ * progress, a check-circle done, a slashed circle cancelled — with the status
+ * also read out for screen readers.
  *
  * A status change swaps the mark and the new one animates in; the card's
  * first render does not animate, so a reload or an opened settled plan shows
@@ -36,15 +35,11 @@ function mountCard(tasks: PlanTask[]) {
 const frames = () => new Promise((r) => setTimeout(r, 50));
 
 describe('PlanCard', () => {
-  it('counts the done and cancelled tasks in its head, lights a bar segment per task, and lists every task in order, its status on its row', () => {
+  it('is the list of tasks alone, every task in order with its status on its row', () => {
     const wrapper = mountCard(TASKS);
 
-    expect(wrapper.find('.plan-card__count').text()).toBe('1/4');
-    expect(wrapper.find('.plan-card__summary').text()).toBe('1 of 4 done, 1 cancelled');
-    expect(wrapper.findAll('.plan-card__bar i').map((s) => s.classes())).toEqual([
-      ['plan-card__segment--done'], ['plan-card__segment--in_progress'],
-      ['plan-card__segment--cancelled'], ['plan-card__segment--todo'],
-    ]);
+    // No head or bar above the tasks: the card's only children are its rows.
+    expect([...wrapper.element.children].map((c) => c.classList.contains('plan-task'))).toEqual([true, true, true, true]);
     const rows = wrapper.findAll('.plan-task');
     expect(rows.map((r) => r.find('.plan-task__title').text())).toEqual(TASKS.map((t) => t.title));
     expect(rows.map((r) => r.classes().find((c) => c.startsWith('plan-task--')))).toEqual([
@@ -53,12 +48,6 @@ describe('PlanCard', () => {
     expect(rows.map((r) => r.find('.plan-task__status').text())).toEqual([
       ', done', ', in progress', ', cancelled', ', to do',
     ]);
-  });
-
-  it('leaves the cancelled count out of the head when nothing was cancelled', () => {
-    const wrapper = mountCard([task(1, 'Find your location', 'done'), task(2, 'Report the weather', 'todo')]);
-
-    expect(wrapper.find('.plan-card__summary').text()).toBe('1 of 2 done');
   });
 
   it('marks a done task with a check, a running one with a spinner, a cancelled one with a slash, and an open one with a dashed circle', () => {

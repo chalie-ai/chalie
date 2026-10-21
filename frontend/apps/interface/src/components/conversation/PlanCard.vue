@@ -1,19 +1,14 @@
-<!-- The plan the agent keeps while it works one message: a rounded card on a
-     soft neon ground, a head counting the done tasks over a gapped bar, then
-     its tasks in order, each with a mark that moves with the task — a dashed
-     circle to do, a spinning arc in progress, a check-circle drawn in when
-     done, a slashed circle (the title struck through) when cancelled. Live it
-     stands sticky under the message it plans; settled it opens from the
-     footer's plan link. -->
+<!-- The plan the agent keeps while it works one message: its tasks in order on
+     a rounded card with a soft neon ground, each with a mark that moves with
+     the task — a dashed circle to do, a spinning arc in progress, a
+     check-circle drawn in when done, a slashed circle (the title struck
+     through) when cancelled. Live it stands sticky under the message it plans;
+     settled it opens from the footer's plan link. -->
 <script setup lang="ts">
-import { computed } from 'vue';
 import { CircleDashed } from '@lucide/vue';
 import type { PlanTask } from '../../api/conversation';
 
-const props = defineProps<{ tasks: PlanTask[] }>();
-
-const doneCount = computed(() => props.tasks.filter((t) => t.status === 'done').length);
-const cancelledCount = computed(() => props.tasks.filter((t) => t.status === 'cancelled').length);
+defineProps<{ tasks: PlanTask[] }>();
 
 // The mark is decoration; the status is read out with the title.
 const STATUS_TEXT: Record<PlanTask['status'], string> = {
@@ -25,61 +20,51 @@ const STATUS_TEXT: Record<PlanTask['status'], string> = {
 </script>
 
 <template>
-  <section class="plan-card" aria-label="Plan">
-    <p class="plan-card__head">
-      <span class="plan-card__label">Plan</span>
-      <span class="plan-card__count" aria-hidden="true">{{ doneCount }}/{{ tasks.length }}</span>
-      <span class="plan-card__summary">{{ doneCount }} of {{ tasks.length }} done<template v-if="cancelledCount">, {{ cancelledCount }} cancelled</template></span>
-    </p>
-    <div class="plan-card__bar" aria-hidden="true">
-      <i v-for="t in tasks" :key="t.number" :class="`plan-card__segment--${t.status}`" />
-    </div>
-    <ol class="plan-card__tasks">
-      <li
-        v-for="t in tasks"
-        :key="t.number"
-        class="plan-task"
-        :class="`plan-task--${t.status}`"
-      >
-        <span class="plan-task__mark" aria-hidden="true">
-          <!-- A status change swaps the mark, and the new one animates in; the
-               first render does not animate, so a reload or an opened settled
-               plan shows its marks still. The other marks are drawn inline:
-               the draw-in animation needs `pathLength` on the glyph itself. -->
-          <Transition name="plan-mark" mode="out-in" :duration="{ enter: 320, leave: 0 }">
-            <CircleDashed v-if="t.status === 'todo'" key="todo" :size="16" />
-            <svg
-              v-else
-              :key="t.status"
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <template v-if="t.status === 'in_progress'">
-                <circle class="plan-task__track" cx="12" cy="12" r="10" />
-                <path class="plan-task__spin" d="M22 12a10 10 0 0 0-10-10" />
-              </template>
-              <template v-else>
-                <circle cx="12" cy="12" r="10" />
-                <path
-                  pathLength="1"
-                  class="plan-task__glyph"
-                  :d="t.status === 'done' ? 'm8 12 3 3 5-6' : 'M8 16 16 8'"
-                />
-              </template>
-            </svg>
-          </Transition>
-        </span>
-        <span class="plan-task__title">{{ t.title }}</span>
-        <span class="plan-task__status">, {{ STATUS_TEXT[t.status] }}</span>
-      </li>
-    </ol>
-  </section>
+  <ol class="plan-card" aria-label="Plan">
+    <li
+      v-for="t in tasks"
+      :key="t.number"
+      class="plan-task"
+      :class="`plan-task--${t.status}`"
+    >
+      <span class="plan-task__mark" aria-hidden="true">
+        <!-- A status change swaps the mark, and the new one animates in; the
+             first render does not animate, so a reload or an opened settled
+             plan shows its marks still. The other marks are drawn inline:
+             the draw-in animation needs `pathLength` on the glyph itself. -->
+        <Transition name="plan-mark" mode="out-in" :duration="{ enter: 320, leave: 0 }">
+          <CircleDashed v-if="t.status === 'todo'" key="todo" :size="16" />
+          <svg
+            v-else
+            :key="t.status"
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <template v-if="t.status === 'in_progress'">
+              <circle class="plan-task__track" cx="12" cy="12" r="10" />
+              <path class="plan-task__spin" d="M22 12a10 10 0 0 0-10-10" />
+            </template>
+            <template v-else>
+              <circle cx="12" cy="12" r="10" />
+              <path
+                pathLength="1"
+                class="plan-task__glyph"
+                :d="t.status === 'done' ? 'm8 12 3 3 5-6' : 'M8 16 16 8'"
+              />
+            </template>
+          </svg>
+        </Transition>
+      </span>
+      <span class="plan-task__title">{{ t.title }}</span>
+      <span class="plan-task__status">, {{ STATUS_TEXT[t.status] }}</span>
+    </li>
+  </ol>
 </template>
 
 <style scoped lang="scss">
@@ -87,8 +72,10 @@ const STATUS_TEXT: Record<PlanTask['status'], string> = {
 // under it.
 .plan-card {
   width: 100%;
-  padding: 14px 16px 8px;
+  margin: 0;
+  padding: 6px 12px;
   border-radius: 12px;
+  list-style: none;
   background: linear-gradient(
     135deg,
     color-mix(in srgb, var(--pink) 6%, var(--bg)),
@@ -96,68 +83,11 @@ const STATUS_TEXT: Record<PlanTask['status'], string> = {
   );
 }
 
-.plan-card__head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  margin: 0;
-}
-
-.plan-card__label {
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--pink-text);
-}
-
-.plan-card__count {
-  font-family: var(--font-display);
-  font-size: var(--fs-title);
-  color: var(--text);
-}
-
-// One segment per task: the dim track, solid pink once done, a pulsing
-// pink while in progress, an outlined gap when cancelled. The states sit
-// inside the bar so they outrank the track's colour.
-.plan-card__bar {
-  display: flex;
-  gap: 4px;
-  height: 3px;
-  margin: 10px 0 6px;
-
-  i {
-    flex: 1;
-    border-radius: 2px;
-    background: var(--cell);
-  }
-
-  .plan-card__segment--done {
-    background: var(--pink);
-  }
-
-  .plan-card__segment--in_progress {
-    background: color-mix(in srgb, var(--pink) 45%, var(--cell));
-    animation: plan-fade 1.6s ease-in-out infinite;
-  }
-
-  .plan-card__segment--cancelled {
-    background: transparent;
-    box-shadow: inset 0 0 0 1px var(--cell);
-  }
-}
-
-.plan-card__tasks {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
 .plan-task {
   display: flex;
   align-items: center;
-  gap: 10px;
-  min-height: 32px;
+  gap: 8px;
+  min-height: 26px;
   font-size: var(--fs-body);
   color: var(--text);
   transition: color var(--dur-2) var(--ease-out);
@@ -212,8 +142,7 @@ const STATUS_TEXT: Record<PlanTask['status'], string> = {
   stroke-dashoffset: 0;
 }
 
-// Read by screen readers only — the count and the marks carry it visually.
-.plan-card__summary,
+// Read by screen readers only — the mark carries it visually.
 .plan-task__status {
   position: absolute;
   width: 1px;
@@ -232,10 +161,6 @@ const STATUS_TEXT: Record<PlanTask['status'], string> = {
 
 .plan-mark-enter-active .plan-task__glyph {
   animation: plan-draw var(--dur-3) var(--ease-out);
-}
-
-@keyframes plan-fade {
-  50% { opacity: 0.45; }
 }
 
 @keyframes plan-spin {
