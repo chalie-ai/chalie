@@ -73,7 +73,7 @@ const STATUS_TEXT: Record<PlanTask['status'], string> = {
 .plan-card {
   width: 100%;
   margin: 0;
-  padding: 6px 12px;
+  padding: 5px 10px;
   border-radius: 12px;
   list-style: none;
   background: linear-gradient(
@@ -86,9 +86,9 @@ const STATUS_TEXT: Record<PlanTask['status'], string> = {
 .plan-task {
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-height: 26px;
-  font-size: var(--fs-body);
+  gap: 6px;
+  min-height: 21px;
+  font-size: var(--fs-mono);
   color: var(--text);
   transition: color var(--dur-2) var(--ease-out);
 }
