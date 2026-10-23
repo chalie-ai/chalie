@@ -11,7 +11,7 @@ mod watcher;
 mod windows;
 
 use tauri::webview::PageLoadEvent;
-use tauri::{Manager, WindowEvent};
+use tauri::Manager;
 use tauri_plugin_log::{Target, TargetKind};
 
 pub fn run() {
@@ -37,14 +37,6 @@ pub fn run() {
         })
         .menu(windows::menu)
         .on_menu_event(windows::on_menu_event)
-        // Tauri only quits once the last window is gone, and the session is watched through the
-        // main window alone: a Brain window left open after it would keep the app running with
-        // nothing keeping it signed in.
-        .on_window_event(|window, event| {
-            if matches!(event, WindowEvent::Destroyed) && window.label() == watcher::MAIN_WINDOW {
-                window.app_handle().exit(0);
-            }
-        })
         .invoke_handler(tauri::generate_handler![
             commands::get_setup_state,
             commands::detect_local,

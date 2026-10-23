@@ -28,10 +28,8 @@ The server's own pages stay in the app. A web, mail or phone link to anywhere
 else opens in the app your Mac uses for that kind of link, and anything else a
 page tries to open is refused.
 
-Brain opens in a window of its own, already signed in. When the app signs itself
-in again, after a restart for instance, that window comes back too — on Brain,
-not on the sign-in page. Closing the main window quits the app, and every Brain
-window with it.
+The app has one window. Brain opens in it, in place of the chat, and Brain's logo
+takes you back. Closing the window quits the app.
 
 Files the server's pages save, such as an export, go to your Downloads folder.
 Nothing from anywhere else is saved.

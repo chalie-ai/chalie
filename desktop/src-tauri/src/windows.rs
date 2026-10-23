@@ -1,17 +1,16 @@
-//! The app's windows, and where their pages may go. The saved server's pages, the wizard's
-//! own page and a blank page stay in the app; web, mail and phone links to anywhere else are
+//! The app's window, and where its pages may go. The saved server's pages, the wizard's own
+//! page and a blank page stay in the app; web, mail and phone links to anywhere else are
 //! handed to the Mac, which opens them in the apps it uses for them; everything else is
-//! refused. Every window the app builds carries the same rules — the main one, and each one a
-//! server page opens, such as Brain — and so do its downloads, which never pass the
-//! navigation check.
+//! refused. The app has one window: a server page that asks for a window of its own, as
+//! Brain's button does, is shown in it instead. The same rules cover its downloads, which
+//! never pass the navigation check.
 
 use std::process::Command;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 
 use tauri::menu::{Menu, MenuEvent, MenuItem};
-use tauri::webview::{DownloadEvent, NewWindowFeatures, NewWindowResponse};
-use tauri::{AppHandle, Manager, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Wry};
+use tauri::webview::{DownloadEvent, NewWindowResponse};
+use tauri::{AppHandle, Manager, Url, WebviewWindow, WebviewWindowBuilder, Wry};
 
 use crate::config::{self, ServerAddress};
 use crate::watcher::{self, MAIN_WINDOW};
@@ -19,16 +18,12 @@ use crate::watcher::{self, MAIN_WINDOW};
 /// The menu item that reloads the window in front.
 const RELOAD: &str = "reload";
 
-/// Numbers the windows server pages open. Never reused, so a label never meets a window that
-/// is still closing under it.
-static NEXT_WINDOW: AtomicUsize = AtomicUsize::new(1);
-
 /// Where a page belongs.
 #[derive(Debug)]
 enum Verdict {
     /// A page of the saved server.
     Server,
-    /// One of the app's own: the wizard's page, or the blank page a new window starts on.
+    /// One of the app's own: the wizard's page, or a blank page.
     App,
     /// A web, mail or phone link to anywhere else, for the Mac to open.
     External,
@@ -114,7 +109,7 @@ fn open_externally(url: &Url) {
     );
 }
 
-/// The rules every window carries: where its pages may go, what it may open and what it may
+/// The rules the window carries: where its pages may go, what it may open and what it may
 /// save.
 fn guarded<'a>(
     app: &AppHandle,
@@ -134,7 +129,7 @@ fn guarded<'a>(
                 false
             }
         })
-        .on_new_window(move |url, features| new_window(&opening, url, features))
+        .on_new_window(move |url, _features| new_window(&opening, &url))
         .on_download(|webview, event| match event {
             DownloadEvent::Requested { url, .. } => {
                 let allowed = download_allowed(&url, saved_address(webview.app_handle()).as_ref());
@@ -151,40 +146,25 @@ fn guarded<'a>(
         })
 }
 
-/// A page asking for a window of its own, as Brain's button does. A server page gets one,
-/// carrying the same rules; a link to anywhere else goes to the Mac; nothing else opens.
-fn new_window(app: &AppHandle, url: Url, features: NewWindowFeatures) -> NewWindowResponse<Wry> {
-    match verdict(app, &url) {
-        Verdict::Server => {}
-        Verdict::External => {
-            open_externally(&url);
-            return NewWindowResponse::Deny;
-        }
+/// A page asking for a window of its own, as Brain's button does. No second window opens: a
+/// server page is shown in the app's one window, as a browser with no tabs would show it; a
+/// link to anywhere else goes to the Mac; nothing else opens.
+fn new_window(app: &AppHandle, url: &Url) -> NewWindowResponse<Wry> {
+    match verdict(app, url) {
+        Verdict::Server => match app.get_webview_window(MAIN_WINDOW) {
+            Some(window) => {
+                if let Err(problem) = window.navigate(url.clone()) {
+                    log::warn!("{url} could not be shown in the {MAIN_WINDOW} window: {problem}");
+                }
+            }
+            None => log::warn!("there is no {MAIN_WINDOW} window to show {url} in"),
+        },
+        Verdict::External => open_externally(url),
         Verdict::App | Verdict::Refused => {
             log::warn!("a page asked for a window on {url}, which the app does not open");
-            return NewWindowResponse::Deny;
         }
     }
-    // The window starts blank and WebKit loads the page into it with the opener's own
-    // configuration, cookies included, so it is signed in as the opener is.
-    let blank = Url::parse("about:blank").expect("about:blank is a URL");
-    let label = format!("page-{}", NEXT_WINDOW.fetch_add(1, Ordering::Relaxed));
-    let builder = WebviewWindowBuilder::new(app, label, WebviewUrl::External(blank))
-        .window_features(features)
-        .title(&app.package_info().name)
-        .on_document_title_changed(|window, title| {
-            if let Err(problem) = window.set_title(&title) {
-                let label = window.label();
-                log::warn!("the {label} window's title could not be set: {problem}");
-            }
-        });
-    match guarded(app, builder).build() {
-        Ok(window) => NewWindowResponse::Create { window },
-        Err(problem) => {
-            log::warn!("a window for {url} could not be opened: {problem}");
-            NewWindowResponse::Deny
-        }
-    }
+    NewWindowResponse::Deny
 }
 
 /// Build the main window from its entry in `tauri.conf.json`, which is marked not to be
