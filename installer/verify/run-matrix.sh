@@ -40,14 +40,14 @@ mkdir -p "$RESULTS"
 command -v docker >/dev/null 2>&1 || { echo "docker not found" >&2; exit 1; }
 
 run_row() {
-  local name="$1" image="$2" plat="$3" expect="$4"
+  local name="$1" image="$2" plat="$3" expect="$4" stock="$5"
   local log="$RESULTS/$name.log"
-  echo ">>> $name  ($image  $plat  expect=$expect)"
+  echo ">>> $name  ($image  $plat  expect=$expect  python=$stock)"
   docker run --rm --platform "$plat" \
     -v "$INSTALLER:/verify/install.sh:ro" \
     -v "$HERE/verify-inside.sh:/verify/verify-inside.sh:ro" \
     -e CHALIE_BRANCH="$BRANCH" -e ROW_NAME="$name" \
-    -e ROW_EXPECT="$expect" \
+    -e ROW_EXPECT="$expect" -e ROW_STOCK_PYTHON="$stock" \
     "$image" bash /verify/verify-inside.sh \
     >"$log" 2>&1
   local verdict
@@ -61,10 +61,12 @@ selected() {
   printf '%s\n' "${rows[@]}" | grep -qx "$1"
 }
 
-while IFS=$'\t' read -r name image plat expect; do
+while IFS=$'\t' read -r name image plat expect stock; do
   case "$name" in ''|\#*) continue ;; esac
   selected "$name" || continue
-  run_row "$name" "$image" "$plat" "$expect"
+  # A row written without the fifth column gets the realistic default: the
+  # distro's own python3 installed first.
+  run_row "$name" "$image" "$plat" "$expect" "${stock:-stock}"
 done < "$MATRIX"
 
 echo
@@ -74,11 +76,10 @@ for v in "$RESULTS"/*.verdict; do
   [ -f "$v" ] || continue
   verdict="$(cat "$v")"
   printf '  %-22s %s\n' "$(basename "$v" .verdict)" "$verdict"
-  # Only PASS (everything installed, booted and every runtime probe green) and
-  # REFUSED (a row whose whole claim is that the installer refuses old Python)
-  # are acceptable. Anything else gates, a missing verdict included: a row that
+  # Only PASS — everything installed, booted and every runtime probe green — is
+  # acceptable. Anything else gates, a missing verdict included: a row that
   # produced no result has proved nothing, and a silent non-result is exactly
   # how a broken install reaches a user.
-  case "$verdict" in PASS|REFUSED) ;; *) bad=1 ;; esac
+  case "$verdict" in PASS) ;; *) bad=1 ;; esac
 done
 exit "$bad"

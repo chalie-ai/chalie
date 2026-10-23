@@ -23,12 +23,13 @@ import { useSessionStore } from '../../stores/session';
 import { useVoiceStore } from '../../stores/voice';
 import { useAttachmentsStore } from '../../stores/attachments';
 import { useContextUsageStore } from '../../stores/contextUsage';
-import { useAmbientSensor } from '../../composables/useAmbientSensor';
 import { lsGet, lsSet } from '../../utils/storage';
 import { system } from '../../api';
 import ImageAttachStrip from '../upload/ImageAttachStrip.vue';
 import QueuedMessages from '../conversation/QueuedMessages.vue';
-import { Plus, Mic, Send, X, AlertTriangle, ChevronDown } from '@lucide/vue';
+import OffScreenAsks from './OffScreenAsks.vue';
+import DockError from './DockError.vue';
+import { Plus, Mic, Send, ChevronDown } from '@lucide/vue';
 
 /**
  * `turnId` is the only thing that distinguishes a thread reply from a main-dock
@@ -53,7 +54,6 @@ const session = useSessionStore();
 const voiceStore = useVoiceStore();
 const attachments = useAttachmentsStore();
 const contextUsage = useContextUsageStore();
-const ambient = useAmbientSensor();
 const { available: voiceAvailable, recorderState } = storeToRefs(voiceStore);
 // A null turnId (the footer dock) reads the channel's latest reading; a thread
 // panel's dock reads its own thread. Both are fed by the same `context_usage`
@@ -117,10 +117,10 @@ async function handleSend(): Promise<void> {
   await session.sendMessage(trimmed, files, turnId, type, level.value);
 
   // sendMessage takes ownership of `files` in BOTH branches — a direct dispatch
-  // uploads them; a busy send queues the whole {text, files} (queue.ts stores
-  // and replays them on drain). Either way the strip must clear: leaving files
-  // pending after a queued send re-attaches them to the user's NEXT message,
-  // a duplicate upload.
+  // uploads them; a busy send with files queues the whole {text, files}
+  // (queue.ts stores and replays them on drain). Either way the strip must
+  // clear: leaving files pending after a queued send re-attaches them to the
+  // user's NEXT message, a duplicate upload.
   attachments.clear();
 
   textareaRef.value?.focus();
@@ -177,8 +177,9 @@ function onBeforeUnload(e: BeforeUnloadEvent): void {
 
 /** A turn was stopped/undone — restore its draft into the dock that owns its
  *  scope. Matched by turn_id (like the sibling `chalie:edit-queued` handler),
- *  not `isActiveDock`: the stop control lives in ActCycle/TurnView, never in
- *  an InputDock footer, so `activeDockKey` never points at the right dock. */
+ *  not `isActiveDock`: the stop control lives in the turn's activity line,
+ *  never in an InputDock footer, so `activeDockKey` never points at the right
+ *  dock. */
 function onTurnInterrupted(e: Event): void {
   const detail = (e as CustomEvent<{ text: string; turnId: number | null }>).detail;
   if (detail.turnId !== props.turnId) return;
@@ -251,9 +252,6 @@ onMounted(() => {
     _dockResizeObserver.observe(footerRef.value);
   }
 
-  // Behavioral signals: typing cadence feeds the ambient snapshot.
-  if (textareaRef.value) ambient.bindTypingInput(textareaRef.value);
-
   void system.thinkingLevel(props.type, props.turnId ?? -1).then((r) => {
     const v = r?.level;
     level.value = v === 'medium' || v === 'high' ? v : 'auto';
@@ -290,18 +288,10 @@ onBeforeUnmount(() => {
     @focusin="markActive"
     @pointerdown="markActive"
   >
-    <div v-if="session.errorMessage" class="dock-error" role="alert">
-      <AlertTriangle class="dock-error__icon" :size="18" aria-hidden="true" />
-      <span class="dock-error__text">{{ session.errorMessage }}</span>
-      <button
-        class="dock-error__close"
-        type="button"
-        aria-label="Dismiss error"
-        @click="session.errorMessage = null"
-      >
-        <X :size="16" />
-      </button>
-    </div>
+    <DockError />
+
+    <!-- Pending asks no live line on screen shows; active dock only, like the attach strip. -->
+    <OffScreenAsks v-if="isActiveDock" />
 
     <!-- Attachments are a shared store; render the pending strip only in the
          active dock so the footer and an open thread don't show duplicates. -->
@@ -320,7 +310,7 @@ onBeforeUnmount(() => {
           :data-state="recorderState"
           @click="voiceStore.toggleRecording()"
         >
-          <Mic class="voice-rec-btn__mic" :size="18" />
+          <Mic class="voice-rec-btn__mic" :size="16" />
           <span class="voice-rec-btn__dot" aria-hidden="true"></span>
           <span class="voice-rec-btn__spinner" aria-hidden="true"></span>
         </button>
@@ -331,7 +321,7 @@ onBeforeUnmount(() => {
           aria-label="Attach"
           @click="openFilePicker"
         >
-          <Plus :size="20" />
+          <Plus :size="16" />
         </button>
 
         <textarea
@@ -352,7 +342,7 @@ onBeforeUnmount(() => {
           :disabled="!canSend"
           @click="handleSend()"
         >
-          <Send :size="20" />
+          <Send :size="16" />
         </button>
       </div>
     </div>
@@ -369,7 +359,7 @@ onBeforeUnmount(() => {
         >
           <span class="thinking-select__swirl" aria-hidden="true"></span>
           <span id="thinkingLabel" class="thinking-select__value">{{ levelLabel }}</span>
-          <ChevronDown :size="12" style="opacity: 0.6" />
+          <ChevronDown :size="16" style="opacity: 0.6" />
         </button>
         <div
           id="thinkingMenu"

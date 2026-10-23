@@ -1,0 +1,64 @@
+name: Publish Desktop App
+
+# Builds the macOS desktop app (desktop/) and attaches its disk image to a
+# GitHub release under the fixed name Chalie.dmg, so
+# https://github.com/chalie-ai/chalie/releases/latest/download/Chalie.dmg always
+# serves the newest one. Runs on a published release, or by hand to rebuild and
+# replace the image on an existing release. Apple Silicon only, and neither
+# signed with a Developer ID nor notarized.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to build from and attach Chalie.dmg to
+        required: true
+
+env:
+  TAG: ${{ github.event.release.tag_name || inputs.tag }}
+
+jobs:
+  dmg:
+    runs-on: macos-15 # Apple Silicon
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: refs/tags/${{ env.TAG }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '24'
+
+      - name: Set up pnpm
+        run: npm install -g pnpm@11.6.0
+
+      - name: Install dependencies
+        working-directory: desktop
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        working-directory: desktop
+        run: pnpm tauri build
+
+      - name: Name the disk image
+        run: |
+          shopt -s nullglob
+          dmgs=(desktop/src-tauri/target/release/bundle/dmg/*.dmg)
+          if [ "${#dmgs[@]}" -ne 1 ]; then
+            echo "expected exactly one disk image, found ${#dmgs[@]}: ${dmgs[*]}"
+            exit 1
+          fi
+          mv "${dmgs[0]}" Chalie.dmg
+
+      - name: Attach to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release upload "$TAG" Chalie.dmg --clobber

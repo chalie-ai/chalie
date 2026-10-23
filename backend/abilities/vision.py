@@ -22,7 +22,7 @@ import logging
 import os
 from typing import ClassVar
 
-from abilities._delegate import DelegateAbility
+from abilities._ability import Ability
 from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 from contracts.params.param_bag import ParamBag
@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 
 
-class VisionAbility(DelegateAbility[VisionParamsBag]):
+class VisionAbility(Ability[VisionParamsBag]):
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = ("see image", "describe image", "analyze image", "look at image")
 
     def get_summary(self) -> str:

@@ -17,6 +17,7 @@ freeze a connection themselves.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Callable, Sequence
 from typing import ClassVar, Self, TypeVar
@@ -99,6 +100,35 @@ class Model(Serializable, HasTable):
         I/O yet. An empty ``values`` matches nothing (see
         :meth:`~models.query.Query.filter_in`)."""
         return Query(cls).filter_in(key, values)
+
+    @classmethod
+    def _select_where_in_json(cls, column: str, values: Sequence[int], order_by: str | None = None) -> list[Self]:
+        """Every row whose ``column`` is in ``values``, bound as one JSON-array
+        parameter via ``json_each`` (large IN-lists exceed SQLite's bound-variable
+        limit). Empty ``values`` is a clean no-op — no query runs."""
+        if not values:
+            return []
+        safe_column = Query._validate_identifier(column)
+        order = f" ORDER BY {Query._validate_identifier(order_by)}" if order_by else ""
+        rows = cls._bound_connection().execute(
+            f"SELECT * FROM {cls.get_table()} WHERE {safe_column} IN (SELECT value FROM json_each(?)){order}",
+            (json.dumps(list(values)),),
+        ).fetchall()
+        return [cls.hydrate(row) for row in rows]
+
+    @classmethod
+    def _delete_where_in_json(cls, column: str, values: Sequence[int]) -> int:
+        """Hard-delete every row whose ``column`` is in ``values``, bound as one
+        JSON-array parameter via ``json_each``. Empty ``values`` is a clean
+        no-op — no query runs. Returns rows deleted."""
+        if not values:
+            return 0
+        safe_column = Query._validate_identifier(column)
+        cursor = cls._bound_connection().execute(
+            f"DELETE FROM {cls.get_table()} WHERE {safe_column} IN (SELECT value FROM json_each(?))",
+            (json.dumps(list(values)),),
+        )
+        return cursor.rowcount or 0
 
     @classmethod
     def order_by(cls: type[T], terms: str) -> Query[T]:

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from pydantic import Field
+
 from .response import Response
 
 
@@ -46,3 +48,4 @@ class PermissionRequestResponse(Response):
     action_id: str
     summary: str
     origin: PermissionOriginResponse
+    asked_at: str = Field(description="When the ask parked, ISO-8601 UTC with its offset (e.g. '2026-10-07T06:32:11+00:00').")

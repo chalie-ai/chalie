@@ -1,30 +1,34 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import type { ConversationMessage } from '../../api/conversation';
+import type { ConversationMessage, PlanTask } from '../../api/conversation';
 import { messagePlaintext } from '../../utils/speech';
 import { emit as busEmit } from '../../composables/useEventBus';
 import { useVoiceTranscriptsStore } from '../../stores/voiceTranscripts';
 import { voice } from '../../api/voice';
 import { Copy, Reply, Volume2 } from '@lucide/vue';
+import StepList from './StepList.vue';
+import PlanCard from './PlanCard.vue';
 
 const props = withDefaults(defineProps<{
   message: ConversationMessage;
   canReply?: boolean;
-  toolCalls?: NonNullable<ConversationMessage['tool_calls']>;
-  thinking?: { traces: string[]; duration_ms: number; tokens: number };
   threadPill?: { status: 'working' | 'done' | 'thread' | 'idle'; label: string } | null;
+  /** The exchange's rows this answer closes — including the answer row itself —
+      behind the work toggle ("N step(s)"). */
+  work?: ConversationMessage[];
+  /** The exchange's wall-clock duration in ms, read next to the step count. */
+  durationMs?: number | null;
+  /** The plan the exchange kept, behind the plan link ("plan N/M"). */
+  plan?: PlanTask[];
 }>(), {
   canReply: false,
-  toolCalls: () => [],
   threadPill: null,
-  thinking: undefined,
+  work: () => [],
+  durationMs: null,
+  plan: () => [],
 });
 
 const emit = defineEmits<{ reply: []; openThread: [] }>();
-
-const rootRef = ref<HTMLElement | null>(null);
-const expanded = ref(false);
-const thinkingExpanded = ref(false);
 
 const voiceStore = useVoiceTranscriptsStore();
 
@@ -32,16 +36,6 @@ const voiceStore = useVoiceTranscriptsStore();
 // mid-turn "let me check…" rows have no audio and never will.
 const transcriptId = computed(() => Number(props.message.id));
 const canSpeak = computed(() => !!props.message.settled && Number.isFinite(transcriptId.value));
-
-// Format the thinking duration as "thought for {S}s" or "thought for {M}m {S}s".
-const thinkingLabel = computed(() => {
-  if (!props.thinking) return '';
-  const seconds = Math.round(props.thinking.duration_ms / 1000);
-  const mins = Math.floor(seconds / 60);
-  const rem = seconds % 60;
-  if (mins === 0) return `thought for ${seconds}s`;
-  return `thought for ${mins}m ${rem}s`;
-});
 
 // Live state wins over the snapshot this message was fetched with; null means
 // nothing has been attempted, which is normal for history that predates
@@ -95,36 +89,109 @@ function onCopy(): void {
     // Silently swallow — clipboard writes can fail in non-secure contexts.
   });
 }
+
+// ── Work toggle — the steps behind this answer, folded open below the footer ─
+//
+// Owner ruling: the work sits below the answer, in its footer. The label shows
+// "N step(s)" (+ the exchange's duration) when the answer did any work, and
+// "thought for Xs" whenever it reasoned — beside the steps label on a tool
+// turn — each opening its own list; the step list itself never carries the
+// reasoning. "plan N/M" beside them opens the plan the exchange kept. Nothing
+// for a plain reply.
+
+type Panel = 'steps' | 'thought' | 'plan';
+
+const panel = ref<Panel | null>(null);
+
+/** One fold, one open panel: open `which`'s list, close it when it is the
+ *  open one, switch to it when the other is open. */
+function togglePanel(which: Panel): void {
+  panel.value = panel.value === which ? null : which;
+}
+
+const stepCount = computed(
+  () =>
+    props.work.reduce((n, m) => n + (m.tool_calls?.length ?? 0), 0) +
+    props.work.filter((m) => m.role === 'assistant' && m.content.trim() !== '' && m.id !== props.message.id).length,
+);
+const failCount = computed(() =>
+  props.work.reduce((n, m) => n + (m.tool_calls?.filter((c) => c.state === 'error').length ?? 0), 0),
+);
+const thinkMs = computed(() => props.work.reduce((n, m) => n + (m.thinking?.duration_ms ?? 0), 0));
+
+// "Xs", "Xm Ys" or "Xh Ym" — rounded seconds, the same reading as the thinking link.
+function formatDuration(ms: number): string {
+  const seconds = Math.round(ms / 1000);
+  const hours = Math.floor(seconds / 3600);
+  const mins = Math.floor(seconds / 60) % 60;
+  if (hours > 0) return `${hours}h ${mins}m`;
+  return mins === 0 ? `${seconds}s` : `${mins}m ${seconds % 60}s`;
+}
+
+// "N step(s)" (+ the exchange's duration) — null when the answer did no work.
+const stepsLabel = computed<string | null>(() => {
+  if (stepCount.value === 0) return null;
+  const n = stepCount.value;
+  const base = `${n} step${n === 1 ? '' : 's'}`;
+  return props.durationMs && props.durationMs > 0 ? `${base} · ${formatDuration(props.durationMs)}` : base;
+});
+
+// "thought for Xs" — null when the exchange never reasoned.
+const thoughtLabel = computed<string | null>(
+  () => (thinkMs.value > 0 ? `thought for ${formatDuration(thinkMs.value)}` : null),
+);
+
+// "plan N/M" — done tasks of all; null when the exchange kept no plan.
+const planLabel = computed<string | null>(() =>
+  props.plan.length > 0
+    ? `plan ${props.plan.filter((t) => t.status === 'done').length}/${props.plan.length}`
+    : null,
+);
+
+// Reasoning traces for the thought panel — a reply that only thought, or a
+// tool turn that reasoned alongside its steps.
+const thinkTraces = computed(() => props.work.flatMap((m) => m.thinking?.traces ?? []));
 </script>
 
 <template>
-  <div ref="rootRef" class="speech-form__meta-wrap">
+  <div class="speech-form__meta-wrap">
     <div class="speech-form__meta">
       <span class="speech-form__timestamp">{{ message.timestamp }}</span>
 
+      <!-- The work behind this answer — "N step(s) · Xm Ys" (plus "thought
+           for Xs" beside it whenever the exchange reasoned), each folding its
+           own list open below the footer. -->
       <button
-        v-if="toolCalls.length > 0"
-        class="trace-pill"
-        :class="{ 'trace-pill--open': expanded }"
-        :aria-expanded="expanded"
+        v-if="stepsLabel"
         type="button"
-        @click="expanded = !expanded"
+        class="speech-form__work"
+        :aria-expanded="panel === 'steps'"
+        @click="togglePanel('steps')"
       >
-        <span class="trace-pill__dot" aria-hidden="true" />
-        {{ toolCalls.length }} tool{{ toolCalls.length === 1 ? '' : 's' }} used
+        · {{ stepsLabel }}
+        <span v-if="failCount" class="activity__fail"> · {{ failCount }} failed</span>
+        <span class="activity__chev" aria-hidden="true">›</span>
       </button>
-
-      <a
-        v-if="thinking"
-        class="thinking-link"
-        :class="{ 'thinking-link--open': thinkingExpanded }"
-        href="#"
-        role="button"
-        :aria-expanded="thinkingExpanded"
-        @click.prevent="thinkingExpanded = !thinkingExpanded"
+      <button
+        v-if="thoughtLabel"
+        type="button"
+        class="speech-form__work"
+        :aria-expanded="panel === 'thought'"
+        @click="togglePanel('thought')"
       >
-        {{ thinkingLabel }}
-      </a>
+        · {{ thoughtLabel }}
+        <span class="activity__chev" aria-hidden="true">›</span>
+      </button>
+      <button
+        v-if="planLabel"
+        type="button"
+        class="speech-form__work"
+        :aria-expanded="panel === 'plan'"
+        @click="togglePanel('plan')"
+      >
+        · {{ planLabel }}
+        <span class="activity__chev" aria-hidden="true">›</span>
+      </button>
 
       <button
         v-if="threadPill"
@@ -176,39 +243,31 @@ function onCopy(): void {
       </span>
     </div>
 
+    <!-- inert while folded: a delegate call row is a button, and the fold only
+         collapses its height, so it would stay reachable by Tab unseen. The
+         open panel names the content — the plan under plan, the step list
+         under steps (it stays in the DOM while folded, height-collapsed), the
+         reasoning traces under thought. A reply that only thought has nothing
+         but traces. -->
     <div
-      v-if="toolCalls.length > 0"
+      v-if="stepsLabel || thoughtLabel || planLabel"
       class="trace-body"
-      :class="{ 'trace-body--open': expanded }"
+      :class="{ 'trace-body--open': panel !== null }"
+      :inert="panel === null"
     >
       <div class="trace-body__inner">
-        <div class="calls">
-          <div
-            v-for="(c, i) in toolCalls"
-            :key="i"
-            class="call"
-            :class="{ 'call--error': c.state === 'error' }"
-          >
-            <span class="call__fn">{{ c.tool_name }}</span>
-            <span class="call__summary">{{ c.summary }}</span>
-          </div>
-        </div>
-      </div>
-    </div>
-    <div
-      v-if="thinking"
-      class="trace-body"
-      :class="{ 'trace-body--open': thinkingExpanded }"
-    >
-      <div class="trace-body__inner">
-        <div class="thinking-traces">
-          <div
-            v-for="(trace, i) in thinking.traces"
-            :key="i"
-            class="thinking-trace"
-          >
-            <pre>{{ trace }}</pre>
-          </div>
+        <PlanCard v-if="panel === 'plan'" :tasks="plan" />
+        <StepList
+          v-else-if="stepCount && panel !== 'thought'"
+          :messages="work"
+          :answer-id="message.id"
+        />
+        <div v-else class="activity__steps">
+          <pre
+            v-for="(trace, j) in thinkTraces"
+            :key="j"
+            class="activity__trace"
+          >{{ trace }}</pre>
         </div>
       </div>
     </div>

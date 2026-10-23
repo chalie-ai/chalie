@@ -1,11 +1,14 @@
 /**
  * liveActTrail — the live act-trail (transient pill) state.
  *
- * Per-feed-type (ConfigType-keyed) map of live tool pills, keyed by
- * transcript_row_id (the turn_id anchor). Visual-only; no turn data.
- * Reactive so Vue components re-render off it.
+ * Per-feed map of live tool pills, keyed by transcript_row_id (the turn_id
+ * anchor). A feed is a ConfigType, or a delegate turn's full channel — the
+ * two never share a key, so a delegate's pills can't land on a same-id user
+ * turn. Visual-only; no turn data. Reactive so Vue components re-render off it.
  */
 import { reactive } from 'vue';
+import type { DelegateRef } from '@chalie/shared';
+import { isDelegateChannel } from './delegateChannel';
 
 // ── Public surface types ─────────────────────────────────────────────────────
 
@@ -21,6 +24,8 @@ export interface LiveToolPill {
   resolved: boolean;
   /** The transcript row this tool call anchors to (from WS frame transcript_row_id). */
   transcriptRowId: number | null;
+  /** The delegate turn this call spawned — set by a later frame for the same call. */
+  delegate: DelegateRef | null;
 }
 
 export interface LiveTrail {
@@ -89,17 +94,36 @@ export function startLiveTool(
 ): void {
   if (callId == null) return;
   const s = feedState(type);
+  const id = String(callId);
+  // A delegate re-sends its call's frame once its child turn exists; the pill
+  // is already on screen, so the repeat must not open a second one.
+  if (s.liveTools[turnId]?.some((p) => p.id === id)) return;
   const pill: LiveToolPill = {
-    id: String(callId),
+    id,
     name,
     summary,
     startedAt: Date.now(),
     ok: false,
     resolved: false,
     transcriptRowId,
+    delegate: null,
   };
   s.liveTools[turnId] = [...(s.liveTools[turnId] ?? []), pill];
   _ensureTimerRunning(s);
+}
+
+/** Point a live pill at the delegate turn its call spawned. */
+export function setLiveToolDelegate(type: string, turnId: number, callId: number | null, delegate: DelegateRef): void {
+  if (callId == null) return;
+  const s = feedState(type);
+  const key = String(callId);
+  const pills = s.liveTools[turnId];
+  const pill = pills?.find((p) => p.id === key);
+  if (!pills || !pill) return;
+  if (pill.delegate?.channel === delegate.channel && pill.delegate.turn_id === delegate.turn_id) return;
+  s.liveTools[turnId] = pills.map((p) =>
+    p.id === key ? { ...p, delegate: { channel: delegate.channel, turn_id: delegate.turn_id } } : p,
+  );
 }
 
 export function finishLiveTool(type: string, turnId: number, callId: number | null, ok: boolean): void {
@@ -142,5 +166,13 @@ export function clearAll(type: string): void {
   if (s.timerInterval !== null) {
     clearInterval(s.timerInterval);
     s.timerInterval = null;
+  }
+}
+
+/** Tear down every delegate feed. A delegate's pills settle only on its own
+ *  terminal frame, which a dropped socket loses for good. */
+export function clearDelegateFeeds(): void {
+  for (const feed of _feeds.keys()) {
+    if (isDelegateChannel(feed)) clearAll(feed);
   }
 }

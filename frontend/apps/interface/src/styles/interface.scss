@@ -1,35 +1,14 @@
 // Structural/layout styles for the app shell (skeleton, fixed bars, ambient
-// layers, banners, loading overlay, keyframes). Component visual detail lives
+// layers, loading overlay, keyframes). Component visual detail lives
 // in each SFC's scoped styles. Depends on @chalie/shared/styles/main.scss (tokens).
 
 :root {
-  --sand:              var(--magenta);      // alias for accent-secondary
-  --dusk-blue:         var(--cyan);         // alias for accent-tertiary
-  --amber:             #B07CFF;             // soft violet used on responding state
-
-  --bg-surface-user:   var(--bg-user);
-  --bg-surface-chalie: var(--bg-chalie);
-
-  --font-size-sm:  0.8125rem;
-  --font-size-lg:  1.125rem;
-  --font-size-xl:  1.5rem;
-
-  --radius-sm:   8px;
-  --radius-md:   16px;
-  --radius-lg:   24px;
-  --radius-full: 9999px;
-
   // Layout — the input box and its trays (attachment preview, controls) all
   // share this width so they line up as one stacked unit above the dock.
   --dock-width:  min(80%, 1200px);
-
-  // Transitions
-  --duration-fast:   150ms;
-  --duration-normal: 300ms;
-  --duration-slow:   500ms;
 }
 
-// Base additions (body bg/color/font handled by _tokens.scss + _reset.scss).
+// Base additions (body bg/color/font come from the shared afterhours.css foundation).
 html {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -46,182 +25,8 @@ body {
   text-rendering: optimizeLegibility;
 }
 
-:focus-visible {
-  outline: 1.5px solid rgba(var(--bs-primary-rgb), 0.45);
-  outline-offset: 2px;
-}
-
 // Voice-button visibility is driven by a reactive flag on the input dock, not a
 // `body.voice-loading` class, so the legacy body-class CSS rule is not ported.
-
-.connection-banner {
-  position: fixed;
-  top: 56px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 1000;
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-  padding: var(--space-sm) var(--space-md);
-  background: rgba(var(--bs-danger-rgb), 0.15);
-  border: 1px solid rgba(var(--bs-danger-rgb), 0.3);
-  border-radius: var(--radius-full);
-  font-size: var(--font-size-sm);
-  color: var(--error);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  animation: fadeSlideDown var(--duration-normal) var(--ease-out);
-}
-
-.connection-banner__dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--error);
-  animation: blink 1.5s infinite;
-}
-
-@keyframes fadeSlideDown {
-  from { opacity: 0; transform: translateX(-50%) translateY(-8px); }
-  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
-}
-
-@keyframes blink {
-  0%, 100% { opacity: 1; }
-  50%       { opacity: 0.3; }
-}
-
-.capability-alert-banner {
-  position: fixed;
-  top: 100px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 1000;
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-  padding: var(--space-sm) var(--space-md);
-  background: rgba(var(--bs-warning-rgb), 0.15);
-  border: 1px solid rgba(var(--bs-warning-rgb), 0.35);
-  border-radius: var(--radius-full);
-  font-size: var(--font-size-sm);
-  color: var(--warning-banner-text);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  animation: fadeSlideDown var(--duration-normal) var(--ease-out);
-}
-
-.banner-dismiss {
-  background: none;
-  border: none;
-  color: color-mix(in srgb, var(--warning-banner-text) 55%, transparent);
-  cursor: pointer;
-  padding: 0 2px;
-  font-size: 1rem;
-  line-height: 1;
-  display: flex;
-  align-items: center;
-  transition: color var(--duration-fast) var(--ease-out);
-}
-
-.banner-dismiss:hover {
-  color: var(--warning-banner-text);
-}
-
-.update-banner {
-  position: fixed;
-  top: 56px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 1000;
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-  padding: var(--space-sm) var(--space-md);
-  background: rgba(var(--bs-info-rgb), 0.08);
-  border: 1px solid rgba(var(--bs-info-rgb), 0.25);
-  border-radius: var(--radius-full);
-  font-size: var(--font-size-sm);
-  color: var(--accent-tertiary);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  animation: fadeSlideDown var(--duration-normal) var(--ease-out);
-}
-
-.update-banner__icon {
-  display: flex;
-  align-items: center;
-  color: var(--accent-tertiary);
-}
-
-.update-banner__text {
-  color: var(--text-primary);
-}
-
-.update-banner__text strong {
-  color: var(--accent-tertiary);
-}
-
-.update-banner__action {
-  background: var(--accent-tertiary);
-  color: #06080e;
-  border: none;
-  border-radius: var(--radius-full);
-  padding: 2px 12px;
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-  cursor: pointer;
-  transition: opacity var(--duration-fast) var(--ease-out);
-}
-
-.update-banner__action:hover {
-  opacity: 0.85;
-}
-
-.update-banner__dismiss {
-  background: none;
-  border: none;
-  color: var(--text-tertiary);
-  cursor: pointer;
-  padding: 2px;
-  display: flex;
-  align-items: center;
-  transition: color var(--duration-fast) var(--ease-out);
-}
-
-.update-banner__dismiss:hover {
-  color: var(--text-primary);
-}
-
-// Permission Stack — outer container fixed-positioning only; PermissionStack.vue
-// teleports cards inside and lays out the inner wrapper (.perm-stack-inner).
-.permission-stack {
-  position: fixed;
-  bottom: calc(var(--input-dock-height, 80px) + var(--space-md));
-  left: 50%;
-  transform: translateX(-50%);
-  width: min(480px, calc(100vw - var(--space-lg) * 2));
-  pointer-events: none;
-  z-index: 200;
-}
-
-// The thread panel's own lane — same container, but in flow above the panel's
-// dock (ThreadPanel.vue renders it) instead of fixed over the spine.
-.permission-stack--panel {
-  position: static;
-  transform: none;
-  width: 100%;
-  max-width: var(--dock-width);
-  align-self: center;
-  margin: 0 auto;
-  padding: 0 var(--space-lg);
-  z-index: auto;
-}
-
-.permission-stack--panel .perm-stack-inner:not(:empty) {
-  padding-bottom: var(--space-sm);
-}
 
 .presence-bar {
   position: fixed;
@@ -234,11 +39,8 @@ body {
   justify-content: space-between;
   height: 56px;
   padding: 0 var(--space-lg);
-  background: var(--scrim-top);
-  backdrop-filter: blur(24px) saturate(120%);
-  -webkit-backdrop-filter: blur(24px) saturate(120%);
-  border-bottom: 1px solid color-mix(in oklab, var(--violet) 8%, transparent);
-  transition: background 420ms ease, border-color 420ms ease;
+  background: var(--surface);
+  transition: background var(--dur-3) var(--ease-out);
 }
 
 .presence-bar__right {
@@ -264,7 +66,6 @@ body {
   display: flex;
   flex-direction: column;
   min-height: 100vh;
-  mask-image: linear-gradient(to bottom, transparent, black 32px, black calc(100% - 32px), transparent);
 }
 
 // Groups a user message with the assistant rows/act groups it produced; inner
@@ -282,14 +83,10 @@ body {
   right: 0;
   z-index: 100;
   padding: var(--space-md) var(--space-lg);
-  // Solid, near-opaque scrim + blur — same fixed-chrome treatment as
-  // .presence-bar. A gradient fading to transparent let the feed bleed through
-  // the composer; this reads as a clean ground on both themes (tokens flip).
-  background: var(--scrim-dock);
-  backdrop-filter: blur(24px) saturate(120%);
-  -webkit-backdrop-filter: blur(24px) saturate(120%);
-  transition: background 420ms ease;
-  border-top: 1px solid var(--border-strong);
+  // Surface band for the fixed chrome — same treatment as .presence-bar
+  // (token-driven, so it flips with the theme).
+  background: var(--surface);
+  transition: background var(--dur-3) var(--ease-out);
 }
 
 // Inline variant — the same composer rendered in-flow at the foot of the thread
@@ -298,7 +95,6 @@ body {
 .input-dock--inline {
   position: static;
   z-index: auto;
-  border-top: none;
 }
 
 .input-dock__outer {
@@ -318,13 +114,8 @@ body {
   align-items: center;
   gap: var(--space-sm);
   padding: var(--space-md) var(--space-lg);
-  color: var(--error); // cascades to the icon (currentColor), text, and close
-  background: color-mix(in oklab, var(--error) 12%, var(--bg-surface-2));
-  border: 1px solid color-mix(in oklab, var(--error) 35%, transparent);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-card);
-  backdrop-filter: blur(20px) saturate(120%);
-  -webkit-backdrop-filter: blur(20px) saturate(120%);
+  color: var(--deny-text); // cascades to the icon (currentColor), text, and close
+  background: var(--surface-2);
 }
 
 .dock-error__icon { flex: none; }
@@ -342,18 +133,14 @@ body {
   align-items: center;
   justify-content: center;
   padding: var(--space-xs);
-  border: none;
-  border-radius: var(--radius-sm);
   background: transparent;
   color: inherit;
   cursor: pointer;
-  opacity: 0.75;
-  transition: opacity 160ms ease, background 160ms ease;
+  transition: background var(--dur-1) var(--ease-out);
 }
 
 .dock-error__close:hover {
-  opacity: 1;
-  background: color-mix(in oklab, var(--error) 16%, transparent);
+  background: var(--cell);
 }
 
 .input-dock__inner {
@@ -378,8 +165,7 @@ body {
   background: transparent;
   border: none;
   outline: none;
-  color: var(--text-primary);
-  font-size: 15px;
+  color: var(--text);
   line-height: 1.4;
   resize: none;
   field-sizing: content;
@@ -390,20 +176,20 @@ body {
 }
 
 .input-dock__textarea::placeholder {
-  color: var(--text-tertiary);
+  color: var(--muted);
 }
 
 .loading-overlay {
   position: fixed;
   inset: 0;
-  // Must sit above every shell layer (bars at 100, banners at 1000); until the
+  // Must sit above every shell layer (bars at 100); until the
   // ready-gate is wired we layer the overlay on top so the dock can't poke through.
   z-index: 1100;
-  background: #06080e; // always dark — stays consistent in both themes
+  background: var(--bg);
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: opacity 220ms ease;
+  transition: opacity var(--dur-2) var(--ease-out);
 }
 
 .loading-overlay.loading-overlay--fading {
@@ -421,182 +207,128 @@ body {
 .loading-overlay__dot {
   width: 18px;
   height: 18px;
-  border-radius: 50%;
-  background: var(--violet);
-  animation: loadingGlow 2s ease-in-out infinite;
+  background: var(--pink);
+  animation: working 1.4s ease-in-out infinite;
 }
 
 .loading-overlay__text {
-  color: var(--text-secondary);
-  font-size: 15px;
-  font-weight: 400;
+  color: var(--muted);
   letter-spacing: 0.02em;
 }
 
 .loading-overlay__skip {
   background: none;
-  border: none;
-  color: var(--text-tertiary);
-  font-size: 13px;
+  color: var(--muted);
   cursor: pointer;
   padding: 4px 8px;
-  opacity: 0;
-  animation: loadingTextFadeIn 400ms ease 4s both;
-  transition: color 220ms ease;
+  animation: fade var(--dur-2) var(--ease-out) 4s both;
+  transition: color var(--dur-1) var(--ease-out);
 }
 
-.loading-overlay__skip:hover { color: var(--text-secondary); }
-
-.loading-overlay__skip:focus-visible {
-  outline: 1.5px solid rgba(var(--bs-primary-rgb), 0.45);
-  outline-offset: 2px;
-}
-
-@keyframes formEntry {
-  from { opacity: 0; transform: translateY(6px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-
-// ── Weave motion (canonical bodies from the threading design system) ──
-// Single signature easing for all of these is var(--ease-out) = cubic-bezier(0.16,1,0.3,1).
-@keyframes panelSlide {
-  from { transform: translateX(48px); }
-  to   { transform: translateX(0); }
-}
-
-@keyframes overlayIn {
-  from { opacity: 0; }
-  to   { opacity: 1; }
-}
-
-@keyframes cardEnter {
-  from { opacity: 0; transform: translateY(8px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-
-// Status-dot heartbeat (thinking threads) and gist-glyph twinkle.
-@keyframes pulseV {
-  0%, 100% { opacity: 0.55; transform: scale(1); }
-  50%       { opacity: 1;    transform: scale(1.4); }
-}
+.loading-overlay__skip:hover { color: var(--text); }
 
 // Thread activity marker (blinker) — one definition shared by the user activity
 // dock (TaskDrawer) and the scheduler dock. Working (pink) pulses while the reply
-// streams; done (blue) is a steady standing marker until the user opens the thread.
+// streams; done is a steady standing marker until the user opens the thread.
 .thread-activity-dot {
   flex-shrink: 0;
   width: 8px;
   height: 8px;
-  border-radius: 50%;
 
   &.working {
-    background: var(--status-main);
-    box-shadow: 0 0 10px color-mix(in oklab, var(--status-main) 60%, transparent);
-    animation: pulseV 1.4s ease-in-out infinite;
+    background: var(--pink);
+    animation: working 1.4s ease-in-out infinite;
   }
 
   &.done {
-    background: var(--cyan);
-    box-shadow: 0 0 8px color-mix(in oklab, var(--cyan) 50%, transparent);
+    background: var(--text);
   }
-}
-
-@keyframes glyphTwinkle {
-  0%, 100% { opacity: 0.55; }
-  50%       { opacity: 1; }
 }
 
 // Base layer (feed + footer dock) recedes behind an open thread panel — the
 // mockup's baseStyle when inThread. The top bar and the panel itself stay crisp.
 .weave-dimmed {
   opacity: 0.5;
-  filter: blur(1px);
   pointer-events: none;
-  transition: opacity var(--duration-normal) var(--ease-out), filter var(--duration-normal) var(--ease-out);
-}
-
-@keyframes loadingGlow {
-  0%, 100% { box-shadow: 0 0 12px var(--violet), 0 0 24px rgba(var(--bs-primary-rgb), 0.3); }
-  50%       { box-shadow: 0 0 24px var(--violet), 0 0 48px rgba(var(--bs-primary-rgb), 0.45); }
-}
-
-@keyframes loadingTextFadeIn {
-  from { opacity: 0; transform: translateY(4px); }
-  to   { opacity: 1; transform: translateY(0); }
+  transition: opacity var(--dur-2) var(--ease-out);
 }
 
 // Action buttons (send / attach / voice)
 .btn-action {
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
-  border: none;
+  width: var(--control-h);
+  height: var(--control-h);
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   line-height: 1;
-  transition: all var(--duration-fast);
+  transition: background-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
   flex-shrink: 0;
 }
 
-.btn-action--attach {
-  background: var(--bg-surface-2);
-  color: var(--text-secondary);
+// One press response, shared by every button in this file.
+.btn-action:active,
+.voice-rec-btn:active,
+.btn-icon:active,
+.thinking-select__trigger:active,
+.thinking-select__item:active,
+.loading-overlay__skip:active,
+.chalie-toast__undo:active,
+.dock-error__close:active {
+  translate: 0 1px;
 }
 
-.btn-action--attach svg { width: 18px; height: 18px; }
+.btn-action--attach {
+  background: var(--surface-2);
+  color: var(--muted);
+}
+
+.btn-action--attach svg { width: var(--icon); height: var(--icon); }
 
 .btn-action--attach:hover {
-  background: color-mix(in oklab, var(--accent-primary) 12%, transparent);
-  color: var(--accent-primary);
+  background: var(--cell);
+  color: var(--text);
 }
 
 .btn-action--send {
-  background: var(--accent-primary);
-  color: #fff;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
-  transition: all 220ms ease;
+  background: var(--pink);
+  color: var(--on-pink);
 }
 
 .btn-action--send:hover:not(:disabled) {
-  filter: brightness(1.08);
-}
-
-.btn-action--send:active:not(:disabled) {
-  transform: scale(0.92);
+  background: var(--text);
+  color: var(--bg);
 }
 
 .btn-action--send:disabled {
-  opacity: 0.3;
+  opacity: 0.45;
   cursor: not-allowed;
 }
 
 .voice-rec-btn {
   flex-shrink: 0;
   position: relative;
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
-  background: var(--bg-surface-2);
-  color: var(--text-secondary);
+  width: var(--control-h);
+  height: var(--control-h);
+  background: var(--surface-2);
+  color: var(--muted);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: color var(--duration-fast), background var(--duration-fast);
+  transition: color var(--dur-1) var(--ease-out), background-color var(--dur-1) var(--ease-out);
 }
 
 .voice-rec-btn:hover {
-  background: color-mix(in oklab, var(--accent-primary) 12%, transparent);
-  color: var(--accent-primary);
+  background: var(--cell);
+  color: var(--text);
 }
 
 .voice-rec-btn[data-state="idle"] .voice-rec-btn__mic     { display: block; }
 .voice-rec-btn[data-state="idle"] .voice-rec-btn__dot     { display: none; }
 .voice-rec-btn[data-state="idle"] .voice-rec-btn__spinner { display: none; }
 
-.voice-rec-btn[data-state="recording"] { color: #E06C6C; }
+.voice-rec-btn[data-state="recording"] { color: var(--deny-text); }
 .voice-rec-btn[data-state="recording"] .voice-rec-btn__mic     { display: none; }
 .voice-rec-btn[data-state="recording"] .voice-rec-btn__dot     { display: block; }
 .voice-rec-btn[data-state="recording"] .voice-rec-btn__spinner { display: none; }
@@ -608,46 +340,31 @@ body {
 .voice-rec-btn__dot {
   width: 10px;
   height: 10px;
-  border-radius: 50%;
-  background: #E06C6C;
-  animation: voiceRecPulse 1s ease-in-out infinite;
-}
-
-@keyframes voiceRecPulse {
-  0%, 100% { transform: scale(1); opacity: 1; }
-  50%       { transform: scale(1.4); opacity: 0.6; }
+  background: var(--deny);
+  animation: working 1.4s ease-in-out infinite;
 }
 
 .voice-rec-btn__spinner {
   width: 14px;
   height: 14px;
-  border: 2px solid var(--border-strong);
-  border-top-color: var(--text-secondary);
-  border-radius: 50%;
+  border: 2px solid var(--control);
+  border-top-color: var(--muted);
   animation: spin 0.7s linear infinite;
-}
-
-/* Canonical spin keyframe — the single 360° rotation every inline loading
-   spinner uses (history, thread panel, voice, action cards, update prompt). */
-@keyframes spin {
-  to { transform: rotate(360deg); }
 }
 
 // Shared icon button — navbar, drawer close, update prompt, etc.
 .btn-icon {
   background: none;
-  border: none;
-  color: var(--text-secondary);
+  color: var(--muted);
   cursor: pointer;
   padding: var(--space-sm);
-  border-radius: var(--radius-sm);
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: color var(--duration-fast);
+  transition: color var(--dur-1) var(--ease-out);
 }
 
-.btn-icon:hover  { color: var(--text-primary); }
+.btn-icon:hover  { color: var(--text); }
 .btn-icon--small { padding: var(--space-xs); }
 
 // Status line — thinking pill (left) and context indicator (right)
@@ -663,8 +380,8 @@ body {
   align-items: center;
   gap: 12px;
   font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--text-tertiary);
+  font-size: var(--fs-mono);
+  color: var(--muted);
 }
 
 .thinking-select { position: relative; }
@@ -673,34 +390,31 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 24px;
+  height: var(--control-h);
   padding: 0 9px;
-  border-radius: var(--radius-full);
   background: transparent;
-  border: 1px solid var(--border-strong);
   cursor: pointer;
   font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--text-secondary);
-  transition: border-color var(--duration-fast), color var(--duration-fast);
+  font-size: var(--fs-mono);
+  color: var(--muted);
+  transition: background-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
 }
 
 .thinking-select__trigger:hover {
-  border-color: color-mix(in oklab, var(--border-strong) 60%, transparent);
-  color: var(--text-primary);
+  background: var(--cell);
+  color: var(--text);
 }
 
 .thinking-select__swirl {
   display: block;
   width: 6px;
   height: 6px;
-  border-radius: 50%;
-  background: var(--accent-primary);
+  background: var(--pink);
   flex-shrink: 0;
 }
 
 .thinking-select__value {
-  color: var(--text-secondary);
+  color: var(--muted);
   font-weight: 500;
 }
 
@@ -715,12 +429,7 @@ body {
   flex-direction: column;
   gap: 2px;
   padding: var(--space-xs);
-  background: color-mix(in oklab, var(--text) 5%, transparent);
-  border: 1px solid color-mix(in oklab, var(--text) 8%, transparent);
-  border-radius: var(--radius-md);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  box-shadow: var(--shadow-card);
+  background: var(--surface);
 }
 
 .thinking-select__menu.hidden { display: none; }
@@ -728,17 +437,15 @@ body {
 .thinking-select__item {
   text-align: left;
   background: transparent;
-  border: none;
   cursor: pointer;
   padding: var(--space-sm) var(--space-md);
-  border-radius: var(--radius-sm);
-  font-size: var(--font-size-sm);
-  color: var(--text-primary);
-  transition: background 220ms ease;
+  font-size: var(--fs-body);
+  color: var(--text);
+  transition: background-color var(--dur-1) var(--ease-out);
 }
 
-.thinking-select__item:hover  { background: color-mix(in oklab, var(--accent-primary) 8%, transparent); }
-.thinking-select__item.active { color: var(--accent-primary); font-weight: 600; }
+.thinking-select__item:hover  { background: var(--surface-2); }
+.thinking-select__item.active { color: var(--pink-text); font-weight: 600; }
 
 .context-display {
   margin-left: auto;
@@ -749,7 +456,7 @@ body {
 
 .context-indicator {
   background: transparent;
-  color: var(--text-secondary);
+  color: var(--muted);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
@@ -757,17 +464,14 @@ body {
 .meter {
   width: 96px;
   height: 5px;
-  border-radius: 3px;
-  background: var(--bg-surface-2);
-  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
   overflow: hidden;
 }
 
 .meter > i {
   display: block;
   height: 100%;
-  background: var(--accent-primary);
-  border-radius: 3px;
+  background: var(--pink);
 }
 
 @media (max-width: 640px) {
@@ -786,20 +490,6 @@ body {
   .input-dock { padding: var(--space-sm) 0; }
 
   .presence-bar { padding: 0 var(--space-md); }
-
-  .btn-action { width: 32px; height: 32px; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .loading-overlay__dot { animation: none; }
-  .loading-overlay__skip { animation: none; opacity: 1; }
-}
-
-// Backdrop-filter doesn't print — substitute the opaque scrim fallback.
-@media print {
-  .presence-bar { background: var(--scrim-fallback); }
-  .input-dock   { background: var(--scrim-fallback); }
-  .connection-banner { background: rgba(40, 20, 20, 0.95); }
 }
 
 // Transient toast (showToast): undo confirmations + provider-retry notices.
@@ -815,24 +505,17 @@ body {
   gap: var(--space-md);
   max-width: min(90vw, 28rem);
   padding: var(--space-sm) var(--space-md);
-  background: var(--bg-surface-2);
-  color: var(--text-primary);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-card);
-  font-size: var(--font-size-sm);
+  background: var(--surface-2);
+  color: var(--text);
   opacity: 0;
-  transition: opacity var(--duration-normal) var(--ease-out),
-              transform var(--duration-normal) var(--ease-out);
+  transition: opacity var(--dur-2) var(--ease-out),
+              transform var(--dur-2) var(--ease-out);
 }
 .chalie-toast--visible { opacity: 1; transform: translate(-50%, 0); }
 .chalie-toast__undo {
   border: 0;
   background: none;
-  color: var(--accent-primary);
+  color: var(--pink-text);
   font-weight: 600;
   cursor: pointer;
-}
-@media (prefers-reduced-motion: reduce) {
-  .chalie-toast { transition: none; }
 }

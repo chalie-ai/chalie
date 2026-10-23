@@ -10,7 +10,8 @@ Both shapes carry ``type`` — the ConfigType identity
 (``user``/``scheduled``/``discovery``) they were resolved under. ``turn_id`` is
 only unique PER TYPE, so a client that learns of a thread from the feed must
 carry this forward rather than fall back to the ``user`` default and resolve
-to the wrong channel.
+to the wrong channel. A delegate turn has no type: its block carries ``type``
+null and the ``channel`` it was read by instead.
 """
 
 from __future__ import annotations
@@ -49,11 +50,16 @@ class TurnBlock(Response):
     working: bool
     duration_ms: int
     messages: list[Message]
-    type: str
+    type: str | None
+    #: Set only on a delegate turn's block, read by channel rather than type.
+    channel: str | None = None
     #: True when the turn's most recent execution ended CRASHED (unhandled step
     #: exception or a swept process death). Drives the FE "ended unexpectedly"
     #: note so a reply-less crash isn't mistaken for a normal empty turn.
     crashed: bool = False
+    #: True when the turn's most recent execution was stopped. Drives the
+    #: "stopped" note on a subagent's transcript panel.
+    cancelled: bool = False
 
 
 class ThreadBatch(Response):

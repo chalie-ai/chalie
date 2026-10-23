@@ -3,6 +3,7 @@ import sqlite3
 import threading
 import time
 from collections.abc import Iterator
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import cast
 from unittest.mock import patch
@@ -194,7 +195,8 @@ def test_ask_with_no_surface_denies_with_steer_and_never_broadcasts(
     assert mgr.pending() == []
 
 
-# 8. 'ask' on a turn WITH a surface: the broadcast frame is the wire contract (origin + summary),
+# 8. 'ask' on a turn WITH a surface: the broadcast frame is the wire contract (origin + summary
+#    + the park instant),
 #    pending() lists that same frame while parked, and an answer given the way
 #    POST /api/policies/respond gives it (result + event) runs or blocks the callback, after
 #    which a permission_resolved frame goes out and pending() is empty again.
@@ -228,12 +230,17 @@ def test_ask_with_surface_broadcasts_origin_frame_and_resolves(
     request, resolved = recorder.frames
     rid = request["request_id"]
     assert isinstance(rid, str) and len(rid) == 36
+    # The park instant rides on the frame as ISO-8601 UTC — it must parse back
+    # to an aware UTC datetime so a reloaded client can age the live line.
+    asked_at = datetime.fromisoformat(cast(str, request["asked_at"]))
+    assert asked_at.tzinfo is not None and asked_at.utcoffset() == timedelta(0)
     assert request == {
         "type": "permission_request",
         "request_id": rid,
         "action_id": "pim",
         "summary": "Check tomorrow's calendar",
         "origin": {"type": "user", "turn_id": 7, "forked": False},
+        "asked_at": asked_at.isoformat(timespec="seconds"),
     }
     assert seen["pending_while_parked"] == [request]
     assert resolved == {"type": "permission_resolved", "request_id": rid}

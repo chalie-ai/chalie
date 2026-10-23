@@ -13,10 +13,6 @@ from typing import Optional, Union
 _correlation_id: ContextVar[Optional[str]] = ContextVar("_correlation_id", default=None)
 
 
-def get_correlation_id() -> Optional[str]:
-    return _correlation_id.get()
-
-
 def set_correlation_id(value: str) -> None:
     _correlation_id.set(value)
 

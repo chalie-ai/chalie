@@ -21,13 +21,14 @@ worth carving out for it. Paired with ``CodeAgentAbility`` (abilities/code_agent
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from abilities.delete import DeleteAbility
 from abilities.edit_file import EditFileAbility
 from abilities.make_dir import MakeDirAbility
 from abilities.recall import Recall
 from abilities.move import MoveAbility
+from abilities.plan import PlanAbility
 from abilities.programming_docs_search import ProgrammingDocsSearchAbility
 from abilities.read import ReadAbility
 from abilities.run_script import RunScriptAbility
@@ -64,16 +65,20 @@ class CodeAgentConfig(ProcessorConfig):
     """``policy_channel`` is supplied by the caller (inherited from whoever
     invoked the tool) rather than hardcoded."""
 
+    RENDERS_HTML: ClassVar[bool] = True
+
     def __init__(self, policy_channel: "PolicyChannel") -> None:
         super().__init__(
             channel=Channel.DELEGATE_CODE_AGENT.value,
             role="code_agent",
             policy_channel=policy_channel,
-            always_available=[*_PINNED_TOOLS, Recall.NAME, WebSearchAbility.NAME, ProgrammingDocsSearchAbility.NAME],
+            always_available=[
+                *_PINNED_TOOLS, Recall.NAME, WebSearchAbility.NAME, ProgrammingDocsSearchAbility.NAME, PlanAbility.NAME,
+            ],
             skip_transcript=False,  # write a delegate-channel transcript row so
             skip_input_row=False,   # _setup assigns the uid the act-trail needs
             suppress_history=True,
-            memory_seed=False,
+            memory_seed=True,
         )
 
     @property

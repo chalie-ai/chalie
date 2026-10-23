@@ -8,8 +8,9 @@ import { ConfigType } from '@chalie/shared';
 import { conversation as convoApi } from '../../api/conversation';
 import { useSessionStore } from '../../stores/session';
 import { useAutoscroll } from '../../composables/useAutoscroll';
-import { registerSurface, unregisterSurface, upsertTurnToSurfaces, evictOldestAbove, SPINE_SURFACE_ID } from '../../utils/turnDom';
+import { registerSurface, unregisterSurface, upsertTurnToSurfaces, evictOldestAbove, nextTicket, SPINE_SURFACE_ID } from '../../utils/turnDom';
 import { syncDaymarks } from '../../utils/daymarks';
+import { preloadRichCards } from '../rich/richRegistry';
 import SpineTurn from './SpineTurn.vue';
 
 const PAGE_SIZE = 20;
@@ -35,9 +36,16 @@ async function _fetchPage(pageOffset: number): Promise<number> {
   const ids = threads.map((t) => t.turn_id).filter((id): id is number => id != null);
   if (!ids.length) return threads.length;
 
+  // Ticketed: a running turn in this page can settle while the read is out,
+  // and its settle must not be repainted by this older snapshot (see turnDom's
+  // `UpsertOptions.ticket`).
+  const ticket = nextTicket();
   const { blocks } = await convoApi.batch(ids, ConfigType.USER);
+  // The scroll that follows a page load measures final heights only if the
+  // page's rich cards are already in the DOM, not still fetching their chunks.
+  await preloadRichCards(blocks.flatMap((b) => b.messages.flatMap((m) => m.segments ?? [])));
   for (const block of blocks) {
-    upsertTurnToSurfaces(block, ConfigType.USER);
+    upsertTurnToSurfaces(block, ConfigType.USER, { ticket });
   }
   return threads.length;
 }
@@ -142,7 +150,7 @@ onBeforeUnmount(() => {
     </div>
 
     <div v-if="!hasMoreRef" class="history-end-pill">
-      <span class="history-end-pill__label">End of thread history</span>
+      <span class="tag">End of thread history</span>
     </div>
 
     <div ref="turnsRef" class="conversation-spine__turns" />
@@ -159,9 +167,8 @@ onBeforeUnmount(() => {
 .history-loader__spinner {
   width: 18px;
   height: 18px;
-  border: 2px solid color-mix(in oklab, var(--violet) 20%, transparent);
-  border-top-color: var(--violet);
-  border-radius: 50%;
+  border: 2px solid var(--line);
+  border-top-color: var(--pink-text);
   animation: spin 0.7s linear infinite;
 }
 
@@ -169,15 +176,5 @@ onBeforeUnmount(() => {
   display: flex;
   justify-content: center;
   padding: 16px 0 8px;
-}
-
-.history-end-pill__label {
-  font-size: 11px;
-  color: var(--text-muted);
-  background: color-mix(in oklab, var(--text) 3%, transparent);
-  border: 1px solid color-mix(in oklab, var(--text) 7%, transparent);
-  border-radius: 20px;
-  padding: 4px 14px;
-  letter-spacing: 0.04em;
 }
 </style>

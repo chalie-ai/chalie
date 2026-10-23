@@ -45,8 +45,7 @@ class ProviderVision(Action):
     }
 
     def get(self, id: int | str) -> ResponseReturnValue:
-        if not self.is_create(id):
-            raise NotFoundError("Not found")
+        self.require_create_sentinel(id)
         status = ProviderDbService().get_vision_provider_status()
         row = cast("dict[str, object] | None", status['provider'])
         return ProviderRole(
@@ -55,8 +54,7 @@ class ProviderVision(Action):
         ).single()
 
     def post(self, id: int | str, data: Request | None) -> ResponseReturnValue:
-        if not self.is_create(id):
-            raise NotFoundError("Not found")
+        self.require_create_sentinel(id)
         dto = cast(NullableProviderRef, data)
         service = ProviderDbService()
 

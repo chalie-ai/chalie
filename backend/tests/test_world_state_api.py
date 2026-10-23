@@ -41,13 +41,7 @@ class TestWorldStateObservabilityEmpty:
 
         resp = client.get("/api/system/observability/world-state")
         assert resp.status_code == 200
-
-    def test_empty_state_rendered_is_empty_string(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
-        client, db_conn, _ = authed_client
-        _reset_world_state(db_conn)
-
-        data = client.get("/api/system/observability/world-state").get_json()
-        assert data["rendered"] == ""
+        assert resp.get_json()["rendered"] == ""
 
 
 # ---------------------------------------------------------------------------
@@ -56,33 +50,13 @@ class TestWorldStateObservabilityEmpty:
 
 @pytest.mark.unit
 class TestWorldStateTelemetryRendering:
-    def test_telemetry_location_appears_in_rendered(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
-        client, db_conn, _ = authed_client
-        _seed_telemetry(db_conn, {"location_name": "Sliema, MT"})
-
-        data = client.get("/api/system/observability/world-state").get_json()
-        assert "location_name:Sliema, MT" in data["rendered"]
-
     def test_telemetry_reflected_in_inputs(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
         client, db_conn, _ = authed_client
         _seed_telemetry(db_conn, {"location_name": "Valletta", "mobility": "stationary"})
 
-        inputs = client.get("/api/system/observability/world-state").get_json()["inputs"]
+        body = client.get("/api/system/observability/world-state").get_json()
+        inputs = body["inputs"]
         assert inputs["telemetry"]["location_name"] == "Valletta"
         assert inputs["telemetry"]["mobility"] == "stationary"
-
-
-# ---------------------------------------------------------------------------
-# Signal push → rendered output
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
-# Full lifecycle (integration)
-# ---------------------------------------------------------------------------
-
-@pytest.mark.integration
-class TestWorldStateFullLifecycle:
-    """Push telemetry + signal → GET world-state → assert both sections rendered
-    and all inputs populated."""
-
-
+        # ``rendered`` is the locale line the model sees, not a world block.
+        assert body["rendered"] == "User is currently in Valletta. Use this information to better tailor your response."

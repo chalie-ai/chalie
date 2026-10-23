@@ -332,18 +332,19 @@ class DispatchService:
             tool_name=tool_name, params=params, summary=act_summary,
         )
 
-        tr = self._run(ability, params)
+        tr = self._run(ability, params, call_id)
 
         state = ToolCall.ERROR if tr.status == "error" else ToolCall.DONE
 
-        # Rich-media ordinal is assigned ONLY when the owning mp broadcasts to a
-        # live surface (``RENDERS_HTML`` — the user spine or a schedule
-        # thread). Background channels never get a card: their
-        # natural-language synthesis is consumed by the parent, so a span emitted
-        # at that hop has no tool_calls row paired to it. This is the single
-        # physical chokepoint that gates the entire card path.
+        # Rich-media ordinal is assigned ONLY on a channel whose reply the user
+        # reads in the feed (``RENDERS_CARDS`` — the user spine or a schedule
+        # thread). Every other channel never gets a card — subagent channels
+        # included, even though they render HTML: their answer is handed to the
+        # calling agent, so a span emitted at that hop would pair against the
+        # caller's own ordinals. This is the single physical chokepoint that
+        # gates the entire card path.
         ordinal = None
-        if tr.rich is not None and self.mp.config.RENDERS_HTML:
+        if tr.rich is not None and self.mp.config.RENDERS_CARDS:
             ordinal = self._next_ordinal(tool_name)
 
         # The follow-up block fires only on a real SUCCESS: never on an error
@@ -409,10 +410,11 @@ class DispatchService:
 
     # ── The synchronous run primitive ─────────────────────────────────────────────
 
-    def _run(self, ability: "Ability", params: dict[str, object]) -> ToolResult:
+    def _run(self, ability: "Ability", params: dict[str, object], call_id: "int | None") -> ToolResult:
         """Execute ability.run() synchronously and enforce the ToolResult contract.
 
-        Loads the flattened client telemetry onto ``ability.telemetry`` just
+        Loads the flattened client telemetry onto ``ability.telemetry`` and the
+        call's own ``tool_calls`` row id onto ``ability.tool_call_id`` just
         before run(); the ability reads its parent off ``self.mp``.
 
         There is no wall-clock bound — an ability runs to completion. The
@@ -431,6 +433,7 @@ class DispatchService:
             ability.telemetry = ctx.as_dict() if ctx else None
         except Exception:  # noqa: BLE001
             ability.telemetry = None
+        ability.tool_call_id = call_id
 
         try:
             # The typed-input door: every first-party ability declares PARAMS,
