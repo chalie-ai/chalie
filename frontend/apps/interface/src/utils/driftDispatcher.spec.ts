@@ -149,12 +149,12 @@ describe('dispatchDrift — discrimination order', () => {
 });
 
 describe('dispatchDrift — tool_call frame', () => {
-  it('state=started calls startLiveTool with (type, turn_id, id, tool_name, summary, transcript_row_id)', () => {
+  it('state=started calls startLiveTool with (type, turn_id, id, tool_name, summary)', () => {
     dispatchDrift(frame({
       tool_name: 'calendar', state: 'started', turn_id: 3, id: 42,
-      summary: 'checking calendar', transcript_row_id: 7, type: 'scheduled',
+      summary: 'checking calendar', type: 'scheduled',
     }));
-    expect(startLiveToolMock).toHaveBeenCalledWith('scheduled', 3, 42, 'calendar', 'checking calendar', 7);
+    expect(startLiveToolMock).toHaveBeenCalledWith('scheduled', 3, 42, 'calendar', 'checking calendar');
   });
 
   it('state=done calls finishLiveTool with ok=true', () => {

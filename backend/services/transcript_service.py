@@ -235,14 +235,21 @@ class TranscriptService:
     def append_assistant(self, content: str, *, settled: bool) -> int:
         """Write one provider call's assistant row for this turn and poke
         every open surface to refetch the turn block — the visible-transcript
-        write every step lands through. ``settled`` only for the turn's
-        terminal call (the one that made no tool calls), so settle0 names the
-        reply itself. The broadcast gate lives in ``mp.push_websocket``
-        (silent/background configs are dropped there), so this is a single
-        direct emit."""
+        write every step lands through. ``settled`` only for a terminal call
+        that made no tool calls (one that answered while closing its plan is
+        stamped by :meth:`settle` instead), so settle0 names the reply itself.
+        The broadcast gate lives in ``mp.push_websocket`` (silent/background
+        configs are dropped there), so this is a single direct emit."""
         row_id = self._append(content, role="assistant", settled=int(settled))
         self.mp.push_websocket(TurnSignal.updated(self.mp))
         return row_id
+
+    def settle(self, row_id: int) -> None:
+        """Stamp an assistant row already written as the turn's terminal one —
+        a call that answered in the same response as the plan updates closing
+        it — and poke every open surface to refetch the turn block."""
+        Transcript.filter("id", row_id).update(settled=1)
+        self.mp.push_websocket(TurnSignal.updated(self.mp))
 
     def append_handover(self, content: str) -> int:
         """Write the pre-compaction hand-over row (role="compaction", settled=0).

@@ -39,6 +39,7 @@
   margin-left: auto;
   background: var(--surface-2);
   padding: 11px 15px;
+  border-radius: 8px;
 }
 
 // Names who wrote the row when it is not the user — a delegate transcript's
@@ -55,7 +56,7 @@
   white-space: pre-wrap;
   overflow-wrap: break-word;
   font-weight: 500;
-  line-height: 1.6;
+  line-height: 1.55;
   color: var(--text);
 }
 
@@ -172,31 +173,6 @@
   letter-spacing: 0.04em;
 }
 
-// The work toggles — "N step(s) · Xm Ys" and "thought for Xs" — sit right after
-// the timestamp and fold their list open below the footer (the shared .trace-body
-// collapse).
-.speech-form__work {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: var(--control-h);
-  padding: 0;
-  background: none;
-  border: 0;
-  font: inherit;
-  color: inherit;
-  cursor: pointer;
-  transition: color var(--dur-1) var(--ease-out);
-}
-
-.speech-form__work:hover {
-  color: var(--text);
-}
-
-.speech-form__work[aria-expanded='true'] .activity__chev {
-  rotate: 90deg;
-}
-
 .speech-form__acts {
   display: flex;
   gap: 2px;
@@ -255,8 +231,28 @@
 }
 
 // --------------------------------------------------------------------------
-// 9. Activity line — one quiet line per segment, above the answer
+// 9. A step's work — its thinking and tool calls, above what it said
 // --------------------------------------------------------------------------
+
+// A step's work (ThinkingAndCalls): a "Thought for 9s" head that unfolds to the
+// traces, then one row per tool call, set in the prose's own type.
+.step {
+  width: 100%;
+  min-width: 0;
+}
+
+.step:not(:last-child) {
+  margin-bottom: 8px;
+}
+
+// The head wraps as two whole units on a narrow screen: the fold, whose label
+// ellipsizes, and the running step's controls.
+.step__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 8px;
+}
 
 .trace-body {
   display: grid;
@@ -275,36 +271,44 @@
 }
 
 .activity {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  column-gap: 8px;
-  width: 100%;
   animation: rise var(--dur-2) var(--ease-out);
 }
 
-.activity__toggle,
-.activity__stop {
+// One fold for everything that unfolds — a step's thinking, the footer's plan
+// link: muted in its line's own type, it brightens on hover and its chevron
+// turns down while open (the shared .trace-body collapse above).
+.fold {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+  max-width: 100%;
   height: var(--control-h);
   padding: 0;
   background: none;
-  border: 0;
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono);
   color: var(--muted);
-  cursor: pointer;
+  text-align: left;
   transition: color var(--dur-1) var(--ease-out);
 }
 
-.activity__toggle:hover {
+.fold:enabled:hover {
   color: var(--text);
 }
 
-// The line is live-only: the mark pulses pink while the turn works, and the
-// label is full-strength text (not the muted work rows below it).
+.fold:disabled {
+  cursor: default;
+}
+
+.fold-chev {
+  flex-shrink: 0;
+  transition: rotate var(--dur-1) var(--ease-out);
+}
+
+[aria-expanded='true'] > .fold-chev {
+  rotate: 90deg;
+}
+
+// The mark pulses pink while the turn works.
 .activity__mark {
   flex-shrink: 0;
   width: 6px;
@@ -313,58 +317,54 @@
   animation: working 1.4s ease-in-out infinite;
 }
 
-.activity__label {
+.activity__label,
+.step__label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.activity__label {
   color: var(--text);
 }
 
-// The line wraps as two whole units on a narrow screen: the lead, whose label
-// ellipsizes, and the controls, whose action label ellipsizes.
-.activity__toggle,
-.activity__lead,
-.activity__controls {
-  min-width: 0;
-}
-
+// An off-screen ask's lead and a running step's controls each hold together;
+// the action label ellipsizes.
 .activity__lead,
 .activity__controls {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
 }
 
 .activity__mark,
 .activity__origin,
 .activity__wait,
-.activity__chev,
 .activity__controls > button {
   flex-shrink: 0;
   white-space: nowrap;
 }
 
-.activity__fail {
-  color: var(--deny-text);
-}
-
-.activity__chev {
-  transition: rotate var(--dur-1) var(--ease-out);
-}
-
-.activity__toggle[aria-expanded='true'] .activity__chev {
-  rotate: 90deg;
-}
-
 .activity__stop {
+  display: inline-flex;
+  align-items: center;
+  height: var(--control-h);
+  padding: 0;
+  background: none;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+  color: var(--muted);
   text-decoration: underline;
   text-underline-offset: 3px;
+  transition: color var(--dur-1) var(--ease-out);
 }
 
 .activity__stop:hover {
   color: var(--deny-text);
 }
 
+.activity__wait,
 .activity__ask {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -408,62 +408,16 @@
   }
 }
 
-.activity .trace-body {
-  flex-basis: 100%;
-}
-
-.activity__steps {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 2px 0;
+// A reasoning trace — in the unfolded thinking, 12px in.
+.step__trace {
+  margin: 0 0 4px;
+  padding-left: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
   font-family: var(--font-mono);
   font-size: var(--fs-mono);
   line-height: 1.6;
   color: var(--muted);
-}
-
-// A reasoning trace — shown in the footer fold of a reply that only thought.
-.activity__trace {
-  margin: 4px 0 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font: inherit;
-}
-
-.activity__prose,
-.activity__prose .speech-form__text {
-  color: var(--muted);
-  font-family: var(--font-ui);
-}
-
-.activity__pill {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  font-variant-numeric: tabular-nums;
-}
-
-.activity__pill-label {
-  display: flex;
-  gap: 6px;
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-}
-
-.activity__pill-summary {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.activity__pill--done {
-  color: var(--allow-text);
-}
-
-.activity__pill--error {
-  color: var(--deny-text);
 }
 
 // Off-screen asks in the dock: the live line's muted mono type, at the composer's width.

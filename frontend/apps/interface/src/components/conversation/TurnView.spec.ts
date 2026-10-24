@@ -23,12 +23,13 @@
  * the docblock above; the suite's default `environment: 'node'` is
  * untouched elsewhere).
  *
- * The second half pins the exchange layout: the question, the answer bubble,
- * and ONE closing footer with the timestamp, actions and — once the exchange
- * settles — its steps (mid-turn prose and tool calls) plus its wall-clock
- * duration folded behind the work toggle. A settled exchange never draws a
- * line above its answer; only a still-working one rides the live activity
- * line.
+ * The second half pins the exchange layout, in the order it happened: the
+ * question, one block per assistant row that did work or spoke (the user row's
+ * turn-zero calls are its memory seed and draw none) — its step block, then its
+ * own prose, visible outside the fold — and a footer right under the row that
+ * closes a segment — the timestamp, the segment's duration when it did work,
+ * and actions. A still-working exchange keeps the same blocks and closes the
+ * list with the live activity line.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mount } from '@vue/test-utils';
@@ -125,30 +126,41 @@ const COPY = 'button[aria-label="Copy message"]';
 const SPEAK = 'button[aria-label="Read this message aloud"]';
 const REPLY = 'button[aria-label="Reply in a thread"]';
 
-/** The rendered turn read top to bottom, one entry per row: a user bubble, a
- *  Chalie bubble, the live plan card, the live activity line, or a footer (a
- *  timestamp and actions). A settled exchange draws NO activity line above its answer — its
- *  steps fold into the answer's footer instead. That footer row can itself
- *  contain a ChalieBubble (a mid-turn prose step) inside its step fold, so
- *  the footer is detected by its timestamp BEFORE the Chalie-bubble check. */
+/** The rendered turn read top to bottom, one entry per row: a user bubble, the
+ *  live plan card, a footer (a timestamp and actions), or one of Chalie's step
+ *  blocks — its work (`live` while it runs, else `step:<head · calls>`), then
+ *  what it said, joined as `step:<work> | <text>`; a block that only spoke
+ *  reads `bubble:<text>`. */
 function layout(wrapper: VueWrapper): string[] {
   return wrapper.findAll('.msg-row').map((r) => {
     if (r.classes('msg-row--plan')) return 'plan';
     if (r.find('.speech-form__timestamp').exists()) return 'footer';
-    const activity = r.find('.activity');
-    if (activity.exists()) return 'live';
     if (r.find('.user-message').exists()) return `user:${r.find('.user-message').attributes('data-user-text')}`;
-    if (r.find('.speech-form--chalie').exists()) return `bubble:${r.find('.speech-form__text').text()}`;
-    return 'other';
+    if (!r.find('.speech-form--chalie').exists()) return 'other';
+    const work = r.find('.activity').exists() ? 'live' : r.find('.step').exists() ? `step:${workText(r)}` : '';
+    const text = r.find('.speech-form__text');
+    if (!text.exists()) return work;
+    return work ? `${work} | ${text.text()}` : `bubble:${text.text()}`;
   });
 }
 
-/** The one sentence each tool-call row of an `.activity__steps` block shows
- *  (the summary, or the tool name when the summary is empty), one array per
- *  block, top to bottom. A block is the live activity line's steps while the
- *  exchange works, or the answer's footer step fold once it settles. */
+/** A block's work as it reads: its "Thought for Xs" head, then its calls. */
+function workText(block: ReturnType<VueWrapper['find']>): string {
+  const head = block.find('.step__label');
+  const calls = block.findAll('.call__summary').map((c) => c.text()).join(', ');
+  return [head.exists() ? head.text() : '', calls].filter(Boolean).join(' · ');
+}
+
+/** The one sentence each tool-call row of a stored block shows (the summary,
+ *  or the tool name when the summary is empty), one array per block, top to
+ *  bottom. The running block is left out. */
 function stepCalls(wrapper: VueWrapper): string[][] {
-  return wrapper.findAll('.activity__steps').map((s) => s.findAll('.call__summary').map((c) => c.text()));
+  return wrapper.findAll('.step:not(.activity)').map((s) => s.findAll('.call__summary').map((c) => c.text()));
+}
+
+/** The row that holds the exchange's timestamp, duration and actions. */
+function footerOf(wrapper: VueWrapper): ReturnType<VueWrapper['find']> {
+  return wrapper.findAll('.msg-row').find((r) => r.find('.speech-form__timestamp').exists())!;
 }
 
 beforeEach(() => {
@@ -231,14 +243,15 @@ describe('live act-trail visibility — working turn on the spine', () => {
     const wrapper = mount(TurnView, {
       props: { block: block(turnId, rows(chip(77, 'web_search', 'started'))), type: ConfigType.USER, fullThread: false },
     });
-    const chipNames = (): string[] => wrapper.findAll('.call__summary').map((e) => e.text());
-    const pillNames = (): string[] => wrapper.findAll('.activity__pill-summary').map((e) => e.text());
+    const chipNames = (): string[] => wrapper.findAll('.step:not(.activity) .call__summary').map((e) => e.text());
+    const pillNames = (): string[] => wrapper.findAll('.activity .call__summary').map((e) => e.text());
 
-    // While it runs: the pill alone shows it, and the earlier call keeps its
-    // stored step. Both sit in the one live activity line.
+    // While it runs: the live line alone shows it, named by its tool, and the
+    // earlier step keeps its block — its stored line, then its interim reply.
     expect(pillNames()).toEqual(['web_search']);
+    expect(wrapper.find('.activity .step__label').text()).toBe('Thinking…');
     expect(chipNames()).toEqual(['ran read']);
-    expect(layout(wrapper)).toEqual(['user:find the museum hours', 'live']);
+    expect(layout(wrapper)).toEqual(['user:find the museum hours', 'step:ran read | let me look', 'live']);
 
     // It finishes: the resolved pill still holds it until the refetch lands.
     finishLiveTool(ConfigType.USER, turnId, 77, true);
@@ -247,12 +260,14 @@ describe('live act-trail visibility — working turn on the spine', () => {
     expect(chipNames()).toEqual(['ran read']);
 
     // The refetch lands the finished chip and drops the resolved pill: now the
-    // stored step shows the call, once.
+    // stored step shows the call, once, and the live line moves on below it.
     clearLiveTurnsForToolCallsResolved(ConfigType.USER, turnId, true);
     await wrapper.setProps({ block: block(turnId, rows(chip(77, 'web_search', 'done'))) });
     expect(pillNames()).toEqual([]);
     expect(chipNames()).toEqual(['ran read', 'ran web_search']);
-    expect(layout(wrapper)).toEqual(['user:find the museum hours', 'live']);
+    expect(layout(wrapper)).toEqual([
+      'user:find the museum hours', 'step:ran read | let me look', 'step:ran web_search', 'live',
+    ]);
   });
 });
 
@@ -294,13 +309,14 @@ describe('live act-trail visibility — working turn in the thread panel', () =>
 });
 
 
-// One exchange draws the question, the answer bubble, and one footer with the
-// timestamp, actions and — once the exchange settles — its steps (mid-turn
-// prose and tool calls) and its duration folded behind the work toggle. While
-// the exchange still works, the same steps ride its live activity line
-// instead; no line ever stands above a settled answer.
-describe('tool-call placement — settled work in the footer under the answer, working work in the live line', () => {
-  it('a call stored on the user\'s own row is the framework\'s turn-zero seed, not a step: it shows nowhere and the answer\'s footer has no work toggle', () => {
+// One exchange draws the question, one quiet step block per assistant row that
+// did work (its thinking and calls folded behind it — the user row's seed
+// calls draw none), each row's own prose as a bubble right after its line, and
+// a footer under the row that closes it, everything in the order it happened.
+// While the exchange still works, the same step blocks stand and the live
+// activity line closes the list.
+describe('tool-call placement — a block per row of work, the answer\'s too, then its footer, the live line last while working', () => {
+  it('a call stored on the user\'s own row is the turn-zero memory seed: it draws no step block and shows nowhere in the exchange', () => {
     const turnId = 201;
     const b = settledTurn(turnId, [
       row('2010', 'user', 'user question with pre-turn tools', turnId, { tool_calls: calls('memory_recall') }),
@@ -309,39 +325,30 @@ describe('tool-call placement — settled work in the footer under the answer, w
 
     const wrapper = mount(TurnView, { props: { block: b, type: ConfigType.USER, fullThread: false } });
 
-    // No settled activity line above the answer...
     expect(layout(wrapper)).toEqual([
       'user:user question with pre-turn tools',
       'bubble:assistant answer',
       'footer',
     ]);
-    // ...and the seed call is never a step: no step list anywhere...
-    expect(wrapper.findAll('.call__summary')).toHaveLength(0);
-    const rows = wrapper.findAll('.msg-row');
-    // ...and the answer's footer carries the timestamp but no work of its own.
-    expect(rows[2]!.find('.speech-form__timestamp').exists()).toBe(true);
-    expect(rows[2]!.find('.speech-form__work').exists()).toBe(false);
+    expect(stepCalls(wrapper)).toEqual([]);
+    expect(wrapper.text()).not.toContain('ran memory_recall');
   });
 
-  it('a working turn whose only row is the user\'s shows a live line without that row\'s own seed calls', async () => {
+  it('a working turn whose only row is the user\'s draws no line for its seed call: the live line alone follows the question, carrying only the running call', () => {
     const turnId = 203;
     const b = block(turnId, [
       row('2030', 'user', 'user question, still working', turnId, { tool_calls: calls('memory_recall') }),
     ]);
+    startLiveTool(ConfigType.USER, turnId, 2039, 'web_search', 'checking the forecast');
 
     const wrapper = mount(TurnView, { props: { block: b, type: ConfigType.USER, fullThread: false } });
 
     expect(layout(wrapper)).toEqual(['user:user question, still working', 'live']);
-    // The user row's own calls are the turn-zero seed, never steps: the live
-    // line stays bare, even opened.
-    const toggle = wrapper.find('.activity__toggle');
-    expect(toggle.attributes('aria-expanded')).toBe('false');
-    await toggle.trigger('click');
-    expect(toggle.attributes('aria-expanded')).toBe('true');
-    expect(wrapper.findAll('.call__summary')).toHaveLength(0);
+    expect(wrapper.findAll('.activity .call__summary').map((c) => c.text())).toEqual(['checking the forecast']);
+    expect(wrapper.text()).not.toContain('ran memory_recall');
   });
 
-  it('a step row that only asked for tools folds its calls into the answer\'s footer and draws no bubble', () => {
+  it('a step row that only asked for tools draws its block with the step block alone', () => {
     const turnId = 211;
     const b = settledTurn(turnId, [
       row('2110', 'user', 'what is the weather', turnId),
@@ -351,57 +358,40 @@ describe('tool-call placement — settled work in the footer under the answer, w
 
     const wrapper = mount(TurnView, { props: { block: b, type: ConfigType.USER, fullThread: false } });
 
-    // One bubble for the whole exchange: the answer. The step row left nothing
-    // behind but its calls, folded into the answer's footer step list.
-    const bubbles = wrapper.findAll('.speech-form--chalie');
-    expect(bubbles).toHaveLength(1);
-    expect(bubbles[0]!.text()).toBe('answer');
-    expect(wrapper.find('[data-transcript-row-id="2111"]').exists()).toBe(false);
-    expect(layout(wrapper)).toEqual(['user:what is the weather', 'bubble:answer', 'footer']);
+    // The step row said nothing: its block is its line, with no text under it.
+    expect(layout(wrapper)).toEqual(['user:what is the weather', 'step:ran web_search', 'bubble:answer', 'footer']);
+    expect(wrapper.find('[data-transcript-row-id="2111"] .step').exists()).toBe(true);
+    expect(wrapper.find('[data-transcript-row-id="2111"] .speech-form__text').exists()).toBe(false);
     expect(stepCalls(wrapper)).toEqual([['ran web_search']]);
   });
 
-  it('all of a multi-call exchange\'s calls and interim reply fold into its answer\'s footer step list — its reasoning trace does not', async () => {
+  it('a multi-call exchange draws each row as a block of its own — its step block, then its prose — and one footer that rolls nothing up', () => {
     const wrapper = mount(TurnView, { props: { block: threeCallTurn(), type: ConfigType.USER, fullThread: false } });
 
+    // "Thought for" leads only the row that thought; the interim reply and the
+    // answer each read under their own row's line, the same way.
     expect(layout(wrapper)).toEqual([
       'user:research the museum',
-      'bubble:final',
+      'step:ran web_search | interim',
+      'step:Thought for 2s · ran read',
+      'step:ran memory_recall | final',
       'footer',
     ]);
-    // The footer's step list carries every call of the exchange, in order.
-    expect(stepCalls(wrapper)).toEqual([['ran web_search', 'ran read', 'ran memory_recall']]);
-    // The interim reply folds into the footer's fold; the reasoning trace no
-    // longer does.
-    const footer = wrapper.findAll('.msg-row')[2]!;
-    const work = footer.find('.speech-form__work');
-    expect(work.attributes('aria-expanded')).toBe('false');
-    await work.trigger('click');
-    expect(work.attributes('aria-expanded')).toBe('true');
-    const fold = footer.find('.trace-body');
-    expect(fold.text()).toContain('interim');
-    expect(fold.text()).not.toContain('which file has it?');
-  });
-
-  it('a tool turn that also reasoned gets a second footer link — "thought for X" — that opens its reasoning traces apart from its step list', async () => {
-    const wrapper = mount(TurnView, { props: { block: threeCallTurn(), type: ConfigType.USER, fullThread: false } });
-
-    // The steps link stays first and unchanged; the thought link sits beside
-    // it (the exchange's one reasoned step ran 2s).
-    const footer = wrapper.findAll('.msg-row')[2]!;
-    const [steps, thought] = footer.findAll('.speech-form__work');
-    expect(steps.text()).toContain('4 steps');
-    expect(thought.text()).toContain('thought for 2s');
-    expect(steps.attributes('aria-expanded')).toBe('false');
-    expect(thought.attributes('aria-expanded')).toBe('false');
-
-    await thought.trigger('click');
-    expect(thought.attributes('aria-expanded')).toBe('true');
-    // Only the thought panel is open: the steps link reports it closed.
-    expect(steps.attributes('aria-expanded')).toBe('false');
-    const fold = footer.find('.trace-body');
-    expect(fold.text()).toContain('which file has it?');
-    expect(fold.text()).not.toContain('interim');
+    expect(stepCalls(wrapper)).toEqual([['ran web_search'], ['ran read'], ['ran memory_recall']]);
+    expect(wrapper.findAll('.speech-form--chalie')).toHaveLength(3);
+    const steps = wrapper.findAll('.step');
+    // The reasoning folds behind the row that reasoned, and no row's prose
+    // hides inside a fold: every text is on the page, outside any step block.
+    expect(steps.map((s) => s.text().includes('which file has it?'))).toEqual([false, true, false]);
+    expect(steps.some((s) => /interim|final/.test(s.text()))).toBe(false);
+    const texts = wrapper.findAll('.speech-form__text').map((b) => b.element);
+    expect(texts).toHaveLength(2);
+    expect(texts.some((b) => b.closest('[inert]') || b.closest('.step'))).toBe(false);
+    // One footer for the exchange, with nothing to unfold and no work tally.
+    expect(wrapper.findAll('.speech-form__meta')).toHaveLength(1);
+    const footer = footerOf(wrapper);
+    expect(footer.find('button[aria-expanded]').exists()).toBe(false);
+    expect(footer.text()).not.toMatch(/step|thought/i);
   });
 
   it('only the row that closes the exchange carries the timestamp and actions', () => {
@@ -430,13 +420,13 @@ describe('tool-call placement — settled work in the footer under the answer, w
 
     const wrapper = mount(TurnView, { props: { block: b, type: ConfigType.USER, fullThread: false } });
 
-    expect(layout(wrapper)).toEqual(['user:summarise it', 'bubble:answer', 'footer', 'live']);
-    const footer = wrapper.findAll('.msg-row')[2]!;
+    expect(layout(wrapper)).toEqual(['user:summarise it', 'step:ran read', 'bubble:answer', 'footer', 'live']);
+    const footer = footerOf(wrapper);
     expect(footer.find('.speech-form__timestamp').exists()).toBe(true);
     expect(footer.findAll(SPEAK)).toHaveLength(1);
   });
 
-  it('a running exchange has no timestamp or actions yet, only its calls so far', () => {
+  it('a running exchange has no timestamp or actions yet — its step blocks and interim reply so far, then the live line, which never repeats the reply', () => {
     const turnId = 218;
     const b = block(turnId, [
       row('2180', 'user', 'find the file', turnId),
@@ -445,12 +435,9 @@ describe('tool-call placement — settled work in the footer under the answer, w
 
     const wrapper = mount(TurnView, { props: { block: b, type: ConfigType.USER, fullThread: false } });
 
-    // The interim 'let me check' prose and its calls live inside the live
-    // activity line's steps — no bubble of their own.
-    expect(layout(wrapper)).toEqual(['user:find the file', 'live']);
-    const live = wrapper.find('.activity');
-    expect(live.text()).toContain('let me check');
-    expect(live.find('.call__summary').text()).toBe('ran read');
+    expect(layout(wrapper)).toEqual(['user:find the file', 'step:ran read | let me check', 'live']);
+    expect(stepCalls(wrapper)).toEqual([['ran read']]);
+    expect(wrapper.find('.activity').text()).not.toContain('let me check');
     expect(wrapper.findAll('.speech-form__timestamp')).toHaveLength(0);
     expect(wrapper.findAll(COPY)).toHaveLength(0);
   });
@@ -466,10 +453,11 @@ describe('tool-call placement — settled work in the footer under the answer, w
 
     const wrapper = mount(TurnView, { props: { block: b, type: ConfigType.USER, fullThread: false } });
 
-    // 'searching both' and its call fold into the answer's footer step list;
-    // the joined message keeps the exchange open, so no footer stands before it.
+    // 'searching both' reads under its call's step block; the joined message
+    // keeps the exchange open, so no footer stands before it.
     expect(layout(wrapper)).toEqual([
       'user:compare two cities',
+      'step:ran web_search | searching both',
       'user:add a third',
       'bubble:all three compared',
       'footer',
@@ -479,10 +467,10 @@ describe('tool-call placement — settled work in the footer under the answer, w
     expect(wrapper.findAll(COPY)).toHaveLength(1);
   });
 
-  it('a cancelled exchange keeps its timestamp on the last thing Chalie said, and a trailing step folds into its answer\'s footer', () => {
+  it('a cancelled exchange keeps its timestamp on the last thing Chalie said, and a step that came after it reads below that footer, in order', () => {
     const turnId = 206;
     // Stopped mid-turn: nothing was ever settled, and the last call died with
-    // no text.
+    // no text — so the footer closes 'partial', and the later step follows it.
     const b = settledTurn(turnId, [
       row('2060', 'user', 'dig into it', turnId),
       row('2061', 'assistant', 'partial', turnId, { tool_calls: calls('web_search') }),
@@ -491,12 +479,14 @@ describe('tool-call placement — settled work in the footer under the answer, w
 
     const wrapper = mount(TurnView, { props: { block: b, type: ConfigType.USER, fullThread: false } });
 
-    expect(layout(wrapper)).toEqual(['user:dig into it', 'bubble:partial', 'footer']);
-    // The trailing tool-only step — and the partial's own call — fold into
-    // the footer's step list, in order.
-    expect(stepCalls(wrapper)).toEqual([['ran web_search', 'ran read']]);
+    expect(layout(wrapper)).toEqual([
+      'user:dig into it',
+      'step:ran web_search | partial',
+      'footer',
+      'step:ran read',
+    ]);
+    expect(stepCalls(wrapper)).toEqual([['ran web_search'], ['ran read']]);
     expect(wrapper.findAll('.speech-form__timestamp')).toHaveLength(1);
-    expect(wrapper.findAll('.msg-row')[2]!.find('.speech-form__timestamp').exists()).toBe(true);
     // Nothing settled, so nothing was spoken: no read-aloud button anywhere.
     expect(wrapper.findAll(SPEAK)).toHaveLength(0);
   });
@@ -514,17 +504,15 @@ describe('tool-call placement — settled work in the footer under the answer, w
 
     expect(layout(wrapper)).toEqual([
       'user:first question',
-      'bubble:first answer',
+      'step:ran web_search | first answer',
       'footer',
       'user:second question',
-      'bubble:second answer',
+      'step:ran memory_recall | second answer',
       'footer',
     ]);
-    // Each footer's step list carries exactly its own exchange's single call.
-    expect(stepCalls(wrapper)).toEqual([['ran web_search'], ['ran memory_recall']]);
   });
 
-  it('a forked spine turn shows the opener exchange only: one footer, none of the dropped continuation\'s calls — the opener\'s user-row seed call is never a step', () => {
+  it('a forked spine turn shows the opener exchange only: one footer, no line for the opener\'s seed call, none of the dropped continuation\'s calls', () => {
     const turnId = 207;
     const b = settledTurn(turnId, [
       row('2070', 'user', 'opener question', turnId, { tool_calls: calls('memory_recall') }),
@@ -537,15 +525,16 @@ describe('tool-call placement — settled work in the footer under the answer, w
 
     expect(wrapper.attributes('data-forked')).toBe('true');
     expect(wrapper.text()).not.toContain('thread continuation');
-    // The opener's pre-turn call sits on the user's own row — the turn-zero
-    // seed, never a step — so no step list anywhere; the reply's footer is the
-    // one and only timestamp.
-    expect(layout(wrapper)).toEqual(['user:opener question', 'bubble:opener reply', 'footer']);
+    expect(layout(wrapper)).toEqual([
+      'user:opener question',
+      'bubble:opener reply',
+      'footer',
+    ]);
+    expect(stepCalls(wrapper)).toEqual([]);
     expect(wrapper.findAll('.speech-form__timestamp')).toHaveLength(1);
-    expect(wrapper.findAll('.call__summary')).toHaveLength(0);
   });
 
-  it('the thread pill rides the closing footer, never the answer\'s step fold', () => {
+  it('the thread pill rides the closing footer, never a step block — not even the step after the settle, which reads below the footer', () => {
     const turnId = 209;
     const b = settledTurn(turnId, [
       row('2090', 'user', 'opener question', turnId),
@@ -558,11 +547,12 @@ describe('tool-call placement — settled work in the footer under the answer, w
       props: { block: b, type: ConfigType.USER, fullThread: false, threadPill: { status: 'working', label: 'museum hours' } },
     });
 
-    expect(layout(wrapper)).toEqual(['user:opener question', 'bubble:opener', 'footer']);
+    expect(layout(wrapper)).toEqual(['user:opener question', 'bubble:opener', 'footer', 'step:ran read']);
     expect(wrapper.findAll('.thread-pill')).toHaveLength(1);
     const withTimestamp = wrapper.findAll('.msg-row').filter((r) => r.find('.speech-form__timestamp').exists());
     expect(withTimestamp).toHaveLength(1);
     expect(withTimestamp[0]!.find('.thread-pill').exists()).toBe(true);
+    expect(wrapper.find('.step .thread-pill').exists()).toBe(false);
   });
 
   /** A fork whose opener's only row is a silent step that never settled, then a
@@ -587,8 +577,8 @@ describe('tool-call placement — settled work in the footer under the answer, w
     });
 
     expect(wrapper.text()).not.toContain('thread answer');
-    expect(layout(wrapper)).toEqual(['user:opener question', 'footer']);
-    const footer = wrapper.findAll('.msg-row')[1]!;
+    expect(layout(wrapper)).toEqual(['user:opener question', 'step:ran read', 'footer']);
+    const footer = footerOf(wrapper);
     expect(footer.find('.thread-pill').exists()).toBe(true);
     expect(wrapper.findAll('.thread-pill')).toHaveLength(1);
   });
@@ -600,6 +590,7 @@ describe('tool-call placement — settled work in the footer under the answer, w
 
     expect(layout(wrapper)).toEqual([
       'user:opener question',
+      'step:ran read',
       'footer',
       'user:a question inside the thread',
       'bubble:thread answer',
@@ -618,17 +609,16 @@ describe('tool-call placement — settled work in the footer under the answer, w
 
     const wrapper = mount(TurnView, { props: { block: b, type: ConfigType.USER, fullThread: false } });
 
-    // The steps fold into the closing footer's step list; the crash note is a
-    // row after it.
-    expect(layout(wrapper)).toEqual(['user:dig into it', 'footer', 'other']);
-    expect(stepCalls(wrapper)).toEqual([['ran web_search', 'ran read']]);
-    const closing = wrapper.findAll('.msg-row')[1]!;
+    // Each row's step block stands above the closing footer; the crash note is
+    // a row after it.
+    expect(layout(wrapper)).toEqual(['user:dig into it', 'step:ran web_search', 'step:ran read', 'footer', 'other']);
+    const closing = footerOf(wrapper);
     expect(closing.find(COPY).exists()).toBe(true);
     expect(closing.find(REPLY).exists()).toBe(true);
     expect(wrapper.find('.turn-crashed').exists()).toBe(true);
   });
 
-  it('a still-working exchange of tool-only rows stays open: no timestamp or actions on any row yet', () => {
+  it('a still-working exchange of tool-only rows stays open: a step block each, no timestamp or actions on any row yet', () => {
     const turnId = 223;
     const b = block(turnId, [
       row('2230', 'user', 'dig into it', turnId),
@@ -638,13 +628,13 @@ describe('tool-call placement — settled work in the footer under the answer, w
 
     const wrapper = mount(TurnView, { props: { block: b, type: ConfigType.USER, fullThread: false } });
 
-    expect(layout(wrapper)).toEqual(['user:dig into it', 'live']);
+    expect(layout(wrapper)).toEqual(['user:dig into it', 'step:ran web_search', 'step:ran read', 'live']);
     expect(wrapper.findAll('.speech-form__timestamp')).toHaveLength(0);
     expect(wrapper.findAll(COPY)).toHaveLength(0);
     expect(wrapper.findAll(REPLY)).toHaveLength(0);
   });
 
-  it('the footer\'s toggle reads the exchange\'s real duration — a joined row does not restart the clock', () => {
+  it('the footer reads the exchange\'s real duration — a joined row does not restart the clock', () => {
     const turnId = 230;
     // The exchange opens at 00:00:00Z; the tool-only step rides the running
     // exchange, the joined row lands at 00:01:00Z (it must NOT reset the
@@ -658,20 +648,88 @@ describe('tool-call placement — settled work in the footer under the answer, w
 
     const wrapper = mount(TurnView, { props: { block: b, type: ConfigType.USER, fullThread: false } });
 
-    // One footer for the whole exchange — the joined row opened none — whose
-    // toggle counts the exchange's steps (the two calls) and reads
-    // 00:00:00Z → 00:02:48Z.
+    // One footer for the whole exchange — the joined row opened none — reading
+    // 00:00:00Z → 00:02:48Z beside the timestamp, with no step count.
     expect(layout(wrapper)).toEqual([
       'user:plan the visit',
+      'step:ran web_search, ran read',
       'user:add a third day',
       'bubble:the plan is done',
       'footer',
     ]);
-    const footer = wrapper.findAll('.msg-row').find((r) => r.find('.speech-form__timestamp').exists())!;
-    const work = footer.find('.speech-form__work');
-    expect(work.exists()).toBe(true);
-    expect(work.text()).toContain('2 steps');
-    expect(work.text()).toContain('2m 48s');
+    const meta = footerOf(wrapper).find('.speech-form__meta');
+    expect(meta.text()).toContain('· 2m 48s');
+    expect(meta.text()).not.toContain('steps');
+  });
+
+  /** What each footer reads beside its timestamp, top to bottom: the elapsed
+   *  time, or null when it shows none. */
+  function footerDurations(wrapper: VueWrapper): (string | null)[] {
+    return wrapper.findAll('.speech-form__meta').map((m) => /· (\d+[hms](?: \d+[ms])?)/.exec(m.text())?.[1] ?? null);
+  }
+
+  it('a reply that did no work shows no duration — even right after an earlier reply in the same exchange that worked and was timed', () => {
+    const turnId = 231;
+    const b = settledTurn(turnId, [
+      row('2310', 'user', 'book the table', turnId),
+      row('2311', 'assistant', '', turnId, { tool_calls: calls('booking'), created_at: '2026-01-01T00:00:10Z' }),
+      row('2312', 'assistant', 'Booked for eight.', turnId, { settled: true, created_at: '2026-01-01T00:00:30Z' }),
+      // 20s pass in the second reply, all of it prose: still no duration.
+      row('2313', 'assistant', 'They also keep a waitlist.', turnId, { created_at: '2026-01-01T00:00:35Z' }),
+      row('2314', 'assistant', 'Anything else?', turnId, { settled: true, created_at: '2026-01-01T00:00:55Z' }),
+    ]);
+
+    const wrapper = mount(TurnView, { props: { block: b, type: ConfigType.USER, fullThread: false } });
+
+    expect(layout(wrapper)).toEqual([
+      'user:book the table', 'step:ran booking', 'bubble:Booked for eight.', 'footer',
+      'bubble:They also keep a waitlist.', 'bubble:Anything else?', 'footer',
+    ]);
+    expect(footerDurations(wrapper)).toEqual(['30s', null]);
+  });
+
+  it('a second settled reply in one exchange gets its own footer, timed from the first row after the earlier settle, not from the question', () => {
+    const turnId = 232;
+    const b = settledTurn(turnId, [
+      row('2320', 'user', 'check both venues', turnId),
+      row('2321', 'assistant', '', turnId, { tool_calls: calls('web_search'), created_at: '2026-01-01T00:00:10Z' }),
+      row('2322', 'assistant', 'The first is open.', turnId, { settled: true, created_at: '2026-01-01T00:00:30Z' }),
+      row('2323', 'assistant', '', turnId, { tool_calls: calls('read'), created_at: '2026-01-01T00:01:00Z' }),
+      row('2324', 'assistant', 'The second is closed.', turnId, { settled: true, created_at: '2026-01-01T00:01:45Z' }),
+    ]);
+
+    const wrapper = mount(TurnView, { props: { block: b, type: ConfigType.USER, fullThread: false } });
+
+    expect(layout(wrapper)).toEqual([
+      'user:check both venues',
+      'step:ran web_search', 'bubble:The first is open.', 'footer',
+      'step:ran read', 'bubble:The second is closed.', 'footer',
+    ]);
+    // 00:00:00 → 00:00:30, then 00:01:00 → 00:01:45.
+    expect(footerDurations(wrapper)).toEqual(['30s', '45s']);
+  });
+
+  it('the running block is one block for the whole run — a refetch, and a new stored row landing, keep the same block', async () => {
+    const turnId = 233;
+    const asked = row('2330', 'user', 'find the opening hours', turnId);
+    const searched = (): ConversationMessage => row('2331', 'assistant', '', turnId, { tool_calls: [
+      { id: 2381, tool_name: 'web_search', summary: 'ran web_search', state: 'done', ended_at: null, delegate: null },
+    ] });
+    startLiveTool(ConfigType.USER, turnId, 2389, 'read', 'reading the venue page');
+    const wrapper = mount(TurnView, { props: { block: block(turnId, [asked, searched()]), type: ConfigType.USER, fullThread: false } });
+    const before = wrapper.get('.activity').element;
+
+    // A refetch of the same rows: the same block.
+    await wrapper.setProps({ block: block(turnId, [asked, searched()]) });
+    expect(wrapper.get('.activity').element).toBe(before);
+
+    // A new stored row lands: the same block, still carrying the running call.
+    await wrapper.setProps({ block: block(turnId, [asked, searched(), row('2332', 'assistant', 'Still looking.', turnId)]) });
+    expect(layout(wrapper)).toEqual([
+      'user:find the opening hours', 'step:ran web_search', 'bubble:Still looking.', 'live',
+    ]);
+    expect(wrapper.get('.activity').element).toBe(before);
+    expect(wrapper.findAll('.activity .call__summary').map((c) => c.text())).toEqual(['reading the venue page']);
   });
 });
 
@@ -789,10 +847,10 @@ describe('crashed-turn note', () => {
 
     const wrapper = mount(TurnView, { props: { block: b, type: ConfigType.USER, fullThread: false } });
 
-    // The step stays visible in the closing footer's step list, but it is not
-    // a reply: no bubble, and the note names the absence.
+    // The step stays visible as its block, but it said nothing: no text, and
+    // the note names the absence.
     expect(wrapper.find('.turn-crashed').exists()).toBe(true);
-    expect(wrapper.findAll('.speech-form--chalie')).toHaveLength(0);
+    expect(wrapper.findAll('.speech-form__text')).toHaveLength(0);
     expect(stepCalls(wrapper)).toEqual([['ran web_search']]);
   });
 });
@@ -912,10 +970,11 @@ describe('the plan — live under its message, settled behind the footer', () =>
       },
     });
 
-    expect(layout(wrapper)).toEqual(['user:what is the weather', 'plan', 'live']);
+    expect(layout(wrapper)).toEqual(['user:what is the weather', 'plan', 'step:ran plan, ran web_search', 'live']);
     const rows = wrapper.findAll('.msg-row');
     expect(rows[1]!.classes()).toEqual(expect.arrayContaining(['msg-row--chalie', 'msg-row--lead']));
     expect(rows[2]!.classes()).toContain('msg-row--cont');
+    expect(rows[3]!.classes()).toContain('msg-row--cont');
     expect(rows[1]!.findAll('.plan-task__title').map((t) => t.text())).toEqual(['task 1', 'task 2', 'task 3']);
     expect(taskStatuses(wrapper)).toEqual(['done', 'in_progress', 'todo']);
     // Nothing has settled, so there is no footer and no plan link yet.
@@ -947,7 +1006,9 @@ describe('the plan — live under its message, settled behind the footer', () =>
       },
     });
 
-    expect(layout(wrapper)).toEqual(['user:what is the weather', 'plan', 'user:and will it rain', 'live']);
+    expect(layout(wrapper)).toEqual([
+      'user:what is the weather', 'plan', 'step:ran web_search', 'user:and will it rain', 'live',
+    ]);
   });
 
   it('draws no card while the exchange has no plan yet', () => {
@@ -971,23 +1032,26 @@ describe('the plan — live under its message, settled behind the footer', () =>
       },
     });
 
-    expect(layout(wrapper)).toEqual(['user:what is the weather', 'bubble:Sunny, 24°.', 'footer']);
-    const link = wrapper.findAll('.speech-form__work').find((b) => b.text().includes('plan'))!;
+    expect(layout(wrapper)).toEqual([
+      'user:what is the weather', 'step:ran plan, ran web_search | Sunny, 24°.', 'footer',
+    ]);
+    const footer = footerOf(wrapper);
+    const link = footer.find('.speech-form__meta button.fold');
     expect(link.text()).toBe('· plan 2/3 ›');
     expect(link.attributes('aria-expanded')).toBe('false');
-    expect(wrapper.find('.trace-body .plan-card').exists()).toBe(false);
+    expect(footer.find('.trace-body .plan-card').exists()).toBe(false);
 
     await link.trigger('click');
 
     expect(link.attributes('aria-expanded')).toBe('true');
-    expect(wrapper.find('.trace-body').classes()).toContain('trace-body--open');
-    expect(wrapper.find('.trace-body .plan-card').exists()).toBe(true);
+    expect(footer.find('.trace-body').classes()).toContain('trace-body--open');
+    expect(footer.find('.trace-body .plan-card').exists()).toBe(true);
     expect(taskStatuses(wrapper)).toEqual(['done', 'cancelled', 'done']);
 
     await link.trigger('click');
 
     expect(link.attributes('aria-expanded')).toBe('false');
-    expect(wrapper.find('.trace-body').classes()).not.toContain('trace-body--open');
+    expect(footer.find('.trace-body').classes()).not.toContain('trace-body--open');
   });
 
   it('gives a settled exchange with no plan no plan link', () => {
@@ -1002,7 +1066,8 @@ describe('the plan — live under its message, settled behind the footer', () =>
       },
     });
 
-    expect(wrapper.findAll('.speech-form__work').map((b) => b.text())).toEqual(['· 1 step ›']);
+    expect(layout(wrapper)).toEqual(['user:what is the weather', 'step:ran web_search | Sunny, 24°.', 'footer']);
+    expect(footerOf(wrapper).find('.speech-form__meta button.fold').exists()).toBe(false);
   });
 
   it('settles an earlier exchange\'s plan into its footer while the working one\'s plan stands live — and the thread panel pins it to the panel\'s top, never the spine for a forked turn', () => {
@@ -1019,7 +1084,7 @@ describe('the plan — live under its message, settled behind the footer', () =>
     // The spine shows the forked turn's opener only — its plan behind the
     // footer link, and no live card: the thread pill carries the live state.
     expect(layout(spine)).toEqual(['user:what is the weather', 'bubble:Sunny, 24°.', 'footer']);
-    expect(spine.find('.speech-form__work').text()).toBe('· plan 2/2 ›');
+    expect(spine.find('.speech-form__meta button.fold').text()).toBe('· plan 2/2 ›');
     expect(spine.classes()).not.toContain('turn-view--panel');
 
     expect(layout(panel)).toEqual([

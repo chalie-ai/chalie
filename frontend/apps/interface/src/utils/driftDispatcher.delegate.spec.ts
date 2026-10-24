@@ -160,8 +160,8 @@ async function makeWorld(options: WorldOptions = {}) {
     session: useSessionStore(),
     send: (data: Record<string, unknown>) => dispatchDrift(frame(data)),
     teardown: () => {
-      // Unmount what the dispatcher rendered (stops the running-pill clocks)
-      // and drop the module-level feeds so nothing outlives the test.
+      // Unmount what the dispatcher rendered and drop the module-level feeds
+      // so nothing outlives the test.
       for (const el of containers) turnDom.clearSurfaceContainer(el);
       for (const feed of ['user', CH, OTHER_CH]) liveActTrail.clearAll(feed);
       document.body.innerHTML = '';
@@ -231,20 +231,20 @@ describe('delegate frames are addressed by channel, never by the same-numbered u
 
   it('delegate tool-call frames build the delegate turn\'s own live trail, not the same-numbered user turn\'s', async () => {
     const w = await makeWorld();
-    const call = { tool_name: 'fetch_url', id: 41, turn_id: TURN, channel: CH, summary: 'museum.example/hours', transcript_row_id: 61 };
+    const call = { tool_name: 'fetch_url', id: 41, turn_id: TURN, channel: CH, summary: 'museum.example/hours' };
 
     w.send({ ...call, state: 'started' });
     await flushPromises();
 
-    expect(w.delegateEl.querySelectorAll('.activity__pill')).toHaveLength(1);
-    expect(w.userEl.querySelectorAll('.activity__pill')).toHaveLength(0);
-    expect(w.otherDelegateEl.querySelectorAll('.activity__pill')).toHaveLength(0);
+    expect(w.delegateEl.querySelectorAll('.activity .call')).toHaveLength(1);
+    expect(w.userEl.querySelectorAll('.activity .call')).toHaveLength(0);
+    expect(w.otherDelegateEl.querySelectorAll('.activity .call')).toHaveLength(0);
 
     w.send({ ...call, state: 'done' });
     await flushPromises();
 
-    expect(w.delegateEl.querySelectorAll('.activity__pill--done')).toHaveLength(1);
-    expect(w.userEl.querySelectorAll('.activity__pill')).toHaveLength(0);
+    expect(w.delegateEl.querySelectorAll('.activity .call--done')).toHaveLength(1);
+    expect(w.userEl.querySelectorAll('.activity .call')).toHaveLength(0);
     // A tool-call frame is purely visual — it never fetches anything.
     expect(backend.userReads).toEqual([]);
     expect(backend.delegateReads).toEqual([]);
@@ -273,9 +273,9 @@ describe('delegate frames are addressed by channel, never by the same-numbered u
     async (state) => {
       const w = await makeWorld();
       // The user turn has a live tool pill of its own, which must survive.
-      w.send({ tool_name: 'web_search', id: 31, turn_id: TURN, type: 'user', state: 'started', transcript_row_id: 50 });
+      w.send({ tool_name: 'web_search', id: 31, turn_id: TURN, type: 'user', state: 'started' });
       await flushPromises();
-      expect(w.userEl.querySelectorAll('.activity__pill')).toHaveLength(1);
+      expect(w.userEl.querySelectorAll('.activity .call')).toHaveLength(1);
       const otherBefore = w.otherDelegateEl.innerHTML;
       backend.delegate = delegateBlock(CH, false, [TASK, DELEGATE_ANSWER]);
 
@@ -285,7 +285,7 @@ describe('delegate frames are addressed by channel, never by the same-numbered u
       expect(backend.delegateReads).toEqual([{ turnId: TURN, channel: CH }]);
       expect(backend.userReads).toEqual([]);
       expect(w.delegateEl.textContent).toContain('The museum opens at nine.');
-      expect(w.userEl.querySelectorAll('.activity__pill')).toHaveLength(1);
+      expect(w.userEl.querySelectorAll('.activity .call')).toHaveLength(1);
       expect(w.otherDelegateEl.innerHTML).toBe(otherBefore);
       expect(w.turnDom.isTurnWorking(TURN, 'user')).toBe(true);
       expect(w.turnDom.isTurnDone(TURN, 'user')).toBe(false);
@@ -302,7 +302,7 @@ describe('a delegate frame nobody is following does no REST work', () => {
     const w = await makeWorld(options);
     const userBefore = w.userEl.innerHTML;
     const otherBefore = w.otherDelegateEl.innerHTML;
-    w.send({ tool_name: 'fetch_url', id: 41, turn_id: TURN, channel: CH, state: 'started', transcript_row_id: 61 });
+    w.send({ tool_name: 'fetch_url', id: 41, turn_id: TURN, channel: CH, state: 'started' });
 
     w.send({ status: 'updated', turn_id: TURN, channel: CH });
     w.send({ state: 'working', turn_id: TURN, started_at: STARTED_AT, channel: CH });
@@ -340,27 +340,28 @@ describe('a delegate call\'s live pill on its parent turn', () => {
   it('gains its delegate link from the re-emitted "started" frame without being duplicated, and keeps the same link once "done"', async () => {
     const w = await makeWorld();
     const ref = { channel: CH, turn_id: 12 };
-    const call = { tool_name: 'web_search', id: 31, turn_id: TURN, type: 'user', channel: 'user', summary: 'museum hours', transcript_row_id: 50 };
+    const call = { tool_name: 'web_search', id: 31, turn_id: TURN, type: 'user', channel: 'user', summary: 'museum hours' };
 
     w.send({ ...call, state: 'started' });
     await flushPromises();
-    expect(w.userEl.querySelectorAll('.activity__pill')).toHaveLength(1);
-    expect(w.userEl.querySelectorAll('button.activity__pill')).toHaveLength(0);
+    expect(w.userEl.querySelectorAll('.activity .call')).toHaveLength(1);
+    expect(w.userEl.querySelectorAll('.activity button.call')).toHaveLength(0);
 
     // The backend re-sends `started` once the child turn exists.
     w.send({ ...call, state: 'started', delegate: ref });
     await flushPromises();
-    expect(w.userEl.querySelectorAll('.activity__pill')).toHaveLength(1);
-    expect(w.userEl.querySelectorAll('button.activity__pill')).toHaveLength(1);
+    expect(w.userEl.querySelectorAll('.activity .call')).toHaveLength(1);
+    expect(w.userEl.querySelectorAll('.activity button.call')).toHaveLength(1);
 
     w.send({ ...call, state: 'done' });
     await flushPromises();
-    expect(w.userEl.querySelectorAll('.activity__pill')).toHaveLength(1);
-    expect(w.userEl.querySelectorAll('button.activity__pill.activity__pill--done')).toHaveLength(1);
+    expect(w.userEl.querySelectorAll('.activity .call')).toHaveLength(1);
+    expect(w.userEl.querySelectorAll('.activity button.call--done')).toHaveLength(1);
 
-    w.userEl.querySelector<HTMLButtonElement>('button.activity__pill')!.click();
+    // Open the call's transcript from the running block.
+    w.userEl.querySelector<HTMLButtonElement>('.activity button.call')!.click();
     expect(w.session.panelDelegate).toEqual(ref);
     // The parent's pill never leaks onto a delegate turn that shares its id.
-    expect(w.delegateEl.querySelectorAll('.activity__pill')).toHaveLength(0);
+    expect(w.delegateEl.querySelectorAll('.activity .call')).toHaveLength(0);
   });
 });

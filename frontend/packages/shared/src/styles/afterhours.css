@@ -3,12 +3,12 @@
    a Sass toolchain can import it. The marketing site carries a mirrored copy of the
    tokens; this file is the source of truth.
 
-   Flat and sharp: no radius, gradient, glow, shadow or blur anywhere but the
-   weather card's sky and the plan card. Depth comes from the three grounds
-   (bg → surface → surface-2): fills group things, and a border marks only a text
-   field or the focus ring. One control height, one icon size, three text sizes
-   (12 mono, 15 body, 20 title). Pink is the only accent (those two neon grounds
-   add a violet) and is always a fill with night-coloured text on it. Every text
+   Flat and sharp: no radius, gradient, glow, shadow or blur except the weather
+   card's sky, the plan card and the user's prompt bubble (8px). Depth comes from
+   the three grounds (bg → surface → surface-2): fills group things; a border marks
+   only a text field or the focus ring. One control height, one icon size, three
+   text sizes (12 mono, 15 body, 20 title). Pink is the only accent (those two neon
+   grounds add a violet), always a fill with night-coloured text on it. Every text
    colour clears 4.5:1 on all three grounds in both themes; --control clears 3:1. */
 
 @font-face {
@@ -20,11 +20,11 @@
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 @font-face {
-  font-family: 'Instrument Sans Variable';
+  font-family: 'Inter Variable';
   font-style: normal;
   font-display: swap;
-  font-weight: 400 700;
-  src: url('@fontsource-variable/instrument-sans/files/instrument-sans-latin-wght-normal.woff2') format('woff2-variations');
+  font-weight: 100 900;
+  src: url('@fontsource-variable/inter/files/inter-latin-wght-normal.woff2') format('woff2-variations');
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 @font-face {
@@ -89,7 +89,7 @@
 
 :root {
   --font-display: 'Epilogue Variable', system-ui, sans-serif;
-  --font-ui:      'Instrument Sans Variable', system-ui, sans-serif;
+  --font-ui:      'Inter Variable', system-ui, sans-serif;
   --font-mono:    'JetBrains Mono Variable', ui-monospace, SFMono-Regular, Menlo, monospace;
 
   --ease-out:     cubic-bezier(0.16, 1, 0.3, 1);

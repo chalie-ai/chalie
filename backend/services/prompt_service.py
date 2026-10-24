@@ -103,17 +103,23 @@ _HANDOVER_FRAME = (
 #: plan current. The block is re-read from the database each step, so a status
 #: change shows on the very next request. A step's tool calls run in order, so
 #: a status change riding just before the call it tracks costs no step of its
-#: own and shows while that call runs.
+#: own and shows while that call runs. The closing updates ride with the
+#: answer, which still ends the turn (``MessageProcessor._closes_plan``).
 _PLAN_INSTRUCTION = (
-    "Above is your plan for the current message. Keep it current as you work, "
-    "but never spend a response on the plan alone. Tool calls in one response "
-    "run in order, so put each status change in the same response as the work "
-    "it tracks, just before that work's call: "
+    "Above is your plan for the current message: your own scratchpad for "
+    "staying on track. The user already sees it, so never describe, restate or "
+    "recap it in what you write. Keep it current as you work, but never spend "
+    "a response on the plan alone. Tool calls in one response run in order, "
+    "so put each status change in the same response as the work it tracks, "
+    "just before that work's call: "
     f'{PlanAbility.NAME}(action="update", task=<number>, status="in_progress") as a '
     'task starts, status="done" once it is finished, "cancelled" when it is no '
     "longer needed. When new work appears — including a message the user sends "
-    f'while you work — add it with {PlanAbility.NAME}(action="add"). Before your final '
-    "answer, close every open task together in one response."
+    f'while you work — add it with {PlanAbility.NAME}(action="add"). Close the '
+    "tasks still open in the same response as your final answer: that response "
+    "ends your turn. A response's text comes before its tool calls and nothing "
+    "follows them, so write the whole answer first, never a line saying you "
+    "are about to give it."
 )
 #: The planning pre-pass's ask (``mp.planning``), shown above the catalogue of
 #: the tools the model will have once its plan is saved.

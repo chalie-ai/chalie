@@ -3,14 +3,12 @@
      button into its transcript. -->
 <script setup lang="ts">
 import { Bot, Check, Minus, X } from '@lucide/vue';
-import type { ConversationMessage } from '../../api/conversation';
 import { delegatePillAttrs } from '../../composables/useDelegatePill';
+import { callLabel, type StepCall } from '../../utils/turnSteps';
 
-type ToolCall = NonNullable<ConversationMessage['tool_calls']>[number];
+defineProps<{ calls: StepCall[] }>();
 
-defineProps<{ calls: ToolCall[] }>();
-
-const STATUS_LABELS: Record<ToolCall['state'], string> = { done: 'succeeded', error: 'failed', started: 'running' };
+const STATUS_LABELS: Record<StepCall['state'], string> = { done: 'succeeded', error: 'failed', started: 'running' };
 </script>
 
 <template>
@@ -30,7 +28,7 @@ const STATUS_LABELS: Record<ToolCall['state'], string> = { done: 'succeeded', er
         role="img"
         :aria-label="STATUS_LABELS[c.state]"
       />
-      <span class="call__summary">{{ c.summary || c.tool_name }}</span>
+      <span class="call__summary">{{ callLabel(c) }}</span>
       <Bot v-if="c.delegate" class="delegate-pill__icon" :size="16" aria-hidden="true" />
     </component>
   </div>
