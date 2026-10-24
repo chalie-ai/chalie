@@ -28,8 +28,8 @@ pytestmark = pytest.mark.unit
 
 def _mp_with_loaded(names: list[str]) -> MessageProcessor:
     """A real MessageProcessor whose ``active_tools`` is exactly *names* — the one
-    field ``get_summary()`` subtracts from the menu. Real, not a stub: the summary
-    reads it off the live processor on every ``build_tools`` pass."""
+    field the menu must ignore. Real, not a stub: the ability is built against the
+    live processor on every ``build_tools`` pass."""
     mp = MessageProcessor(UserConfig({"hidden_input": True}), raw_input="find a tool for me")
     mp.active_tools = list(names)
     return mp
@@ -238,43 +238,27 @@ def test_summary_lists_each_tool_under_its_category_heading() -> None:
         )
 
 
-def test_summary_excludes_tools_already_loaded_in_context() -> None:
-    """A tool the model can already call is noise in a menu whose only job is
-    loading tools it cannot — so anything in ``mp.active_tools`` is dropped, and a
-    category emptied by that drops with it rather than leaving a bare heading."""
-    # Derived, not hardcoded: the "emptied category drops" half of this test
-    # only holds if EVERY File Operations tool is loaded, and that roster grows
-    # (write_file / make_dir / delete / set_permissions replaced one merged
-    # tool). A literal list silently stops testing the second assertion the day
-    # a tool is added to the category.
-    file_ops = [
+def test_summary_is_identical_whatever_is_already_loaded() -> None:
+    """The menu is part of this tool's schema, and the schema heads every provider
+    request — so it must not change as tools get loaded, or every step of a turn
+    invalidates the provider's cached prompt prefix. A loaded tool stays listed;
+    asking for it again is a no-op."""
+    baseline = FindToolsAbility().get_summary()
+    file_ops = sorted(
         name for name in AbilityRegistry.discoverable_names()
         if AbilityRegistry.get(name).CATEGORY is AbilityCategory.FILE_OPERATIONS
-    ]
-    assert len(file_ops) == 8, f"expected the 8 file primitives, got {sorted(file_ops)}"
-    loaded = ["find_tools", *file_ops]
-    summary = FindToolsAbility(mp=_mp_with_loaded(loaded)).get_summary()
-
-    for name in loaded:
-        assert f"- `{name}`: " not in summary, (
-            f"'{name}' is already loaded and must not be offered. summary={summary!r}"
-        )
-    assert f"{AbilityCategory.FILE_OPERATIONS.value}:" not in summary, (
-        f"an emptied category must not render a bare heading. summary={summary!r}"
     )
-    # Everything NOT loaded is still on offer.
-    assert "- `weather`: " in summary, f"summary={summary!r}"
-    assert f"{AbilityCategory.INFORMATION.value}:" in summary, f"summary={summary!r}"
-
-
-def test_summary_says_so_when_every_tool_is_already_loaded() -> None:
-    """An empty "**Available Tools**" heading reads as "no tools exist" — the
-    opposite of the truth. With nothing left to offer, say nothing is left."""
+    assert file_ops, "the file primitives must be discoverable for this test to mean anything"
     everything = sorted(AbilityRegistry.discoverable_names())
-    summary = FindToolsAbility(mp=_mp_with_loaded(everything)).get_summary()
 
-    assert "**Available Tools**" not in summary, f"summary={summary!r}"
-    assert "already loaded in context" in summary, f"summary={summary!r}"
+    for loaded in (["find_tools", *file_ops], everything):
+        summary = FindToolsAbility(mp=_mp_with_loaded(loaded)).get_summary()
+        assert summary == baseline, (
+            f"menu must not change with loaded={loaded!r}. summary={summary!r} baseline={baseline!r}"
+        )
+        for name in file_ops:
+            assert f"- `{name}`: " in summary, f"'{name}' must stay listed. summary={summary!r}"
+    assert "**Available Tools**" in baseline, f"summary={baseline!r}"
 
 
 def test_summary_tells_the_model_how_to_call_find_tools() -> None:

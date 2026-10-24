@@ -340,8 +340,6 @@ onBeforeUnmount((): void => {
   grid-template-columns: 56px 1fr auto;
   gap: 16px;
   align-items: center;
-  border: none;
-  box-shadow: none;
 }
 
 .timer-card__ring {
@@ -358,37 +356,27 @@ onBeforeUnmount((): void => {
 
 .timer-card__ring-track {
   fill: none;
-  stroke: var(--border);
+  stroke: var(--cell);
   stroke-width: 3;
 }
 
 .timer-card__ring-fill {
   fill: none;
-  stroke: var(--violet);
+  stroke: var(--pink-text);
   stroke-width: 3;
-  stroke-linecap: round;
-  transition: stroke-dashoffset 0.4s linear;
+  transition: stroke-dashoffset var(--dur-3) var(--ease-out);
 }
 
 .timer-card--done .timer-card__ring-fill {
-  stroke: var(--amber);
-  animation: timer-ring-pulse 1s ease-in-out infinite;
-}
-
-@keyframes timer-ring-pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.45;
-  }
+  stroke: var(--ask-text);
+  animation: working 1.4s ease-in-out infinite;
 }
 
 /*
  * Compound `--done.--silenced` (specificity 0-3-0) deliberately outranks the
  * `--done` pulse rule (0-2-0) by specificity, not source order — a silenced
- * card always carries both classes — so it cancels the pulse while keeping amber.
+ * card always carries both classes — so it cancels the pulse while keeping the
+ * done colour.
  */
 .timer-card--done.timer-card--silenced .timer-card__ring-fill {
   animation: none;
@@ -399,11 +387,11 @@ onBeforeUnmount((): void => {
 }
 
 .timer-card__title {
-  font-size: 0.96rem;
+  font-size: var(--fs-title);
   font-weight: 500;
   letter-spacing: -0.005em;
   margin: 0 0 2px;
-  color: var(--text-primary);
+  color: var(--text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -411,12 +399,12 @@ onBeforeUnmount((): void => {
 
 .timer-card__time {
   font-family: var(--font-mono);
-  font-size: 0.78rem;
-  color: var(--text-tertiary);
+  font-size: var(--fs-mono);
+  color: var(--muted);
   letter-spacing: 0.04em;
 
   :deep(b) {
-    color: var(--text-secondary);
+    color: var(--muted);
     font-weight: 500;
   }
 }
@@ -427,24 +415,27 @@ onBeforeUnmount((): void => {
 }
 
 .timer-card__btn {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--text-secondary);
+  width: var(--control-h);
+  height: var(--control-h);
+  background: var(--surface-2);
+  color: var(--muted);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   transition:
-    color 160ms ease,
-    border-color 160ms ease;
+    color var(--dur-1) var(--ease-out),
+    background var(--dur-1) var(--ease-out),
+    translate var(--dur-1) var(--ease-out);
   padding: 0;
 
   &:hover:not(:disabled) {
-    color: var(--text-primary);
-    border-color: color-mix(in oklab, var(--violet) 50%, var(--border));
+    color: var(--text);
+    background: var(--cell);
+  }
+
+  &:active:not(:disabled) {
+    translate: 0 1px;
   }
 
   &:disabled {
@@ -453,19 +444,19 @@ onBeforeUnmount((): void => {
   }
 
   svg {
-    width: 12px;
-    height: 12px;
+    width: var(--icon);
+    height: var(--icon);
     display: block;
   }
 }
 
-.timer-card--stopped {
-  opacity: 0.65;
+.timer-card--stopped .timer-card__title {
+  color: var(--muted);
 }
 
 .timer-card--error {
   display: block;
-  color: var(--text-tertiary);
+  color: var(--muted);
   font-style: italic;
 }
 </style>

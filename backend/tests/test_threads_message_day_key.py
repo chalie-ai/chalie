@@ -73,7 +73,7 @@ def test_every_projected_message_carries_a_full_calendar_day(db: sqlite3.Connect
     turn_id = 9401
     mp = MessageProcessor(UserConfig(), turn_id, "What day is it?")  # inert (I2)
     mp.uid = mp.transcript_service.append_input(mp.raw_input)
-    mp.transcript_service.append_assistant("It is Wednesday.")
+    mp.transcript_service.append_assistant("It is Wednesday.", settled=True)
 
     messages = _messages(turn_id)
 
@@ -115,8 +115,8 @@ def test_day_is_stable_across_every_row_of_one_turn(db: sqlite3.Connection) -> N
     turn_id = 9403
     mp = MessageProcessor(UserConfig(), turn_id, "First.")  # inert (I2)
     mp.uid = mp.transcript_service.append_input(mp.raw_input)
-    mp.transcript_service.append_assistant("Second.")
-    mp.transcript_service.append_assistant("Third.")
+    mp.transcript_service.append_assistant("Second.", settled=False)
+    mp.transcript_service.append_assistant("Third.", settled=True)
 
     days = {cast("str", m["day"]) for m in _messages(turn_id)}
 
@@ -162,7 +162,7 @@ def test_day_survives_the_rest_contract(
     mp = MessageProcessor(UserConfig(), turn_id, "Does the day key survive marshalling?")  # inert (I2)
     mp.uid = mp.transcript_service.append_input(mp.raw_input)
     mp.current_transcript_id = mp.uid
-    mp.transcript_service.append_assistant("It must.")
+    mp.transcript_service.append_assistant("It must.", settled=True)
 
     resp = client.get(f"/api/threads/{turn_id}")
 

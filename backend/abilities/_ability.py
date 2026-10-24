@@ -89,13 +89,6 @@ class Ability(ABC, Generic[B]):
     # DISCOVERABLE=False abilities, which never appear in the menu at all.
     CATEGORY: ClassVar[AbilityCategory | None] = None
 
-    # Settle flag. True (the default) means a tool_calls row for this ability
-    # demotes its transcript row's settled=1 back to 0 — the row carries a
-    # model-driven tool and is therefore NOT a settle0. Internal framework passes
-    # (chat_history_compactor, thinking) set this False so they never demote a
-    # settle: their tool_calls rows are implementation artefacts, not model tools.
-    counts_as_settle: ClassVar[bool] = True
-
     # Constructor-injected, the invoking MessageProcessor (the "parent" of this
     # tool call). A tool reads ALL its context off this — self.mp.config.channel,
     # .config.policy_channel, ._uid, etc. This is the traceability spine: every
@@ -164,6 +157,9 @@ class Ability(ABC, Generic[B]):
         # client telemetry dict (location / locale / time / currency …) or None
         # when no client context is stored yet (fresh boot, no heartbeat).
         self.telemetry: "dict[str, object] | None" = None
+        # Set by DispatchService._run() alongside telemetry: the ``tool_calls``
+        # row this call opened, or None when it went unrecorded (no anchor row).
+        self.tool_call_id: "int | None" = None
 
     # ── Metadata getters — every concrete ability implements all four ──────────
 

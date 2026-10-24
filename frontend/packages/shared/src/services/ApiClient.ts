@@ -52,18 +52,8 @@ export class ApiClient {
 
   constructor(
     private readonly getHost: GetHost,
-    private readonly getToken: GetHost,
     private readonly onAuthError: AuthErrorHandler = redirectToLogin,
   ) {}
-
-  /**
-   * Bearer header when a token is configured, else `{}`. Spreading the empty
-   * object is a no-op, so the web (cookie) path is unchanged — one common path.
-   */
-  private authHeaders(): Record<string, string> {
-    const token = this.getToken();
-    return token ? { Authorization: `Bearer ${token}` } : {};
-  }
 
   private buildUrl(path: string): string {
     const host = this.getHost();
@@ -94,7 +84,7 @@ export class ApiClient {
     const res = await fetch(this.buildUrl(path), {
       credentials: 'same-origin',
       ...init,
-      headers: { 'Content-Type': 'application/json', ...this.authHeaders(), ...init?.headers },
+      headers: { 'Content-Type': 'application/json', ...init?.headers },
     });
     if (res.status === 401) this.fail401(opts);
     if (!res.ok) return this.throwHttp(res);
@@ -116,7 +106,7 @@ export class ApiClient {
     const res = await fetch(this.buildUrl(path), {
       method: 'DELETE',
       credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json', ...this.authHeaders() },
+      headers: { 'Content-Type': 'application/json' },
     });
     if (res.status === 401) this.fail401(opts);
     if (!res.ok) return this.throwHttp(res);
@@ -128,7 +118,6 @@ export class ApiClient {
     const res = await fetch(this.buildUrl(path), {
       method: 'POST',
       credentials: 'same-origin',
-      headers: { ...this.authHeaders() },
       body: formData,
     });
     if (res.status === 401) this.fail401(opts);
@@ -145,7 +134,6 @@ export class ApiClient {
     const res = await fetch(this.buildUrl(path), {
       method: 'PUT',
       credentials: 'same-origin',
-      headers: { ...this.authHeaders() },
       body: formData,
     });
     if (res.status === 401) this.fail401(opts);
@@ -162,7 +150,7 @@ export class ApiClient {
     const res = await fetch(this.buildUrl(path), {
       method: 'POST',
       credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json', ...this.authHeaders() },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body ?? {}),
     });
     if (res.status === 401) this.fail401(opts);
@@ -170,19 +158,13 @@ export class ApiClient {
   }
 
   health(): Promise<{ status: string } | null> {
-    return fetch(this.buildUrl('/health'), {
-      credentials: 'same-origin',
-      headers: { ...this.authHeaders() },
-    })
+    return fetch(this.buildUrl('/health'), { credentials: 'same-origin' })
       .then((r) => r.json())
       .catch(() => null);
   }
   /** Never rejects. */
   ready(): Promise<{ ready: boolean }> {
-    return fetch(this.buildUrl('/ready'), {
-      credentials: 'same-origin',
-      headers: { ...this.authHeaders() },
-    })
+    return fetch(this.buildUrl('/ready'), { credentials: 'same-origin' })
       .then((r) => (r.ok ? r.json() : { ready: false }))
       .catch(() => ({ ready: false }));
   }

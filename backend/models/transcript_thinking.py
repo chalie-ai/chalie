@@ -10,7 +10,6 @@ autoincrement ``id`` (like ``tool_calls``) rather than keyed by
 
 from __future__ import annotations
 
-import json
 from typing import ClassVar, Self
 
 from models.model import Model
@@ -57,15 +56,7 @@ class TranscriptThinking(Model):
         :meth:`~models.tool_call.ToolCall.delete_by_transcripts`) because a
         GC sweep's candidate set can exceed SQLite's bound-variable limit.
         Empty input is a clean no-op — no query runs."""
-        if not transcript_ids:
-            return []
-        rows = cls._bound_connection().execute(
-            "SELECT * FROM transcript_thinking "
-            "WHERE transcript_id IN (SELECT value FROM json_each(?)) "
-            "ORDER BY id",
-            (json.dumps(transcript_ids),),
-        ).fetchall()
-        return [cls.hydrate(row) for row in rows]
+        return cls._select_where_in_json("transcript_id", transcript_ids, order_by="id")
 
     @classmethod
     def by_turn(cls, channel: str, turn_id: int) -> list[Self]:

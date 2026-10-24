@@ -104,7 +104,7 @@ const listContacts = computed<Contact[]>(() => {
           class="ct__field"
           :href="`tel:${p.value}`"
         >
-          <Phone :size="11" />
+          <Phone :size="16" />
           <span>{{ p.value }}</span>
         </a>
 
@@ -114,7 +114,7 @@ const listContacts = computed<Contact[]>(() => {
           class="ct__field"
           :href="`mailto:${e.value}`"
         >
-          <Mail :size="11" />
+          <Mail :size="16" />
           <span>{{ e.value }}</span>
         </a>
 
@@ -123,7 +123,7 @@ const listContacts = computed<Contact[]>(() => {
           class="ct__field"
           :href="`mailto:${singleContact.email}`"
         >
-          <Mail :size="11" />
+          <Mail :size="16" />
           <span>{{ singleContact.email }}</span>
         </a>
       </div>
@@ -137,7 +137,7 @@ const listContacts = computed<Contact[]>(() => {
       <span class="ct__row-name">{{ c.fn ?? c.name ?? '' }}</span>
 
       <a v-if="primaryValue(c.phones)" class="ct__field" :href="`tel:${primaryValue(c.phones)}`">
-        <Phone :size="11" />
+        <Phone :size="16" />
         <span>{{ primaryValue(c.phones) }}</span>
       </a>
 
@@ -146,7 +146,7 @@ const listContacts = computed<Contact[]>(() => {
         class="ct__field"
         :href="`mailto:${primaryValue(c.emails) ?? c.email}`"
       >
-        <Mail :size="11" />
+        <Mail :size="16" />
         <span>{{ primaryValue(c.emails) ?? c.email }}</span>
       </a>
     </div>
@@ -170,10 +170,8 @@ const listContacts = computed<Contact[]>(() => {
 .ct__avatar {
   width: 56px;
   height: 56px;
-  border-radius: 50%;
-  background: color-mix(in oklab, var(--violet) 18%, var(--bg-2));
-  border: 1px solid color-mix(in oklab, var(--violet) 35%, transparent);
-  color: var(--violet);
+  background: var(--cell);
+  color: var(--text);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -188,13 +186,12 @@ const listContacts = computed<Contact[]>(() => {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  border-radius: 50%;
 }
 
 .ct__avatar--sm {
   width: 30px;
   height: 30px;
-  font-size: 0.7rem;
+  font-size: var(--fs-mono);
   letter-spacing: -0.01em;
 }
 
@@ -203,16 +200,16 @@ const listContacts = computed<Contact[]>(() => {
 }
 
 .ct__name {
-  font-size: 1.15rem;
+  font-size: var(--fs-title);
   font-weight: 600;
   letter-spacing: -0.01em;
   margin: 0 0 8px;
-  color: var(--text-primary);
+  color: var(--text);
 }
 
 .ct__subtitle {
-  font-size: 0.78rem;
-  color: var(--text-tertiary);
+  font-size: var(--fs-body);
+  color: var(--muted);
   margin: -4px 0 8px;
 }
 
@@ -227,23 +224,28 @@ const listContacts = computed<Contact[]>(() => {
   align-items: center;
   gap: 6px;
   padding: 4px 10px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: var(--bg-input);
+  background: var(--surface-2);
   font-family: var(--font-mono);
-  font-size: 0.74rem;
-  color: var(--text-secondary);
+  font-size: var(--fs-mono);
+  color: var(--muted);
   text-decoration: none;
   letter-spacing: 0.02em;
-  transition: all 160ms ease;
+  transition:
+    background var(--dur-1) var(--ease-out),
+    color var(--dur-1) var(--ease-out),
+    translate var(--dur-1) var(--ease-out);
 
   &:hover {
-    border-color: var(--border-strong);
-    color: var(--text-primary);
+    background: var(--cell);
+    color: var(--text);
+  }
+
+  &:active {
+    translate: 0 1px;
   }
 
   svg {
-    color: var(--text-tertiary);
+    color: var(--muted);
     flex-shrink: 0;
   }
 }
@@ -259,11 +261,6 @@ const listContacts = computed<Contact[]>(() => {
   align-items: center;
   gap: 12px;
   padding: 8px 0;
-  border-bottom: 1px solid var(--border);
-
-  &:last-child {
-    border-bottom: none;
-  }
 }
 
 .ct__row-name {
@@ -272,8 +269,8 @@ const listContacts = computed<Contact[]>(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 0.88rem;
+  font-size: var(--fs-body);
   font-weight: 500;
-  color: var(--text-primary);
+  color: var(--text);
 }
 </style>

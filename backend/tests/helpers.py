@@ -11,7 +11,11 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import cast
 
+from abilities.plan import PlanAbility
+from abilities.recall import Recall
 from configs.enums.policy_channel import PolicyChannel
+from models.provider_request import ProviderRequest
+from models.provider_response import ProviderResponse
 from services.processor_config import ProcessorConfig
 
 
@@ -185,3 +189,24 @@ def force_vision_provider(db: sqlite3.Connection, host: str = "http://127.0.0.1:
     db.commit()
     svc.set_vision_provider(pid)
     return pid
+
+
+# ─── The planning pre-pass, for turn-driving provider doubles ────────
+# Every turn on a config that pins the plan tool opens with a planning send
+# before its loop. A double scripting a test about something else answers it
+# with NO_PLAN — a model that makes no plan — so the pre-pass still runs for
+# real and the test's script is left whole for the loop.
+
+#: A reply with no tool call: it ends the pre-pass, and the loop starts with
+#: the instruction to create the plan.
+NO_PLAN = ProviderResponse(text="", model="scripted-no-plan", tool_calls=None)
+
+
+def is_planning_request(request: object) -> bool:
+    """Whether a provider request is a turn's planning pre-pass, recognised by
+    its tool set: the plan tool and nothing beyond ``recall``. Every step of a
+    turn's loop offers the config's other pinned tools as well."""
+    if not isinstance(request, ProviderRequest):
+        return False
+    names = {tool["name"] for tool in request.tools or []}
+    return PlanAbility.NAME in names and names <= {Recall.NAME, PlanAbility.NAME}

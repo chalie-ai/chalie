@@ -64,6 +64,9 @@ vi.mock('./turnDom', () => ({
   removeTurn: removeTurnMock,
   upsertTurnToSurfaces: upsertTurnToSurfacesMock,
   findTurnType: findTurnTypeMock,
+  // Request ordering is turnDom's job, proven against the real module in
+  // driftDispatcher.refetchOrder.spec.ts; here every read just carries one.
+  nextTicket: () => 1,
 }));
 
 const { enqueueMock, removeMock } = vi.hoisted(() => ({ enqueueMock: vi.fn(), removeMock: vi.fn() }));
@@ -146,12 +149,12 @@ describe('dispatchDrift — discrimination order', () => {
 });
 
 describe('dispatchDrift — tool_call frame', () => {
-  it('state=started calls startLiveTool with (type, turn_id, id, tool_name, summary, transcript_row_id)', () => {
+  it('state=started calls startLiveTool with (type, turn_id, id, tool_name, summary)', () => {
     dispatchDrift(frame({
       tool_name: 'calendar', state: 'started', turn_id: 3, id: 42,
-      summary: 'checking calendar', transcript_row_id: 7, type: 'scheduled',
+      summary: 'checking calendar', type: 'scheduled',
     }));
-    expect(startLiveToolMock).toHaveBeenCalledWith('scheduled', 3, 42, 'calendar', 'checking calendar', 7);
+    expect(startLiveToolMock).toHaveBeenCalledWith('scheduled', 3, 42, 'calendar', 'checking calendar');
   });
 
   it('state=done calls finishLiveTool with ok=true', () => {
@@ -323,7 +326,7 @@ describe('dispatchDrift — turn_execution frame', () => {
     dispatchDrift(frame({ state: 'cancelled', turn_id: 33, started_at: '2026-01-01T00:00:00Z', type: 'user' }));
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(upsertTurnToSurfacesMock).toHaveBeenCalledWith(
-      expect.objectContaining({ turn_id: 33 }), 'user', { force: true },
+      expect.objectContaining({ turn_id: 33 }), 'user', expect.objectContaining({ force: true }),
     );
     expect(setTurnWorkingMock).toHaveBeenCalledWith(33, 'user', false);
     expect(removeTurnMock).not.toHaveBeenCalled();
@@ -336,7 +339,7 @@ describe('dispatchDrift — turn_execution frame', () => {
     });
     dispatchDrift(frame({ state: 'cancelled', turn_id: 34, started_at: '2026-01-01T00:00:00Z', type: 'user' }));
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(removeTurnMock).toHaveBeenCalledWith(34, 'user');
+    expect(removeTurnMock).toHaveBeenCalledWith(34, 'user', expect.any(Number));
     expect(upsertTurnToSurfacesMock).not.toHaveBeenCalled();
     // The cancel is terminal on EVERY branch — a remote-initiated cancel
     // (another tab/device) whose turn emptied must still clear the live
@@ -358,7 +361,7 @@ describe('dispatchDrift — turn_execution frame', () => {
   // assistant row, so TranscriptService never fires the 'updated' signal that
   // masks the same hole on 'completed'. Without a refetch here the rendered
   // block keeps the `working: true` it was last upserted with — TurnView keeps
-  // appending its live-act row and renders 'thinking…' forever — and `crashed`,
+  // appending its live activity line and renders 'Thinking…' forever — and `crashed`,
   // which only ever arrives over REST, never reaches the crash note built for
   // exactly this case. Force, because a terminal frame outranks the version
   // guard.
@@ -372,7 +375,7 @@ describe('dispatchDrift — turn_execution frame', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(threadMock).toHaveBeenCalledWith(40, 'user');
     expect(upsertTurnToSurfacesMock).toHaveBeenCalledWith(
-      expect.objectContaining({ turn_id: 40, working: false, crashed: true }), 'user', { force: true },
+      expect.objectContaining({ turn_id: 40, working: false, crashed: true }), 'user', expect.objectContaining({ force: true }),
     );
     expect(setErrorMessageMock).toHaveBeenCalled();
   });
@@ -389,7 +392,7 @@ describe('dispatchDrift — turn_execution frame', () => {
     dispatchDrift(frame({ state: 'completed', turn_id: 41, started_at: '2026-01-01T00:00:00Z', type: 'user' }));
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(upsertTurnToSurfacesMock).toHaveBeenCalledWith(
-      expect.objectContaining({ turn_id: 41, working: false }), 'user', { force: true },
+      expect.objectContaining({ turn_id: 41, working: false }), 'user', expect.objectContaining({ force: true }),
     );
     expect(setErrorMessageMock).not.toHaveBeenCalled();
   });

@@ -15,7 +15,6 @@ Holds no mp, calls no service (Rule-3 depth).
 
 from __future__ import annotations
 
-import json
 from typing import ClassVar
 
 from models.model import Model
@@ -55,14 +54,7 @@ class VoiceTranscript(Model):
         :meth:`~models.tool_call.ToolCall.delete_by_transcripts`) because a
         GC sweep's candidate set can exceed SQLite's bound-variable limit.
         Empty input is a clean no-op — no query runs."""
-        if not transcript_ids:
-            return []
-        rows = cls._bound_connection().execute(
-            "SELECT * FROM voice_transcript "
-            "WHERE transcript_id IN (SELECT value FROM json_each(?))",
-            (json.dumps(transcript_ids),),
-        ).fetchall()
-        return [cls.hydrate(row) for row in rows]
+        return cls._select_where_in_json("transcript_id", transcript_ids)
 
     @classmethod
     def delete_by_transcripts(cls, transcript_ids: list[int]) -> int:
@@ -76,11 +68,4 @@ class VoiceTranscript(Model):
         whatever the caller does with the transcript row afterwards. Same
         ``json_each`` binding as :meth:`for_transcripts`; empty input is a
         clean no-op. Returns rows deleted."""
-        if not transcript_ids:
-            return 0
-        cursor = cls._bound_connection().execute(
-            "DELETE FROM voice_transcript "
-            "WHERE transcript_id IN (SELECT value FROM json_each(?))",
-            (json.dumps(transcript_ids),),
-        )
-        return cursor.rowcount or 0
+        return cls._delete_where_in_json("transcript_id", transcript_ids)

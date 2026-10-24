@@ -1,30 +1,30 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import type { ConversationMessage } from '../../api/conversation';
+import type { ConversationMessage, PlanTask } from '../../api/conversation';
 import { messagePlaintext } from '../../utils/speech';
+import { formatElapsed } from '../../utils/time';
 import { emit as busEmit } from '../../composables/useEventBus';
 import { useVoiceTranscriptsStore } from '../../stores/voiceTranscripts';
 import { voice } from '../../api/voice';
 import { Copy, Reply, Volume2 } from '@lucide/vue';
+import PlanCard from './PlanCard.vue';
 
 const props = withDefaults(defineProps<{
   message: ConversationMessage;
   canReply?: boolean;
-  toolCalls?: NonNullable<ConversationMessage['tool_calls']>;
-  thinking?: { traces: string[]; duration_ms: number; tokens: number };
   threadPill?: { status: 'working' | 'done' | 'thread' | 'idle'; label: string } | null;
+  /** The exchange's wall-clock duration in ms, read next to the timestamp. */
+  durationMs?: number | null;
+  /** The plan the exchange kept, behind the plan link ("plan N/M"). */
+  plan?: PlanTask[];
 }>(), {
   canReply: false,
-  toolCalls: () => [],
   threadPill: null,
-  thinking: undefined,
+  durationMs: null,
+  plan: () => [],
 });
 
 const emit = defineEmits<{ reply: []; openThread: [] }>();
-
-const rootRef = ref<HTMLElement | null>(null);
-const expanded = ref(false);
-const thinkingExpanded = ref(false);
 
 const voiceStore = useVoiceTranscriptsStore();
 
@@ -32,16 +32,6 @@ const voiceStore = useVoiceTranscriptsStore();
 // mid-turn "let me check…" rows have no audio and never will.
 const transcriptId = computed(() => Number(props.message.id));
 const canSpeak = computed(() => !!props.message.settled && Number.isFinite(transcriptId.value));
-
-// Format the thinking duration as "thought for {S}s" or "thought for {M}m {S}s".
-const thinkingLabel = computed(() => {
-  if (!props.thinking) return '';
-  const seconds = Math.round(props.thinking.duration_ms / 1000);
-  const mins = Math.floor(seconds / 60);
-  const rem = seconds % 60;
-  if (mins === 0) return `thought for ${seconds}s`;
-  return `thought for ${mins}m ${rem}s`;
-});
 
 // Live state wins over the snapshot this message was fetched with; null means
 // nothing has been attempted, which is normal for history that predates
@@ -95,36 +85,31 @@ function onCopy(): void {
     // Silently swallow — clipboard writes can fail in non-secure contexts.
   });
 }
+
+// The exchange's work stands above the answer as step blocks, so the footer
+// keeps only its duration and, when the exchange kept a plan, the plan link:
+// "plan N/M" folds the plan open below the footer.
+const planOpen = ref(false);
+const planDone = computed(() => props.plan.filter((t) => t.status === 'done').length);
 </script>
 
 <template>
-  <div ref="rootRef" class="speech-form__meta-wrap">
+  <div class="speech-form__meta-wrap">
     <div class="speech-form__meta">
       <span class="speech-form__timestamp">{{ message.timestamp }}</span>
 
-      <button
-        v-if="toolCalls.length > 0"
-        class="trace-pill"
-        :class="{ 'trace-pill--open': expanded }"
-        :aria-expanded="expanded"
-        type="button"
-        @click="expanded = !expanded"
-      >
-        <span class="trace-pill__dot" aria-hidden="true" />
-        {{ toolCalls.length }} tool{{ toolCalls.length === 1 ? '' : 's' }} used
-      </button>
+      <span v-if="durationMs && durationMs > 0">· {{ formatElapsed(durationMs) }}</span>
 
-      <a
-        v-if="thinking"
-        class="thinking-link"
-        :class="{ 'thinking-link--open': thinkingExpanded }"
-        href="#"
-        role="button"
-        :aria-expanded="thinkingExpanded"
-        @click.prevent="thinkingExpanded = !thinkingExpanded"
+      <button
+        v-if="plan.length"
+        type="button"
+        class="fold"
+        :aria-expanded="planOpen"
+        @click="planOpen = !planOpen"
       >
-        {{ thinkingLabel }}
-      </a>
+        · plan {{ planDone }}/{{ plan.length }}
+        <span class="fold-chev" aria-hidden="true">›</span>
+      </button>
 
       <button
         v-if="threadPill"
@@ -176,40 +161,16 @@ function onCopy(): void {
       </span>
     </div>
 
+    <!-- inert while folded: the fold only collapses its height, so the plan's
+         controls would stay reachable by Tab unseen. -->
     <div
-      v-if="toolCalls.length > 0"
+      v-if="plan.length"
       class="trace-body"
-      :class="{ 'trace-body--open': expanded }"
+      :class="{ 'trace-body--open': planOpen }"
+      :inert="!planOpen"
     >
       <div class="trace-body__inner">
-        <div class="calls">
-          <div
-            v-for="(c, i) in toolCalls"
-            :key="i"
-            class="call"
-            :class="{ 'call--error': c.state === 'error' }"
-          >
-            <span class="call__fn">{{ c.tool_name }}</span>
-            <span class="call__summary">{{ c.summary }}</span>
-          </div>
-        </div>
-      </div>
-    </div>
-    <div
-      v-if="thinking"
-      class="trace-body"
-      :class="{ 'trace-body--open': thinkingExpanded }"
-    >
-      <div class="trace-body__inner">
-        <div class="thinking-traces">
-          <div
-            v-for="(trace, i) in thinking.traces"
-            :key="i"
-            class="thinking-trace"
-          >
-            <pre>{{ trace }}</pre>
-          </div>
-        </div>
+        <PlanCard v-if="planOpen" :tasks="plan" />
       </div>
     </div>
   </div>

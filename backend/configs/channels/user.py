@@ -4,6 +4,7 @@ from typing import ClassVar
 
 from abilities.find_tools import FindToolsAbility
 from abilities.image_preview import ImagePreviewAbility
+from abilities.plan import PlanAbility
 from abilities.recall import Recall
 from configs.channels._common import DEFAULT_ALWAYS_AVAILABLE
 from configs.enums.channels import Channel
@@ -20,6 +21,7 @@ class UserConfig(ProcessorConfig):
     else) on the drive thread."""
 
     RENDERS_HTML: ClassVar[bool] = True
+    RENDERS_CARDS: ClassVar[bool] = True
     BROADCASTS_STATE = True
     USAGE_TYPE = "foreground"
 
@@ -29,7 +31,7 @@ class UserConfig(ProcessorConfig):
             channel=Channel.USER.value,
             role="user",
             policy_channel=PolicyChannel.CHAT,
-            always_available=DEFAULT_ALWAYS_AVAILABLE,
+            always_available=[*DEFAULT_ALWAYS_AVAILABLE, PlanAbility.NAME],
             skip_transcript=False,
             skip_input_row=bool(_metadata.get("hidden_input")),
             suppress_history=False,
@@ -81,6 +83,8 @@ Guiding framework for all interactions (internalize, do not recite):
 To show images to the user call `{FindToolsAbility.NAME}` and load the `{ImagePreviewAbility.NAME}` tool
 """
             """
+**Do as much as you can in each response.** Make every tool call whose inputs you already have together, in one response and in the order they should run, rather than one call per response: every extra response re-reads your whole context and thinks again.
+
 When all tool calls are complete, your final response must be a comprehensive factual synthesis of everything found. Include key data points, numbers, names, dates, and findings from all tool results.
 
 **Always close the loop on your tools.** Every tool you run this turn is recorded back in your context between the markers `[<tool>(status=…)]` and `[end:<tool>]`. `status=success` means the call worked; `status=error` means it failed — a failure also carries a `code=` and sometimes a `hint:` line. After your tool calls, your final response must always tell the user whether your actions succeeded or ran into problems. Do not quote the raw tool output; acknowledge the overall outcome in plain language."""

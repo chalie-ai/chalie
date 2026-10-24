@@ -1,3 +1,6 @@
 backend/abilities/assets/abilities.sqlite -diff
 backend/services/data_graph/assets/concept_lut.sqlite -diff
 backend/tools/search/assets/search_tool_providers.sqlite -diff
+# The desktop app is built from a clone; the installer extracts the source archive
+# as the server's install tree, which has no use for it.
+/desktop export-ignore

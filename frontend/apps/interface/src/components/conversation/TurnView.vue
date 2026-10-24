@@ -1,22 +1,32 @@
-<!-- Renders a turn block as gutterless speaker rows: assistant prose runs open
-     to the left, the user message sits as a right-set bubble, and speaker-change
-     spacing gives the rhythm (no avatar gutter). Shared by the main feed (inline
-     turns) and the thread panel so both keep identical row rhythm. -->
+<!-- Renders a turn block as gutterless speaker rows: each segment of the turn
+     reads as the user bubble, then each of Chalie's steps as a chat message of
+     its own — its thinking and tool calls on one line, then what it said — and
+     a footer under the step that closes the segment.
+     Message spacing gives the rhythm (no avatar gutter). Shared by the main
+     feed (inline turns) and the thread panel so both keep identical row
+     rhythm. -->
 <script setup lang="ts">
 import { computed } from 'vue';
 import { ConfigType } from '@chalie/shared';
-import type { ConversationMessage, ConversationTurnBlock } from '../../api/conversation';
-import type { LiveToolPill } from '../../utils/liveActTrail';
+import type {
+  ConversationMessage,
+  ConversationTurnBlock,
+  DelegateTurnBlock,
+  PlanTask,
+} from '../../api/conversation';
+import { usePermissionsStore } from '../../stores/permissions';
+import type { PermissionRequest } from '../../stores/permissions';
 import { liveTrailsFor } from '../../utils/liveActTrail';
+import { didWork } from '../../utils/turnSteps';
 import UserBubble from './UserBubble.vue';
 import ChalieBubble from './ChalieBubble.vue';
-import ActCycle from './ActCycle.vue';
-import ActCycleGroup from './ActCycleGroup.vue';
+import ActivityLine from './ActivityLine.vue';
 import BubbleFooter from './BubbleFooter.vue';
+import PlanCard from './PlanCard.vue';
 
 const props = withDefaults(
   defineProps<{
-    block: ConversationTurnBlock;
+    block: ConversationTurnBlock | DelegateTurnBlock;
     canReply?: boolean;
     type?: string;
     fullThread?: boolean;
@@ -31,128 +41,186 @@ const props = withDefaults(
 
 const emit = defineEmits<{ reply: [turnId: number]; openThread: [turnId: number] }>();
 
+/** Set when this block is a delegate (subagent) turn, read by its channel: the
+ *  turn has no type, its stop undoes nothing, and its user-role rows are the
+ *  task Chalie handed over. */
+const channel = computed(() => props.block.channel ?? null);
+
 /** A forked thread carries at least one row past its settle0 (see
  *  ConversationMessage.thread_message) — derived directly off the prop, no
  *  store/composable needed. */
 const isForkedThread = computed(() => props.block.messages.some((m) => m.thread_message));
 
-// The live act-trail is derived from WS signals (spec §6.5). While the turn
-// works, append one transient non-collapsed ActRow carrying the turn's live tool
-// pills (each driven started→done/error by the single tool-call frame). Before the
-// first pill lands, a bare anchor renders the "thinking…" placeholder.
-interface LiveActRow {
-  kind: 'live-act';
-  rowId: number;
-  pills: LiveToolPill[];
+const permissions = usePermissionsStore();
+
+/** This turn's parked permission ask, if any: the first queued gate whose
+ *  `origin` names this view's (turn_id, type) identity — the same pair the
+ *  lane resolver matches a card's origin on. A subagent's gate inherits its
+ *  caller's origin, so it waits on the caller's line, never a delegate's. */
+const pendingAsk = computed<PermissionRequest | null>(() =>
+  channel.value == null
+    ? (permissions.queue.find((r) => r.origin?.turn_id === props.block.turn_id && r.origin.type === props.type) ?? null)
+    : null,
+);
+
+// Only the authoritative live view of the turn (thread panel, or a non-forked
+// turn in the spine) draws the live line: a forked turn in the spine shows the
+// thread pill's animated dot instead, so an inline live line would duplicate
+// that indicator and misattribute thread activity to the top-level timeline.
+const liveView = computed(() => props.block.working && (props.fullThread || !isForkedThread.value));
+
+/** The running step's live line: its calls are the turn's act-trail pills
+ *  (derived from WS signals), and it carries the stop and the parked ask. */
+const liveLine = computed(() => ({
+  pills: liveView.value ? liveTrailsFor(channel.value ?? props.type, props.block.turn_id).flatMap((t) => t.pills) : [],
+  undoable: channel.value == null,
+  ask: pendingAsk.value,
+}));
+
+/** The running step: the row a live call was dropped from, else — before a
+ *  refetch returned that row — none yet, so its block is the live line alone,
+ *  reading "Thinking…" until the first pill lands. Its key never changes, so the
+ *  live line never remounts as the step moves. */
+interface ActivityRow {
+  kind: 'activity';
+  key: string;
+  message: ConversationMessage | null;
 }
 
+/** A row as its speaker's message — an assistant row as its step's block. */
 interface MsgRow {
   kind: 'msg';
+  key: string;
   message: ConversationMessage;
 }
 
-/** One tool call's collapsed summary, as carried by the API model. */
-type ToolSummary = { tool_name: string; summary: string; state: string; ended_at: string | null };
-
-interface CollapsedGroupRow {
-  kind: 'collapsed-group';
-  id: string;
-  summaries: ToolSummary[];
-}
-
-// The completion-time footer — one per turn_exchange. It carries that exchange's
-// aggregated tool calls (`toolCalls`) so its meta line can show the "N tools used"
-// trace inline (expandable), matching the design: assistant prose → footer(trace).
+// The meta line that ends a segment, under the row that closes it: timestamp,
+// the segment's duration when it did work, the plan its exchange kept behind
+// the plan link, actions, and (on the last footer of a forked turn) the
+// collapsed thread pill.
 interface FooterRow {
   kind: 'footer';
+  key: string;
   message: ConversationMessage;
-  toolCalls: ToolSummary[];
-  thinking?: { traces: string[]; duration_ms: number; tokens: number };
+  durationMs: number | null;
+  plan: PlanTask[];
 }
 
-type DisplayRow = MsgRow | LiveActRow | CollapsedGroupRow | FooterRow;
+/** The still-working exchange's plan, standing sticky under the message it
+ *  plans and ticking as the agent works it. Settled, it moves behind the
+ *  footer's plan link. */
+interface PlanRow {
+  kind: 'plan';
+  key: string;
+  tasks: PlanTask[];
+}
+
+type DisplayRow = MsgRow | ActivityRow | FooterRow | PlanRow;
+
+/** Ids of the user rows a cancel of this working turn would remove: the
+ *  trailing run of user rows nothing has answered yet, stopping at a row that
+ *  joined the running turn — a cancel keeps that one and everything before it.
+ *  The same rule the backend trims a cancelled turn by. A stop hands the text
+ *  back to the dock only when its row is one of these. */
+const droppedOnCancel = computed<Set<string>>(() => {
+  const ids = new Set<string>();
+  if (!props.block.working) return ids;
+  const messages = props.block.messages;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (message.role !== 'user' || message.joined) break;
+    ids.add(message.id);
+  }
+  return ids;
+});
 
 const displayRows = computed<DisplayRow[]>(() => {
+  // Every row stands in order, by one rule: a user row as its bubble; an
+  // assistant row as its step's block — its work, then its text — and, when it
+  // settled, the footer that closes its segment. An exchange opens at each
+  // user row — except one that joined the running turn, which stays in the
+  // exchange it joined. One that ended with no settled row — cancelled or
+  // crashed — closes on its last row with text, else its last row, its footer
+  // right under that row. The exchange a working turn is still running has no
+  // closing row yet: its live plan stands under its prompt and the running
+  // step ends the list.
   const rows: DisplayRow[] = [];
-  // A turn_exchange opens at each USER message and runs through its assistant
-  // reply(-ies). Every tool call in it — pre-turn calls on the user row and calls
-  // on each assistant step alike — is buffered here and RIDES ON that exchange's
-  // footer as its aggregated "N tools used" trace (inline, expandable), so the
-  // paint order within one exchange is: assistant prose → footer(with its trace),
-  // never a tool chip hoisted past a later exchange. A still-streaming exchange
-  // has no footer yet; its already-finished calls fall back to a collapsed-group
-  // row so they are never dropped while the reply streams.
-  let pendingTools: ToolSummary[] = [];
-  let pendingThinking: { traces: string[]; duration_ms: number; tokens: number } | null = null;
-  let exchangeLastAssistant: ConversationMessage | null = null;
 
-  // The turn's still-streaming reply is its LAST message; that exchange has
-  // nothing "complete" to timestamp yet, so its footer waits for the turn to
-  // settle.
-  const streamingReply = props.block.working
-    ? props.block.messages[props.block.messages.length - 1]
-    : null;
+  // A running call shows as its pill, and a refetch also returns it as a
+  // `started` chip: a chip whose pill is live is dropped, so the call shows
+  // once — the pill while it runs, the stored chip once the pill clears. The
+  // row it was dropped from is the running step.
+  const liveIds = new Set(liveLine.value.pills.map((p) => p.id));
+  const activity: ActivityRow = { kind: 'activity', key: 'activity', message: null };
 
-  for (const message of props.block.messages) {
-    // Spine renders only through settle0 — drop thread reply rows. The thread
-    // panel (fullThread) renders the WHOLE thread, continuations included.
-    if (!props.fullThread && message.thread_message) continue;
+  // The spine renders only through settle0 — drop thread reply rows: every row
+  // past settle0, so the exchange before them has settled. The thread panel
+  // (fullThread) renders the WHOLE thread, continuations included.
+  const messages = props.fullThread ? props.block.messages : props.block.messages.filter((m) => !m.thread_message);
 
-    // A new user message opens the next exchange: close the previous one — its
-    // footer carries that exchange's aggregated tool calls beneath its last reply,
-    // before this row.
+  // The open exchange: its rows after the prompt, its plan, whether it settled,
+  // and the footers its last row and last row with text would close it with.
+  // The open segment: its start, whether it worked.
+  let body: DisplayRow[] = [];
+  let plan: PlanTask[] = [];
+  let settled = false;
+  let last: { at: number; footer: FooterRow } | undefined;
+  let lastText: typeof last;
+  let start = '';
+  let worked = false;
+
+  const flush = (open: boolean): void => {
+    const closing = lastText ?? last;
+    if (!settled && !open && closing) body.splice(closing.at, 0, closing.footer);
+    rows.push(...body);
+  };
+
+  for (const stored of messages) {
+    const calls = stored.tool_calls ?? [];
+    const kept = calls.filter((c) => !liveIds.has(String(c.id)));
+    const message = kept.length === calls.length ? stored : { ...stored, tool_calls: kept };
+    const own: MsgRow = { kind: 'msg', key: `msg-${message.id}`, message };
+    start ||= message.created_at;
+    // A user row's tool calls are the turn-zero memory seed, never a step.
     if (message.role === 'user') {
-      if (exchangeLastAssistant) {
-        rows.push({ kind: 'footer', message: exchangeLastAssistant, toolCalls: pendingTools, thinking: pendingThinking ?? undefined });
-        exchangeLastAssistant = null;
-      } else if (pendingTools.length) {
-        // Tool calls with no assistant reply to anchor a footer (rare) — keep
-        // them visible as their own collapsed row rather than drop them.
-        rows.push({ kind: 'collapsed-group', id: `pre-${message.id}`, summaries: pendingTools });
+      if (message.joined) {
+        body.push(own);
+      } else {
+        flush(false);
+        rows.push(own);
+        body = [];
+        plan = message.plan ?? [];
+        settled = worked = false;
+        last = lastText = undefined;
+        start = message.created_at;
       }
-      pendingTools = [];
-      pendingThinking = null;
+      continue;
     }
-
-    rows.push({ kind: 'msg', message });
-    if (message.role === 'assistant') exchangeLastAssistant = message;
-
-    if (message.tool_calls?.length) pendingTools.push(...message.tool_calls);
-    if (message.thinking) {
-      pendingThinking = pendingThinking
-        ? { traces: [...pendingThinking.traces, ...message.thinking.traces], duration_ms: pendingThinking.duration_ms + message.thinking.duration_ms, tokens: pendingThinking.tokens + message.thinking.tokens }
-        : message.thinking;
-    }
-  }
-
-  // Tail — the last exchange. A settled one gets its footer (carrying its trace);
-  // a settled earlier exchange that only reaches this tail push — on the spine the
-  // streaming continuation is dropped, leaving the opener as the last VISIBLE
-  // reply — keeps its footer while the fork streams, so the spine always shows
-  // exactly one footer per turn_id. The still-streaming exchange has no footer,
-  // so its finished calls fall back to a collapsed-group row.
-  if (exchangeLastAssistant && exchangeLastAssistant !== streamingReply) {
-    rows.push({ kind: 'footer', message: exchangeLastAssistant, toolCalls: pendingTools, thinking: pendingThinking ?? undefined });
-  } else if (pendingTools.length) {
-    rows.push({ kind: 'collapsed-group', id: 'streaming', summaries: pendingTools });
-  }
-
-  // Live trails: appended at the tail while the turn is working, but only when
-  // this render is the authoritative live view of the turn (thread panel, or a
-  // non-forked turn in the spine). Forked turns in the spine show the thread
-  // pill's animated dot instead — rendering "thinking..." inline would duplicate
-  // that indicator and misattribute thread activity to the top-level timeline.
-  if (props.block.working && (props.fullThread || !isForkedThread.value)) {
-    const trails = liveTrailsFor(props.type, props.block.turn_id);
-    if (trails.length) {
-      for (const t of trails) {
-        rows.push({ kind: 'live-act', rowId: t.rowId, pills: t.pills });
-      }
-    } else {
-      rows.push({ kind: 'live-act', rowId: -1, pills: [] });
+    const live = !activity.message && kept.length < calls.length;
+    const work = live || didWork(message);
+    const text = message.content.trim();
+    if (live) activity.message = message;
+    if (work || text) body.push(live ? activity : own);
+    worked ||= work;
+    // A segment shows its duration only when it did work; the footer drops a
+    // NaN or negative one.
+    const durationMs = worked ? Date.parse(message.created_at) - Date.parse(start) : null;
+    const footer: FooterRow = { kind: 'footer', key: `footer-${message.id}`, message, durationMs, plan };
+    last = { at: body.length, footer };
+    if (text) lastText = last;
+    if (message.settled) {
+      body.push(footer);
+      settled = true;
+      worked = false;
+      start = '';
     }
   }
 
+  if (liveView.value && !settled && plan.length > 0) rows.push({ kind: 'plan', key: 'plan', tasks: plan });
+  // Only a live view's last exchange is still open: a forked spine shows just
+  // the opener, which the thread past it closed.
+  flush(liveView.value);
+  if (liveView.value && !activity.message) rows.push(activity);
   return rows;
 });
 
@@ -160,56 +228,43 @@ const displayRows = computed<DisplayRow[]>(() => {
 type RowRole = 'user' | 'chalie';
 
 interface RowEntry {
-  key: string;
   role: RowRole;
   isLead: boolean;
   row: DisplayRow;
 }
 
-/** Key for a non-message row — collapsed tool group, live act-trail anchor, or footer. */
-function nonMsgKey(row: LiveActRow | CollapsedGroupRow | FooterRow): string {
-  if (row.kind === 'collapsed-group') return `cg-${row.id}`;
-  if (row.kind === 'footer') return `footer-${row.message.id}`;
-  return `live-${row.rowId}`;
-}
-
 const rowEntries = computed<RowEntry[]>(() => {
   let prevRole: RowRole | null = null;
   return displayRows.value.map((row) => {
-    // A footer row has no user branch to match, so it falls into 'chalie' —
-    // same as the collapsed-group/live-act rows — keeping it grouped under
-    // the exchange's chalie rows so speaker-change spacing stays correct.
+    // The running step, footers and plans have no user branch to match, so
+    // they fall into 'chalie' — keeping them grouped with the chalie rows so
+    // speaker-change spacing stays correct.
     const role: RowRole = row.kind === 'msg' && row.message.role === 'user' ? 'user' : 'chalie';
-    const key = row.kind === 'msg' ? `msg-${row.message.id}` : nonMsgKey(row);
     const isLead = role !== prevRole;
     prevRole = role;
-    return { key, role, isLead, row };
+    return { role, isLead, row };
   });
 });
 
-// The thread pill rides on the exchange-closing footer. On the spine there is
-// exactly one footer per turn (thread replies are dropped), but keying off the
-// LAST footer stays correct if an exchange ever renders more than one.
-const lastFooterKey = computed<string | null>(() => {
-  const entries = rowEntries.value;
-  for (let i = entries.length - 1; i >= 0; i--) {
-    if (entries[i].row.kind === 'footer') return entries[i].key;
-  }
-  return null;
-});
+// The thread pill rides on the last footer. On the spine that is the opener's
+// (thread replies are dropped), but keying off the LAST one stays correct when
+// a render shows more than one exchange.
+const lastFooterKey = computed(() => displayRows.value.filter((r) => r.kind === 'footer').at(-1)?.key);
 
 // A crashed turn that surfaced no assistant reply text settles to working:false
-// with nothing but (maybe) a tool-trace footer — indistinguishable from a normal
-// empty turn. Show an explicit note in exactly that case. A crash that DID leave
-// a reply keeps it and needs no note. Gated on the VISIBLE rows (thread
+// with nothing but (maybe) tool traces — indistinguishable from a normal empty
+// turn. Show an explicit note in exactly that case. A crash that DID leave a
+// reply keeps it and needs no note. Gated on the VISIBLE rows (thread
 // continuations are spine-dropped), so a fork-reply crash never mislabels a
 // completed opener as failed.
 const showCrashNote = computed<boolean>(() =>
   (props.block.crashed ?? false)
-  && !displayRows.value.some(
-    (r) => r.kind === 'msg' && r.message.role === 'assistant' && r.message.content.trim().length > 0,
-  ),
+  && !displayRows.value.some((r) => r.kind === 'msg' && r.message.role === 'assistant' && r.message.content.trim() !== ''),
 );
+
+// A subagent the user stopped ends with nothing after its task — say so, or
+// the panel reads as an empty answer.
+const showStoppedNote = computed<boolean>(() => channel.value != null && (props.block.cancelled ?? false));
 
 function onReply(): void {
   emit('reply', props.block.turn_id);
@@ -223,8 +278,10 @@ function onOpenThread(): void {
 <template>
   <div
     class="turn-view"
+    :class="{ 'turn-view--panel': fullThread }"
     :data-turn-id="block.turn_id"
-    :data-type="type"
+    :data-type="channel ? undefined : type"
+    :data-channel="channel ?? undefined"
     :data-forked="isForkedThread || undefined"
     :data-gist="block.gist ?? undefined"
     :data-preview="block.preview"
@@ -232,47 +289,49 @@ function onOpenThread(): void {
   >
     <div
       v-for="ar in rowEntries"
-      :key="ar.key"
+      :key="ar.row.key"
       class="msg-row"
-      :class="[`msg-row--${ar.role}`, ar.isLead ? 'msg-row--lead' : 'msg-row--cont']"
+      :class="[`msg-row--${ar.role}`, ar.isLead ? 'msg-row--lead' : 'msg-row--cont', `msg-row--${ar.row.kind}`]"
     >
-      <!-- Collapsed tool-call group -->
-      <ActCycleGroup
-        v-if="ar.row.kind === 'collapsed-group'"
-        :summaries="(ar.row as CollapsedGroupRow).summaries"
-      />
+      <PlanCard v-if="ar.row.kind === 'plan'" :tasks="(ar.row as PlanRow).tasks" />
 
-      <!-- Live act-trail anchor -->
-      <ActCycle v-else-if="ar.row.kind === 'live-act'" :pills="(ar.row as LiveActRow).pills" />
-
-      <!-- Completion-time footer — one per turn_exchange, below its act-trail.
-           Its meta line carries the exchange's aggregated tool trace inline, and
-           (on the settle0 footer of a forked turn) the collapsed thread pill. -->
+      <!-- The segment's footer: timestamp, duration, plan link and actions —
+           and (on the last footer of a forked turn) the collapsed thread
+           pill. -->
       <BubbleFooter
         v-else-if="ar.row.kind === 'footer'"
         :message="(ar.row as FooterRow).message"
-        :tool-calls="(ar.row as FooterRow).toolCalls"
-        :thinking="(ar.row as FooterRow).thinking"
+        :duration-ms="(ar.row as FooterRow).durationMs"
+        :plan="(ar.row as FooterRow).plan"
         :can-reply="canReply"
-        :thread-pill="ar.key === lastFooterKey ? threadPill : null"
+        :thread-pill="ar.row.key === lastFooterKey ? threadPill : null"
         @reply="onReply"
         @open-thread="onOpenThread"
       />
 
-      <!-- Message rows -->
-      <template v-else>
-        <UserBubble
-          v-if="(ar.row as MsgRow).message.role === 'user'"
-          :message="(ar.row as MsgRow).message"
-        />
-        <ChalieBubble v-else :message="(ar.row as MsgRow).message" />
-      </template>
+      <UserBubble
+        v-else-if="ar.role === 'user'"
+        :message="(ar.row as MsgRow).message"
+        :label="channel ? 'Task from Chalie' : null"
+        :data-dropped-on-cancel="droppedOnCancel.has((ar.row as MsgRow).message.id) || undefined"
+      />
+
+      <!-- A step's block. The running step's work line is the LIVE line: it
+           tracks the act-trail pills and carries the stop. -->
+      <ChalieBubble v-else :message="(ar.row as MsgRow | ActivityRow).message">
+        <template v-if="ar.row.kind === 'activity'" #step>
+          <ActivityLine v-bind="liveLine" :work="(ar.row as ActivityRow).message" />
+        </template>
+      </ChalieBubble>
     </div>
 
     <!-- A crash that produced no reply — name the absence rather than leave a
          bare tool-trace footer read as an empty answer. -->
     <div v-if="showCrashNote" class="msg-row msg-row--chalie msg-row--lead">
       <p class="turn-crashed">This turn ended unexpectedly.</p>
+    </div>
+    <div v-if="showStoppedNote" class="msg-row msg-row--chalie msg-row--lead">
+      <p class="turn-stopped">This subagent was stopped.</p>
     </div>
   </div>
 </template>
@@ -303,13 +362,33 @@ function onOpenThread(): void {
   margin-top: 6px;
 }
 
-// A settled turn that failed with no reply — a muted, unobtrusive note (not an
-// alarm banner); it explains an otherwise-blank exchange, matching the feed's
-// restrained tone.
-.turn-crashed {
+// Each step is a message of its own, spaced from the one before it like one;
+// a footer stays close under the step it closes.
+.msg-row--chalie.msg-row--cont:not(.msg-row--footer) {
+  margin-top: var(--space-lg);
+}
+
+// The live plan stays in view under the fixed 56px top bar while the work runs
+// — or at the top of the thread panel, which scrolls its own body. It opens
+// Chalie's side.
+.msg-row--plan {
+  position: sticky;
+  top: 56px;
+  z-index: 3;
+}
+
+.turn-view--panel .msg-row--plan {
+  top: 0;
+}
+
+// A settled turn that failed with no reply, or a stopped subagent — a muted,
+// unobtrusive note (not an alarm banner); it explains an otherwise-blank
+// exchange, matching the feed's restrained tone.
+.turn-crashed,
+.turn-stopped {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--fs-body);
   font-style: italic;
-  color: var(--text-secondary);
+  color: var(--muted);
 }
 </style>

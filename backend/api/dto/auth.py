@@ -22,13 +22,6 @@ class AuthStatus(DTO):
     has_session: bool
     vault_state: str
     has_vision_provider: bool
-    internal_dev: bool
-
-
-class Username(DTO):
-    """GET /api/auth/username — master account login credential."""
-
-    username: str
 
 
 class RegisterRequest(DTO):

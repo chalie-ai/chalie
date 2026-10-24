@@ -64,7 +64,7 @@ class Websocket:
             cls._connections.discard(ws)
 
     @staticmethod
-    def broadcast(instance: JsonSerializable | None) -> None:
+    def broadcast(instance: JsonSerializable | None, channel: str | None = None) -> None:
         """Serialize ``instance`` once via ``.to_json()`` and push the string to
         every live socket. ``None`` is a no-op — a caller may hand a nullable
         model (e.g. one forwarded through ``mp.push_websocket``) without an extra
@@ -74,7 +74,12 @@ class Websocket:
 
         Turn-scoped frames are enriched with the shared DOM-contract keys
         ``turn_id`` / ``type`` / ``transcript_row_id`` here and only here —
-        models never hand-write these keys into their own WS serialization."""
+        models never hand-write these keys into their own WS serialization.
+
+        ``channel`` addresses the frame by that full channel and strips ``type``:
+        a delegate turn has no routing type, and its numeric turn id collides
+        with the user spine's, so the channel is the only address a surface
+        cannot mistake for a user turn."""
         if instance is None:
             return
         with Websocket._lock:
@@ -91,6 +96,9 @@ class Websocket:
             row_ref = getattr(instance, "transcript_id", None)
             if row_ref is not None:
                 payload_dict.setdefault("transcript_row_id", row_ref)
+        if channel is not None:
+            payload_dict.pop("type", None)
+            payload_dict["channel"] = channel
         payload = json.dumps(payload_dict)
         dead: list[_WebSocket] = []
         for ws in targets:

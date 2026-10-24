@@ -1,25 +1,36 @@
+<!-- One step of Chalie's as a chat message: its work — thinking and tool calls
+     — then what it said. Every step is this same block, the running one too,
+     whose live work fills the `step` slot — with no row yet until a refetch
+     returns it. -->
 <script setup lang="ts">
 import type { ConversationMessage } from '../../api/conversation';
 import { renderMarkup } from '../../composables/useMarkup';
+import { didWork } from '../../utils/turnSteps';
 import SegmentRenderer from './SegmentRenderer.vue';
+import ThinkingAndCalls from './ThinkingAndCalls.vue';
 
-defineProps<{ message: ConversationMessage }>();
+defineProps<{ message: ConversationMessage | null }>();
 </script>
 
 <template>
   <div
     class="speech-form speech-form--chalie"
-    :data-transcript-row-id="message.id"
+    :data-transcript-row-id="message?.id"
   >
-    <SegmentRenderer
-      v-if="message.segments && message.segments.length"
-      :segments="message.segments"
-    />
-    <div
-      v-else
-      class="speech-form__text chalie-markup"
-      v-html="renderMarkup(message.content ?? '')"
-    />
+    <slot name="step">
+      <ThinkingAndCalls v-if="message && didWork(message)" :work="message" />
+    </slot>
+    <template v-if="message?.content.trim()">
+      <SegmentRenderer
+        v-if="message.segments && message.segments.length"
+        :segments="message.segments"
+      />
+      <div
+        v-else
+        class="speech-form__text chalie-markup"
+        v-html="renderMarkup(message.content)"
+      />
+    </template>
   </div>
 </template>
 
@@ -37,36 +48,46 @@ defineProps<{ message: ConversationMessage }>();
 
 .chalie-markup p {
   margin: 0 0 0.75em;
-  line-height: 1.35;
+  line-height: 1.55;
 }
 
 .chalie-markup p:last-child {
   margin-bottom: 0;
 }
 
+.chalie-markup h1 {
+  font-family: var(--font-ui);
+  font-weight: 600;
+  font-size: var(--fs-title);
+  letter-spacing: normal;
+  line-height: 1.3;
+  margin: var(--space-lg) 0 var(--space-sm);
+}
+
+.chalie-markup h1:first-child {
+  margin-top: 0;
+}
+
 .chalie-markup a {
-  color: var(--accent-primary);
+  color: var(--pink-text);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
 
 .chalie-markup a:hover {
-  color: var(--accent-secondary);
+  color: var(--text);
 }
 
 .chalie-code,
 .chalie-markup code {
   font-family: var(--font-mono);
-  font-size: 0.875em;
-  background: color-mix(in oklab, var(--text-primary) 8%, transparent);
+  font-size: var(--fs-mono);
+  background: var(--surface-2);
   padding: 0.1em 0.35em;
-  border-radius: 4px;
 }
 
 .chalie-markup pre {
-  background: color-mix(in oklab, var(--text-primary) 6%, transparent);
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  background: var(--surface-2);
   padding: var(--space-md);
   overflow-x: auto;
   margin: 0.75em 0;
@@ -75,18 +96,17 @@ defineProps<{ message: ConversationMessage }>();
 .chalie-markup pre code {
   background: none;
   padding: 0;
-  border-radius: 0;
-  font-size: 0.85em;
+  font-size: var(--fs-mono);
 }
 
-.chalie-markup strong {
+.chalie-markup b {
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--text);
 }
 
-.chalie-markup em {
+.chalie-markup i {
   font-style: italic;
-  color: var(--text-secondary);
+  color: var(--muted);
 }
 
 .chalie-markup ul,
@@ -105,40 +125,34 @@ defineProps<{ message: ConversationMessage }>();
 
 .chalie-markup li {
   margin: 0.2em 0;
-  line-height: 1.35;
+  line-height: 1.55;
 }
 
 .chalie-markup blockquote {
-  border-left: 2px solid var(--border);
   margin: 0.75em 0;
   padding: 0.25em 0 0.25em var(--space-md);
-  color: var(--text-secondary);
+  color: var(--muted);
 }
 
 .chalie-markup hr {
   border: none;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--line);
   margin: var(--space-md) 0;
 }
 
 .chalie-markup table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.875em;
 }
 
 .chalie-markup th,
 .chalie-markup td {
-  border: 1px solid var(--border);
   padding: 6px 10px;
   text-align: left;
 }
 
-.chalie-markup thead {
-  background: color-mix(in oklab, var(--text-primary) 5%, transparent);
-}
-
+.chalie-markup thead,
 .chalie-markup tbody tr:nth-child(even) {
-  background: color-mix(in oklab, var(--text-primary) 3%, transparent);
+  background: var(--surface-2);
 }
 </style>

@@ -46,6 +46,12 @@ logger = logging.getLogger(__name__)
 # ability db-file coexist on one thread without thrashing a single slot.
 _local = threading.local()
 
+# Serialises ``PRAGMA journal_mode=WAL``. On a fresh file that pragma converts
+# rollback -> WAL, a write SQLite will not busy-wait on: connections racing it
+# each hold SHARED while asking for EXCLUSIVE, so SQLite fails one at once with
+# "database is locked" whatever the timeout. One conversion at a time.
+_JOURNAL_MODE_LOCK = threading.Lock()
+
 #: Sugar the off-spine accessors accept in place of the real chalie.db path.
 DEFAULT = "default"
 
@@ -85,7 +91,8 @@ class Database:
         conn = sqlite3.connect(path, timeout=30)
         conn.isolation_level = None  # autocommit; transaction() issues an explicit BEGIN to group multi-write blocks
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
+        with _JOURNAL_MODE_LOCK:
+            conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("PRAGMA busy_timeout=15000")
         conn.execute("PRAGMA synchronous=NORMAL")

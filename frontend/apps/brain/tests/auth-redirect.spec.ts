@@ -23,6 +23,16 @@ test.describe('Brain SPA — shared ApiClient owns the 401 redirect', () => {
     // the backend will return 401 for the next authenticated request.
     await page.context().clearCookies();
 
+    // An instance with a credentials.json at its install root logs every
+    // cookieless request straight back in, so the 401 below can never happen
+    // there. Prove the backend really refuses first — otherwise that setup
+    // reads as a broken client redirect.
+    const probe = await page.request.get('/api/lists/all');
+    expect(
+      probe.status(),
+      'cookieless request was not refused (credentials.json auto-login?)',
+    ).toBe(401);
+
     // Fire an authenticated mutation WITHOUT navigating: open the local modal
     // (no fetch) and submit it (POST /api/lists). The POST 401s → the shared
     // ApiClient redirects.

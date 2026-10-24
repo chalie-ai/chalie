@@ -23,6 +23,7 @@ import sqlite3
 import threading
 import time
 from collections.abc import Iterator
+from datetime import datetime, timedelta
 from typing import cast
 from unittest.mock import patch
 
@@ -40,6 +41,7 @@ from models.provider_response import ProviderResponse
 from models.turn_execution import TurnExecution
 from services.policy_manager import _ASK_NO_SURFACE, _permission_gates
 from services.websocket import Websocket
+from tests.helpers import NO_PLAN, is_planning_request
 
 pytestmark = pytest.mark.unit
 
@@ -96,7 +98,9 @@ class _ScriptedProvider:
     def get_context_limit(self) -> int:
         return 200000
 
-    def send(self, _dto: object) -> ProviderResponse:
+    def send(self, dto: object) -> ProviderResponse:
+        if is_planning_request(dto):
+            return NO_PLAN
         if self.sends >= len(self._responses):
             return self._TERMINAL
         response = self._responses[self.sends]
@@ -221,12 +225,17 @@ def test_user_turn_ask_prompts_on_that_turn_with_summary(
     requests = recorder.of_type("permission_request")
     assert len(requests) == 1, recorder.frames
     rid = requests[0]["request_id"]
+    # The park instant rides on the frame as ISO-8601 UTC — it must parse back
+    # to an aware UTC datetime so a reloaded client can age the live line.
+    asked_at = datetime.fromisoformat(cast(str, requests[0]["asked_at"]))
+    assert asked_at.tzinfo is not None and asked_at.utcoffset() == timedelta(0)
     assert requests[0] == {
         "type": "permission_request",
         "request_id": rid,
         "action_id": "gate_probe",
         "summary": _SUMMARY,
         "origin": {"type": "user", "turn_id": mp.turn_id, "forked": False},
+        "asked_at": asked_at.isoformat(timespec="seconds"),
     }
     assert recorder.of_type("permission_resolved") == [{"type": "permission_resolved", "request_id": rid}]
     assert rid not in _permission_gates

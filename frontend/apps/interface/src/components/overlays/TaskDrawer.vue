@@ -6,7 +6,8 @@
  * The trigger button lives in PresenceBar.vue; the slide-out shell (scrim,
  * panel, close, transition choreography) is SideDrawer. This component supplies
  * the rows and wires them to tasks.isOpen. The hint appears on first
- * open-with-content; the panel auto-closes when the last item clears.
+ * open-with-content, an empty drawer says so, and the panel auto-closes when
+ * the last item clears.
  */
 import { computed, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
@@ -66,7 +67,7 @@ watch(totalCount, (count) => {
 
 <template>
   <SideDrawer :open="isOpen" title="Activity" @close="tasks.close()">
-    <!-- Forked threads whose reply has settled unseen (done, blue). Clicking
+    <!-- Forked threads whose reply has settled unseen (done). Clicking
          opens the thread's slide-over. The mockup's floating notifications
          live here. -->
     <template v-if="threadActivity.length">
@@ -74,7 +75,6 @@ watch(totalCount, (count) => {
         v-for="ta in threadActivity"
         :key="`thread-${ta.turn_id}`"
         class="task-drawer__thread"
-        :class="`task-drawer__thread--${ta.kind}`"
         @click="openThread(ta.turn_id, ta.type)"
       >
         <span class="task-drawer__thread-top">
@@ -84,6 +84,7 @@ watch(totalCount, (count) => {
         <span class="task-drawer__thread-snippet">{{ ta.snippet }}</span>
       </button>
     </template>
+    <p v-else class="task-drawer__hint">Nothing new. Finished replies in your threads show up here.</p>
 
     <!-- First-time hint — shown on first open-with-content. -->
     <div v-if="showHint" class="task-drawer__hint">I'll show what I'm working on here.</div>
@@ -93,7 +94,7 @@ watch(totalCount, (count) => {
 <style scoped lang="scss">
 // ── Thread-activity row ──────────────────────────────────────────────────────────
 // Forked threads whose reply has settled unseen, folded out of the mockup's
-// floating notifications. A cyan left accent stripe marks them done.
+// floating notifications. The steady activity dot marks them done.
 
 .task-drawer__thread {
   display: flex;
@@ -102,18 +103,19 @@ watch(totalCount, (count) => {
   width: 100%;
   text-align: left;
   background: transparent;
-  border: none;
-  border-left: 2px solid transparent;
   padding: 10px 16px;
   cursor: pointer;
+  transition:
+    background-color var(--dur-1) var(--ease-out),
+    translate var(--dur-1) var(--ease-out);
 
   &:hover {
-    background: var(--surface-hover, rgba(128, 128, 128, 0.06));
+    background: var(--cell);
   }
-}
 
-.task-drawer__thread--done {
-  border-left-color: var(--cyan);
+  &:active {
+    translate: 0 1px;
+  }
 }
 
 .task-drawer__thread-top {
@@ -125,18 +127,18 @@ watch(totalCount, (count) => {
 .task-drawer__thread-label {
   flex: 1;
   min-width: 0;
-  font-size: 13px;
+  font-size: var(--fs-body);
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .task-drawer__thread-snippet {
-  font-size: 11.5px;
+  font-size: var(--fs-body);
   line-height: 1.45;
-  color: var(--text-secondary);
+  color: var(--muted);
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -144,8 +146,8 @@ watch(totalCount, (count) => {
 }
 
 .task-drawer__hint {
-  font-size: 12px;
-  color: var(--text-secondary);
+  font-size: var(--fs-body);
+  color: var(--muted);
   padding: 8px 16px 4px;
   font-style: italic;
 }

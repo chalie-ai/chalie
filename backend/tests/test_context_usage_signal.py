@@ -78,12 +78,12 @@ class _RecordingClient:
 class _TokenReportingProvider:
     """A real functional double at the network boundary: implements the thin
     client protocol (``get_context_limit``/``send``)
-    and answers with one benign terminal response (non-empty text, no tool
-    calls) so the turn settles in a single step — one CHAT call, hence one
-    expected move of the meter. The text must be non-empty: an empty completion
-    trips the processor's empty-completion steer, which re-sends and would move
-    the meter again. ``tokens_input=None`` models a provider whose native
-    payload exposes no usage counter."""
+    and answers every send with one benign terminal response (non-empty text,
+    no tool calls), counting the sends: one CHAT call is one expected move of
+    the meter. A user turn makes two — the planning pre-pass, then one loop
+    step. The text must be non-empty: an empty completion trips the
+    processor's empty-completion steer, which re-sends. ``tokens_input=None``
+    models a provider whose native payload exposes no usage counter."""
 
     def __init__(self, tokens_input: int | None = _TOKENS_IN) -> None:
         self._tokens_input = tokens_input
@@ -183,13 +183,14 @@ def test_user_turn_emits_context_usage_with_tokens_and_window(db: sqlite3.Connec
 
     mp, client = _run(UserConfig(), provider, "how full is my context")
 
+    assert provider.sends >= 1, "turn never reached the provider — silence proves nothing"
     usage = client.usage_frames()
-    assert len(usage) == 1, f"expected exactly one meter move per CHAT call, got {usage!r}"
-    frame = usage[0]
-    assert frame["tokens_input"] == _TOKENS_IN
-    assert frame["context_window"] == _CLIENT_WINDOW  # the client's real limit, under the cap
-    assert frame["turn_id"] == mp.turn_id
-    assert frame["type"] == "user"
+    assert len(usage) == provider.sends, f"expected exactly one meter move per CHAT call, got {usage!r}"
+    for frame in usage:
+        assert frame["tokens_input"] == _TOKENS_IN
+        assert frame["context_window"] == _CLIENT_WINDOW  # the client's real limit, under the cap
+        assert frame["turn_id"] == mp.turn_id
+        assert frame["type"] == "user"
 
 
 def test_wire_contract_reply_reaches_meter_as_occupancy(db: sqlite3.Connection) -> None:
@@ -206,12 +207,12 @@ def test_wire_contract_reply_reaches_meter_as_occupancy(db: sqlite3.Connection) 
 
     assert provider.sends >= 1, "turn never reached the provider — silence proves nothing"
     usage = client.usage_frames()
-    assert len(usage) == 1, f"expected exactly one meter move per CHAT call, got {usage!r}"
-    frame = usage[0]
-    assert frame["tokens_input"] == _TOKENS_IN + _CACHE_READ + _CACHE_CREATE
-    assert frame["context_window"] == _CLIENT_WINDOW
-    assert frame["turn_id"] == mp.turn_id
-    assert frame["type"] == "user"
+    assert len(usage) == provider.sends, f"expected exactly one meter move per CHAT call, got {usage!r}"
+    for frame in usage:
+        assert frame["tokens_input"] == _TOKENS_IN + _CACHE_READ + _CACHE_CREATE
+        assert frame["context_window"] == _CLIENT_WINDOW
+        assert frame["turn_id"] == mp.turn_id
+        assert frame["type"] == "user"
 
 
 def test_background_turn_emits_no_context_usage(db: sqlite3.Connection) -> None:

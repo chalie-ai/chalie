@@ -19,7 +19,8 @@ and sanitized as HTML at persist time (``MessageProcessor._format``, gated on
 came back as raw markdown on an HTML surface. The fix hoists the contract into
 ``PromptService._RESPONSE_FORMAT`` and appends it in
 ``PromptService.system_prompt()`` whenever ``config.RENDERS_HTML`` is set;
-``UserConfig`` and ``ScheduledConfig`` both now set it.
+``UserConfig`` and ``ScheduledConfig`` both now set it, and so do the four
+watchable subagent channels, whose transcript the user reads in the subagent panel.
 
 Driven on the real assembly path with real SQLite (``db``), the real
 ``MessageProcessor``/``PromptService``/``ProcessorConfig`` classes — zero mocks
@@ -27,15 +28,37 @@ Driven on the real assembly path with real SQLite (``db``), the real
 file follows structurally for the new gate."""
 
 import sqlite3
+from collections.abc import Callable
 
 import pytest
 
-from configs.channels import DiscoveryConfig, ScheduledConfig, UserConfig
+from configs.channels import (
+    DiscoveryConfig,
+    ScheduledConfig,
+    UserConfig,
+    VisionConfig,
+    WebBrowseConfig,
+    WebSearchConfig,
+)
+from configs.channels.code_agent import CodeAgentConfig
+from configs.channels.pim import PimConfig
+from configs.enums.policy_channel import PolicyChannel
 from controllers.message_processor import MessageProcessor
 from services.processor_config import ProcessorConfig
 from services.prompt_service import _RESPONSE_FORMAT
 
 pytestmark = pytest.mark.unit
+
+# The subagent channels whose transcript the user can open and watch: their reply
+# is rendered as HTML in that panel, so they carry the same output contract as
+# the user channel. The caller's policy channel is passed through, as the
+# delegating tool does.
+_WATCHABLE_SUBAGENTS: dict[str, Callable[[], ProcessorConfig]] = {
+    "web_search": lambda: WebSearchConfig(PolicyChannel.CHAT),
+    "web_browse": lambda: WebBrowseConfig(PolicyChannel.CHAT),
+    "pim": lambda: PimConfig(PolicyChannel.CHAT),
+    "code_agent": lambda: CodeAgentConfig(PolicyChannel.CHAT),
+}
 
 
 def _assembled_system(config: ProcessorConfig) -> str:
@@ -75,6 +98,34 @@ def test_response_format_absent_on_silent_non_html_channel(db: sqlite3.Connectio
     re-declared False) whose output is never rendered to a human — it must
     never be told to emit HTML."""
     system = _assembled_system(DiscoveryConfig())
+
+    assert _RESPONSE_FORMAT not in system
+    assert "## Response format" not in system
+
+
+@pytest.mark.parametrize(
+    "make_config", list(_WATCHABLE_SUBAGENTS.values()), ids=list(_WATCHABLE_SUBAGENTS)
+)
+def test_response_format_present_on_watchable_subagent_channel(
+    db: sqlite3.Connection, make_config: Callable[[], ProcessorConfig]
+) -> None:
+    """A subagent's reply is shown to the user as HTML in its transcript panel.
+    Without the contract in its system prompt the model answers in markdown,
+    and ``markdown_to_html`` (inline-only) leaves its headings, lists and tables
+    as raw syntax in that panel."""
+    system = _assembled_system(make_config())
+
+    assert _RESPONSE_FORMAT in system, (
+        "HTML response-format contract missing from a watchable subagent's system prompt"
+    )
+    assert "NEVER use markdown syntax" in system
+
+
+def test_response_format_absent_on_vision_channel(db: sqlite3.Connection) -> None:
+    """Vision is a subagent too, but its answer is an image description that is
+    indexed as plain text and never displayed — it must not be told to emit
+    HTML markup that would then pollute the index."""
+    system = _assembled_system(VisionConfig(PolicyChannel.CHAT))
 
     assert _RESPONSE_FORMAT not in system
     assert "## Response format" not in system
