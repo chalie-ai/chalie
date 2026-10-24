@@ -7,7 +7,9 @@ show the other tools as a catalogue. The loop that follows sees the plan as a
 ``[plan]`` block that tracks every update, keyed by the message's input row;
 once the exchange settles the plan leaves the context and stays on its message,
 where the thread view returns it. A message joined into a working turn adds
-tasks to the running plan and is never planned on its own.
+tasks to the running plan and is never planned on its own. A response that
+answers while its only calls close the plan's last open tasks is the turn's
+settled answer.
 
 These drive the real send endpoint (``POST /api/threads/<turn_id>``) or the
 real ``MessageProcessor`` for a delegate, the real plan ability through real
@@ -355,7 +357,137 @@ def test_a_delegate_plans_its_brief_before_working_it(provider: _PlanningProvide
     assert [c.tool_name for c in ToolCall.by_transcript(mp.uid)] == [Recall.NAME, PlanAbility.NAME]
 
 
-# ── 6. the upgrade path ──────────────────────────────────────────────────────
+# ── 6. the answer that closes the plan ends the turn ─────────────────────────
+
+
+def _answer(text: str, *calls: dict[str, object]) -> ProviderResponse:
+    return ProviderResponse(text=text, model="scripted", tool_calls=list(calls))
+
+
+def test_the_answer_that_closes_the_plan_ends_the_turn(
+    authed_client: AuthedClient, provider: _PlanningProvider,
+) -> None:
+    """The model answers in the same response as the updates that close its
+    plan — one task done, the other no longer needed. That response is the
+    turn's last: the updates ran, its row is the settled answer, and the model
+    is never sent another step."""
+    client, _db, _store = authed_client
+    provider.script(
+        _calls(_plan(action="create", tasks=[_FLIGHT, _ANSWER])),
+        _calls(_plan(action="update", task=1, status="in_progress")),
+        _answer(
+            "Your flight leaves at 9.",
+            _plan(action="update", task=1, status="done"),
+            _plan(action="update", task=2, status="cancelled"),
+        ),
+    )
+    turn_id = cast("int", _result(_post(client, -1, "when does my flight leave?"))["turn_id"])
+    _drain()
+
+    assert provider.tools == [_PLANNING] + [frozenset(UserConfig().always_available)] * 2
+    [message_id] = _input_rows(turn_id)
+    assert [status for *_, status in _plan_rows(message_id)] == ["done", "cancelled"]
+    assert _assistant_rows(turn_id) == [("", 0), ("Your flight leaves at 9.", 1)]
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        pytest.param(
+            _answer("Your flight leaves at 9.", _plan(action="update", task=1, status="done")),
+            id="a-task-left-open",
+        ),
+        pytest.param(
+            _answer(
+                "Your flight leaves at 9.",
+                _plan(action="update", task=1, status="done"),
+                _plan(action="update", task=2, status="done"),
+                {"name": Recall.NAME, "input": {"query": "flight booking"}},
+            ),
+            id="another-tool-called",
+        ),
+        pytest.param(
+            _answer(
+                "",
+                _plan(action="update", task=1, status="done"),
+                _plan(action="update", task=2, status="done"),
+            ),
+            id="nothing-said",
+        ),
+    ],
+)
+def test_a_response_that_does_not_both_answer_and_close_the_plan_is_a_step(
+    authed_client: AuthedClient, provider: _PlanningProvider, answer: ProviderResponse,
+) -> None:
+    """Prose beside plan updates is a step, not the answer, unless the updates
+    are all it called and they close the plan: a task still open, another
+    tool's call, or no prose at all, and the loop asks again. The reply after
+    it is the turn's settled row."""
+    client, _db, _store = authed_client
+    provider.script(_calls(_plan(action="create", tasks=[_FLIGHT, _ANSWER])), answer, _say("Anything else?"))
+    turn_id = cast("int", _result(_post(client, -1, "when does my flight leave?"))["turn_id"])
+    _drain()
+
+    assert provider.tools == [_PLANNING] + [frozenset(UserConfig().always_available)] * 2
+    assert _assistant_rows(turn_id) == [(answer.text, 0), ("Anything else?", 1)]
+
+
+_ECHO = f'[{PlanAbility.NAME}] {{"action": "update", "task": 2, "status": "done"}}'
+
+
+@pytest.mark.parametrize(
+    ("text", "rows"),
+    [
+        pytest.param(_ECHO, [("", 0), ("Anything else?", 1)], id="only-the-echo"),
+        pytest.param(f"Your flight leaves at 9.\n{_ECHO}", [("Your flight leaves at 9.", 1)], id="echo-beside-prose"),
+    ],
+)
+def test_a_line_echoing_the_responses_own_call_is_never_its_prose(
+    authed_client: AuthedClient, provider: _PlanningProvider, text: str, rows: list[tuple[str, int]],
+) -> None:
+    """The model writes its own plan update out in the act trail's call
+    notation beside the real updates that close the plan. That line is never
+    stored or taken for the answer: alone, the response is a silent step and
+    the reply after it settles; beside prose, the prose is the settled answer."""
+    client, _db, _store = authed_client
+    provider.script(
+        _calls(_plan(action="create", tasks=[_FLIGHT, _ANSWER])),
+        _answer(text, _plan(action="update", task=1, status="done"), _plan(action="update", task=2, status="done")),
+        _say("Anything else?"),
+    )
+    turn_id = cast("int", _result(_post(client, -1, "when does my flight leave?"))["turn_id"])
+    _drain()
+
+    assert provider.tools == [_PLANNING] + [frozenset(UserConfig().always_available)] * len(rows)
+    assert _assistant_rows(turn_id) == rows
+
+
+def test_a_message_joined_while_the_plan_closes_keeps_the_turn_going(
+    authed_client: AuthedClient, provider: _PlanningProvider,
+) -> None:
+    """The user adds to the question while the closing answer is being
+    written. That answer is no longer the turn's last: it stays a step, the
+    loop takes the new message in, and the reply to it is the settled row."""
+    client, _db, _store = authed_client
+    provider.script(
+        _calls(_plan(action="create", tasks=[_FLIGHT])),
+        _answer("Your flight leaves at 9.", _plan(action="update", task=1, status="done")),
+        _say("Your hotel is from 3."),
+    )
+    provider.hold_at(1)
+    opened = _result(_post(client, -1, "when does my flight leave?"))
+    turn_id = cast("int", opened["turn_id"])
+    assert provider.entered.wait(10), "the loop never reached its first step"
+    assert _result(_post(client, turn_id, "and my hotel?"))["id"] == opened["id"]
+    provider.release.set()
+    _drain()
+
+    assert provider.tools == [_PLANNING] + [frozenset(UserConfig().always_available)] * 2
+    assert "and my hotel?" in provider.bodies[2]
+    assert _assistant_rows(turn_id) == [("Your flight leaves at 9.", 0), ("Your hotel is from 3.", 1)]
+
+
+# ── 7. the upgrade path ──────────────────────────────────────────────────────
 
 
 def _outcome(db: sqlite3.Connection) -> object:

@@ -65,11 +65,11 @@ describe('a delegate call\'s pill', () => {
   const ref = { channel: 'delegate:web_search', turn_id: 12 };
 
   it('is the same pill once the repeated start frame arrives: it gains the delegate link and is not duplicated', () => {
-    startLiveTool('t-link', 5, 31, 'web_search', 'museum hours', 50);
+    startLiveTool('t-link', 5, 31, 'web_search', 'museum hours');
     expect(liveTrailsFor('t-link', 5)[0]?.pills[0]?.delegate).toBeNull();
 
     // The backend re-sends the call's start once the child turn exists.
-    startLiveTool('t-link', 5, 31, 'web_search', 'museum hours', 50);
+    startLiveTool('t-link', 5, 31, 'web_search', 'museum hours');
     setLiveToolDelegate('t-link', 5, 31, ref);
 
     const pills = liveTrailsFor('t-link', 5)[0]?.pills ?? [];

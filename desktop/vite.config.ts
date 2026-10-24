@@ -16,7 +16,7 @@ export default defineConfig({
     dedupe: [
       'vue',
       '@fontsource-variable/epilogue',
-      '@fontsource-variable/instrument-sans',
+      '@fontsource-variable/inter',
       '@fontsource-variable/jetbrains-mono',
     ],
   },

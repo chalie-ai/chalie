@@ -73,7 +73,8 @@ class Transcript(Model):
     # settle0 — the FIRST assistant row of a turn with settled=1: the boundary
     # between a turn's main exchange and its fork continuation. Each provider
     # call writes its own assistant row; only the exchange's terminal call (the
-    # one with no tool calls) is stamped settled=1. No alias needed — every
+    # one with no tool calls, or one that answered while closing its plan) is
+    # stamped settled=1. No alias needed — every
     # query below is single-table.
     _SETTLE_PREDICATE: ClassVar[str] = "role = 'assistant' AND settled = 1"
 

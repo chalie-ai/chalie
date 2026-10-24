@@ -11,6 +11,19 @@ export function formatDuration(totalSeconds: number): string {
   return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
 }
 
+/**
+ * Format an elapsed span in ms as rounded whole seconds, never under 1: "Xs"
+ * under a minute, "Xm Ys" under an hour, "Xh Ym" beyond — how a turn's work
+ * reads in prose ("Thought for 9s", a footer's "1m 9s"), unlike the clock above.
+ */
+export function formatElapsed(ms: number): string {
+  const seconds = Math.max(1, Math.round(ms / 1000));
+  const hours = Math.floor(seconds / 3600);
+  const mins = Math.floor(seconds / 60) % 60;
+  if (hours > 0) return `${hours}h ${mins}m`;
+  return mins === 0 ? `${seconds}s` : `${mins}m ${seconds % 60}s`;
+}
+
 /** Short weekday labels, indexed by Date.getDay() (0 = Sun). */
 export const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
 

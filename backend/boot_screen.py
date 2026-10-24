@@ -73,9 +73,9 @@ def _font_face_css() -> str:
             "100 900",
         ),
         (
-            "Instrument Sans Variable",
-            "instrument-sans-latin-wght-normal-*.woff2",
-            "400 700",
+            "Inter Variable",
+            "inter-latin-wght-normal-*.woff2",
+            "100 900",
         ),
         (
             "JetBrains Mono Variable",
@@ -116,7 +116,7 @@ _PAGE = (
   html,body{height:100%;margin:0}
   body{display:flex;align-items:center;justify-content:center;
     background:var(--bg);color:var(--text);
-    font:15px/1.55 'Instrument Sans Variable',system-ui,-apple-system,sans-serif}
+    font:15px/1.55 'Inter Variable',system-ui,-apple-system,sans-serif}
   main{text-align:center;padding:2rem}
   .dot{width:16px;height:16px;margin:0 auto 1.5rem;
     background:var(--pink);animation:working 1.4s ease-in-out infinite}
@@ -170,7 +170,7 @@ _FAIL_PAGE = (
   html,body{height:100%%;margin:0}
   body{display:flex;align-items:center;justify-content:center;
     background:var(--bg);color:var(--text);
-    font:15px/1.55 'Instrument Sans Variable',system-ui,-apple-system,sans-serif}
+    font:15px/1.55 'Inter Variable',system-ui,-apple-system,sans-serif}
   main{text-align:center;padding:2rem;max-width:52ch}
   h1{font-family:'Epilogue Variable',system-ui,sans-serif;
     font-size:1.25rem;margin:0 0 .75rem;font-weight:800;letter-spacing:-.02em}

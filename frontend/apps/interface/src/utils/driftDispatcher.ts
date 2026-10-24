@@ -189,11 +189,10 @@ function _dispatchToolCall(data: WsPushEvent): boolean {
     tool_name?: string;
     summary?: string;
     state?: string;
-    transcript_row_id?: number | null;
     delegate?: DelegateRef | null;
   };
   if (frame.state === 'started') {
-    startLiveTool(feed, turnId, frame.id ?? null, frame.tool_name ?? '', frame.summary, frame.transcript_row_id ?? null);
+    startLiveTool(feed, turnId, frame.id ?? null, frame.tool_name ?? '', frame.summary);
   } else {
     finishLiveTool(feed, turnId, frame.id ?? null, frame.state === 'done');
   }

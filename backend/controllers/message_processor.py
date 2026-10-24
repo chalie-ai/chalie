@@ -48,9 +48,11 @@ decides normally.
 ``_step()`` is the **recursive** step loop: send → (compact-and-continue on
 over-cap) → store the call's own assistant row → dispatch tool calls → take in
 any message joined meanwhile → recurse; it bottoms out when the model returns a
-call with no tool calls. ``_settle()`` then stores that call's row and, in the
-same transaction, either ends the turn — the only row stored settled — or, when
-a message joined while the call was in flight, takes it in and steps again. The
+call with no tool calls, or one that answered while its only calls closed the
+last open tasks of its plan. ``_settle()`` then stores (or, for the latter,
+stamps) that call's row and, in the same transaction, either ends the turn —
+the only row settled — or, when a message joined while the call was in flight,
+takes it in and steps again. The
 loop runs on the daemon thread ``begin()`` starts; every recursive call is
 synchronous within that thread. Synchronous text-consumers (delegate abilities, mcp_server, the
 user-synthesis generator) call ``process()`` then ``result()`` to join the
@@ -72,6 +74,8 @@ from abilities.plan import PlanAbility
 from abilities.recall import Recall
 from configs.channels.user import UserConfig
 from configs.enums.channels import WATCHABLE_DELEGATE_CHANNELS, Channel
+from configs.enums.param_key import Keys
+from configs.enums.plan_task_status import PlanTaskStatus
 from configs.enums.provider_type import ProviderType
 from configs.enums.thinking_level import ThinkingLevel
 from exceptions import (
@@ -134,10 +138,25 @@ _EMPTY_COMPLETION_STEER = (
 #: will survive the next one too — recursing past this is an infinite loop, not
 #: persistence.
 _CONTEXT_LIMIT_RECOVERY_LIMIT = 3
+
+#: A response line written in the act trail's own call notation —
+#: ``[tool_name] {params}`` (``PromptService.act_trail``): the model copying the
+#: trail's format into its text, not prose for the user.
+_ECHOED_CALL = re.compile(r"^\[(\w+)\] \{")
 # The planning pre-pass offers only these tools, and sends at most this many
 # requests: room for a recall or two before the plan, never an open loop.
 _PLANNING_TOOLS = (Recall.NAME, PlanAbility.NAME)
 _PLANNING_STEP_LIMIT = 3
+
+
+def _without_echoed_calls(text: str, tool_calls: list[dict[str, object]]) -> str:
+    """The response text without the lines that echo one of its own tool calls
+    in the act trail's notation — so an echo is never stored, spoken, or taken
+    for the prose that answers a turn. Unchanged when it echoes none."""
+    names = {call["name"] for call in tool_calls}
+    lines = (text or "").splitlines()
+    kept = [line for line in lines if not ((match := _ECHOED_CALL.match(line.strip())) and match[1] in names)]
+    return text if len(kept) == len(lines) else "\n".join(kept).strip()
 
 
 class _TurnCancelled(Exception):
@@ -440,10 +459,13 @@ class MessageProcessor:
         and returning that last call's response for :meth:`_settle` to store.
 
         Send through :meth:`_send_fitting` (compacting on ``ContextLimit``)
-        → if the call made no tool calls, return it unstored; otherwise store
-        its own assistant row with settled=0 — empty when the call carried no
-        prose — so the call's tool calls and thinking trace anchor to it,
-        dispatch the calls, take in any message joined meanwhile, and recurse.
+        → if the call made no tool calls, return it unstored; otherwise drop
+        any line of its text that echoes one of its own calls in the act
+        trail's notation, store its own assistant row with settled=0 — empty
+        when the call carried no prose — so the call's tool calls and thinking
+        trace anchor to it, dispatch the calls, and return it if it answered by
+        closing its plan (:meth:`_closes_plan`); else take in any message
+        joined meanwhile, and recurse.
         A retried send and the empty-completion steer write no row and take
         nothing in: a joined message is consumed only once a call and all its
         tools have returned. A cancel observed before any send aborts the
@@ -483,12 +505,34 @@ class MessageProcessor:
                 self._empty_completion_steer = True
                 return self._step()
             return response
+        response.text = _without_echoed_calls(response.text, tool_calls)
         self._guard_runaway(response.text, tool_calls)
         self._store(response.text, settled=False)
         self._capture_thinking_trace(response)
         self._dispatch_tools(tool_calls)
+        if self._closes_plan(response.text, tool_calls):
+            return response
         self._consume_joined()
         return self._step()
+
+    def _closes_plan(self, text: str, tool_calls: list[dict[str, object]]) -> bool:
+        """Whether a call that made tool calls is still the turn's answer: it
+        wrote prose, its calls only updated plan tasks, and no task is left
+        open — the plan instruction's close-with-the-answer. Read once those
+        calls have run, so an update that failed never passes for a closed
+        plan."""
+        if not (text or "").strip() or self.uid is None:
+            return False
+        if any(
+            call["name"] != PlanAbility.NAME
+            or cast("dict[str, object]", call["input"]).get(Keys.action) != "update"
+            for call in tool_calls
+        ):
+            return False
+        tasks = PlanTask.for_transcript(self.uid)
+        return bool(tasks) and all(
+            task.status in (PlanTaskStatus.DONE, PlanTaskStatus.CANCELLED) for task in tasks
+        )
 
     def _send_fitting(self) -> "ProviderResponse":
         """Send this step's request, checking for a cancel before every attempt
@@ -521,15 +565,22 @@ class MessageProcessor:
         is stored settled and the execution closes COMPLETED, together, so a
         message can never join a turn that has already answered for the last
         time. One waiting: the row is stored settled=0, the message is taken
-        in, and the caller steps again. Frames for these writes go out only
-        after the commit; a cancel that landed first aborts before anything is
-        written. Returns whether the turn is settled."""
+        in, and the caller steps again. A call that answered while closing its
+        plan was already stored and its calls run by :meth:`_step`, so its row
+        is only stamped settled, under the same rule. Frames for these writes
+        go out only after the commit; a cancel that landed first aborts before
+        anything is written. Returns whether the turn is settled."""
         with self._atomic():
             if self.turn_execution_service.should_stop():
                 raise _TurnCancelled()
             waiting = bool(self.transcript_service.joined_since(self._consumed_through))
-            formatted = self._store(response.text, settled=not waiting)
-            self._capture_thinking_trace(response)
+            if not response.tool_calls:
+                formatted = self._store(response.text, settled=not waiting)
+                self._capture_thinking_trace(response)
+            else:
+                formatted = self._format(response.text or "")
+                if not waiting and not self.config.skip_transcript:
+                    self.transcript_service.settle(cast("int", self.current_transcript_id))
             if not waiting:
                 closed = self.turn_execution_service.finish(TurnExecution.COMPLETED)
                 if closed is None and self.execution is not None:

@@ -1,25 +1,36 @@
+<!-- One step of Chalie's as a chat message: its work — thinking and tool calls
+     — then what it said. Every step is this same block, the running one too,
+     whose live work fills the `step` slot — with no row yet until a refetch
+     returns it. -->
 <script setup lang="ts">
 import type { ConversationMessage } from '../../api/conversation';
 import { renderMarkup } from '../../composables/useMarkup';
+import { didWork } from '../../utils/turnSteps';
 import SegmentRenderer from './SegmentRenderer.vue';
+import ThinkingAndCalls from './ThinkingAndCalls.vue';
 
-defineProps<{ message: ConversationMessage }>();
+defineProps<{ message: ConversationMessage | null }>();
 </script>
 
 <template>
   <div
     class="speech-form speech-form--chalie"
-    :data-transcript-row-id="message.id"
+    :data-transcript-row-id="message?.id"
   >
-    <SegmentRenderer
-      v-if="message.segments && message.segments.length"
-      :segments="message.segments"
-    />
-    <div
-      v-else
-      class="speech-form__text chalie-markup"
-      v-html="renderMarkup(message.content ?? '')"
-    />
+    <slot name="step">
+      <ThinkingAndCalls v-if="message && didWork(message)" :work="message" />
+    </slot>
+    <template v-if="message?.content.trim()">
+      <SegmentRenderer
+        v-if="message.segments && message.segments.length"
+        :segments="message.segments"
+      />
+      <div
+        v-else
+        class="speech-form__text chalie-markup"
+        v-html="renderMarkup(message.content)"
+      />
+    </template>
   </div>
 </template>
 
@@ -37,11 +48,24 @@ defineProps<{ message: ConversationMessage }>();
 
 .chalie-markup p {
   margin: 0 0 0.75em;
-  line-height: 1.35;
+  line-height: 1.55;
 }
 
 .chalie-markup p:last-child {
   margin-bottom: 0;
+}
+
+.chalie-markup h1 {
+  font-family: var(--font-ui);
+  font-weight: 600;
+  font-size: var(--fs-title);
+  letter-spacing: normal;
+  line-height: 1.3;
+  margin: var(--space-lg) 0 var(--space-sm);
+}
+
+.chalie-markup h1:first-child {
+  margin-top: 0;
 }
 
 .chalie-markup a {
@@ -75,12 +99,12 @@ defineProps<{ message: ConversationMessage }>();
   font-size: var(--fs-mono);
 }
 
-.chalie-markup strong {
+.chalie-markup b {
   font-weight: 600;
   color: var(--text);
 }
 
-.chalie-markup em {
+.chalie-markup i {
   font-style: italic;
   color: var(--muted);
 }
@@ -101,7 +125,7 @@ defineProps<{ message: ConversationMessage }>();
 
 .chalie-markup li {
   margin: 0.2em 0;
-  line-height: 1.35;
+  line-height: 1.55;
 }
 
 .chalie-markup blockquote {
