@@ -1,7 +1,7 @@
 """Provider database service — manages provider configuration in DB (SQLite)."""
 
 import logging
-from typing import Dict, Optional, List, cast
+from typing import TYPE_CHECKING, Dict, Optional, List, cast
 
 from exceptions import ProviderError, VaultLockedError
 from models.provider import Provider as ProviderModel
@@ -9,6 +9,9 @@ from models.setting import Setting
 from services.database import Database
 from services.log_utils import safe
 from services.provider_api import MAX_CONTEXT_WINDOW
+
+if TYPE_CHECKING:
+    from contracts.provider_client import ProviderClient
 
 logger = logging.getLogger(__name__)
 
@@ -283,7 +286,9 @@ class ProviderDbService:
 
         return self.get_provider_by_id(provider_id)
 
-    def pin_context_window(self, config: Dict[str, object]) -> int:
+    def pin_context_window(
+        self, config: Dict[str, object], client: Optional["ProviderClient"] = None,
+    ) -> int:
         """Return this provider's context window, probing and persisting once.
 
         The self-heal that runs in front of every LLM call. A row that already
@@ -306,6 +311,9 @@ class ProviderDbService:
         platform — in every one of those cases the call this window was being
         computed for was going nowhere regardless. Substituting a guess would
         only convert a clear failure into a wrong answer.
+
+        ``client`` is the one the probe asks when given — a sender passes its
+        own, so aborting that client ends the probe as well as the call.
         """
         platform = cast(str, config.get("platform") or "")
         model = cast(str, config.get("model") or "")
@@ -318,6 +326,7 @@ class ProviderDbService:
             platform, model,
             cast(Optional[str], config.get("host")),
             cast(Optional[str], config.get("api_key")),
+            client,
         )
         if window is None:
             raise ProviderError(
@@ -354,6 +363,7 @@ class ProviderDbService:
     @staticmethod
     def _probe_context_window(
         platform: str, model: str, host: Optional[str], api_key: Optional[str],
+        client: Optional["ProviderClient"] = None,
     ) -> Optional[int]:
         """Ask the provider for the model's real context window, clamped.
 
@@ -361,14 +371,17 @@ class ProviderDbService:
         row (create/update) leaves the column alone rather than storing a guess,
         and :meth:`pin_context_window` turns it into a loud failure instead.
 
+        ``client`` is asked when given; otherwise one is built from the fields.
+
         Never raises: a provider must remain creatable while its host is down.
         """
         try:
-            from services.llm_clients.factory import build_client  # noqa: PLC0415
-            client = build_client({
-                'platform': platform, 'model': model,
-                'host': host, 'api_key': api_key,
-            })
+            if client is None:
+                from services.llm_clients.factory import build_client  # noqa: PLC0415
+                client = build_client({
+                    'platform': platform, 'model': model,
+                    'host': host, 'api_key': api_key,
+                })
             window = client.get_context_limit()
         except Exception as exc:
             logger.warning(

@@ -66,7 +66,9 @@ class _Provider:
     Past the script it answers with a benign terminal reply (the best-effort
     post-turn calls a finished turn spawns are not scripted for). ``hold_next``
     makes the next ``send`` park until ``release`` is set, signalling ``entered``
-    first — the window in which a test sends a message into the working turn."""
+    first — the window in which a test sends a message into the working turn.
+    ``abort`` ends a parked call the way a real client's abort ends its request:
+    the call raises instead of answering."""
 
     _TERMINAL = ProviderResponse(text="done", model="scripted-terminal", tool_calls=None)
 
@@ -77,6 +79,7 @@ class _Provider:
         self.bodies: list[str] = []
         self.entered = threading.Event()
         self.release = threading.Event()
+        self.aborted = threading.Event()
 
     def script(self, *responses: ProviderResponse) -> None:
         with self._lock:
@@ -91,6 +94,10 @@ class _Provider:
     def get_context_limit(self) -> int:
         return 200000
 
+    def abort(self) -> None:
+        self.aborted.set()
+        self.release.set()
+
     def send(self, dto: ProviderApiRequest) -> ProviderResponse:
         if is_planning_request(dto):
             return NO_PLAN
@@ -101,6 +108,8 @@ class _Provider:
         if hold:
             self.entered.set()
             assert self.release.wait(10), "the held provider call was never released"
+            if self.aborted.is_set():
+                raise ConnectionAbortedError("the provider call was aborted")
         return response
 
 
@@ -316,7 +325,8 @@ def test_stopping_a_turn_with_a_joined_message_keeps_both_visible_and_ends_it_ca
     authed_client: AuthedClient, provider: _Provider,
 ) -> None:
     """The user sends an addition, then hits stop before the model answers. The
-    turn ends cancelled (not crashed), stores no answer, and refetching the
+    stop itself ends the call still in flight — nothing else releases it — and
+    the turn ends cancelled (not crashed), stores no answer, and refetching the
     thread still shows the question AND the addition — a message the user sent
     into a turn they were watching must not vanish. A message sent after the
     stop is a reply, not another join into the dead turn."""
@@ -328,9 +338,9 @@ def test_stopping_a_turn_with_a_joined_message_keeps_both_visible_and_ends_it_ca
 
     stop = cast("dict[str, object]", client.delete(f"/api/threads/{turn_id}").get_json())
     assert cast("dict[str, object]", stop["result"])["cancelled"] is True
-    provider.release.set()
     _drain()
 
+    assert provider.aborted.is_set()
     assert _executions(db, turn_id) == [(cast("int", opened["id"]), "cancelled")]
     assert _answers(turn_id) == []
     block = cast("dict[str, object]", client.get(f"/api/threads/{turn_id}").get_json())

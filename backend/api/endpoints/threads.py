@@ -202,10 +202,11 @@ class ThreadsEndpoint(Endpoint):
         turn's terminal state) and broadcasts that row exactly as the turn's
         own lifecycle frames go out, so the surface's ``cancelled`` frame fires
         the instant this returns rather than waiting on the still running step
-        loop. The loop keeps its in-flight provider call running — there is no
-        mid-flight abort — but its own cancel checkpoint observes
-        ``cancel_requested`` and discards the response instead of storing it;
-        every row the turn already wrote stays, nothing is deleted.
+        loop. The provider call in flight is aborted by its own watcher once
+        that reads ``cancel_requested``, and a response that came back before
+        the abort landed is discarded by the loop's cancel checkpoint instead
+        of being stored; every row the turn already wrote stays, nothing is
+        deleted.
 
         Args:
             id: Turn id — the same one the send handed back.

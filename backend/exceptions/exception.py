@@ -155,15 +155,6 @@ class RateLimitError(ProviderResponseError):
         super().__init__(message, response_code=429, provider=provider)
 
 
-class ProviderTimeoutError(ProviderResponseError):
-    """The provider call exceeded PROVIDER_CALL_TIMEOUT_S at the HTTP boundary.
-
-    Every thin client maps its SDK's native timeout to this type. The provider
-    layer never retries; this (like any provider error) bubbles up to the
-    MessageProcessor, which owns the resend policy.
-    """
-
-
 class ProviderRetriesExhaustedError(ProviderResponseError):
     """Raised by the MessageProcessor after every provider resend attempt failed.
 

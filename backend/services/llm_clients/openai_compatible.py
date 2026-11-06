@@ -58,10 +58,10 @@ from contracts.provider_client import ProviderClient
 from exceptions import (
     ContextLimit,
     ProviderResponseError,
-    ProviderTimeoutError,
     RateLimitError,
 )
 from services.llm_clients.context_window import DEFAULT_WINDOW
+from services.llm_clients.socket_abort import SocketAbort
 from services.llm_clients.thinking_map import (
     OPENAI_COMPATIBLE_NONE_BODY,
     OPENAI_NONE_FALLBACK_EFFORT,
@@ -264,6 +264,12 @@ class OpenAICompatibleClient(ProviderClient):
         self._config = config
         self.model: str = cast(str, config.get('model', ''))
         self.platform: str = cast(str, config.get('platform', self.PLATFORM))
+        self._abort = SocketAbort()
+
+    def abort(self) -> None:
+        """End this client's in-flight call from another thread."""
+        self._abort.abort()
+
     def _api_key(self) -> str:
         """The credential to present, honouring this platform's own key rule.
 
@@ -284,12 +290,13 @@ class OpenAICompatibleClient(ProviderClient):
         return _resolve_api_key(self._config)
 
     def _get_client(self) -> "_openai_mod.OpenAI":
-        from openai import OpenAI  # noqa: PLC0415
+        from openai import DefaultHttpxClient, OpenAI  # noqa: PLC0415
         from services.llm_service import _app_user_agent  # noqa: PLC0415
-        from services.provider_api import PROVIDER_CALL_TIMEOUT_S  # noqa: PLC0415
         kwargs: dict[str, object] = {
             'api_key': self._api_key(),
-            'timeout': PROVIDER_CALL_TIMEOUT_S,
+            'timeout': None,
+            'max_retries': 0,  # Chalie's own retry loop is the only thing that re-sends
+            'http_client': DefaultHttpxClient(timeout=None, event_hooks=self._abort.hooks()),
             'default_headers': {
                 "HTTP-Referer": _APP_URL,
                 "X-Title": _APP_TITLE,
@@ -345,8 +352,6 @@ class OpenAICompatibleClient(ProviderClient):
             return cast("Callable[..., _openai_mod.types.chat.ChatCompletion]", client.chat.completions.create)(**create_kwargs)
         except openai_mod.RateLimitError as exc:
             raise RateLimitError(str(exc), provider='openai') from exc
-        except openai_mod.APITimeoutError as exc:
-            raise ProviderTimeoutError(str(exc), provider='openai') from exc
         except (openai_mod.BadRequestError, openai_mod.APIError) as exc:
             # Confirmed: OpenAI sends HTTP 400 with error.code == 'context_length_exceeded'.
             # That code is OpenAI's own — the openai_compatible hosts sharing this
@@ -407,7 +412,6 @@ class OpenAICompatibleClient(ProviderClient):
         """Transform DTO → OpenAI Chat Completions API → ProviderApiResponse."""
         from services.llm_service import _strip_think_blocks  # noqa: PLC0415
 
-        client = self._get_client()
         start = time.time()
 
         api_messages = _openai_convert_messages(dto.messages)
@@ -427,7 +431,8 @@ class OpenAICompatibleClient(ProviderClient):
             if self.SENDS_THINKING_EXTRA_BODY and dto.thinking_mode is ThinkingLevel.NONE:
                 create_kwargs['extra_body'] = OPENAI_COMPATIBLE_NONE_BODY
 
-        response = self._invoke_create(client, create_kwargs)
+        with self._get_client() as client:
+            response = self._invoke_create(client, create_kwargs)
         latency_ms = int((time.time() - start) * 1000)
 
         msg = response.choices[0].message
@@ -564,7 +569,8 @@ class OpenAICompatibleClient(ProviderClient):
         try:
             # Materialised eagerly: the SDK returns a lazily-iterated page, and
             # a network failure part-way through must be caught here, not later.
-            entries = list(self._get_client().models.list())
+            with self._get_client() as client:
+                entries = list(client.models.list())
         except Exception as exc:
             logger.warning(
                 "[%s] /models unavailable for window detection on model=%s: %s",
@@ -592,19 +598,19 @@ class OpenAICompatibleClient(ProviderClient):
         import openai as openai_mod  # noqa: PLC0415
 
         try:
-            client = self._get_client()
-            create = cast(
-                "Callable[..., _openai_mod.types.chat.ChatCompletion]",
-                client.chat.completions.create,
-            )
-            resp = create(
-                model=self.model,
-                messages=[{
-                    "role": "user",
-                    "content": "Do NOT think, answer immediately with 'pong'.",
-                }],
-                max_tokens=5,
-            )
+            with self._get_client() as client:
+                create = cast(
+                    "Callable[..., _openai_mod.types.chat.ChatCompletion]",
+                    client.chat.completions.create,
+                )
+                resp = create(
+                    model=self.model,
+                    messages=[{
+                        "role": "user",
+                        "content": "Do NOT think, answer immediately with 'pong'.",
+                    }],
+                    max_tokens=5,
+                )
         except openai_mod.APIStatusError as exc:
             # The host answered, and an answer is the liveness this probe exists
             # to establish. Reasoning models reject max_tokens outright (they

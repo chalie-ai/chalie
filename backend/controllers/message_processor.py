@@ -469,14 +469,13 @@ class MessageProcessor:
         A retried send and the empty-completion steer write no row and take
         nothing in: a joined message is consumed only once a call and all its
         tools have returned. A cancel observed before any send aborts the
-        whole turn. Every provider client is a
-        single blocking, non-streaming call (§ llm_clients/*) with no
-        mid-flight abort hook, so a cancel requested while that call is
-        in flight can only be observed once it returns — the checkpoint in
-        :meth:`_send_fitting` right after it, BEFORE the response is stored, is what makes that observation
-        count: without it a cancel that lands mid-generation is silently
-        ignored and the full response is persisted and rendered as if the turn
-        had completed normally."""
+        whole turn. A cancel requested while a call is in flight aborts that
+        call (:meth:`ProviderService._abort_on_stop`), but one whose response
+        came back before the abort landed is only observed once it returns —
+        the checkpoint in :meth:`_send_fitting` right after it, BEFORE the
+        response is stored, is what makes that observation count: without it
+        that response is persisted and rendered as if the turn had completed
+        normally."""
         response = self._send_fitting()
         tool_calls = response.tool_calls
         if not tool_calls:
@@ -625,7 +624,7 @@ class MessageProcessor:
                 raise
             except Exception as exc:  # noqa: BLE001 — resend policy lives here, not in the provider
                 last_exc = exc
-                if self.turn_execution_service.should_stop():
+                if self.provider_service.aborted.is_set() or self.turn_execution_service.should_stop():
                     raise _TurnCancelled() from exc
                 logger.warning(
                     "[MessageProcessor] provider attempt %s/%s failed: %s",

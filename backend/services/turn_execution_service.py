@@ -98,13 +98,13 @@ class TurnExecutionService:
         /api/threads/<turn_id> (addressed by the turn's type or, for a
         watchable delegate turn, its channel) and a turn's own self-cancelling
         ability (:meth:`cancel`) route through here — and the single AUTHORITY
-        for the turn's terminal state. Every provider client is one blocking,
-        non-streaming call with no mid-flight abort hook (§ llm_clients/*), so
-        the running turn cannot physically be stopped the instant this is
-        called — the in-flight call is left to finish server-side, and
-        :meth:`MessageProcessor._step`'s cancel checkpoint discards its
-        response instead of storing it. Ending the
-        turn's LIFECYCLE does not have to wait for that: this stamps the live
+        for the turn's terminal state. This does not reach into the running
+        thread: the provider call in flight is aborted by its own watcher once
+        that reads the flag (:meth:`ProviderService._abort_on_stop`, about one
+        poll later), the retry loop then ends the turn instead of resending,
+        and a response that came back before the abort landed is discarded by
+        :meth:`MessageProcessor._step`'s cancel checkpoint instead of being
+        stored. Ending the turn's LIFECYCLE does not have to wait for that: this stamps the live
         (``ended_at IS NULL``) row for this (channel, turn_id) CANCELLED with
         ``ended_at`` set right here, synchronously, so the WS frame and the DB
         state both flip the instant cancel is requested rather than after the

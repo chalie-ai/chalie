@@ -33,6 +33,7 @@ import pytest
 
 from configs.channels.user import UserConfig
 from controllers.message_processor import MessageProcessor
+from models.provider_request import ProviderRequest
 from models.provider_response import ProviderResponse
 from models.transcript import Transcript
 from models.voice_transcript import VoiceTranscript
@@ -79,7 +80,11 @@ class _ReplyingProvider:
 
 class _ToolThenReplyProvider:
     """A reply that first runs a tool-only step, then answers: the exchange's
-    terminal row is NOT the first row the call stores."""
+    terminal row is NOT the first row the call stores.
+
+    The reply's thread gist runs concurrently through this same double, so only
+    the reply's act-loop sends — the ones carrying tools — are counted; the
+    gist's toolless send can never take the tool-only step."""
 
     def __init__(self) -> None:
         self._sent = 0
@@ -90,6 +95,10 @@ class _ToolThenReplyProvider:
     def send(self, dto: object) -> ProviderResponse:
         if is_planning_request(dto):
             return NO_PLAN
+        if not cast(ProviderRequest, dto).tools:
+            return ProviderResponse(
+                text=_REPLY, model="scripted-presynthesis", tool_calls=None, tokens_input=1,
+            )
         self._sent += 1
         if self._sent == 1:
             return ProviderResponse(
