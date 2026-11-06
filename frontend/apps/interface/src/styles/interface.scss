@@ -207,6 +207,7 @@ body {
 .loading-overlay__dot {
   width: 18px;
   height: 18px;
+  border-radius: 50%;
   background: var(--pink);
   animation: working 1.4s ease-in-out infinite;
 }
@@ -349,6 +350,7 @@ body {
   height: 14px;
   border: 2px solid var(--control);
   border-top-color: var(--muted);
+  border-radius: 50%;
   animation: spin 0.7s linear infinite;
 }
 

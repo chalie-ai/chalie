@@ -4,7 +4,8 @@
    tokens; this file is the source of truth.
 
    Flat and sharp: no radius, gradient, glow, shadow or blur except the weather
-   card's sky, the plan card and the user's prompt bubble (8px). Depth comes from
+   card's sky, the plan card, the user's prompt bubble (8px) and the loading
+   spinners, which are circles (status dots stay square). Depth comes from
    the three grounds (bg → surface → surface-2): fills group things; a border marks
    only a text field or the focus ring. One control height, one icon size, three
    text sizes (12 mono, 15 body, 20 title). Pink is the only accent (those two neon
@@ -149,6 +150,8 @@ select {
 }
 input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="color"]),
 select { min-height: var(--control-h); }
+/* Text sits inset from the border like the select's. Zero specificity, so a component's own padding wins. */
+:where(input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="color"])) { padding: 0 12px; }
 /* The native select draws its own arrow and box; ours is the chevron in the end padding. */
 select {
   appearance: none;

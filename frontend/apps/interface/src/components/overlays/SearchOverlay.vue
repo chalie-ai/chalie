@@ -139,6 +139,7 @@ function pick(item: ConversationThread): void {
   background: transparent;
   border: 0;
   outline: 0;
+  padding: 0;
 }
 
 .search-input::placeholder {
