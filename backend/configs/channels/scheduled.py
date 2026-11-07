@@ -64,7 +64,7 @@ class ScheduledConfig(ProcessorConfig):
             external_turn_id=True,
         )
 
-    def type(self) -> ConfigTypeEnum:
+    def type(self) -> ConfigTypeEnum | None:
         return ConfigTypeEnum.SCHEDULED
 
     @property

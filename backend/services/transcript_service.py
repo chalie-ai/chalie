@@ -45,11 +45,12 @@ class TranscriptService:
 
     def read(self) -> list[Transcript]:
         """The current turn's history view, above the compaction watermark
-        (§6.1): FORK (``self.mp._forked`` — a reply into an already-settled
-        thread) returns the whole turn, unfloored, between the watermark and
-        this turn's anchoring row; MAIN (a fresh turn) returns every prior
-        turn above the watermark, each floored at its own settle0. Keyed off
-        the same ``mp._forked`` flag ``CompactionService`` uses to pick its
+        (§6.1): FORK (``self.mp.fork_view`` — a reply into an already-settled
+        thread, or any turn on a ``turn_scoped_history`` channel) returns the
+        whole turn, unfloored, between the watermark and this turn's anchoring
+        row; MAIN (a fresh turn) returns every prior turn above the watermark,
+        each floored at its own settle0. Keyed off the same ``mp.fork_view``
+        flag ``CompactionService`` uses to pick its
         watermark axis, so the two never disagree mid-turn (a live
         ``settle0`` lookup flips the moment this turn's terminal row lands;
         the fixed flag can't). Feeds
@@ -82,7 +83,7 @@ class TranscriptService:
             return []
         watermark = self.mp.compaction_service.watermark()
         rows: list[Transcript] = []
-        if self.mp._forked:
+        if self.mp.fork_view:
             ceiling = self.mp.uid if self.mp.uid is not None else _NO_CEILING
             rows = (
                 Transcript.filter("channel", self.mp.channel)

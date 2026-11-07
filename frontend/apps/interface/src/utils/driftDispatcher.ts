@@ -21,7 +21,7 @@
 import type { DelegateRef, WsPushEvent, WsTurnExecutionEvent } from '@chalie/shared';
 import { conversation as convoApi } from '../api/conversation';
 import { showToast } from './toast';
-import { clearLiveTurn, finishLiveTool, setLiveToolDelegate, startLiveTool } from './liveActTrail';
+import { clearLiveTurn, finishLiveTool, setDelegateRunning, setLiveToolDelegate, startLiveTool } from './liveActTrail';
 import { reconcileCancelledTurn } from './cancelReconcile';
 import { isDelegateChannel } from './delegateChannel';
 import {
@@ -389,6 +389,8 @@ function _dispatchTurnExecution(data: WsPushEvent): boolean {
  */
 function _dispatchDelegateExecution(turnId: number, channel: string, state: string): void {
   const terminal = state !== 'working';
+  // A subtask outlives its caller: record its run state from its own frame.
+  setDelegateRunning(channel, turnId, !terminal);
   if (terminal) clearLiveTurn(channel, turnId);
   if (!hasDelegateSurface(channel, turnId)) return;
   void refetchDelegate(turnId, channel, { force: terminal });

@@ -136,7 +136,9 @@ class ThreadsEndpoint(Endpoint):
         loop answers it once its current provider call and tools return, so
         the working execution comes back rather than a new one. Otherwise a
         real id replies INTO that thread (the id is echoed back). A supplied id
-        naming no existing turn is rejected by the constructor.
+        naming no existing turn is rejected by the constructor. The join-or-start
+        dispatch itself is :meth:`MessageProcessor.send` — the one input
+        function every sender uses.
 
         A truthy ``join`` field marks the thread's own follow-up: it joins only
         the thread's first exchange, and when that is not the one working —
@@ -165,16 +167,14 @@ class ThreadsEndpoint(Endpoint):
         if not text and not files:
             return Response.failure(self._MSG_REQUIRED), 422
         turn_id = cast("int", id)
+        spine_only = False
         if turn_id != -1:
             spine_only = request.form.get("join", "").lower() in self._TRUTHY
-            if not files:
-                joined = MessageProcessor(scope.config, turn_id).join(text, spine_only=spine_only)
-                if joined is not None:
-                    return TurnExecution.model_validate(joined.to_dict()).single()
-            elif TurnExecutionModel.joinable(scope.channel, turn_id, spine_only=spine_only) is not None:
+            # Files never join: a file sent into a still-working turn is a 409
+            # before anything is staged. The join-or-start dispatch itself is
+            # :meth:`MessageProcessor.send` below.
+            if files and TurnExecutionModel.joinable(scope.channel, turn_id, spine_only=spine_only) is not None:
                 return Response.failure(self._NO_FILES_ON_JOIN), 409
-            if spine_only:
-                turn_id = -1
         attachments = self._stage_uploads(cast("list[object]", files))
         if not text:
             text = self._FILE_PLACEHOLDER
@@ -186,10 +186,10 @@ class ThreadsEndpoint(Endpoint):
             "attachments": attachments,
             "thinking_level": request.form.get("thinking_level"),
         }
-        mp = MessageProcessor.process(scope.config, text, payload, turn_id)
-        if mp.execution is None:
+        execution = MessageProcessor.send(scope.config, text, payload, turn_id, spine_only=spine_only)
+        if execution is None:
             return Response.failure("Failed to open turn execution"), 500
-        return TurnExecution.model_validate(mp.execution.to_dict()).single()
+        return TurnExecution.model_validate(execution.to_dict()).single()
 
     def delete(self, id: int | str) -> ResponseReturnValue:
         """Interrupt the running turn for this turn_id — the stop button's call.

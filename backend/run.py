@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     import ssl
 
     from boot_screen import BootScreen as _BootScreen
+    from models.turn_execution import TurnExecution
     from services.embedding_service import EmbeddingService
     from services.onnx_inference_service import OnnxInferenceService
     from consumer import WorkerManager as _WorkerManager
@@ -312,6 +313,23 @@ def _init_services() -> None:
     logger.info("[Startup] WriteQueueService started")
 
 
+def _reply_to_swept_subtasks(swept: list["TurnExecution"]) -> None:
+    """Tell the caller of every subtask the boot sweep closed that a restart
+    cut it off — the reply the subtask's own end would have sent, had its
+    process lived. A memory step swept on the subtask channel is not a
+    subtask (``is_subtask_turn``) and has no caller to tell. One failed
+    notice is logged and the rest still go out: a caller missing its notice
+    must never stop the boot."""
+    from abilities.subtask import is_subtask_turn, reply_to_caller
+
+    for row in swept:
+        try:
+            if is_subtask_turn(row.channel, row.turn_id):
+                reply_to_caller(row.turn_id, "")
+        except Exception:
+            logger.exception("[Startup] Subtask #%d: the restart notice to its caller failed", row.turn_id)
+
+
 def _register_workers(manager: "_WorkerManager", host: str, port: int) -> None:
     """Register all service workers with the WorkerManager.
 
@@ -463,12 +481,18 @@ def main() -> None:
     # TurnExecutionService.sweep_orphaned() every in-process turn would.
     from controllers.message_processor import MessageProcessor
     _boot_mp = MessageProcessor(config_for(ConfigTypeEnum.USER))
-    _closed = _boot_mp.turn_execution_service.sweep_orphaned()
-    if _closed:
-        logger.info("[Startup] Closed %d orphaned turn_executions row(s)", _closed)
+    _swept = _boot_mp.turn_execution_service.sweep_orphaned()
+    if _swept:
+        logger.info("[Startup] Closed %d orphaned turn_executions row(s)", len(_swept))
 
     _run_startup_migrations()
     _init_services()
+
+    # Only now, not at the sweep: each notice writes a row on the caller's
+    # thread and starts a turn whose own thread reads and writes the
+    # conversation tables, so it must run on the migrated schema, never
+    # alongside the transcript rebuild and backfills above.
+    _reply_to_swept_subtasks(_swept)
 
     _check_asset_caches()
     _warmup_models()

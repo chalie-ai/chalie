@@ -85,6 +85,14 @@ export interface ConversationMessage {
    */
   joined?: boolean;
   /**
+   * Who wrote this row, when it is not the user — a subtask transcript's own
+   * input row carries 'Task from Chalie' or 'Message from Chalie' (on the
+   * `delegate:subtask` channel), and a subtask's reply landing on the user or
+   * schedule channel carries 'Reply from subtask #N'. Absent/null on every
+   * other row.
+   */
+  speaker?: string | null;
+  /**
    * Pre-synthesis outcome for a settled row, as of this fetch: 'ready' (audio
    * stored), 'failed' (gave up after its attempts), or absent/null for a row
    * with no attempt on record — history from before pre-synthesis, whose first

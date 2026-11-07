@@ -137,6 +137,7 @@ class Keys(StrEnum):
     start_line = "start_line"
     status = "status"
     subject = "subject"
+    subtask = "subtask"
     subtitle = "subtitle"
     summary = "summary"
     tags = "tags"

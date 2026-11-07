@@ -65,7 +65,7 @@ import json
 import logging
 import re
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from threading import Thread, get_ident
 from typing import TYPE_CHECKING, Protocol, cast
@@ -319,6 +319,17 @@ class MessageProcessor:
     # ── entrypoint ─────────────────────────────────────────────────────────────
 
     @property
+    def fork_view(self) -> bool:
+        """True when this turn's history is its own thread's rows (the FORK
+        view) rather than every turn on the channel (the MAIN view): a reply
+        into an existing turn, or any turn on a channel whose every turn is its
+        own conversation (``turn_scoped_history``). The history read, the
+        compaction watermark and the compactor all key on this one answer, so
+        the rows a checkpoint folds and the floor that cuts them never sit on
+        different axes."""
+        return self._forked or self.config.turn_scoped_history
+
+    @property
     def origin(self) -> dict[str, object] | None:
         """The interactive turn a policy prompt raised by this turn belongs to,
         or ``None`` when nobody could answer one.
@@ -350,6 +361,39 @@ class MessageProcessor:
         mp = cls(config, turn_id=turn_id, raw_input=raw_input, metadata=metadata)
         mp.begin()
         return mp
+
+    @classmethod
+    def send(
+        cls,
+        config: ProcessorConfig,
+        text: str,
+        metadata: dict[str, object] | None = None,
+        turn_id: int = -1,
+        *,
+        spine_only: bool = False,
+    ) -> TurnExecution | None:
+        """The one input function every sender uses: a send into a turn that
+        is still working joins it — its working execution comes back — and
+        only when there is nothing to join does one open through
+        :meth:`process`. Files never join: a send whose ``metadata`` carries
+        truthy ``attachments`` always opens. ``spine_only`` narrows the join
+        to the thread's first exchange, and a missed join degrades the send
+        into a new thread rather than a reply. Returns the execution now
+        carrying the message (joined or opened); ``None`` only when the
+        opened turn's execution row failed to write."""
+        meta: dict[str, object] = metadata if metadata is not None else {}
+        joined: TurnExecution | None = None
+        if turn_id != -1 and not meta.get("attachments"):
+            joined = cls(config, turn_id).join(
+                text,
+                spine_only=spine_only,
+                tool_call_id=cast("int | None", meta.get("tool_call_id")),
+            )
+        if joined is not None:
+            return joined
+        if turn_id != -1 and spine_only:
+            turn_id = -1
+        return cls.process(config, text, metadata, turn_id).execution
 
     def begin(self) -> None:
         """Synchronous turn setup, then hand off to the drive thread. The
@@ -395,22 +439,23 @@ class MessageProcessor:
             tool_call_id=cast("int | None", self.metadata.get("tool_call_id")),
         )
 
-    def join(self, text: str, *, spine_only: bool) -> TurnExecution | None:
+    def join(self, text: str, *, spine_only: bool, tool_call_id: int | None = None) -> TurnExecution | None:
         """Send ``text`` into this thread's turn while it is still working,
         instead of starting another: the message is written as a joined input
-        row and the running loop takes it in at its next boundary. Returns the
-        execution it joined, or ``None`` when there is nothing to join — no
-        execution working (or one already asked to stop), or, with
-        ``spine_only``, the one working is a reply rather than the thread's
-        own first exchange. The check and the write share one ``BEGIN
-        IMMEDIATE`` transaction with the loop's settle and with cancel, so the
-        row lands either before the turn ends — and the loop answers it — or
-        not at all. Built on an inert instance: no turn is driven here."""
+        row — carrying the caller's ``tool_calls`` row when the message comes
+        from a tool call (``tool_call_id``) — and the running loop takes it in
+        at its next boundary. Returns the execution it joined, or ``None`` when
+        there is nothing to join — no execution working (or one already asked
+        to stop), or, with ``spine_only``, the one working is a reply rather
+        than the thread's own first exchange. The check and the write share one
+        ``BEGIN IMMEDIATE`` transaction with the loop's settle and with cancel,
+        so the row lands either before the turn ends — and the loop answers it
+        — or not at all. Built on an inert instance: no turn is driven here."""
         with self._atomic():
             execution = TurnExecution.joinable(self.channel, self.turn_id, spine_only=spine_only)
             if execution is None:
                 return None
-            self.transcript_service.append_input(text, joined=True)
+            self.transcript_service.append_input(text, joined=True, tool_call_id=tool_call_id)
         return execution
 
     def result(self) -> str:
@@ -437,7 +482,12 @@ class MessageProcessor:
         offered to the memory step, and only once its execution row is
         closed: the step is a background turn of its own on this channel, so
         it can never open beside a live loop or a row still marked working,
-        and this thread never waits on it."""
+        and this thread never waits on it. A subtask's turn then reports its
+        outcome to its caller after every ending (completed, stopped, crashed),
+        the reply carrying the model's raw final text — the reply is an input
+        row on the caller's channel, and input rows are raw text — rather than
+        the HTML-formatted result."""
+        answer = ""
         try:
             self._setup()
             response = self._step()
@@ -445,14 +495,15 @@ class MessageProcessor:
                 response = self._step()
         except _TurnCancelled:
             self.turn_execution_service.finish(TurnExecution.CANCELLED)
-            return
         except Exception as exc:  # noqa: BLE001 — the drive thread is the last line of defence
             logger.exception("[MessageProcessor] turn %s crashed", self.turn_id)
             self.crash_exception = exc
             self.turn_execution_service.finish(TurnExecution.CRASHED, str(exc))
-            return
-        self._post_turn(response.text)
-        self._offer_memory_step()
+        else:
+            answer = response.text or ""
+            self._post_turn(response.text)
+            self._offer_memory_step()
+        self._report_to_caller(answer)
 
     def _step(self) -> "ProviderResponse":
         """One provider step, recursing until the model stops calling tools,
@@ -600,11 +651,25 @@ class MessageProcessor:
         rows = self.transcript_service.joined_since(self._consumed_through)
         if not rows:
             return
+        self._offer_subtask_tool(rows)
         anchor = self.current_transcript_id
         if anchor is None:
             raise RuntimeError(f"turn {self.turn_id}: joined messages arrived with no row to file them under")
         self.consumed_joins.setdefault(anchor, []).extend(rows)
         self._consumed_through = cast("int", rows[-1].id)
+
+    def _offer_subtask_tool(self, rows: Sequence[Transcript]) -> None:
+        """Activate the subtask tool on a turn whose message is a reply to a
+        subtask's tool call: a reply from a subtask arrives with the subtask
+        tool already active, so the turn can follow up without looking it up.
+        A subtask never gets the tool itself — one level only."""
+        if self.config.type() is None:
+            return
+        if not any(row.tool_call_id is not None for row in rows):
+            return
+        from abilities.subtask import SubtaskAbility  # noqa: PLC0415
+        if SubtaskAbility.NAME not in self.active_tools:
+            self.active_tools.append(SubtaskAbility.NAME)
 
     # ── provider send ──────────────────────────────────────────────────────────
 
@@ -841,6 +906,21 @@ class MessageProcessor:
         except Exception as exc:  # noqa: BLE001 — the turn is already complete; log, never raise
             logger.warning("[MessageProcessor] memory step trigger failed (isolated): %s", exc)
 
+    def _report_to_caller(self, answer: str) -> None:
+        """Hand this turn's outcome — the model's raw final text, since the
+        reply is an input row on the caller's channel and input rows are raw
+        text — to the turn that started it: a subtask's reply always lands,
+        however the subtask ended. Only a subtask's own turn has a caller
+        (:func:`~abilities.subtask.is_subtask_turn`); the memory step's turn
+        on the subtask channel has none. Never raises: the turn is already
+        terminal, so a failed reply is logged and dropped."""
+        try:
+            from abilities.subtask import is_subtask_turn, reply_to_caller  # noqa: PLC0415
+            if is_subtask_turn(self.channel, self.turn_id):
+                reply_to_caller(self.turn_id, answer)
+        except Exception:  # noqa: BLE001 — the turn is already terminal; log, never raise
+            logger.exception("[MessageProcessor] subtask %s: reply to its caller failed", self.turn_id)
+
     def _voice_presynthesis(self) -> None:
         """Kick background speech pre-synthesis for the row this exchange just
         settled — its terminal row, the current anchor once :meth:`_settle` has
@@ -897,6 +977,9 @@ class MessageProcessor:
         ``user`` channel, seed the turn-zero flashback + any attachments, ingest
         the reply's parent gist on a fork, then plan the message."""
         self.active_tools = list(self.config.always_available or [])
+        anchor = self.transcript_service.anchor_row()
+        if anchor is not None:
+            self._offer_subtask_tool([anchor])
         # Resolve thinking override from the transcript row written by begin()
         # (the current turn's input row). medium/high becomes the override,
         # auto/NULL leaves it unset so the deliberation gate decides normally.

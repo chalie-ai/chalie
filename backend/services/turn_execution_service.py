@@ -20,9 +20,12 @@ canceller holds no MP for the turn it stops.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from configs.channels import config_for
+from configs.enums.channels import Channel
+from models.tool_call import ToolCall
+from models.transcript import Transcript
 from models.turn_execution import TurnExecution
 from services.database import Database
 from services.time_utils import utc_now
@@ -36,6 +39,8 @@ logger = logging.getLogger(__name__)
 #: Stamped as ``stop_reason`` when the boot sweep finds a row a killed process
 #: never got to close.
 STOP_REASON_PROCESS_DEATH = "process death"
+#: Stamped as ``stop_reason`` on a subtask stopped by its caller's own stop.
+STOP_REASON_PARENT_STOPPED = "parent stopped"
 
 
 class TurnExecutionService:
@@ -93,7 +98,7 @@ class TurnExecutionService:
         return execution
 
     @classmethod
-    def cancel_turn(cls, channel: str, turn_id: int) -> TurnExecution | None:
+    def cancel_turn(cls, channel: str, turn_id: int, stop_reason: str | None = None) -> TurnExecution | None:
         """The single cancel-request chokepoint (§2.7): both DELETE
         /api/threads/<turn_id> (addressed by the turn's type or, for a
         watchable delegate turn, its channel) and a turn's own self-cancelling
@@ -119,7 +124,12 @@ class TurnExecutionService:
         always wins, never resurrected or overwritten by the doomed turn's own
         eventual finish(). The read and the write share one ``BEGIN
         IMMEDIATE`` transaction, so a turn settling or a message joining on
-        another thread lands wholly before or wholly after it."""
+        another thread lands wholly before or wholly after it. Stopping a
+        caller's turn also stops its subtasks: every ``delegate:subtask`` turn
+        the caller's own tool calls spawned is cancelled in turn from here
+        with :data:`STOP_REASON_PARENT_STOPPED` (other delegate children are
+        already stopped by their own waiting caller, and an already-ended
+        child simply returns ``None``)."""
         from controllers.message_processor import MessageProcessor  # noqa: PLC0415 — the MP imports this module
 
         try:
@@ -130,6 +140,7 @@ class TurnExecutionService:
                 execution.cancel_requested = True
                 execution.state = TurnExecution.CANCELLED
                 execution.ended_at = utc_now().isoformat()
+                execution.stop_reason = stop_reason
                 execution.save()
         except Exception as exc:
             logger.warning(
@@ -138,6 +149,19 @@ class TurnExecutionService:
             )
             return None
         MessageProcessor.broadcast_as(execution, execution.channel, cls._row_config(execution))
+        # Cascade: the caller's tool calls may have spawned subtasks, which
+        # now run against a stopped conversation. Only subtask children are
+        # cascaded here — every other delegate child is already stopped by its
+        # own waiting caller — and an already-ended child returns None from
+        # the recursive cancel, which is fine.
+        calls = ToolCall.by_turn(channel, turn_id)
+        children = Transcript.delegate_turns({cast("int", c.id): (c.created_at, c.ended_at) for c in calls})
+        for entry in children.values():
+            if entry["channel"] == Channel.DELEGATE_SUBTASK.value:
+                cls.cancel_turn(
+                    entry["channel"], cast("int", entry["turn_id"]),
+                    stop_reason=STOP_REASON_PARENT_STOPPED,
+                )
         return execution
 
     @staticmethod
@@ -215,15 +239,16 @@ class TurnExecutionService:
         self.mp.push_websocket(execution)
         return execution
 
-    def sweep_orphaned(self) -> int:
+    def sweep_orphaned(self) -> list[TurnExecution]:
         """Boot-time reconciliation: every row a killed process left open
         (``ended_at IS NULL``) becomes ``crashed`` — the process that owned
         it is gone, so "working" surviving from a previous run is always
         stale. The whole sweep runs inside one ``self.mp.db`` transaction
         (I6) so a mid-loop write failure rolls back every row it already
         touched rather than stranding a partially-swept boot; returns the
-        number of rows closed, or 0 if the sweep did not commit."""
-        count = 0
+        rows it closed — so boot can tell each swept subtask's caller — or
+        an empty list if the sweep did not commit."""
+        swept: list[TurnExecution] = []
         try:
             with self.mp.db.transaction():
                 for execution in TurnExecution.open_rows():
@@ -231,11 +256,11 @@ class TurnExecutionService:
                     execution.stop_reason = STOP_REASON_PROCESS_DEATH
                     execution.ended_at = utc_now().isoformat()
                     execution.save()
-                    count += 1
+                    swept.append(execution)
         except Exception as exc:
             logger.warning("[TurnExecutionService] sweep_orphaned failed: %s", exc)
-            return 0
-        return count
+            return []
+        return swept
 
     def latest_for_turn(self) -> TurnExecution | None:
         """The newest row for this turn (channel-scoped, since ``turn_id`` is

@@ -50,6 +50,48 @@
   color: var(--muted);
 }
 
+// A subtask's reply folded to its label reads as a chip, not a bubble.
+.user-message--collapsed {
+  padding: 6px 12px;
+}
+
+// The folded reply's label is a toggle: the chevron rotates it open, it
+// brightens on hover/focus like the other folds.
+.user-message__label--toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  // Family and line height only — size and weight come from the label rule,
+  // which the `font` shorthand would reset.
+  font-family: inherit;
+  line-height: inherit;
+  text-align: left;
+  cursor: pointer;
+  color: var(--muted);
+  transition: color var(--dur-1) var(--ease-out);
+}
+
+.user-message__label--toggle:hover,
+.user-message__label--toggle:focus-visible {
+  color: var(--text);
+}
+
+.user-message__label--toggle:focus-visible {
+  outline: 1.5px solid var(--muted);
+}
+
+.user-message__chevron {
+  flex-shrink: 0;
+  transition: transform var(--dur-1) var(--ease-out);
+}
+
+.user-message__label--toggle[aria-expanded='true'] .user-message__chevron {
+  transform: rotate(90deg);
+}
+
 .user-text {
   // pre-wrap preserves the newlines the composer inserts (Enter adds a newline;
   // only the send button submits).

@@ -8,6 +8,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { ConfigType } from '@chalie/shared';
+import type { DelegateRef } from '@chalie/shared';
 import type {
   ConversationMessage,
   ConversationTurnBlock,
@@ -16,13 +17,15 @@ import type {
 } from '../../api/conversation';
 import { usePermissionsStore } from '../../stores/permissions';
 import type { PermissionRequest } from '../../stores/permissions';
-import { liveTrailsFor } from '../../utils/liveActTrail';
+import { delegateRunning, liveTrailsFor } from '../../utils/liveActTrail';
+import { SUBTASK_CHANNEL } from '../../utils/delegateChannel';
 import { didWork } from '../../utils/turnSteps';
 import UserBubble from './UserBubble.vue';
 import ChalieBubble from './ChalieBubble.vue';
 import ActivityLine from './ActivityLine.vue';
 import BubbleFooter from './BubbleFooter.vue';
 import PlanCard from './PlanCard.vue';
+import SubtaskRing from './SubtaskRing.vue';
 
 const props = withDefaults(
   defineProps<{
@@ -77,6 +80,31 @@ const liveLine = computed(() => ({
   ask: pendingAsk.value,
 }));
 
+/** This turn's subtasks that are still running — the ring's menu, in
+ *  first-seen order. A subtask outlives the call that started it, so its live
+ *  frames decide when seen, else the read's `working`. A live pill's child
+ *  just started, so its fallback is running; a stored chip's is the REST
+ *  read's `working`. Deduped by turn_id — a follow-up "message" call points
+ *  at the same subtask, and the first summary wins. */
+const runningSubtasks = computed(() => {
+  const found = new Map<number, { delegate: DelegateRef; summary: string }>();
+  const consider = (delegate: DelegateRef, summary: string | undefined, fallback: boolean): void => {
+    if (delegate.channel !== SUBTASK_CHANNEL) return;
+    const running = delegateRunning(delegate.channel, delegate.turn_id) ?? fallback;
+    if (!running || found.has(delegate.turn_id)) return;
+    found.set(delegate.turn_id, { delegate, summary: summary ?? '' });
+  };
+  for (const pill of liveLine.value.pills) {
+    if (pill.delegate) consider(pill.delegate, pill.summary, true);
+  }
+  for (const message of props.block.messages) {
+    for (const chip of message.tool_calls ?? []) {
+      if (chip.delegate) consider(chip.delegate, chip.summary, chip.delegate.working ?? false);
+    }
+  }
+  return [...found.values()];
+});
+
 /** The running step: the row a live call was dropped from, else — before a
  *  refetch returned that row — none yet, so its block is the live line alone,
  *  reading "Thinking…" until the first pill lands. Its key never changes, so the
@@ -113,7 +141,13 @@ interface PlanRow {
   tasks: PlanTask[];
 }
 
-type DisplayRow = MsgRow | ActivityRow | FooterRow | PlanRow;
+/** The running-subtasks ring, standing just above the turn's last footer. */
+interface SubtasksRow {
+  kind: 'subtasks';
+  key: 'subtasks';
+}
+
+type DisplayRow = MsgRow | ActivityRow | FooterRow | PlanRow | SubtasksRow;
 
 /** Ids of the user rows a cancel of this working turn would remove: the
  *  trailing run of user rows nothing has answered yet, stopping at a row that
@@ -222,6 +256,17 @@ const displayRows = computed<DisplayRow[]>(() => {
   return rows;
 });
 
+/** The rows as drawn: `displayRows` plus, while any of this turn's subtasks
+ *  still runs, the ring at the bottom — right above the footer that closes the
+ *  list, or last when the list ends on anything else (an exchange still
+ *  running, whatever exchange an earlier footer closed). */
+const shownRows = computed<DisplayRow[]>(() => {
+  const rows = displayRows.value;
+  if (runningSubtasks.value.length === 0) return rows;
+  const ring: SubtasksRow = { kind: 'subtasks', key: 'subtasks' };
+  return rows.at(-1)?.kind === 'footer' ? [...rows.slice(0, -1), ring, rows[rows.length - 1]] : [...rows, ring];
+});
+
 // Speaker-role grouping for the row rhythm.
 type RowRole = 'user' | 'chalie';
 
@@ -233,10 +278,10 @@ interface RowEntry {
 
 const rowEntries = computed<RowEntry[]>(() => {
   let prevRole: RowRole | null = null;
-  return displayRows.value.map((row) => {
-    // The running step, footers and plans have no user branch to match, so
-    // they fall into 'chalie' — keeping them grouped with the chalie rows so
-    // speaker-change spacing stays correct.
+  return shownRows.value.map((row) => {
+    // The running step, footers, plans and the subtasks ring have no user
+    // branch to match, so they fall into 'chalie' — keeping them grouped with
+    // the chalie rows so speaker-change spacing stays correct.
     const role: RowRole = row.kind === 'msg' && row.message.role === 'user' ? 'user' : 'chalie';
     const isLead = role !== prevRole;
     prevRole = role;
@@ -284,6 +329,7 @@ function onOpenThread(): void {
     :data-gist="block.gist ?? undefined"
     :data-preview="block.preview"
     :data-last-activity="block.last_activity_at ?? undefined"
+    :data-subtasks-running="runningSubtasks.length > 0 || undefined"
   >
     <div
       v-for="ar in rowEntries"
@@ -291,7 +337,9 @@ function onOpenThread(): void {
       class="msg-row"
       :class="[`msg-row--${ar.role}`, ar.isLead ? 'msg-row--lead' : 'msg-row--cont', `msg-row--${ar.row.kind}`]"
     >
-      <PlanCard v-if="ar.row.kind === 'plan'" :tasks="(ar.row as PlanRow).tasks" />
+      <SubtaskRing v-if="ar.row.kind === 'subtasks'" :subtasks="runningSubtasks" />
+
+      <PlanCard v-else-if="ar.row.kind === 'plan'" :tasks="(ar.row as PlanRow).tasks" />
 
       <!-- The segment's footer: timestamp, duration and actions — and (on the
            last footer of a forked turn) the collapsed thread pill. -->
@@ -308,7 +356,8 @@ function onOpenThread(): void {
       <UserBubble
         v-else-if="ar.role === 'user'"
         :message="(ar.row as MsgRow).message"
-        :label="channel ? 'Task from Chalie' : null"
+        :label="(ar.row as MsgRow).message.speaker ?? (channel ? 'Task from Chalie' : null)"
+        :collapsible="channel == null && (ar.row as MsgRow).message.speaker != null"
         :data-dropped-on-cancel="droppedOnCancel.has((ar.row as MsgRow).message.id) || undefined"
       />
 
@@ -359,9 +408,15 @@ function onOpenThread(): void {
 }
 
 // Each step is a message of its own, spaced from the one before it like one;
-// a footer stays close under the step it closes.
-.msg-row--chalie.msg-row--cont:not(.msg-row--footer) {
+// a footer, and the subtasks ring above it, stay close under the step they
+// close.
+.msg-row--chalie.msg-row--cont:not(.msg-row--footer):not(.msg-row--subtasks) {
   margin-top: var(--space-lg);
+}
+
+// The running-subtasks ring stands at the row's right edge.
+.msg-row--subtasks {
+  justify-content: flex-end;
 }
 
 // The live plan stays in view under the fixed 56px top bar while the work runs

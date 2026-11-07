@@ -91,6 +91,14 @@ export const useSessionStore = defineStore('session', {
      *  silently die). */
     _offlineWorking: new Set<string>(),
 
+    /** `type:turnId` keys of turns showing a running-subtasks ring when the WS
+     *  dropped. The drop clears the subtasks' live run state, and a subtask
+     *  that ends behind the dead socket sends no frame anyone receives, so
+     *  these turns are re-read on reconnect for their chips' `working` to
+     *  decide again. Kept apart from `_offlineWorking`: such a turn may be
+     *  settled, so it holds no lane and has nothing to settle. */
+    _offlineSubtaskTurns: new Set<string>(),
+
     /** Turn-level provider/quota error, surfaced as a closable toast above the
      *  input dock. Null when there is nothing to show. */
     errorMessage: null as string | null,
@@ -153,6 +161,7 @@ export const useSessionStore = defineStore('session', {
       ws.onConnect(() => {
         conn.setConnected(true);
         void this._reconcileWorking();
+        void this._refreshSubtaskRings();
         // Pending permission gates outlive the socket (the backend thread keeps
         // waiting; the WS frame was only the visual trigger) — re-read them on
         // every connect, first load and reconnect alike, so a reload or a drop
@@ -190,7 +199,12 @@ export const useSessionStore = defineStore('session', {
           setTurnWorking(turnId, type, false);
         }
         // A delegate's terminal frame is lost the same way — drop its pills
-        // and timers now; reconnect re-reads the delegate panel, if open.
+        // and timers now; reconnect re-reads the delegate panel, if open, and
+        // every turn whose ring the clear below leaves to a stale read. Read
+        // BEFORE the clear, which can hide a ring whose subtask still runs.
+        for (const el of Array.from(document.querySelectorAll<HTMLElement>('[data-subtasks-running][data-turn-id][data-type]'))) {
+          this._offlineSubtaskTurns.add(`${el.getAttribute('data-type')}:${el.getAttribute('data-turn-id')}`);
+        }
         clearDelegateFeeds();
         // So is speech's: a 'pending' speaker button would stay dead.
         useVoiceTranscriptsStore().forgetPending();
@@ -263,6 +277,32 @@ export const useSessionStore = defineStore('session', {
       // markers back), so the blanket offline flag can drop — best-effort
       // even when a fetch failed and its key stayed snapshotted.
       this._offlineSpineWorking = false;
+    },
+
+    /**
+     * Re-read every turn that showed a running-subtasks ring when the WS
+     * dropped (the `_offlineSubtaskTurns` snapshot). The drop cleared the
+     * subtasks' live run state, so each ring now answers from the chips of the
+     * turn's last read — and a subtask that ended during the outage would read
+     * as running until a page reload. A fresh read's chips decide again; any
+     * later frame still wins over them.
+     */
+    async _refreshSubtaskRings(): Promise<void> {
+      for (const key of Array.from(this._offlineSubtaskTurns)) {
+        const idx = key.indexOf(':');
+        const type = key.slice(0, idx);
+        const turnId = Number(key.slice(idx + 1));
+        const ticket = nextTicket(); // a read sent before the drop must not land on top
+        let block;
+        try {
+          block = await convoApi.thread(turnId, type);
+        } catch (err) {
+          console.warn('[Session] Subtask ring re-read failed for', key, '— retried on the next reconnect:', err);
+          continue;
+        }
+        this._offlineSubtaskTurns.delete(key);
+        upsertTurnToSurfaces(block, type, { ticket });
+      }
     },
 
     /**

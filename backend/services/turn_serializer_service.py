@@ -22,6 +22,7 @@ import urllib.parse
 from typing import cast
 
 from abilities._registry import AbilityRegistry
+from abilities.subtask import speaker
 from services.database import Database
 from services.file_mapper_service import FileMapperService
 from services.locale_service import CHAT_DAY_FMT, CHAT_TIMESTAMP_FMT, format_date
@@ -137,6 +138,11 @@ def _apply_user_fields(msg: dict[str, object], r: dict[str, object], attachments
     attachments = attachments_by_id.get(cast("int", r['id']))
     if attachments:
         msg["attachments"] = attachments
+    # Who wrote a row a tool call caused — the same label the prompt shows
+    # ("Task from Chalie", "Reply from subtask #N"); absent on ordinary input.
+    label = speaker(Transcript(**r))
+    if label is not None:
+        msg["speaker"] = label
 
 
 def _tool_call_chips(
@@ -267,6 +273,12 @@ def _rows_to_messages(rows: list[dict[str, object]]) -> list[dict[str, object]]:
         for c in turn_calls
         if AbilityRegistry.is_watchable_delegate(cast("str", c["tool_name"]))
     })
+    # Whether each child turn is still running, as of this read — a subtask
+    # outlives the call that started it, so the call's own state cannot say.
+    for entry in delegates.values():
+        entry["working"] = TurnExecution.open_turn(
+            cast("str", entry["channel"]), cast("int", entry["turn_id"]),
+        ) is not None
 
     # Rich-media spans resolve PER ACT CYCLE, not per turn. A turn_id spans the
     # whole thread — many user requests — and each request runs its own ACT loop
@@ -421,9 +433,11 @@ class TurnSerializerService:
         latest = TurnExecution.latest(channel, turn_id)
         rows = Transcript.by_turn(channel, turn_id)
         rows = _drop_trailing_cancelled_orphan(rows, latest)
-        # Only a delegate's input row carries a tool_call_id: it is the stamp
-        # linking the row to the call that spawned the turn, and nothing else
-        # has written the column since rows gained a turn_id.
+        # A row carries a tool_call_id only when a tool call wrote it: a
+        # delegate's input row (the stamp linking it to the call that spawned
+        # the turn) or a subtask's reply on its caller's channel. Both are
+        # input to their turn, so both read as user rows whatever the role of
+        # the config that wrote them.
         for r in rows:
             if r["tool_call_id"] is not None:
                 r["role"] = "user"

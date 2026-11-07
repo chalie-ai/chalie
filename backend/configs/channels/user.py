@@ -38,7 +38,7 @@ class UserConfig(ProcessorConfig):
             memory_seed=True,
         )
 
-    def type(self) -> ConfigTypeEnum:
+    def type(self) -> ConfigTypeEnum | None:
         return ConfigTypeEnum.USER
 
     @property

@@ -359,13 +359,15 @@ def test_parent_thread_read_links_the_delegate_chip_to_its_child_turn(
     authed_client: tuple[FlaskClient, sqlite3.Connection, object], delegate_run: _DelegateRun,
 ) -> None:
     """Reading the parent thread back gives the ``web_search`` chip the same
-    ``delegate`` reference the live frame carried, leaves an ordinary tool's chip
+    ``delegate`` reference the live frame carried, plus whether that child still
+    runs, leaves an ordinary tool's chip
     unlinked, and keeps the block itself a plain user thread."""
     client, _db, _store = authed_client
 
     block = _block(client, f"/api/threads/{delegate_run.parent.turn_id}")
 
-    assert _chip(block, "web_search")["delegate"] == delegate_run.ref
+    # The read also says the child is no longer running — it finished before the parent did.
+    assert _chip(block, "web_search")["delegate"] == {**delegate_run.ref, "working": False}
     assert _chip(block, "find_tools")["delegate"] is None
     assert block["type"] == "user" and block["channel"] is None
 
@@ -403,7 +405,7 @@ def test_purged_delegate_turn_unlinks_the_chip_and_reads_as_an_unknown_turn(
     client, db, _store = authed_client
     parent_path = f"/api/threads/{delegate_run.parent.turn_id}"
     child_path = f"/api/threads/{delegate_run.child_turn_id}?channel={_CHILD_CHANNEL}"
-    assert _chip(_block(client, parent_path), "web_search")["delegate"] == delegate_run.ref
+    assert _chip(_block(client, parent_path), "web_search")["delegate"] == {**delegate_run.ref, "working": False}
 
     db.execute(
         "UPDATE transcript SET created_at = datetime('now', '-200 days') WHERE channel = ?", (_CHILD_CHANNEL,),

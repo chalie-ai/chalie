@@ -13,9 +13,11 @@ A delegate tool is a standalone Ability that runs a child turn on its OWN
 SUBAGENT_TYPES registry, and no make_subagent_config() factory.
 
 The framework provides one base class — :class:`DelegateAbility` — that every
-delegate tool running its child turn through :meth:`DelegateAbility.delegate`
-inherits. That runner links the child to the parent's tool call and shapes the
-answer through ``delegate_result``, so a DelegateAbility's call is exactly one
+delegate tool running its child turn through :meth:`DelegateAbility.spawn`
+inherits. That runner opens the child linked to the parent's tool call and
+returns it at once: :meth:`DelegateAbility.delegate` waits for the answer and
+shapes it through ``delegate_result``, while ``subtask`` leaves the child
+running in the background. Either way a DelegateAbility's call is exactly one
 whose child turn can be watched. Each ``run()`` still owns its pre-flight
 (``pim`` checks the mail connection, ``code_agent`` creates its workspace).
 ``vision`` is a delegate by category only: it describes through
@@ -37,6 +39,7 @@ if TYPE_CHECKING:
     from typing import Protocol
 
     from configs.enums.policy_channel import PolicyChannel
+    from controllers.message_processor import MessageProcessor
     from services.processor_config import ProcessorConfig
 
     class _ActTrailRenderer(Protocol):
@@ -48,25 +51,18 @@ logger = logging.getLogger(__name__)
 
 class DelegateAbility(Ability[B], ABC):
     """Base class for the delegate tools that run their child turn through
-    :meth:`delegate`. Abstract (lists ``ABC`` directly, like the other base
+    :meth:`spawn`. Abstract (lists ``ABC`` directly, like the other base
     mix-ins) so it is never registered as a tool in its own right; concrete
     delegates fill in the getters and their own ``run()``, so the base is
     generic over the subclass's bag (``DelegateAbility[ItsBag]``)."""
 
-    def delegate(
-        self, config: "Callable[[PolicyChannel], ProcessorConfig]", instructions: str, *, hint: str,
-    ) -> ToolResult:
-        """Run ``instructions`` as a child turn on ``config`` and return its
-        answer. The child's input row carries this call's ``tool_calls`` id,
-        written in the same transaction that opens the turn, so the parent's
-        pill can be followed to the child's transcript. The parent's frame is
-        sent again once that row exists — the earlier ``started`` frame went out
-        before there was a child turn to point at.
-
-        A child the user stopped from its transcript panel ends CANCELLED; that
-        is reported as ``delegate-stopped`` — read from the child's execution
-        row, never inferred from its text — so the caller does not re-run work
-        the user chose to stop."""
+    def spawn(self, config: "ProcessorConfig", instructions: str) -> "MessageProcessor":
+        """Open ``instructions`` as a child turn on ``config`` and return it
+        without waiting. The child's input row carries this call's
+        ``tool_calls`` id, written in the same transaction that opens the turn,
+        so the parent's pill can be followed to the child's transcript. The
+        parent's frame is sent again once that row exists — the earlier
+        ``started`` frame went out before there was a child turn to point at."""
         from controllers.message_processor import MessageProcessor  # noqa: PLC0415
 
         mp = self.mp
@@ -76,11 +72,27 @@ class DelegateAbility(Ability[B], ABC):
         # A gated tool inside the delegate prompts on the CALLER's turn — the
         # delegate's own turn has no surface a human could answer from.
         child = MessageProcessor.process(
-            config(mp.config.policy_channel),
+            config,
             raw_input=instructions,
             metadata={"origin": mp.origin, "tool_call_id": self.tool_call_id},
         )
         mp.tool_call_service.reemit(self.tool_call_id)
+        return child
+
+    def delegate(
+        self, config: "Callable[[PolicyChannel], ProcessorConfig]", instructions: str, *, hint: str,
+    ) -> ToolResult:
+        """Run ``instructions`` as a child turn on ``config`` (built for the
+        caller's policy channel) through :meth:`spawn` and wait for its answer.
+
+        A child the user stopped from its transcript panel ends CANCELLED; that
+        is reported as ``delegate-stopped`` — read from the child's execution
+        row, never inferred from its text — so the caller does not re-run work
+        the user chose to stop."""
+        mp = self.mp
+        if mp is None:
+            raise RuntimeError(f"{self.NAME}.run() dispatched without a bound MessageProcessor")
+        child = self.spawn(config(mp.config.policy_channel), instructions)
         answer = child.result()
         if child.execution is not None and child.execution.state == TurnExecution.CANCELLED:
             return ToolResult.err(

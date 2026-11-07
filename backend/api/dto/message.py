@@ -63,6 +63,9 @@ class Message(DTO):
     ``plan`` carries, on a message's input row, the plan the agent kept while
     working it, tasks in number order; ``None`` on rows with no plan — a joined
     row never has one, its tasks join the plan of the message it joined.
+    ``speaker`` names who wrote an input row a tool call caused — ``Task from
+    Chalie`` / ``Message from Chalie`` on a subtask's own rows, ``Reply from
+    subtask #N`` on a subtask's reply to its caller; ``None`` on every other row.
     """
 
     id: str
@@ -78,6 +81,7 @@ class Message(DTO):
     thread_message: bool | None = None
     settled: bool | None = None
     joined: bool | None = None
+    speaker: str | None = None
     voice_state: str | None = None
     thinking: Thinking | None = None
     plan: list[PlanTask] | None = None

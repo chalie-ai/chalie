@@ -7,10 +7,13 @@ from .base import DTO
 
 class DelegateRef(DTO):
     """The delegate turn a tool call spawned, addressed the way the threads
-    read takes it: its full channel plus its ``turn_id``."""
+    read takes it: its full channel plus its ``turn_id``. ``working`` says
+    whether that turn is still running as of this read — a subtask outlives
+    the call that started it, so the call's own state cannot say."""
 
     channel: str
     turn_id: int
+    working: bool
 
 
 class Chip(DTO):

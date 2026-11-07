@@ -76,6 +76,10 @@ export interface WsToolCallEvent {
 export interface DelegateRef {
   channel: string;
   turn_id: number;
+  /** Set only on a REST read's chip: whether that delegate turn still ran as
+   *  of the read (a subtask outlives the call that started it). Live frames
+   *  never carry it. */
+  working?: boolean;
 }
 
 /** One `turn_executions` row, pushed whole on every state flip (see

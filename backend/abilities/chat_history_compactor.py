@@ -45,7 +45,7 @@ if TYPE_CHECKING:
         _compaction_kept_rows: int
         _compaction_folded_block: str
         turn_id: "int | None"
-        _forked: bool
+        fork_view: bool
 
         class _TranscriptService(Protocol):
             def read(self) -> list["Transcript"]: ...
@@ -145,10 +145,10 @@ class ChatHistoryCompactor(Ability[ChatHistoryCompactorParamsBag]):
         # the write ``channel`` — a fork is its own thread and
         # ``transcript_service.read()`` scopes its FORK view the same way, so
         # the id-axis watermark and the rows it cuts stay on one channel.
-        channel = mp.config.channel if mp._forked else (mp.config.read_channel or mp.config.channel)
+        channel = mp.config.channel if mp.fork_view else (mp.config.read_channel or mp.config.channel)
         # The checkpoint axis follows the parent's view: FORK → its thread, MAIN →
         # the spine (NULL). Used for both the prior read and the new write.
-        for_turn_id = mp.turn_id if mp._forked else None
+        for_turn_id = mp.turn_id if mp.fork_view else None
 
         # Carry forward the prior checkpoint so continuity chains across
         # compactions instead of restarting from the recent tail each time.
@@ -185,7 +185,7 @@ class ChatHistoryCompactor(Ability[ChatHistoryCompactorParamsBag]):
         # narrative spells out why).
         rows = mp.transcript_service.read()
         compacted_up_to = (
-            max(cast(int, r.id) for r in rows) if mp._forked
+            max(cast(int, r.id) for r in rows) if mp.fork_view
             else max(cast(int, tid) for r in rows if (tid := r.to_dict()["turn_id"]) is not None)
         )
         Compaction.write(channel, for_turn_id, compacted_up_to, summary)

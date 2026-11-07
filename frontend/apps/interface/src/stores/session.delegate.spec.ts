@@ -18,6 +18,13 @@
  * addressed by the subagent's channel alone, must undo nothing, and must leave
  * a chat turn with the same number running.
  *
+ * A chat turn's running-subtasks ring rides the same lost frames. Whether a
+ * subtask runs comes from its own frames once seen, else from the turn's last
+ * read; the drop throws the frames' word away, and a settled turn has no lane
+ * for the reconnect to reconcile. So every turn that showed the ring when the
+ * socket dropped is read again on reconnect, and the ring follows that read,
+ * whichever way it went while the socket was down.
+ *
  * Real throughout: the session store (its real `init()` wiring), the real
  * drift dispatcher, ThreadPanel, the TurnView it registers as its surface, the
  * turnDom surface registry, the REST wrappers and the shared ApiClient. Two
@@ -34,7 +41,7 @@ import { flushPromises, mount } from '@vue/test-utils';
 import type { VueWrapper } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import type { WsPushEvent } from '@chalie/shared';
-import type { ConversationMessage, ConversationTurnBlock, DelegateTurnBlock } from '../api/conversation';
+import type { ConversationMessage, ConversationTurnBlock, DelegateTurnBlock, ToolCallChip } from '../api/conversation';
 
 const { fakeWs, wsCallbacks } = vi.hoisted(() => {
   const wsCallbacks: { onConnect: () => void; onDisconnect: () => void; onDrift: (data: unknown) => void } = {
@@ -562,5 +569,101 @@ describe('stopping a running subagent from its open transcript', () => {
     expect(turnDom.isTurnWorking(12, 'user')).toBe(true);
     expect(stopControls(chat)).toEqual(['Stop and undo']);
     expect(chat.textContent).toContain('What time does the museum open?');
+  });
+});
+
+describe('a chat turn\'s subtask ring across a dropped connection', () => {
+  const SUBTASK = { channel: 'delegate:subtask', turn_id: 4 };
+  const PLAN_TURN = 901;
+
+  /** The settled chat turn that started subtask #4, its chip's `working` as
+   *  the backend reads it. */
+  function planTurn(subtaskWorking: boolean): ConversationTurnBlock {
+    const start: ToolCallChip = {
+      id: 91, tool_name: 'subtask', summary: 'compare museum hours', state: 'done', ended_at: null,
+      delegate: { ...SUBTASK, working: subtaskWorking },
+    };
+    return userThread(PLAN_TURN, [
+      msg('9010', 'user', 'Plan my museum day', PLAN_TURN),
+      { ...msg('9011', 'assistant', 'I started a subtask for that.', PLAN_TURN), tool_calls: [start], settled: true },
+    ]);
+  }
+
+  /** The backend answers a read of the chat turn alone; any other read fails. */
+  function serveChatTurn(subtaskWorking: boolean): Serve {
+    return (read) => {
+      if (read.turnId !== PLAN_TURN || read.type !== 'user' || read.channel !== null) throw new Error('not this turn');
+      return planTurn(subtaskWorking);
+    };
+  }
+
+  /** The subtask's own execution frame: addressed by its channel, no type. */
+  const subtaskFrame = (state: 'working' | 'completed'): WsPushEvent =>
+    ({
+      id: SUBTASK.turn_id, channel: SUBTASK.channel, type: null, turn_id: SUBTASK.turn_id,
+      started_at: '2026-01-01T00:00:01Z', ended_at: state === 'working' ? null : '2026-01-01T00:00:09Z',
+      cancel_requested: false, state, stop_reason: null,
+    }) as unknown as WsPushEvent;
+
+  /** A fresh app with the chat showing the planning turn as the backend first
+   *  read it, the subtask's working frame already in. */
+  async function chatWithRunningSubtask(subtaskWorkingAsRead: boolean): Promise<HTMLElement> {
+    vi.resetModules();
+    setActivePinia(createPinia());
+    const { useSessionStore } = await import('./session');
+    const turnDom = await import('../utils/turnDom');
+    const { default: TurnView } = await import('../components/conversation/TurnView.vue');
+    useSessionStore().init();
+    const chat = document.body.appendChild(document.createElement('div'));
+    turnDom.registerSurface({ id: 'spine', type: 'user', container: chat, component: TurnView });
+    cleanups.push(() => turnDom.clearSurfaceContainer(chat));
+    turnDom.upsertTurnToSurfaces(planTurn(subtaskWorkingAsRead), 'user');
+    wsCallbacks.onDrift(subtaskFrame('working'));
+    await flushPromises();
+    return chat;
+  }
+
+  /** The ring's running count, or null when the turn shows no ring. */
+  const ringCount = (chat: HTMLElement): string | null =>
+    chat.querySelector('.subtask-ring .subtask-ring__count')?.textContent ?? null;
+
+  it('drops the ring on reconnect when the subtask finished while the socket was down', async () => {
+    const chat = await chatWithRunningSubtask(true);
+    expect(ringCount(chat)).toBe('1');
+
+    // Its terminal frame died with the socket; the backend now reads it done.
+    serve = serveChatTurn(false);
+    await dropAndRestoreSocket();
+
+    expect(chat.querySelector('.subtask-ring')).toBeNull();
+    expect(chat.textContent).toContain('I started a subtask for that.');
+  });
+
+  it('brings the ring back on reconnect when the subtask still runs though the turn\'s last read had it done', async () => {
+    // The read is older than the subtask's own working frame, which wins.
+    const chat = await chatWithRunningSubtask(false);
+    expect(ringCount(chat)).toBe('1');
+
+    serve = serveChatTurn(true);
+    await dropAndRestoreSocket();
+
+    expect(ringCount(chat)).toBe('1');
+  });
+
+  it('reads the turn again on the next reconnect when the backend failed the first re-read', async () => {
+    const chat = await chatWithRunningSubtask(false);
+    expect(ringCount(chat)).toBe('1');
+
+    serve = () => {
+      throw new Error('backend down');
+    };
+    await dropAndRestoreSocket();
+
+    // The ring the first drop hid is not on screen for the second drop to
+    // find; only the turn kept from the failed read brings it back.
+    serve = serveChatTurn(true);
+    await dropAndRestoreSocket();
+
+    expect(ringCount(chat)).toBe('1');
   });
 });

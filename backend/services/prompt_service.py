@@ -37,6 +37,7 @@ from abilities._registry import AbilityRegistry
 from abilities.find_tools import FindToolsAbility
 from abilities.plan import PlanAbility
 from abilities.recall import Recall
+from abilities.subtask import speaker
 from configs.channels.external_agent import EAMPConfig
 from configs.channels.memory_step import PROMPT_CHANNEL as MEMORY_STEP_PROMPT_CHANNEL
 from configs.channels.user import UserConfig
@@ -317,7 +318,7 @@ class PromptService:
             raw_role = cast("str", fields.get("role") or "unknown")
             content = cast("str", fields.get("content") or "").replace("\n", " ").strip()
             ts = self._format_ts(cast("str | None", fields.get("created_at")))
-            role_label = "Assistant" if raw_role == "assistant" else raw_role
+            role_label = speaker(row) or ("Assistant" if raw_role == "assistant" else raw_role)
             lines.append(f"[{ts}] {role_label}: {content}")
         return "\n".join(lines)
 
@@ -412,7 +413,10 @@ class PromptService:
 
         def joined_after(tid: int) -> None:
             lead_in(tid)
-            parts.extend(f"[{self._format_ts(row.created_at)}] user: {row.content}" for row in joins[tid])
+            parts.extend(
+                f"[{self._format_ts(row.created_at)}] {speaker(row) or 'user'}: {row.content}"
+                for row in joins[tid]
+            )
 
         # Traces anchored to rows that never got a call (an empty-completion
         # steer at the exchange input row) precede every call-bearing anchor
@@ -548,7 +552,9 @@ class PromptService:
         if handover:
             parts.append(handover)
 
-        parts.append(f"[{self._input_stamp()}] user: {self.mp.raw_input}")
+        anchor = self.mp.transcript_service.anchor_row()
+        label = speaker(anchor) if anchor is not None else None
+        parts.append(f"[{self._input_stamp(anchor)}] {label or 'user'}: {self.mp.raw_input}")
 
         trail = self._trail()
         if trail:
@@ -582,7 +588,9 @@ class PromptService:
         handover = self._handover()
         if handover:
             parts.append(handover)
-        parts.append(f"[{self._input_stamp()}] Scheduled task:\n{self.mp.raw_input}")
+        anchor = self.mp.transcript_service.anchor_row()
+        label = speaker(anchor) if anchor is not None else None
+        parts.append(f"[{self._input_stamp(anchor)}] {label or 'Scheduled task'}:\n{self.mp.raw_input}")
         trail = self._trail()
         if trail:
             parts.append(trail)
@@ -786,7 +794,7 @@ class PromptService:
 
     # ── formatting helpers ───────────────────────────────────────────────────
 
-    def _input_stamp(self) -> str:
+    def _input_stamp(self, anchor: Transcript | None = None) -> str:
         """The stamp for THIS turn's input line, rendered in :data:`_STAMP_FORMAT`
         through :meth:`_format_ts` — the same formatter the history rows use:
         the ``created_at`` of this turn's anchoring input row (id ``mp.uid``,
@@ -796,7 +804,7 @@ class PromptService:
         input row (``mp.uid`` is None). This stamp is the model's only time
         source, so the two paths share the one local-time formatter rather
         than each carrying its own."""
-        row = self.mp.transcript_service.anchor_row()
+        row = anchor if anchor is not None else self.mp.transcript_service.anchor_row()
         if row is not None:
             return self._format_ts(row.created_at)
         execution = self.mp.execution

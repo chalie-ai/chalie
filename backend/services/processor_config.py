@@ -158,6 +158,14 @@ class ProcessorConfig(ABC):
     research turn and read the research log, while fire 1 (MAIN) reads the
     user spine."""
 
+    turn_scoped_history: bool = False
+    """True → every turn on this channel is its own conversation: a new turn
+    reads no earlier turn's rows, and a later message into the same turn reads
+    that turn's rows only — the history a reply into a thread already gets.
+    ``False`` ⇒ a new turn reads every earlier turn on its read channel (the
+    main chat). Only the subtask configs set it, so one subtask never reads
+    another's work."""
+
     # ── PromptService dispatch override ───────────────────────────────────────
 
     prompt_channel: str | None = None
