@@ -399,7 +399,10 @@ _setup_venv() {
 
   _info "Installing core dependencies (this may take a few minutes)…"
   if [[ "$use_uv" == "true" ]]; then
-    uv pip install --python "$venv/bin/python" -e "$CHALIE_HOME/app/backend"
+    # --exact also removes packages an earlier release needed and this one no
+    # longer does; upgrades reuse the venv, so nothing else would. pip has no
+    # equivalent, so the fallback below leaves them until a run with uv.
+    uv pip install --exact --python "$venv/bin/python" -e "$CHALIE_HOME/app/backend"
   else
     "$venv/bin/pip" install --upgrade pip
     "$venv/bin/pip" install -e "$CHALIE_HOME/app/backend"

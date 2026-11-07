@@ -42,11 +42,12 @@ _STDERR_TAIL = 1_000
 CLOSED = "Target page, context or browser has been closed"
 _REVISION_DIR_RE = re.compile(r"^chromium_headless_shell-(\d+)$")
 
-# (platform.system(), platform.machine()) -> executable path inside a revision directory.
+# (platform.system(), platform.machine()) -> executable path inside a revision
+# directory, as the installer's Playwright fetcher unpacks that platform's build.
 _EXECUTABLES: dict[tuple[str, str], tuple[str, ...]] = {
     ("Linux", "x86_64"): ("chrome-headless-shell-linux64", "chrome-headless-shell"),
-    ("Linux", "aarch64"): ("chrome-linux", "headless_shell"),
-    ("Linux", "arm64"): ("chrome-linux", "headless_shell"),
+    ("Linux", "aarch64"): ("chrome-headless-shell-linux-arm64", "chrome-headless-shell"),
+    ("Linux", "arm64"): ("chrome-headless-shell-linux-arm64", "chrome-headless-shell"),
     ("Darwin", "arm64"): ("chrome-headless-shell-mac-arm64", "chrome-headless-shell"),
     ("Darwin", "x86_64"): ("chrome-headless-shell-mac-x64", "chrome-headless-shell"),
 }
