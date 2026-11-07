@@ -62,7 +62,7 @@ class WebBrowseConfig(ProcessorConfig):
 
     @property
     def system_prompt(self) -> str:
-        return """You are driving a real browser with Playwright to accomplish one goal, given below. You can open pages, read and search them, click and fill by visible text, and take a screenshot — every screenshot comes back already described, so it is how you see the page.
+        return """You are driving a real browser to accomplish one goal, given below. You can open pages, read and search them, click and fill by visible text, and take a screenshot — every screenshot comes back already described, so it is how you see the page.
 
 Accomplish the goal in the fewest steps possible. Do not linger, do not retry, do not waste cycles — the moment you can answer, stop and respond.
 

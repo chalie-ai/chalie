@@ -8,7 +8,7 @@
 #
 # The container base images are pristine official distros — nothing is pre-baked,
 # so what the installer must do (build deps, uv, Python venv, native wheels,
-# Playwright, voice models, Deno) is exactly what a first-time user's machine
+# the headless browser, voice models, Deno) is exactly what a first-time user's machine
 # would require.
 #
 # Usage:

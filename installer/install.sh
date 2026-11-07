@@ -107,8 +107,9 @@ _detect_linux_distro() {
 # every Linux run.
 #
 # macOS: a macOS install needs root nowhere else (build deps are skipped and
-# Playwright installs unprivileged), so writing to /usr/local/bin would add a
-# sudo prompt for one file. Keep the CLI under $HOME and add a profile line.
+# the headless browser installs unprivileged), so writing to /usr/local/bin
+# would add a sudo prompt for one file. Keep the CLI under $HOME and add a
+# profile line.
 _cli_bin_dir() {
   if [[ "$(_detect_os)" == "linux" ]]; then
     echo "/usr/local/bin"
@@ -408,23 +409,35 @@ _setup_venv() {
   _info "Note: The embedding model (~400 MB) downloads on first 'chalie start', not now"
 }
 
-# ─── Playwright Browser ─────────────────────────────────────────────────────
-# Chromium needs a set of system libraries to launch (nss, cups, gbm, X libs,
-# …). Playwright's `--with-deps` installs them, but it only knows apt package
-# names: on any non-apt distro it falls back to apt-get, which is absent, and
-# aborts the whole install. So install those libraries with the distro's own
-# package manager, then fetch the browser without `--with-deps`.
-_install_playwright() {
-  _section "Playwright Browser"
-  local pw="$CHALIE_HOME/venv/bin/playwright"
+# ─── Headless Browser ───────────────────────────────────────────────────────
+# Chalie drives chrome-headless-shell directly over the DevTools protocol, so
+# only that build is fetched (`--only-shell`) — full Chromium is never launched.
+# Playwright's CLI does the fetching because it pins a tested build for every
+# platform (Chrome for Testing publishes no linux-arm64 build) and knows the
+# apt libraries the browser needs. It goes into a throwaway directory and is
+# deleted afterwards: Chalie never imports it.
+#
+# On apt distros `--with-deps` installs the system libraries (nss, cups, gbm, X
+# libs, …) and tracks package renames such as Ubuntu 24.04's t64 transition.
+# It elevates only that apt step itself, so the browser lands in the invoking
+# user's cache — running the whole command under sudo would put it in root's.
+# It knows no other package manager, so dnf distros get a hand-kept list.
+_install_browser() {
+  _section "Headless Browser"
+  local venv="$CHALIE_HOME/venv"
+  local fetcher
+  fetcher="$(mktemp -d)"
+  if command -v uv >/dev/null 2>&1; then
+    uv pip install --python "$venv/bin/python" --target "$fetcher" playwright
+  else
+    "$venv/bin/python" -m pip install --target "$fetcher" playwright
+  fi
+
+  local -a install_args=(--only-shell chromium)
   if [[ "$(_detect_os)" == "linux" ]]; then
-    local distro
-    distro="$(_detect_linux_distro)"
-    case "$distro" in
+    case "$(_detect_linux_distro)" in
       *debian*|*ubuntu*)
-        # apt path works — and `--with-deps` tracks apt package renames (e.g.
-        # Ubuntu 24.04's t64 transition) that a hand-listed set would miss.
-        _run_privileged "$pw" install --with-deps chromium
+        install_args=(--with-deps "${install_args[@]}")
         ;;
       # No fallback branch: _install_build_deps already refused anything that is
       # not apt or dnf, so by here the distro is one of these two.
@@ -433,13 +446,12 @@ _install_playwright() {
           nss nspr atk at-spi2-atk at-spi2-core cups-libs libdrm libxkbcommon \
           libXcomposite libXdamage libXrandr libXext libXfixes libX11 libxcb \
           mesa-libgbm pango cairo alsa-lib
-        "$pw" install chromium
         ;;
     esac
-  else
-    "$pw" install chromium
   fi
-  _ok "Playwright Chromium ready"
+  PYTHONPATH="$fetcher" "$venv/bin/python" -m playwright install "${install_args[@]}"
+  rm -rf "$fetcher"
+  _ok "Headless browser ready"
 }
 
 # ─── Voice Models (Kokoro TTS, Moonshine STT, Silero VAD) ──────────────────
@@ -739,7 +751,7 @@ main() {
   _choose_python
   _download_release
   _setup_venv
-  _install_playwright
+  _install_browser
   _download_voice_models
   _install_deno
   _install_cli

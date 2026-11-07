@@ -9,7 +9,7 @@ mounts in `installer/install.sh`, and runs it exactly as a first-time user would
 (`install.sh --branch <ref>`, which self-fetches that branch's source). It then
 audits that the dependencies actually installed — `onnxruntime` imports and lists
 its execution providers, the core modules import, and the installer-managed
-artifacts (voice models, Playwright browser, Deno, the CLI) are present — boots
+artifacts (voice models, headless browser, Deno, the CLI) are present — boots
 Chalie, and finally exercises every subsystem a user touches on day one.
 
 ## What a row has to prove
@@ -21,7 +21,7 @@ claim being tested; "a user can use it" is.
 |---|---|
 | readiness | `GET /ready` returns `200`, meaning database, memory store, embeddings and ONNX classifier heads each report `ok` |
 | webserver | `GET /` serves the built interface bundle |
-| chromium | Playwright launches Chromium, navigates to the live instance and reads its title |
+| chromium | Chalie's own browser session launches the headless shell, opens the live instance and reads its title |
 | voice | Kokoro synthesises speech and Moonshine transcribes that same audio back to text (running Silero VAD on the way) |
 | deno | the bundled runtime executes a script and returns its stdout |
 

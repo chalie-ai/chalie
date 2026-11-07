@@ -11,7 +11,8 @@
 #                   each reporting "ok" (embeddings ok == the embedding session
 #                   is built; onnx ok == the classifier heads registered)
 #        webserver  GET / serves the interface bundle
-#        chromium   Playwright drives the live instance and reads its title
+#        chromium   Chalie's browser session opens the live instance and reads
+#                   its title
 #        voice      a real Kokoro synthesis is fed back through Moonshine STT
 #                   (which runs Silero VAD on the way) and returns text
 #        deno       the bundled runtime executes a script and returns stdout
@@ -169,8 +170,7 @@ try:
     print("onnxruntime", ort.__version__, "CPUExecutionProvider")
 except Exception as e:
     print("ONNXRUNTIME-IMPORT-FAIL:", repr(e)); hard_ok = False
-for m in ("numpy", "tokenizers", "soundfile", "playwright",
-          "kokoro_onnx", "moonshine_onnx"):
+for m in ("numpy", "tokenizers", "soundfile", "kokoro_onnx", "moonshine_onnx"):
     try:
         __import__(m); print("import-ok", m)
     except Exception as e:
@@ -261,22 +261,20 @@ if [ "$ready" = "1" ]; then
   result "webserver=$([ "$web_ok" = "1" ] && echo ok || echo fail)"
 
   # ── chromium: drive the LIVE instance, not an empty browser ───────────────
-  # Launching alone proves the shared objects resolved; navigating and reading
-  # the title proves the renderer works too, which is what the browsing ability
-  # actually needs. --no-sandbox/--disable-dev-shm-usage because this runs as
-  # root in a container (Chromium refuses to run as root with the sandbox on).
+  # Goes through Chalie's own browser session — the path the browsing ability
+  # takes — so it proves the installed headless shell is found, launches with
+  # Chalie's flags, and renders: launching alone would only prove its shared
+  # objects resolved. Run from backend/ because its modules resolve via cwd.
   say "probe: chromium"
-  "$VENV/bin/python" - "$PORT" <<'PY'
+  ( cd "$APP/backend" && "$VENV/bin/python" - "$PORT" <<'PY'
 import sys
-port = sys.argv[1]
-from playwright.sync_api import sync_playwright
-with sync_playwright() as p:
-    b = p.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage"])
-    page = b.new_page()
-    page.goto(f"http://localhost:{port}/", wait_until="domcontentloaded", timeout=60000)
-    print("chromium navigated, title=%r" % page.title())
-    b.close()
+from tools.browser.session import run_verb
+
+env = run_verb(1, "open", {"url": f"http://localhost:{sys.argv[1]}/"})
+assert not env["error"], env["error"]
+print("chromium navigated, title=%r" % env["page"]["title"])
 PY
+  )
   [ $? -eq 0 ] && chromium_ok=1
   result "chromium=$([ "$chromium_ok" = "1" ] && echo ok || echo fail)"
 

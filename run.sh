@@ -2,7 +2,7 @@
 # run.sh — Canonical Chalie launcher (dev, installer, Docker)
 #
 # Resolves a Python interpreter, syncs deps, then hands off to run.py.
-# Voice deps and the Playwright browser are installed once at install time
+# Voice deps and the headless browser are installed once at install time
 # (installer/install.sh / the Docker build) — nothing here manages them.
 #
 # Usage:
