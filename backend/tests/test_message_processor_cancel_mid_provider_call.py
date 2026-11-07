@@ -126,7 +126,7 @@ class _CancelOnToolCallProvider(_RecordingProvider):
 
 
 class _CancelOnRowCount:
-    """A real socket-registry subscriber (``send(str)`` Protocol) that requests
+    """A real socket-registry subscriber (``send``/``close`` Protocol) that requests
     the turn's cancel — the same chokepoint ``DELETE /api/threads/<turn_id>``
     uses — the moment the turn's Nth assistant row is stored. A row's store
     broadcasts its ``updated`` frame, so this lands the cancel after that call
@@ -136,6 +136,9 @@ class _CancelOnRowCount:
         self._mp = mp
         self._stored_rows = stored_rows
         self._fired = False
+
+    def close(self) -> None:
+        """Nothing to release: it only listens for the row that triggers the cancel."""
 
     def send(self, data: str) -> None:
         frame = json.loads(data)

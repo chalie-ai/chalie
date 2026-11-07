@@ -33,9 +33,11 @@ logger = logging.getLogger(__name__)
 
 
 class _WebSocket(Protocol):
-    """Structural type for a WebSocket connection that can send a string."""
+    """Structural type for a WebSocket connection that can send a string and close."""
 
     def send(self, data: str) -> None: ...
+
+    def close(self) -> None: ...
 
 
 class Websocket:
@@ -68,9 +70,10 @@ class Websocket:
         """Serialize ``instance`` once via ``.to_json()`` and push the string to
         every live socket. ``None`` is a no-op — a caller may hand a nullable
         model (e.g. one forwarded through ``mp.push_websocket``) without an extra
-        guard at the call site. No-op too if nobody is listening. Sockets that fail to send
-        (closed/half-open) are pruned so a stale connection cannot accumulate
-        or block delivery to healthy clients.
+        guard at the call site. No-op too if nobody is listening. A socket that
+        fails to send is pruned AND closed: pruned alone it stays open but deaf,
+        so the browser keeps waiting on a connection that will never deliver
+        another frame instead of reconnecting and catching up.
 
         Turn-scoped frames are enriched with the shared DOM-contract keys
         ``turn_id`` / ``type`` / ``transcript_row_id`` here and only here —
@@ -105,8 +108,13 @@ class Websocket:
             try:
                 ws.send(payload)
             except Exception as exc:  # noqa: BLE001 — a dead surface is pruned, not raised
-                logger.debug("[WS] send failed (connection likely closed): %s", exc)
+                logger.warning("[WS] send failed, closing the connection so the client reconnects: %s", exc)
                 dead.append(ws)
         if dead:
             with Websocket._lock:
                 Websocket._connections.difference_update(dead)
+            for ws in dead:
+                try:
+                    ws.close()
+                except Exception as exc:  # noqa: BLE001 — already gone is the outcome we want
+                    logger.debug("[WS] close after failed send: %s", exc)

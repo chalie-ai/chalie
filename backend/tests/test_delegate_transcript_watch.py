@@ -177,6 +177,9 @@ class _RecordingClient:
         self.frames: list[dict[str, object]] = []
         self._on_frame = on_frame
 
+    def close(self) -> None:
+        """Nothing to release: the captured frames stay readable after the registry lets go."""
+
     def send(self, data: str) -> None:
         frame = json.loads(data)
         self.frames.append(frame)

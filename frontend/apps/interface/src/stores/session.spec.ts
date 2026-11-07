@@ -987,6 +987,22 @@ describe('reconnect reconcile', () => {
     expect(liveTrailsFor(ConfigType.USER, 12)[0]?.pills.map((p) => p.id)).toEqual(['33']);
   });
 
+  it('onDisconnect lets go of speech still being prepared, whose ready frame may have died with the socket, and keeps what is settled', async () => {
+    const { session } = await freshSession();
+    const { useVoiceTranscriptsStore } = await import('./voiceTranscripts');
+    const voice = useVoiceTranscriptsStore();
+    session.init();
+    voice.record(58, 'pending');
+    voice.record(59, 'ready');
+    voice.record(60, 'failed');
+
+    wsCallbacks.onDisconnect();
+
+    expect(voice.stateFor(58)).toBeNull();
+    expect(voice.stateFor(59)).toBe('ready');
+    expect(voice.stateFor(60)).toBe('failed');
+  });
+
   it('_reconcileWorking settles a snapshotted turn whose refetch says it is no longer working (drains queues), and restores the spinner for one still working', async () => {
     const { session, turnDom, threadPhase, queue } = await freshSession();
     session._offlineWorking.add('user:5'); // will refetch as settled

@@ -956,8 +956,8 @@ function taskStatuses(wrapper: VueWrapper): string[] {
 
 // A request's plan stands sticky under the message it plans while the
 // exchange works, ticking as the agent marks its tasks; once the exchange
-// settles it leaves the column and sits behind the answer footer's plan link.
-describe('the plan — live under its message, settled behind the footer', () => {
+// settles the plan is gone — neither in the column nor on the footer.
+describe('the plan — live under its message, gone once it settles', () => {
   it('stands the working exchange\'s plan right under its message and ahead of the live line, opening Chalie\'s side, the live line continuing it', () => {
     const turnId = 501;
     const wrapper = mount(TurnView, {
@@ -977,7 +977,7 @@ describe('the plan — live under its message, settled behind the footer', () =>
     expect(rows[3]!.classes()).toContain('msg-row--cont');
     expect(rows[1]!.findAll('.plan-task__title').map((t) => t.text())).toEqual(['task 1', 'task 2', 'task 3']);
     expect(taskStatuses(wrapper)).toEqual(['done', 'in_progress', 'todo']);
-    // Nothing has settled, so there is no footer and no plan link yet.
+    // Nothing has settled, so there is no footer yet.
     expect(wrapper.find('.speech-form__meta').exists()).toBe(false);
   });
 
@@ -1020,7 +1020,7 @@ describe('the plan — live under its message, settled behind the footer', () =>
     expect(layout(wrapper)).toEqual(['user:hello', 'live']);
   });
 
-  it('moves a settled exchange\'s plan behind its footer\'s "plan N/M" link, which opens the checklist below the footer and closes it again', async () => {
+  it('drops a settled exchange\'s plan from view: no card in the column and no plan link on its footer', () => {
     const turnId = 505;
     const wrapper = mount(TurnView, {
       props: {
@@ -1035,42 +1035,11 @@ describe('the plan — live under its message, settled behind the footer', () =>
     expect(layout(wrapper)).toEqual([
       'user:what is the weather', 'step:ran plan, ran web_search | Sunny, 24°.', 'footer',
     ]);
-    const footer = footerOf(wrapper);
-    const link = footer.find('.speech-form__meta button.fold');
-    expect(link.text()).toBe('· plan 2/3 ›');
-    expect(link.attributes('aria-expanded')).toBe('false');
-    expect(footer.find('.trace-body .plan-card').exists()).toBe(false);
-
-    await link.trigger('click');
-
-    expect(link.attributes('aria-expanded')).toBe('true');
-    expect(footer.find('.trace-body').classes()).toContain('trace-body--open');
-    expect(footer.find('.trace-body .plan-card').exists()).toBe(true);
-    expect(taskStatuses(wrapper)).toEqual(['done', 'cancelled', 'done']);
-
-    await link.trigger('click');
-
-    expect(link.attributes('aria-expanded')).toBe('false');
-    expect(footer.find('.trace-body').classes()).not.toContain('trace-body--open');
+    expect(wrapper.find('.plan-card').exists()).toBe(false);
+    expect(footerOf(wrapper).text()).not.toContain('plan');
   });
 
-  it('gives a settled exchange with no plan no plan link', () => {
-    const turnId = 506;
-    const wrapper = mount(TurnView, {
-      props: {
-        block: settledTurn(turnId, [
-          row('5060', 'user', 'what is the weather', turnId),
-          row('5061', 'assistant', 'Sunny, 24°.', turnId, { tool_calls: calls('web_search'), settled: true }),
-        ]),
-        type: ConfigType.USER,
-      },
-    });
-
-    expect(layout(wrapper)).toEqual(['user:what is the weather', 'step:ran web_search | Sunny, 24°.', 'footer']);
-    expect(footerOf(wrapper).find('.speech-form__meta button.fold').exists()).toBe(false);
-  });
-
-  it('settles an earlier exchange\'s plan into its footer while the working one\'s plan stands live — and the thread panel pins it to the panel\'s top, never the spine for a forked turn', () => {
+  it('drops an earlier exchange\'s plan once it settles while the working one\'s plan stands live — and the thread panel pins it to the panel\'s top, never the spine for a forked turn', () => {
     const turnId = 507;
     const messages = [
       row('5070', 'user', 'what is the weather', turnId, { plan: planOf('done', 'done') }),
@@ -1081,10 +1050,10 @@ describe('the plan — live under its message, settled behind the footer', () =>
     const spine = mount(TurnView, { props: { block: block(turnId, messages), type: ConfigType.USER, fullThread: false } });
     const panel = mount(TurnView, { props: { block: block(turnId, messages), type: ConfigType.USER, fullThread: true } });
 
-    // The spine shows the forked turn's opener only — its plan behind the
-    // footer link, and no live card: the thread pill carries the live state.
+    // The spine shows the forked turn's opener only — its settled plan gone,
+    // and no live card: the thread pill carries the live state.
     expect(layout(spine)).toEqual(['user:what is the weather', 'bubble:Sunny, 24°.', 'footer']);
-    expect(spine.find('.speech-form__meta button.fold').text()).toBe('· plan 2/2 ›');
+    expect(footerOf(spine).text()).not.toContain('plan');
     expect(spine.classes()).not.toContain('turn-view--panel');
 
     expect(layout(panel)).toEqual([

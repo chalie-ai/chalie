@@ -95,20 +95,18 @@ interface MsgRow {
 }
 
 // The meta line that ends a segment, under the row that closes it: timestamp,
-// the segment's duration when it did work, the plan its exchange kept behind
-// the plan link, actions, and (on the last footer of a forked turn) the
-// collapsed thread pill.
+// the segment's duration when it did work, actions, and (on the last footer of
+// a forked turn) the collapsed thread pill.
 interface FooterRow {
   kind: 'footer';
   key: string;
   message: ConversationMessage;
   durationMs: number | null;
-  plan: PlanTask[];
 }
 
 /** The still-working exchange's plan, standing sticky under the message it
- *  plans and ticking as the agent works it. Settled, it moves behind the
- *  footer's plan link. */
+ *  plans and ticking as the agent works it. It is scaffolding for the work,
+ *  so a settled exchange shows no plan at all. */
 interface PlanRow {
   kind: 'plan';
   key: string;
@@ -205,7 +203,7 @@ const displayRows = computed<DisplayRow[]>(() => {
     // A segment shows its duration only when it did work; the footer drops a
     // NaN or negative one.
     const durationMs = worked ? Date.parse(message.created_at) - Date.parse(start) : null;
-    const footer: FooterRow = { kind: 'footer', key: `footer-${message.id}`, message, durationMs, plan };
+    const footer: FooterRow = { kind: 'footer', key: `footer-${message.id}`, message, durationMs };
     last = { at: body.length, footer };
     if (text) lastText = last;
     if (message.settled) {
@@ -295,14 +293,12 @@ function onOpenThread(): void {
     >
       <PlanCard v-if="ar.row.kind === 'plan'" :tasks="(ar.row as PlanRow).tasks" />
 
-      <!-- The segment's footer: timestamp, duration, plan link and actions —
-           and (on the last footer of a forked turn) the collapsed thread
-           pill. -->
+      <!-- The segment's footer: timestamp, duration and actions — and (on the
+           last footer of a forked turn) the collapsed thread pill. -->
       <BubbleFooter
         v-else-if="ar.row.kind === 'footer'"
         :message="(ar.row as FooterRow).message"
         :duration-ms="(ar.row as FooterRow).durationMs"
-        :plan="(ar.row as FooterRow).plan"
         :can-reply="canReply"
         :thread-pill="ar.row.key === lastFooterKey ? threadPill : null"
         @reply="onReply"

@@ -1,13 +1,12 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
-import type { ConversationMessage, PlanTask } from '../../api/conversation';
+import { computed } from 'vue';
+import type { ConversationMessage } from '../../api/conversation';
 import { messagePlaintext } from '../../utils/speech';
 import { formatElapsed } from '../../utils/time';
 import { emit as busEmit } from '../../composables/useEventBus';
 import { useVoiceTranscriptsStore } from '../../stores/voiceTranscripts';
 import { voice } from '../../api/voice';
 import { Copy, Reply, Volume2 } from '@lucide/vue';
-import PlanCard from './PlanCard.vue';
 
 const props = withDefaults(defineProps<{
   message: ConversationMessage;
@@ -15,13 +14,10 @@ const props = withDefaults(defineProps<{
   threadPill?: { status: 'working' | 'done' | 'thread' | 'idle'; label: string } | null;
   /** The exchange's wall-clock duration in ms, read next to the timestamp. */
   durationMs?: number | null;
-  /** The plan the exchange kept, behind the plan link ("plan N/M"). */
-  plan?: PlanTask[];
 }>(), {
   canReply: false,
   threadPill: null,
   durationMs: null,
-  plan: () => [],
 });
 
 const emit = defineEmits<{ reply: []; openThread: [] }>();
@@ -72,8 +68,10 @@ async function onSpeak(): Promise<void> {
     // terminal frame. Anything else is terminal here and now.
     if (resp.status !== 202) voiceStore.record(transcriptId.value, 'failed');
   } catch (err) {
+    // No answer from the server is not its verdict on the speech: leave the
+    // button pressable rather than marking it dead until a reload.
     console.error('[BubbleFooter] speech request failed:', err);
-    voiceStore.record(transcriptId.value, 'failed');
+    voiceStore.forget(transcriptId.value);
   }
 }
 
@@ -85,12 +83,6 @@ function onCopy(): void {
     // Silently swallow — clipboard writes can fail in non-secure contexts.
   });
 }
-
-// The exchange's work stands above the answer as step blocks, so the footer
-// keeps only its duration and, when the exchange kept a plan, the plan link:
-// "plan N/M" folds the plan open below the footer.
-const planOpen = ref(false);
-const planDone = computed(() => props.plan.filter((t) => t.status === 'done').length);
 </script>
 
 <template>
@@ -99,17 +91,6 @@ const planDone = computed(() => props.plan.filter((t) => t.status === 'done').le
       <span class="speech-form__timestamp">{{ message.timestamp }}</span>
 
       <span v-if="durationMs && durationMs > 0">· {{ formatElapsed(durationMs) }}</span>
-
-      <button
-        v-if="plan.length"
-        type="button"
-        class="fold"
-        :aria-expanded="planOpen"
-        @click="planOpen = !planOpen"
-      >
-        · plan {{ planDone }}/{{ plan.length }}
-        <span class="fold-chev" aria-hidden="true">›</span>
-      </button>
 
       <button
         v-if="threadPill"
@@ -159,19 +140,6 @@ const planDone = computed(() => props.plan.filter((t) => t.status === 'done').le
           <Reply :size="16" />
         </button>
       </span>
-    </div>
-
-    <!-- inert while folded: the fold only collapses its height, so the plan's
-         controls would stay reachable by Tab unseen. -->
-    <div
-      v-if="plan.length"
-      class="trace-body"
-      :class="{ 'trace-body--open': planOpen }"
-      :inert="!planOpen"
-    >
-      <div class="trace-body__inner">
-        <PlanCard v-if="planOpen" :tasks="plan" />
-      </div>
     </div>
   </div>
 </template>

@@ -46,6 +46,7 @@ import {
 import { laneKey, useQueueStore } from './queue';
 import { useNotificationsStore } from './notifications';
 import { usePermissionsStore } from './permissions';
+import { useVoiceTranscriptsStore } from './voiceTranscripts';
 
 /** Guard: init() must be idempotent (HMR / Vue StrictMode). */
 let _initialized = false;
@@ -191,6 +192,8 @@ export const useSessionStore = defineStore('session', {
         // A delegate's terminal frame is lost the same way — drop its pills
         // and timers now; reconnect re-reads the delegate panel, if open.
         clearDelegateFeeds();
+        // So is speech's: a 'pending' speaker button would stay dead.
+        useVoiceTranscriptsStore().forgetPending();
       });
 
       ws.onDrift((data: WsPushEvent) => {

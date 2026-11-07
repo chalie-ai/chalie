@@ -60,6 +60,9 @@ class _RecordingClient:
     def __init__(self) -> None:
         self.frames: list[dict[str, object]] = []
 
+    def close(self) -> None:
+        """Nothing to release: the captured frames stay readable after the registry lets go."""
+
     def send(self, data: str) -> None:
         self.frames.append(json.loads(data))
 
