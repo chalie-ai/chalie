@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from abilities._delegate import DelegateAbility, delegate_result
+from abilities._delegate import DelegateAbility
 from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 from configs.channels.web_browse import WebBrowseConfig
@@ -113,17 +113,7 @@ class WebBrowseAbility(DelegateAbility[DelegateParamsBag]):
         return self._PARAMETERS
 
     def run(self, params: DelegateParamsBag) -> ToolResult:
-        from controllers.message_processor import MessageProcessor  # noqa: PLC0415
-
-        mp = self.mp
-        if mp is None:
-            raise RuntimeError("web_browse.run() dispatched without a bound MessageProcessor")
-
-        cfg = WebBrowseConfig(mp.config.policy_channel)
-        # A gated tool inside the delegate prompts on the CALLER's turn — the
-        # delegate's own turn has no surface a human could answer from.
-        delegate_mp = MessageProcessor.process(cfg, raw_input=params.instructions, metadata={"origin": mp.origin})
-        result = delegate_mp.result()
-        return delegate_result(
-            result, hint="Restate the goal more concretely or break it into steps, then retry."
+        return self.delegate(
+            WebBrowseConfig, params.instructions,
+            hint="Restate the goal more concretely or break it into steps, then retry.",
         )

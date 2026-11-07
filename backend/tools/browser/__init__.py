@@ -1,11 +1,4 @@
-"""Headless browser tool — JS rendering, screenshots, interaction, page monitoring.
+"""Headless browser tool — a headless chromium driven over the DevTools protocol.
 
-Optional dependency: requires `playwright` with Chromium installed.
-Auto-detected at import time. Tool excluded from registry if unavailable.
+The installer downloads the chromium build; ``cdp.find_executable`` locates it.
 """
-
-try:
-    import playwright  # noqa: F401 — availability check
-    AVAILABLE = True
-except ImportError:
-    AVAILABLE = False

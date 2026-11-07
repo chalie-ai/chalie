@@ -37,9 +37,8 @@ def send_image_with_config(config: Dict[str, object], image_bytes: bytes,
 
     Builds a ProviderApiRequest and calls the thin client directly: this probes a
     CANDIDATE provider (not the live-configured one), so it cannot route through
-    ProviderService.send, which resolves the configured provider. The call is still
-    bounded — every client enforces PROVIDER_CALL_TIMEOUT_S at its HTTP boundary.
-    Returns None on any failure.
+    ProviderService.send, which resolves the configured provider. Returns None on
+    any failure.
 
     ``max_tokens`` is explicit because this is the one send that has no context
     window to size against: a candidate has no ``providers.context_window`` to

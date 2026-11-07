@@ -26,8 +26,11 @@ export interface WsPingEvent {
 export type WsTurnStatus = 'updated' | 'provider_retry' | 'context_usage';
 export interface WsTurnSignal {
   status: WsTurnStatus;
-  /** ConfigType — the ProcessorConfig identity the FE routes by. */
-  type: string;
+  /** ConfigType — the ProcessorConfig identity the FE routes by. Absent on a
+   *  delegate turn's frames, which are addressed by `channel` instead. */
+  type?: string | null;
+  /** Delegate turns only: the full transcript channel (`delegate:<name>`). */
+  channel?: string;
   turn_id?: number | null;
   /** `context_usage` only — tokens the sent request measured, and the window it
    *  was measured against. Absent on every other status. */
@@ -44,7 +47,9 @@ export interface WsTurnSignal {
  *  `done` on success/placeholder return, `error` on a failure/denial/pre-validation
  *  bounce. `params`/`result` never cross the wire — the surface refetches the turn
  *  block over REST for the persisted trail; this frame drives the live pill timer
- *  only. */
+ *  only. A delegate tool's frame is re-emitted, state unchanged, once the child
+ *  turn it spawned exists, so `delegate` can arrive on a later frame for the same
+ *  `id`. */
 export type WsToolCallState = 'started' | 'done' | 'error';
 export interface WsToolCallEvent {
   id: number;
@@ -53,9 +58,24 @@ export interface WsToolCallEvent {
   created_at: string;
   ended_at: string | null;
   state: WsToolCallState;
-  /** ConfigType — the ProcessorConfig identity the FE routes by. */
-  type: string | null;
+  /** ConfigType — the ProcessorConfig identity the FE routes by. Absent on a
+   *  delegate turn's frames, which are addressed by `channel` instead. */
+  type?: string | null;
+  /** Delegate turns only: the full transcript channel (`delegate:<name>`). */
+  channel?: string;
   turn_id: number | null;
+  /** The transcript row this call anchors to. */
+  transcript_row_id?: number | null;
+  /** The delegate turn this call spawned, once that turn has written rows. */
+  delegate?: DelegateRef | null;
+}
+
+/** Address of one delegate (subagent) turn. A delegate's turn_id is allocated
+ *  per channel, so it collides with user turn ids — the full channel
+ *  (`delegate:<name>`) is part of the identity, never optional. */
+export interface DelegateRef {
+  channel: string;
+  turn_id: number;
 }
 
 /** One `turn_executions` row, pushed whole on every state flip (see
@@ -69,9 +89,12 @@ export interface WsToolCallEvent {
 export type TurnExecutionState = 'working' | 'completed' | 'cancelled' | 'crashed';
 export interface WsTurnExecutionEvent {
   id: number;
+  /** The transcript channel the turn runs on (`user`, a scheduled channel, or
+   *  `delegate:<name>` for a delegate turn). */
   channel: string;
-  /** ConfigType — the ProcessorConfig identity the FE routes by. */
-  type: string | null;
+  /** ConfigType — the ProcessorConfig identity the FE routes by. Absent on a
+   *  delegate turn's frames, which are addressed by `channel` instead. */
+  type?: string | null;
   turn_id: number;
   started_at: string;
   ended_at: string | null;
@@ -130,28 +153,15 @@ export class WebSocketService {
   private lastInboundAt = 0;
   private livenessTimer: Interval | null = null;
 
-  constructor(
-    private readonly getHost: GetHost,
-    private readonly getToken: GetHost,
-  ) {}
-
-  /**
-   * Bearer header when a token is configured, else `{}`. Spreading the empty
-   * object is a no-op, so the web (cookie) path is unchanged.
-   */
-  private authHeaders(): Record<string, string> {
-    const token = this.getToken();
-    return token ? { Authorization: `Bearer ${token}` } : {};
-  }
+  constructor(private readonly getHost: GetHost) {}
 
   private baseUrl(): string {
     const host = this.getHost();
     return host ? host.replace(/\/$/, '') : globalThis.location.origin;
   }
   private buildWsUrl(): string {
-    // The bearer token is NOT carried in the URL — a query-string credential
-    // leaks into reverse-proxy/access logs, Referer, and history. The native
-    // client sends it as the first WS frame instead (see ``connect``).
+    // The session cookie rides the handshake — no credential is ever carried in
+    // the URL, where it would leak into reverse-proxy/access logs and history.
     return this.baseUrl().replace(/^http/, 'ws') + '/ws';
   }
   private buildHttpUrl(path: string): string {
@@ -200,16 +210,6 @@ export class WebSocketService {
       this.reconnectDelay = 1000;
       this.lastInboundAt = Date.now();
       this.startLivenessWatch();
-      // Native clients have no cookie, so they present the bearer token as the
-      // first WS frame — never in the URL. The web (cookie) path sends none.
-      const token = this.getToken();
-      if (token) {
-        try {
-          ws.send(JSON.stringify({ type: 'auth', token }));
-        } catch {
-          /* frame send failure surfaces as onclose → reconnect */
-        }
-      }
       try {
         this.connectHandler?.();
       } catch {
@@ -319,7 +319,11 @@ export class WebSocketService {
    *  no signal will ever arrive — so the surface can release its send guard.
    *
    *  Resolves with the POST body `{turn_id, type}` so the caller can bind the
-   *  lane handle the moment the server allocates it (no WS round-trip needed). */
+   *  lane handle the moment the server allocates it (no WS round-trip needed).
+   *
+   *  `join` sends a main-conversation follow-up into the still-working turn
+   *  `threadId`; the server starts a new thread instead if that turn's own
+   *  work already finished. */
   send(
     text: string,
     onSendFailure: (message: string) => void = () => {
@@ -329,12 +333,13 @@ export class WebSocketService {
     threadId: number | null = null,
     type: string = ConfigType.USER,
     thinkingLevel: string | null = null,
+    join = false,
   ): Promise<{ turn_id: number; type: string } | null> {
     if (!this.isConnected) {
       onSendFailure('Not connected. Please wait...');
       return Promise.resolve(null);
     }
-    return this.postChat(text, files, threadId, onSendFailure, type, thinkingLevel);
+    return this.postChat(text, files, threadId, onSendFailure, type, thinkingLevel, join);
   }
 
   private postChat(
@@ -344,10 +349,13 @@ export class WebSocketService {
     onSendFailure: (message: string) => void,
     type: string = ConfigType.USER,
     thinkingLevel: string | null = null,
+    join = false,
   ): Promise<{ turn_id: number; type: string } | null> {
     const form = new FormData();
     form.append('text', text);
     form.append('type', type);
+    if (join) form.append('join', '1');
+    // A join ignores it; a message that starts a new thread instead honours it.
     if (thinkingLevel) form.append('thinking_level', thinkingLevel);
     for (const file of files) form.append('files', file, file.name);
     // POST /api/threads/<turn_id> — -1 creates a new thread, a real id replies
@@ -359,7 +367,6 @@ export class WebSocketService {
     return fetch(this.buildHttpUrl(path), {
       method: 'POST',
       credentials: 'same-origin',
-      headers: { ...this.authHeaders() },
       body: form,
     })
       .then(async (resp) => {

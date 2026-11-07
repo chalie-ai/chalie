@@ -37,14 +37,6 @@ def is_token_limit_message(text: str | None) -> bool:
     return any(s in (text or '').lower() for s in TOKEN_LIMIT_STRINGS)
 
 
-# Deadline (seconds) for a single provider API call, enforced by every thin
-# client at its own HTTP boundary (the only place a call can actually be
-# interrupted — a Python thread cannot be killed). On expiry the client raises
-# ProviderTimeoutError, which the retry helper surfaces immediately. This is the
-# ONE provider-call timeout; clients import this constant rather than hard-coding.
-PROVIDER_CALL_TIMEOUT_S = 300
-
-
 @dataclass
 class ProviderApiRequest:
     """Caller-built, provider-neutral send request.

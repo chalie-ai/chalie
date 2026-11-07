@@ -1,8 +1,7 @@
 """OCR Service — RapidOCR (rapidocr_onnxruntime) text extraction.
 
-Single private entry point: `_extract_text(img)`. Callers:
-- services.image_context_service
-- tools.browser.browser
+Single private entry point: `_extract_text(img)`, called only by
+services.image_context_service.
 """
 
 import threading

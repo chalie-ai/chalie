@@ -1,11 +1,11 @@
-"""Stores and retrieves client timezone, location, device info, behavioral
-signals, and system info.
+"""Stores and retrieves client timezone, location, device info, and
+system info.
 
 The raw heartbeat payload (whatever the frontend sends) is persisted as a
 nested JSON document (``data/telemetry.json``) by ``TelemetryService``.
 The frontend (heartbeat.js) is the single source of truth for which keys
-are collected; this service handles location resolution + behavioral
-merging on save, and read-side consumers (locale_service, world_state, …)
+are collected; this service handles location resolution
+on save, and read-side consumers (locale_service, world_state, …)
 see the same nested shape they always did.
 
 Side concerns that stay in MemoryStore (NOT telemetry): the location-history
@@ -19,37 +19,16 @@ service.
 
 import json
 import logging
-from typing import TYPE_CHECKING, Optional, cast
+from typing import cast
+
+import requests
 
 from services.memory_client import MemoryClientService
 from services.telemetry_service import TelemetryService
 
-if TYPE_CHECKING:
-    from typing import Protocol
-
-    class _Location(Protocol):
-        @property
-        def raw(self) -> dict[str, object]:
-            ...
-
-    class _Geocoder(Protocol):
-        def reverse(self, query: object, language: str = ..., exactly_one: bool = ...) -> "_Location | None":
-            ...
-
+_NOMINATIM_REVERSE_URL = "https://nominatim.openstreetmap.org/reverse"
 _NOMINATIM_USER_AGENT = "Chalie/1.0"
 _NOMINATIM_TIMEOUT_S = 3
-_nominatim: "Optional[_Geocoder]" = None
-
-
-def _get_nominatim() -> "_Geocoder":
-    """Return a lazily-initialised Nominatim geocoder singleton."""
-    global _nominatim
-    if _nominatim is None:
-        from geopy.geocoders import Nominatim
-        _nominatim = cast("_Geocoder", Nominatim(
-            user_agent=_NOMINATIM_USER_AGENT, timeout=_NOMINATIM_TIMEOUT_S,
-        ))
-    return _nominatim
 
 
 HISTORY_KEY = "client_context:history"
@@ -58,11 +37,11 @@ TTL = 3600  # 1 hour (used by ephemeral MemoryStore keys, not telemetry)
 
 
 class ClientContextService:
-    """Manages client context (timezone, location, device, behavioral signals).
+    """Manages client context (timezone, location, device).
 
     Telemetry persistence is a JSON file (``data/telemetry.json``) owned by
     ``TelemetryService``; this service only handles save-side concerns —
-    location resolution and behavioral merging. MemoryStore is retained for
+    location resolution. MemoryStore is retained for
     ephemeral inference flags (place-transition, session-reentry) and the
     location-history ring buffer.
     """
@@ -71,16 +50,34 @@ class ClientContextService:
         self._store = MemoryClientService.create_connection()
 
     def _resolve_location_name(self, lat: float, lon: float) -> str | None:
-        """Uses the geopy Nominatim geocoder (OpenStreetMap). Prefers
-        city → town → municipality → county → state_district as the
-        locality label, combined with the country name. Returns ``None``
-        on geocoder failure or unusable address."""
+        """Reverse-geocodes the coordinates against the OpenStreetMap
+        Nominatim reverse endpoint. Prefers city → town → municipality →
+        county → state_district as the locality label, combined with the
+        country name. Returns ``None`` on geocoder failure or unusable
+        address."""
         try:
-            geocoder = _get_nominatim()
-            location = geocoder.reverse((lat, lon), language="en", exactly_one=True)
-            if location is None:
+            params: dict[str, str | float] = {
+                "lat": lat,
+                "lon": lon,
+                "format": "json",
+                "accept-language": "en",
+                "addressdetails": 1,
+            }
+            resp = requests.get(
+                _NOMINATIM_REVERSE_URL,
+                params=params,
+                headers={"User-Agent": _NOMINATIM_USER_AGENT},
+                timeout=_NOMINATIM_TIMEOUT_S,
+            )
+            resp.raise_for_status()
+            place = cast("dict[str, object]", resp.json())
+            if not place:
                 return None
-            address = cast(dict[str, object], location.raw.get("address", {}))
+            if (error := place.get("error")) is not None:
+                if error != "Unable to geocode":
+                    logging.warning(f"[CLIENT CONTEXT] Nominatim error: {error}")
+                return None
+            address = cast("dict[str, object]", place.get("address", {}))
             city = cast(str, address.get("city") or address.get("town") or
                     address.get("municipality") or address.get("county") or
                     address.get("state_district") or "")
@@ -89,6 +86,8 @@ class ClientContextService:
                 return f"{city}, {country}"
             if country:
                 return country
+        except requests.RequestException as e:
+            logging.warning(f"[CLIENT CONTEXT] Nominatim request failed: {e}")
         except (KeyError, ValueError, AttributeError) as e:
             logging.debug(f"[CLIENT CONTEXT] Failed to resolve location: {e}")
         except Exception as e:
@@ -96,13 +95,8 @@ class ClientContextService:
         return None
 
     def save(self, ctx: dict[str, object]) -> None:
-        """Handles location resolution, behavioral-data merging, location
-        history, and session re-entry."""
+        """Handles location resolution, location history, and session re-entry."""
         cached = TelemetryService.read()
-
-        # Merge behavioral data: don't overwrite if new heartbeat lacks it
-        if "behavioral" not in ctx and cached.behavioral is not None:
-            ctx["behavioral"] = cached.behavioral
 
         # Resolve location name if location changed significantly
         if location := cast("dict[str, object]", ctx.get("location")):

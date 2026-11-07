@@ -8,7 +8,14 @@ from unittest.mock import patch
 
 import pytest
 
-from configs.channels import DiscoveryConfig, ScheduledConfig, UserConfig
+from configs.channels import (
+    DiscoveryConfig,
+    ScheduledConfig,
+    UserConfig,
+    WebSearchConfig,
+)
+from configs.enums.channels import Channel
+from configs.enums.policy_channel import PolicyChannel
 from configs.enums.provider_type import ProviderType
 from controllers.message_processor import MessageProcessor
 from models.provider_request import ProviderRequest
@@ -123,6 +130,33 @@ def test_scheduled_channel_markdown_is_converted_to_html(db: sqlite3.Connection)
     assert content == expected
     assert "**" not in content
     assert "`" not in content
+
+
+def test_subagent_channel_markdown_is_converted_and_script_stripped(
+    db: sqlite3.Connection,
+) -> None:
+    """A subagent's reply is rendered as HTML in the transcript panel the user
+    can open, so it goes through the same persist-time convert-and-sanitise step
+    as the user channel: leaked markdown becomes HTML, and markup the model was
+    never allowed to emit (a ``<script>`` lifted from a fetched page) is dropped
+    before it is stored — the panel's refresh read inherits the same clean
+    text."""
+    leaked = "**Valletta** is the capital of Malta.<script>alert('x')</script>"
+    expected = "<b>Valletta</b> is the capital of Malta."
+
+    result = _run_turn(
+        WebSearchConfig(PolicyChannel.CHAT), "what is the capital of Malta", leaked
+    )
+
+    assert result == expected
+
+    history = _recent(Channel.DELEGATE_WEB_SEARCH.value, limit=10)
+    assistant = [r for r in history if r["role"] == "assistant"]
+    assert assistant, "no assistant row persisted on the subagent channel"
+    content = assistant[-1]["content"]
+    assert content == expected
+    assert "<script" not in content
+    assert "**" not in content
 
 
 def test_discovery_channel_markdown_is_left_verbatim(db: sqlite3.Connection) -> None:

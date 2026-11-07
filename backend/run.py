@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 
 
 def _parse_cli() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Chalie — personal intelligence layer")
+    parser = argparse.ArgumentParser(description="Chalie — built for day 300.")
     parser.add_argument("--port", type=int, default=31025, help="Server port (default: 31025)")
     parser.add_argument("--host", default="0.0.0.0", help="Bind address (default: 0.0.0.0)")
     return parser.parse_args()
@@ -65,19 +65,18 @@ if __name__ == "__main__":
         _boot_screen.serve_forever()
         sys.exit(1)
 
-# Force numpy/transformers to fully initialize before any background thread
+# Force numpy to fully initialize before any background thread
 # imports them. Python's import system isn't fully thread-safe for nested
 # imports — concurrent first-imports from multiple threads cause a circular
 # import in numpy._typing (NDArray not yet available from the
 # partially-initialized module), which poisons sys.modules and makes every
 # subsequent embedding call fail with "maximum recursion depth exceeded".
-# A failure here is not survivable: it means numpy/transformers is present but
+# A failure here is not survivable: it means numpy is present but
 # broken, and every embedding call downstream would fail with a recursion error
 # that reads nothing like its cause. Context is added and the error re-raised —
 # never swallowed into a warning that boots a broken process anyway.
 try:
     import numpy  # noqa: F401 — thread-safety warm-up
-    import transformers  # noqa: F401 — thread-safety warm-up
 except Exception as _e:
     print(f"[BOOT] CRITICAL: Chalie failed to load, core import failed: {_e}",
           file=sys.stderr, flush=True)

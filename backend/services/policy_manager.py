@@ -63,7 +63,7 @@ VALID_SETTINGS = {"internal", "allow", "ask", "deny"}
 INTERNAL = frozenset({
     "browser", "calendar", "chalie_docs", "chat_history_compactor", "contacts",
     "delete_graph", "email", "find_skills", "find_tools", "image_preview", "mcp_tools", "news",
-    "read", "recall", "review_tool_calls", "review_transcript", "run_script", "save_graph",
+    "plan", "read", "recall", "review_tool_calls", "review_transcript", "run_script", "save_graph",
     "save_map", "save_synthesis", "search", "skill_manager", "web_fetch",
 })
 
@@ -159,6 +159,10 @@ class PolicyManager:
                 "action_id": permission,
                 "summary": summary,
                 "origin": origin,
+                # The instant the ask parked, ISO-8601 UTC with its offset:
+                # pending() returns this same frame over REST, so a client
+                # restoring after a reload can age its live line from here.
+                "asked_at": utc_now().isoformat(timespec="seconds"),
             }
             gate = _permission_gates[rid] = {"event": threading.Event(), "result": None, "frame": frame}
             Websocket.broadcast(WsMessage(**frame))

@@ -1,21 +1,18 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted } from 'vue';
-import { isTauri, platform, useTheme } from '@chalie/shared';
+import { useTheme } from '@chalie/shared';
 import { useSessionStore } from './stores/session';
 import { useVoiceStore } from './stores/voice';
 import { useHeartbeat } from './composables/useHeartbeat';
-import { useAmbientSensor } from './composables/useAmbientSensor';
 import PresenceBar from './components/layout/PresenceBar.vue';
 import ConversationFeed from './components/conversation/ConversationFeed.vue';
 import ThreadPanel from './components/conversation/ThreadPanel.vue';
 import SearchOverlay from './components/overlays/SearchOverlay.vue';
 import InputDock from './components/layout/InputDock.vue';
 import LoadingOverlay from './components/layout/LoadingOverlay.vue';
-import PermissionStack from './components/overlays/PermissionStack.vue';
 import TaskDrawer from './components/overlays/TaskDrawer.vue';
 import SchedulerDock from './components/overlays/SchedulerDock.vue';
 import VoicePlayerDialog from './components/voice/VoicePlayerDialog.vue';
-import UnlockVault from './components/layout/UnlockVault.vue';
 
 const { init: initTheme } = useTheme();
 const session = useSessionStore();
@@ -23,7 +20,7 @@ const voiceStore = useVoiceStore();
 
 // When a thread panel is open the base layer (feed + footer dock) dims and
 // blurs behind it — the mockup's baseStyle. The panel and top bar stay crisp.
-const baseDimmed = computed(() => session.panelThreadId != null);
+const baseDimmed = computed(() => session.panelThreadId != null || session.panelDelegate != null);
 
 // Cmd/Ctrl-K toggles the thread-search overlay; the overlay owns Esc-to-close.
 function onSearchHotkey(e: KeyboardEvent): void {
@@ -53,12 +50,6 @@ onMounted(() => {
   session.init();
   voiceStore.checkAvailability();
 
-  // Native shell only: request OS notification permission once so background
-  // message notifications can fire. On web the browser drives its own prompt.
-  if (isTauri) {
-    void platform.requestNotificationPermission();
-  }
-
   // Heartbeat also surfaces auth expiry via /auth/status.
   const heartbeat = useHeartbeat();
   heartbeat.onAuthFailure(handleAuthFailure);
@@ -72,7 +63,6 @@ onMounted(() => {
 onBeforeUnmount(() => {
   globalThis.removeEventListener('keydown', onSearchHotkey);
   useHeartbeat().stop();
-  useAmbientSensor().destroy();
 });
 </script>
 
@@ -97,15 +87,12 @@ onBeforeUnmount(() => {
   <!-- Thread search overlay — Cmd/Ctrl-K or the top-bar search button. -->
   <SearchOverlay />
 
-  <!-- Teleport targets for dialogs / permission cards -->
-  <div id="permStack" class="permission-stack"></div>
+  <!-- Teleport target for dialogs -->
   <div id="overlayRoot"></div>
 
-  <!-- PermissionStack teleports into #permStack; the rest self-render and
+  <!-- TaskDrawer, SchedulerDock and VoicePlayerDialog self-render and
        self-subscribe to bus events. -->
-  <PermissionStack />
   <TaskDrawer />
   <SchedulerDock />
   <VoicePlayerDialog />
-  <UnlockVault />
 </template>

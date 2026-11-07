@@ -45,6 +45,7 @@ function block(turnId: number, messageIds: number[]): ConversationTurnBlock {
       content: `msg ${id}`,
       timestamp: '2026-01-01 00:00:00',
       day: '2026-01-01',
+      created_at: '2026-01-01T00:00:00Z',
       turn_id: turnId,
     })),
   };

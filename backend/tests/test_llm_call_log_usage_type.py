@@ -46,11 +46,12 @@ _BUILD_CLIENT = "services.provider_service.build_client"
 
 class _ScriptedProvider:
     """A real functional double at the network boundary: implements the thin
-    client protocol and answers with one benign terminal response (non-empty
-    text, no tool calls) so the turn settles in a single step — one CHAT call,
-    hence exactly one ledger row per turn. The text must be non-empty: an empty
-    completion trips the processor's empty-completion steer, which re-sends and
-    would append extra ledger rows."""
+    client protocol and answers every send with one benign terminal response
+    (non-empty text, no tool calls), counting the sends. A turn on a config that
+    pins the plan tool makes two CHAT calls — the planning pre-pass, then one
+    loop step — and each is one ledger row; the rest make one. The text must be
+    non-empty: an empty completion trips the processor's empty-completion steer,
+    which re-sends."""
 
     def __init__(self) -> None:
         self.sends = 0
@@ -117,7 +118,8 @@ def test_user_turn_bills_foreground(db: sqlite3.Connection) -> None:
     provider = _run(UserConfig(), "hello")
 
     assert provider.sends >= 1, "turn never reached the provider — an empty ledger proves nothing"
-    assert _logged_types(db) == ["foreground"]
+    # One row per provider call, every one of them the user's.
+    assert _logged_types(db) == ["foreground"] * provider.sends
 
 
 def test_delegate_with_chat_policy_still_bills_background(db: sqlite3.Connection) -> None:
@@ -137,7 +139,7 @@ def test_delegate_with_chat_policy_still_bills_background(db: sqlite3.Connection
     provider = _run(WebSearchConfig(PolicyChannel.CHAT), "who won the match")
 
     assert provider.sends >= 1, "delegate never reached the provider"
-    assert _logged_types(db) == ["background"]
+    assert _logged_types(db) == ["background"] * provider.sends
 
 
 def test_discovery_bills_background_not_foreground(db: sqlite3.Connection) -> None:
@@ -150,4 +152,4 @@ def test_discovery_bills_background_not_foreground(db: sqlite3.Connection) -> No
     provider = _run(DiscoveryConfig(), "quietly research something")
 
     assert provider.sends >= 1, "discovery turn never reached the provider"
-    assert _logged_types(db) == ["background"]
+    assert _logged_types(db) == ["background"] * provider.sends

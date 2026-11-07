@@ -202,6 +202,7 @@ _EXPECTED_NON_DISCOVERABLE = frozenset({
     "calendar",                # personal info — pim delegate only
     "contacts",                # personal info — pim delegate only
     "run_script",               # code-agent-delegate-exclusive — CodeAgentConfig only
+    "plan",                    # a turn's own plan — pinned on every planning config
 })
 
 

@@ -42,11 +42,14 @@ test.describe('Brain SPA — routing & deep-link reload', () => {
     });
   });
 
-  test('Brain panel deep link + reload', async ({ page }) => {
-    await deepLinkSurvivesReload(page, '/brain/brain', async () => {
-      await expect(page).toHaveURL(/\/brain\/brain(\/|$|\?)/);
-      // Brain backup/restore panel — Import/Export actions are its anchor.
-      await expect(page.locator('#panelRoot')).toContainText(/Export|Import|Backup/i);
+  test('Import / Export deep link + reload', async ({ page }) => {
+    await deepLinkSurvivesReload(page, '/brain/import-export', async () => {
+      await expect(page).toHaveURL(/\/brain\/import-export(\/|$|\?)/);
+      await expect(
+        page.getByRole('heading', { name: 'Import / Export', exact: true }),
+      ).toBeVisible();
+      // Snapshot backup/restore panel — its export action is the anchor.
+      await expect(page.getByRole('button', { name: 'Export Snapshot' })).toBeVisible();
     });
   });
 
@@ -60,9 +63,9 @@ test.describe('Brain SPA — routing & deep-link reload', () => {
       // …and MemorySub's own content proves the nested <RouterView> actually
       // rendered the child (not just that the route matched). The filter tabs
       // render only after a successful load — a silent child crash shows nothing,
-      // a failed fetch shows "Failed to load data." instead — so the Episodes tab
-      // being present AND active is a real end-to-end signal the panel mounted.
-      await expect(page.locator('.records-controls .filter-tab.active')).toHaveText('Episodes');
+      // a failed fetch shows "Failed to load data." instead — so the default Graph
+      // tab being present AND active is a real end-to-end signal the panel mounted.
+      await expect(page.locator('.records-controls .filter-tab.active')).toHaveText('Graph');
     });
   });
 

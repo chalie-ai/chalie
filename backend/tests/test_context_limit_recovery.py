@@ -164,9 +164,13 @@ def test_previous_reported_usage_at_the_line_compacts_the_next_turn(
 
     The gate is *reactive* by design: it can only know a request was too big
     after one came back. That is why the first turn completes untouched and the
-    second is the one that pays."""
+    second is the one that pays.
+
+    A user turn's first send is its planning pre-pass, and the gate reads every
+    send's report — so the first turn's pre-pass comes in under the line, and
+    only its last send, the loop step, reports at it."""
     assert db is not None  # fixture taken for its binding side effect (real DB gateway)
-    provider = _ReportingProvider(reports=[_OVER_CAP])
+    provider = _ReportingProvider(reports=[_UNDER_CAP, _OVER_CAP])
 
     first = _run(provider, "a first turn the provider serves normally")
     assert _terminal_state(first) == TurnExecution.COMPLETED

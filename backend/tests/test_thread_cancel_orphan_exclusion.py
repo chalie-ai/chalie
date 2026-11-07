@@ -52,7 +52,7 @@ def _open_exchange(turn_id: int, question: str, answer: str) -> tuple[int, int]:
     user_id = mp.transcript_service.append_input(mp.raw_input)
     mp.uid = user_id
     mp.current_transcript_id = user_id
-    answer_id = mp.transcript_service.append_assistant(answer)
+    answer_id = mp.transcript_service.append_assistant(answer, settled=True)
     return user_id, answer_id
 
 

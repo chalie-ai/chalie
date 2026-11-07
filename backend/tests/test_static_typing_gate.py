@@ -112,7 +112,7 @@ def test_first_party_source_is_strict_clean() -> None:
     weakening a type.
     """
     assert importlib.util.find_spec("mypy") is not None, (
-        "mypy must be installed (it is a pyproject dependency) for the "
+        "mypy must be installed (it is in the pyproject `dev` extra) for the "
         "strict typing gate to run"
     )
 

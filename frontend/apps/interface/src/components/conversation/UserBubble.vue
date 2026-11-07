@@ -4,7 +4,11 @@ import { FileText, Image as ImageIcon } from '@lucide/vue';
 import type { ConversationAttachment, ConversationMessage } from '../../api/conversation';
 import ImagePreviewModal from '../overlays/ImagePreviewModal.vue';
 
-const props = defineProps<{ message: ConversationMessage }>();
+const props = withDefaults(defineProps<{
+  message: ConversationMessage;
+  /** Caption naming who wrote this row, when it isn't the user. */
+  label?: string | null;
+}>(), { label: null });
 
 // File-only messages carry the '[File attached]' placeholder text — drop the
 // empty bubble and let the attachment list stand on its own.
@@ -66,6 +70,8 @@ function open(att: ConversationAttachment): void {
     :data-transcript-row-id="message.id"
     :data-user-text="message.content"
   >
+    <span v-if="label" class="user-message__label">{{ label }}</span>
+
     <div
       v-if="showText"
       ref="textEl"
@@ -91,7 +97,7 @@ function open(att: ConversationAttachment): void {
           <component
             :is="att.is_image ? ImageIcon : FileText"
             class="user-attachments__icon"
-            :size="13"
+            :size="16"
           />
           <span class="user-attachments__name">{{ att.filename || 'attachment' }}</span>
         </button>

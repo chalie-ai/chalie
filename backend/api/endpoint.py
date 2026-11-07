@@ -29,7 +29,7 @@ from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 from pydantic import ValidationError
 
-from exceptions import EndpointError, ForbiddenError
+from exceptions import EndpointError, ForbiddenError, NotFoundError
 from .auth import require_auth
 from .dto.openapi import register_auth_error, register_dto, register_envelope, register_error_envelope
 from .request import Request
@@ -140,6 +140,11 @@ class Endpoint(ABC):
     def is_create(self, id: int | str) -> bool:
         """True when the id is the create sentinel, regardless of :attr:`id_type`."""
         return id in (-1, "-1")
+
+    def require_create_sentinel(self, id: int | str) -> None:
+        """Raise :class:`NotFoundError` unless ``id`` is the create sentinel."""
+        if not self.is_create(id):
+            raise NotFoundError("Not found")
 
     def namespace(self) -> Namespace:
         """Build the fully-wired Namespace for this endpoint group."""

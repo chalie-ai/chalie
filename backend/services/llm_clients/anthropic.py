@@ -43,10 +43,10 @@ from contracts.provider_client import ProviderClient
 from exceptions import (
     ContextLimit,
     ProviderResponseError,
-    ProviderTimeoutError,
     RateLimitError,
 )
 from services.llm_clients.context_window import DEFAULT_WINDOW
+from services.llm_clients.socket_abort import SocketAbort
 from services.llm_clients.thinking_map import ANTHROPIC_NONE_THINKING, ANTHROPIC_THINKING_BUDGETS
 from services.provider_api import (
     ProviderApiRequest,
@@ -159,14 +159,20 @@ class AnthropicClient(ProviderClient):
         """Initialise from provider config dict (platform, model, api_key)."""
         self._config = config
         self.model: str = cast(str, config.get('model', 'claude-haiku-4-5-20251001'))
+        self._abort = SocketAbort()
+
+    def abort(self) -> None:
+        """End this client's in-flight call from another thread."""
+        self._abort.abort()
 
     def _get_client(self) -> "_anthropic_mod.Anthropic":
         import anthropic
         from services.llm_service import _resolve_api_key, _app_user_agent  # noqa: PLC0415
-        from services.provider_api import PROVIDER_CALL_TIMEOUT_S  # noqa: PLC0415
         return anthropic.Anthropic(
             api_key=_resolve_api_key(self._config),
-            timeout=PROVIDER_CALL_TIMEOUT_S,
+            timeout=None,
+            max_retries=0,  # Chalie's own retry loop is the only thing that re-sends
+            http_client=anthropic.DefaultHttpxClient(timeout=None, event_hooks=self._abort.hooks()),
             default_headers={"User-Agent": _app_user_agent()},
         )
 
@@ -207,8 +213,6 @@ class AnthropicClient(ProviderClient):
             return cast("Callable[..., _anthropic_mod.types.Message]", client.messages.create)(**create_kwargs)
         except anthropic.RateLimitError as exc:
             raise RateLimitError(str(exc), provider='anthropic') from exc
-        except anthropic.APITimeoutError as exc:
-            raise ProviderTimeoutError(str(exc), provider='anthropic') from exc
         except (anthropic.BadRequestError, anthropic.APIError) as exc:
             # VERIFIED: anthropic._exceptions.RequestTooLargeError subclasses
             # anthropic.APIError with class-level status_code == 413.
@@ -236,7 +240,6 @@ class AnthropicClient(ProviderClient):
         # the cap check and the context meter used — never a client-local opinion.
         max_out = dto.resolve_max_tokens()
 
-        client = self._get_client()
         start = time.time()
 
         system = (
@@ -254,7 +257,8 @@ class AnthropicClient(ProviderClient):
             **self._thinking_native(dto.thinking_mode, max_out),
         }
 
-        response = self._invoke_create(client, create_kwargs)
+        with self._get_client() as client:
+            response = self._invoke_create(client, create_kwargs)
         latency_ms = int((time.time() - start) * 1000)
         text, tool_calls, thinking_block = _parse_content_blocks(response.content)
         stop_reason = response.stop_reason
@@ -302,7 +306,8 @@ class AnthropicClient(ProviderClient):
 
         import anthropic  # noqa: PLC0415
         try:
-            info = self._get_client().models.retrieve(self.model)
+            with self._get_client() as client:
+                info = client.models.retrieve(self.model)
             window = getattr(info, 'max_input_tokens', None)
             if not isinstance(window, int) or isinstance(window, bool) or window <= 0:
                 logger.warning(

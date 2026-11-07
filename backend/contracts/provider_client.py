@@ -92,7 +92,14 @@ class ProviderClient(Protocol):
             ContextLimit: provider rejected the payload for size.
             ProviderResponseError: other API or HTTP error.
             RateLimitError: HTTP 429.
-            ProviderTimeoutError: the call exceeded PROVIDER_CALL_TIMEOUT_S.
+        """
+        ...
+
+    def abort(self) -> None:
+        """End this client's in-flight ``send`` from another thread.
+
+        Calls carry no timeout, so this is the only way to stop one that hangs.
+        Safe before, during or after the call; the interrupted ``send`` raises.
         """
         ...
 

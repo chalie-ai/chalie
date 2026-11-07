@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Chalie setup</title>
+    <script>
+      // The foundation stylesheet is dark unless the page says light. The wizard
+      // follows the Mac's appearance, set before the first paint and kept in step.
+      (function () {
+        var light = globalThis.matchMedia('(prefers-color-scheme: light)');
+        function apply() {
+          document.documentElement.dataset.theme = light.matches ? 'light' : 'dark';
+        }
+        apply();
+        light.addEventListener('change', apply);
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
