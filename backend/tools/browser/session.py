@@ -66,6 +66,11 @@ _WHITESPACE_RE = re.compile(r"\n{3,}")
 _Finder = Callable[[], tuple[int, list[str]]]
 
 
+class PageLoadError(BrowserError):
+    """The site a page was sent to did not load, by the browser's own verdict — an untrusted
+    certificate, an unknown host, a refused connection. An outcome to report, not a fault."""
+
+
 # ── Cross-thread entry points ────────────────────────────────────────────────
 
 def run_verb(key: int, verb: str, kwargs: dict[str, object]) -> dict[str, object]:
@@ -238,6 +243,7 @@ class PageSession:
         self._lifecycle: set[str] = set()  # lifecycle events _loader has reached
         self._commits = 0                  # main-frame commits, same-document ones included
         self._requested = False            # a main-frame navigation is scheduled, not yet committed
+        self._unreachable = ""             # the url the main frame failed to load, while it shows the error page
         self._dialog: str | None = None
         self._popups: dict[str, str] = {}  # popup target id -> its latest url
         self._target = target or get(browser.send("Target.createTarget", {"url": "about:blank"}), "targetId", str)
@@ -331,7 +337,7 @@ class PageSession:
         if nav.get("isDownload"):
             raise BrowserError("Download is starting")
         if nav.get("errorText"):
-            raise BrowserError(f"{nav['errorText']} at {url}")
+            raise PageLoadError(f"{nav['errorText']} at {url}")
         loader = nav.get("loaderId")
         if loader:
             # The new document's load — or the load of whichever document replaced it
@@ -431,7 +437,11 @@ class PageSession:
 
     def grab(self) -> dict[str, object]:
         """Viewport PNG at one image px per CSS px, whatever the tab's scale, + page info —
-        NOT an envelope; the ability layer ingests it."""
+        NOT an envelope; the ability layer ingests it. The browser's error page is no page to
+        picture: there, the error envelope instead."""
+        self._pump()
+        if self._unreachable:
+            return self._envelope()
         view = get_dict(self._send("Page.getLayoutMetrics"), "cssVisualViewport")
         clip = {"x": view["pageX"], "y": view["pageY"], "width": view["clientWidth"], "height": view["clientHeight"],
                 "scale": 1 / self.tab.scale}
@@ -455,6 +465,7 @@ class PageSession:
                 if frame.get("id") == self._target:
                     if frame.get("loaderId") != self._loader:
                         self._loader, self._lifecycle = str(frame.get("loaderId")), set()
+                    self._unreachable = str(frame.get("unreachableUrl", ""))
                     self._commit(f"{frame.get('url', '')}{frame.get('urlFragment', '')}")
             elif method == "Page.navigatedWithinDocument" and main:
                 self._commit(str(params.get("url")))
@@ -687,6 +698,8 @@ class PageSession:
     def _envelope(self, data: object = None, changed: dict[str, object] | None = None,
                   status: int | None = None, error: str | None = None) -> dict[str, object]:
         self._pump()
+        if self._unreachable:  # the browser's own error page stands where the page never loaded
+            data, error = None, f"No page is open: {self._unreachable} did not load."
         try:
             page: object = {"url": self._url, "title": self._title(), "status": status}
         except BrowserError:

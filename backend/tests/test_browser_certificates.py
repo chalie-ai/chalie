@@ -3,15 +3,19 @@
 A real browsing run drives the real ``browser`` ability, through the real
 dispatcher, at a real loopback HTTPS site whose certificate is self-signed. The
 real headless shell refuses the connection: the site's page never reaches the
-browser, and the run is told the certificate is why, so it can say so instead
-of reading a blank page. Nothing is substituted; the browser runs on the test's
-own throwaway profile.
+browser, and the run is told the certificate is why and that retrying will not
+help, so it can say so instead of reading a blank page. Until a page does load,
+every read of the tab says nothing loaded rather than reporting the browser's
+blank error page as a page. A site that refuses the connection outright is
+reported the same way, under its own reason. Nothing is substituted; the
+browser runs on the test's own throwaway profile.
 """
 
 from __future__ import annotations
 
 import datetime
 import ipaddress
+import logging
 import socket
 import sqlite3
 import ssl
@@ -30,6 +34,7 @@ from cryptography.x509.oid import NameOID
 from configs.channels.web_browse import WebBrowseConfig
 from configs.enums.policy_channel import PolicyChannel
 from controllers.message_processor import MessageProcessor
+from tests._browser_live import Site
 
 pytest_plugins = ("tests._browser_live",)
 pytestmark = pytest.mark.e2e
@@ -117,19 +122,56 @@ def untrusted_site(tmp_path: Path) -> Iterator[_UntrustedSite]:
         thread.join(timeout=5)
 
 
-def test_a_page_chalie_opens_on_a_self_signed_site_never_loads_and_chalie_is_told_the_certificate_is_why(
-    db: sqlite3.Connection, browser_data: Path, untrusted_site: _UntrustedSite
-) -> None:
+def _browsing_run() -> MessageProcessor:
     run = MessageProcessor(WebBrowseConfig(PolicyChannel.CHAT), raw_input="read the page")
     run.active_tools = list(run.config.always_available or [])
+    return run
 
-    opened = run.dispatch_service.dispatch("browser", {"action": "open", "url": untrusted_site.url})
+
+def test_a_page_chalie_opens_on_a_self_signed_site_never_loads_and_chalie_is_told_the_certificate_is_why(
+    db: sqlite3.Connection, browser_data: Path, untrusted_site: _UntrustedSite, site: Site,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    run = _browsing_run()
+
+    with caplog.at_level(logging.INFO):
+        opened = run.dispatch_service.dispatch("browser", {"action": "open", "url": untrusted_site.url})
     assert "status=error" in opened.splitlines()[0], opened
-    # Chromium names every certificate failure ERR_CERT_*; a reworded message must still name the certificate.
-    assert "ERR_CERT_" in opened or "certificate" in opened.lower(), opened
+    assert "code=certificate-error" in opened.splitlines()[0], opened
+    assert f"ERR_CERT_AUTHORITY_INVALID at {untrusted_site.url}" in opened, opened
+    assert "Re-open the page" not in opened, opened  # retrying cannot fix a certificate
     assert _MARKER not in opened, opened
+    # A site that does not load is the browser's verdict, not a fault: no traceback is logged for it.
+    assert [r.getMessage() for r in caplog.records if r.exc_info] == []
 
-    # Whatever the tab now shows, the site's page is not in it.
-    read = run.dispatch_service.dispatch("browser", {"action": "read"})
-    assert _MARKER not in read, read
+    # The tab now shows the browser's own blank error page: every look at it says nothing loaded.
+    for action in ("read", "screenshot"):
+        looked = run.dispatch_service.dispatch("browser", {"action": action})
+        assert "code=no-open-page" in looked.splitlines()[0], looked
+        assert f"No page is open: {untrusted_site.url} did not load." in looked, looked
+        assert _MARKER not in looked, looked
     assert untrusted_site.served == []  # the browser never even asked for the page
+
+    # Once a page does load, the same run reads it as usual.
+    recovered = run.dispatch_service.dispatch("browser", {"action": "open", "url": f"{site.url}/count"})
+    assert "status=success" in recovered.splitlines()[0], recovered
+    read = run.dispatch_service.dispatch("browser", {"action": "read"})
+    assert "status=success" in read.splitlines()[0], read
+    assert '"title":"Visit 1"' in read, read
+
+
+def test_a_site_that_refuses_the_connection_is_reported_as_not_loading_with_the_browsers_reason(
+    db: sqlite3.Connection, browser_data: Path
+) -> None:
+    with socket.socket() as probe:  # a port nothing listens on once the probe lets it go
+        probe.bind(("127.0.0.1", 0))
+        url = f"http://127.0.0.1:{probe.getsockname()[1]}/"
+    run = _browsing_run()
+
+    opened = run.dispatch_service.dispatch("browser", {"action": "open", "url": url})
+    assert "code=page-load-failed" in opened.splitlines()[0], opened
+    assert f"ERR_CONNECTION_REFUSED at {url}" in opened, opened
+
+    read = run.dispatch_service.dispatch("browser", {"action": "read"})
+    assert "code=no-open-page" in read.splitlines()[0], read
+    assert f"No page is open: {url} did not load." in read, read

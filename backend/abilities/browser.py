@@ -47,7 +47,7 @@ from contracts.params.browser_params_bag import (
     BrowserStyleParams,
 )
 from contracts.params.param_bag import ParamBag
-from tools.browser.session import error_envelope, run_tab, run_verb
+from tools.browser.session import PageLoadError, error_envelope, run_tab, run_verb
 from tools.browser.tabs import hand_off
 
 if TYPE_CHECKING:
@@ -315,6 +315,17 @@ class BrowserAbility(Ability[BrowserParamsBag]):
             return {"_code": "browser-error",
                     "_hint": "Re-open the page and retry the action.",
                     "error": text[:300]}
+        except PageLoadError as e:  # the browser's verdict on the site, to report, not a fault to trace
+            logger.info("[BROWSER] page did not load: %s", e)
+            if "ERR_CERT_" in str(e):
+                return {"_code": "certificate-error",
+                        "_hint": "The site's certificate is not trusted, so the browser refused to "
+                                 "load it, as any browser would. Do not retry; say so in your answer.",
+                        "error": str(e)}
+            return {"_code": "page-load-failed",
+                    "_hint": "The browser could not load the site; the error names why. Check the "
+                             "url, and retry only if the site may be down for a moment.",
+                    "error": str(e)}
         except Exception as e:  # noqa: BLE001
             logger.exception("[BROWSER] %s failed", verb)
             return {"_code": "browser-error",
