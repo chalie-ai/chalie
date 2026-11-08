@@ -18,6 +18,7 @@ import sqlite3
 import threading
 from collections.abc import Callable, Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import cast
 from urllib.parse import parse_qs, urlsplit
 
@@ -26,9 +27,7 @@ import pytest
 from configs.channels.web_browse import WebBrowseConfig
 from configs.enums.policy_channel import PolicyChannel
 from controllers.message_processor import MessageProcessor
-from tools.browser.cdp import Browser
-from tools.browser.pool import get_pool
-from tools.browser.session import close_session
+from tests._browser_live import isolated_browser
 
 _PAGES = {
     "/": """<title>Home</title><h1>Welcome</h1>
@@ -80,15 +79,16 @@ def site() -> Iterator[str]:
     threading.Thread(target=server.serve_forever, daemon=True).start()
     yield f"http://127.0.0.1:{server.server_address[1]}"
     server.shutdown()
-    get_pool().execute(Browser.close)  # no headless shell outlives the module; the pool relaunches on demand
 
 
 @pytest.fixture
-def browse(db: sqlite3.Connection) -> Iterator[Browse]:
-    """One delegate run: consecutive calls drive the same live page."""
+def browse(
+    db: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[Browse]:
+    """One delegate run on a throwaway profile: consecutive calls drive one page."""
     mp = _browse_mp()
-    yield lambda **params: mp.dispatch_service.dispatch("browser", params)
-    close_session(mp.uid or 0)
+    with isolated_browser(tmp_path, monkeypatch):  # page and shell close with the test
+        yield lambda **params: mp.dispatch_service.dispatch("browser", params)
 
 
 def _browse_mp() -> MessageProcessor:

@@ -31,9 +31,7 @@ from services.file_mapper_service import FileMapperService
 from services.file_parser_service import FileParserService
 from services.provider_db_service import ProviderDbService
 from services.tmp_storage import new_tmp_path
-from tools.browser.cdp import Browser
-from tools.browser.pool import get_pool
-from tools.browser.session import close_session
+from tests._browser_live import isolated_browser
 
 
 def _invoice_png_path() -> str:
@@ -117,14 +115,11 @@ def test_a_screenshot_of_a_real_page_is_stored_and_read_back(
     documents_dir = _isolated_documents(tmp_path, monkeypatch)
     mp = MessageProcessor(WebBrowseConfig(PolicyChannel.CHAT), raw_input="screenshot a page")
     mp.active_tools = list(mp.config.always_available or [])
-    try:
+    with isolated_browser(tmp_path, monkeypatch):  # a profile under tmp_path
         mp.dispatch_service.dispatch(
             "browser", {"action": "open", "url": "data:text/html,<h1 style='font-size:120px'>INVOICE</h1>"},
         )
         rendered = mp.dispatch_service.dispatch("browser", {"action": "screenshot"})
-    finally:
-        close_session(mp.uid or 0)
-        get_pool().execute(Browser.close)  # no headless shell outlives the test
 
     header, body = rendered.splitlines()[:2]
     assert "status=success" in header, rendered
