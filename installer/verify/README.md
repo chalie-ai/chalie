@@ -98,7 +98,7 @@ user.
 Each run also records what an install actually costs, so the system requirements
 published in the README stay measured numbers rather than estimates:
 
-- **disk** — `du` over `~/.chalie`, the Playwright browser cache and `~/.local/bin`.
+- **disk** — `du` over `~/.chalie` (the bundled browser included) and `~/.local/bin`.
 - **memory** — resident set of the running instance, sampled *after* every probe,
   by which point the daemon has warmed its voice and embedding models and served
   real traffic. That steady state is the honest figure; RSS at boot is not.

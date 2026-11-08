@@ -2,8 +2,9 @@
 # run.sh — Canonical Chalie launcher (dev, installer, Docker)
 #
 # Resolves a Python interpreter, syncs deps, then hands off to run.py.
-# Voice deps and the headless browser are installed once at install time
-# (installer/install.sh / the Docker build) — nothing here manages them.
+# The voice models and the headless browser are fetched into resources/ at
+# install time (installer/install.sh / the Docker build) — nothing here manages
+# them.
 #
 # Usage:
 #   ./run.sh                          # start on default port 31025

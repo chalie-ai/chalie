@@ -24,14 +24,14 @@ import itertools
 import json
 import logging
 import os
-import platform
-import re
 import shutil
 import signal
 import tempfile
 import threading
 import time
 from typing import NamedTuple, TypeVar
+
+from services.file_mapper_service import FileMapperService
 
 logger = logging.getLogger(__name__)
 
@@ -40,17 +40,6 @@ _STARTUP_TIMEOUT = 30.0
 _CLOSE_GRACE = 5.0
 _STDERR_TAIL = 1_000
 CLOSED = "Target page, context or browser has been closed"
-_REVISION_DIR_RE = re.compile(r"^chromium_headless_shell-(\d+)$")
-
-# (platform.system(), platform.machine()) -> executable path inside a revision
-# directory, as the installer's Playwright fetcher unpacks that platform's build.
-_EXECUTABLES: dict[tuple[str, str], tuple[str, ...]] = {
-    ("Linux", "x86_64"): ("chrome-headless-shell-linux64", "chrome-headless-shell"),
-    ("Linux", "aarch64"): ("chrome-headless-shell-linux-arm64", "chrome-headless-shell"),
-    ("Linux", "arm64"): ("chrome-headless-shell-linux-arm64", "chrome-headless-shell"),
-    ("Darwin", "arm64"): ("chrome-headless-shell-mac-arm64", "chrome-headless-shell"),
-    ("Darwin", "x86_64"): ("chrome-headless-shell-mac-x64", "chrome-headless-shell"),
-}
 
 # The switch set the browser has always run with: the automation defaults
 # (no background networking, updaters, throttling or first-run UI; headless
@@ -168,37 +157,14 @@ def get_objects(payload: dict[str, object], key: str) -> list[dict[str, object]]
 # ── Executable discovery ─────────────────────────────────────────────────────
 
 def find_executable() -> str:
-    """The newest installed chrome-headless-shell under the browsers directory."""
-    root = os.path.abspath(os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or _default_browsers_dir())
-    relative = _EXECUTABLES.get((platform.system(), platform.machine()))
-    if relative is None:
+    """Chalie's own chrome-headless-shell, unpacked into the install by the installer."""
+    executable = FileMapperService.get_browser_executable_path()
+    if not os.access(executable, os.X_OK):
         raise RuntimeError(
-            f"No headless chromium build exists for {platform.system()} {platform.machine()}."
+            f"Headless chromium executable is missing: {executable}. "
+            "Re-run the installer to download it."
         )
-    try:
-        names = os.listdir(root)
-    except OSError:
-        names = []
-    revisions = sorted(
-        ((int(m.group(1)), name) for name in names if (m := _REVISION_DIR_RE.match(name))),
-        reverse=True,
-    )
-    for _, name in revisions:
-        candidate = os.path.join(root, name, *relative)
-        if os.access(candidate, os.X_OK):
-            return candidate
-    raise RuntimeError(
-        f"Headless chromium executable is missing: no chromium_headless_shell-*/"
-        f"{'/'.join(relative)} under {root}. Re-run the installer to download it."
-    )
-
-
-def _default_browsers_dir() -> str:
-    if platform.system() == "Darwin":
-        cache = os.path.expanduser("~/Library/Caches")
-    else:
-        cache = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
-    return os.path.join(cache, "ms-playwright")
+    return str(executable)
 
 
 def _fd_above_4(fd: int) -> int:

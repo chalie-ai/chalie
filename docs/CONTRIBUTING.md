@@ -22,7 +22,11 @@ The database is versioned per release (`data/chalie-<version>.sqlite`) and is ne
 
 There is no `.env` and no environment-variable configuration: code-level config is Python constants, runtime settings live in the Brain interface, and secrets auto-generate on first run.
 
-This manual flow syncs Python dependencies only. The Playwright browser and the on-device voice models are fetched once by `installer/install.sh` (or the Docker build), not by `pip install -e backend/` or `python backend/run.py` — abilities that need them fail loudly with a reinstall hint until you've run the installer at least once.
+This manual flow syncs Python dependencies only. The headless browser and the on-device voice models are fetched by `installer/install.sh` (or the Docker build) into its install's `resources/`, not by `pip install -e backend/` or `python backend/run.py`. A checkout reads the git-ignored `resources/` at the repo root instead, so abilities that need them fail loudly until you copy them in from an install — on Linux the installer also adds the browser's system libraries:
+
+```bash
+cp -R ~/.chalie/app/resources .         # from the repo root, after running the installer once
+```
 
 `run.py` will not start with a dependency missing. Before any heavy import it checks every entry in `backend/pyproject.toml` against the installed distributions; if one is absent it names it on stderr, serves a terminal error page on the public port instead of the starting page, and exits non-zero. A backend that boots without its dependencies silently takes the degraded branch of some `except ImportError` and lies about its own state. So after a pull that changes `pyproject.toml`, re-run `pip install -e 'backend[dev]'`.
 

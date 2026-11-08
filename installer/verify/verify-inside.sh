@@ -194,7 +194,8 @@ PY
   done
   deno_v="$("$HOME/.local/bin/deno" --version 2>/dev/null | head -1 || echo ABSENT)"
   echo "deno=$deno_v"
-  [ -d "$HOME/.cache/ms-playwright" ] && echo "playwright-browsers=present" || echo "playwright-browsers=ABSENT"
+  browser="$APP/resources/browser/chrome-headless-shell"
+  [ -x "$browser" ] && echo "browser-ok   $browser" || echo "browser-MISS $browser"
   cli_path="$(_chalie_cli)"
   cli_v="$("$cli_path" version 2>/dev/null || echo ABSENT)"
   echo "chalie-cli=$cli_v (resolved: $cli_path)"
@@ -202,8 +203,8 @@ PY
   # Measured, not estimated — this is the number the README's disk requirement
   # has to match, so it is recorded on every run rather than guessed once.
   say "installed footprint on disk"
-  du -sh "$HOME/.chalie" "$HOME/.cache/ms-playwright" "$HOME/.local/bin" 2>/dev/null
-  du -sc "$HOME/.chalie" "$HOME/.cache/ms-playwright" "$HOME/.local/bin" 2>/dev/null | tail -1
+  du -sh "$HOME/.chalie" "$HOME/.local/bin" 2>/dev/null
+  du -sc "$HOME/.chalie" "$HOME/.local/bin" 2>/dev/null | tail -1
 else
   say "dependency audit — SKIPPED (no venv; installer did not reach it)"
   result "dep_audit_rc=skipped"
@@ -262,7 +263,7 @@ if [ "$ready" = "1" ]; then
 
   # ── chromium: drive the LIVE instance, not an empty browser ───────────────
   # Goes through Chalie's own browser session — the path the browsing ability
-  # takes — so it proves the installed headless shell is found, launches with
+  # takes — so it proves the bundled headless shell is found, launches with
   # Chalie's flags, and renders: launching alone would only prove its shared
   # objects resolved. Run from backend/ because its modules resolve via cwd.
   say "probe: chromium"

@@ -162,7 +162,8 @@ _run_privileged() {
 
 # ─── System Build Dependencies (Linux) ──────────────────────────────────────
 # Needed for native Python wheels (cryptography), sqlite-vec rebuild,
-# envsubst (sqlite-vec template), and curl.
+# envsubst (sqlite-vec template), curl, and the headless browser's system
+# libraries.
 _install_build_deps() {
   local os
   os="$(_detect_os)"
@@ -174,12 +175,43 @@ _install_build_deps() {
   case "$distro" in
     *debian*|*ubuntu*)
       _run_privileged apt-get update -qq
+      # The headless browser's shared libraries and fonts. Debian 13 and Ubuntu
+      # 24.04 renamed several libraries with a t64 suffix (64-bit time_t); the
+      # old name is then only a virtual package apt refuses to pick, so the t64
+      # name is taken wherever the archive has one.
+      local -a browser_pkgs=()
+      local pkg
+      for pkg in libasound2 libatk-bridge2.0-0 libatk1.0-0 libatspi2.0-0 libcairo2 \
+                 libcups2 libdbus-1-3 libdrm2 libgbm1 libglib2.0-0 libnspr4 libnss3 \
+                 libpango-1.0-0 libx11-6 libxcb1 libxcomposite1 libxdamage1 libxext6 \
+                 libxfixes3 libxkbcommon0 libxrandr2 libfontconfig1 libfreetype6 \
+                 fonts-liberation fonts-noto-color-emoji fonts-unifont fonts-ipafont-gothic \
+                 fonts-wqy-zenhei fonts-tlwg-loma-otf fonts-freefont-ttf; do
+        if apt-cache show "${pkg}t64" >/dev/null 2>&1; then
+          browser_pkgs+=("${pkg}t64")
+        else
+          browser_pkgs+=("$pkg")
+        fi
+      done
+      # libgl1: the OCR engine's OpenCV wheel links libGL.so.1 and fails to
+      # import without it.
       _run_privileged apt-get install -y --no-install-recommends \
         build-essential libffi-dev libsqlite3-dev gettext-base curl unzip \
-        python3-venv
+        python3-venv libgl1 "${browser_pkgs[@]}"
       ;;
     *fedora*|*rhel*|*centos*)
-      _run_privileged dnf install -y gcc gcc-c++ make libffi-devel sqlite-devel gettext curl unzip
+      # The headless browser's shared libraries and fonts: the base system's
+      # fonts cover Latin only, so CJK, Thai and emoji would screenshot as empty
+      # boxes. Every font name resolves on Fedora and the RHEL family alike.
+      # mesa-libGL: the OCR engine's OpenCV wheel links libGL.so.1.
+      _run_privileged dnf install -y gcc gcc-c++ make libffi-devel sqlite-devel \
+        gettext curl unzip mesa-libGL \
+        nss nspr atk at-spi2-atk at-spi2-core cups-libs libdrm libxkbcommon \
+        libXcomposite libXdamage libXrandr libXext libXfixes libX11 libxcb \
+        mesa-libgbm pango cairo alsa-lib \
+        liberation-sans-fonts liberation-serif-fonts liberation-mono-fonts \
+        google-noto-sans-cjk-ttc-fonts google-noto-sans-thai-fonts \
+        google-noto-emoji-color-fonts
       ;;
     *)
       # Refuse rather than continue. Carrying on installs a Chalie whose browser
@@ -413,48 +445,34 @@ _setup_venv() {
 }
 
 # ─── Headless Browser ───────────────────────────────────────────────────────
-# Chalie drives chrome-headless-shell directly over the DevTools protocol, so
-# only that build is fetched (`--only-shell`) — full Chromium is never launched.
-# Playwright's CLI does the fetching because it pins a tested build for every
-# platform (Chrome for Testing publishes no linux-arm64 build) and knows the
-# apt libraries the browser needs. It goes into a throwaway directory and is
-# deleted afterwards: Chalie never imports it.
-#
-# On apt distros `--with-deps` installs the system libraries (nss, cups, gbm, X
-# libs, …) and tracks package renames such as Ubuntu 24.04's t64 transition.
-# It elevates only that apt step itself, so the browser lands in the invoking
-# user's cache — running the whole command under sudo would put it in root's.
-# It knows no other package manager, so dnf distros get a hand-kept list.
+# Chalie ships its own browser: a pinned chrome-headless-shell build from
+# Google's Chrome for Testing, unpacked inside Chalie's install. Nothing else
+# on the machine supplies, shares, replaces or removes it, and it goes when
+# Chalie goes. Its system libraries come from _install_build_deps. resources/
+# is replaced on every upgrade, so each install fetches it again — the same as
+# the voice models.
+_BROWSER_VERSION="157.0.8103.38"
+
 _install_browser() {
   _section "Headless Browser"
-  local venv="$CHALIE_HOME/venv"
-  local fetcher
-  fetcher="$(mktemp -d)"
-  if command -v uv >/dev/null 2>&1; then
-    uv pip install --python "$venv/bin/python" --target "$fetcher" playwright
-  else
-    "$venv/bin/python" -m pip install --target "$fetcher" playwright
-  fi
-
-  local -a install_args=(--only-shell chromium)
-  if [[ "$(_detect_os)" == "linux" ]]; then
-    case "$(_detect_linux_distro)" in
-      *debian*|*ubuntu*)
-        install_args=(--with-deps "${install_args[@]}")
-        ;;
-      # No fallback branch: _install_build_deps already refused anything that is
-      # not apt or dnf, so by here the distro is one of these two.
-      *)
-        _run_privileged dnf install -y \
-          nss nspr atk at-spi2-atk at-spi2-core cups-libs libdrm libxkbcommon \
-          libXcomposite libXdamage libXrandr libXext libXfixes libX11 libxcb \
-          mesa-libgbm pango cairo alsa-lib
-        ;;
-    esac
-  fi
-  PYTHONPATH="$fetcher" "$venv/bin/python" -m playwright install "${install_args[@]}"
-  rm -rf "$fetcher"
-  _ok "Headless browser ready"
+  local platform
+  case "$(_detect_os)/$(_detect_arch)" in
+    darwin/arm64) platform="mac-arm64" ;;
+    linux/amd64)  platform="linux64" ;;
+    linux/arm64)  platform="linux-arm64" ;;
+  esac
+  local url="https://storage.googleapis.com/chrome-for-testing-public/$_BROWSER_VERSION/$platform/chrome-headless-shell-$platform.zip"
+  local dest="$CHALIE_HOME/app/resources/browser"
+  local tmpdir
+  tmpdir="$(mktemp -d)"
+  _info "Downloading the headless browser ($_BROWSER_VERSION, $platform)…"
+  curl -fL --progress-bar -o "$tmpdir/browser.zip" "$url"
+  unzip -q "$tmpdir/browser.zip" -d "$tmpdir"
+  rm -rf "$dest"
+  mkdir -p "$(dirname "$dest")"
+  mv "$tmpdir/chrome-headless-shell-$platform" "$dest"
+  rm -rf "$tmpdir"
+  _ok "Headless browser ready ($dest)"
 }
 
 # ─── Voice Models (Kokoro TTS, Moonshine STT, Silero VAD) ──────────────────
