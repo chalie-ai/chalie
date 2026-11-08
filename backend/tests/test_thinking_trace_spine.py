@@ -24,15 +24,13 @@
 #    across turns.
 
 import sqlite3
-import threading
-import time
 from typing import TYPE_CHECKING, cast
 from unittest.mock import patch
 
 import pytest
 
 from models.provider_response import ProviderResponse
-from tests.helpers import NO_PLAN, is_planning_request
+from tests.helpers import NO_PLAN, drain_background_turns, is_planning_request
 
 if TYPE_CHECKING:
     from controllers.message_processor import MessageProcessor
@@ -76,22 +74,6 @@ class _RecordingProvider:
         return response
 
 
-def _drain_background_turns(timeout_s: float = 10.0) -> None:
-    """Join the fire-and-forget post-turn daemon turns a completed ``user`` turn
-    spawns so they run to completion inside THIS test's provider+DB patch and
-    never leak into the next test."""
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        pending = [
-            t for t in threading.enumerate()
-            if t.name in ("skill-suggest", "thread-gist") or t.name.startswith("turn-")
-        ]
-        if not pending:
-            return
-        for t in pending:
-            t.join(timeout=deadline - time.monotonic())
-
-
 def _run(
     provider: _RecordingProvider, raw_input: str, *, turn_id: int = -1,
 ) -> "MessageProcessor":
@@ -103,7 +85,7 @@ def _run(
     with patch(_BUILD_CLIENT, return_value=provider):
         mp.begin()
         mp.result()
-        _drain_background_turns()
+        drain_background_turns()
     return mp
 
 

@@ -31,6 +31,7 @@ from controllers.message_processor import MessageProcessor
 from models.provider_response import ProviderResponse
 from models.turn_execution import TurnExecution
 from services.turn_execution_service import TurnExecutionService
+from tests.helpers import drain_background_turns
 from tests.test_delegate_transcript_watch import (
     _BUILD_CLIENT,
     _CHILD_ANSWER,
@@ -38,7 +39,6 @@ from tests.test_delegate_transcript_watch import (
     _INSTRUCTIONS,
     _assert_parent_turn_completed_with_its_answer,
     _block,
-    _drain_background_turns,
     _HeldChildProvider,
     _listening,
     _ScriptedProvider,
@@ -92,7 +92,7 @@ def test_stopped_subagent_is_reported_as_stopped_and_its_caller_still_answers(
         finally:
             gate.set()
             parent.result()
-            _drain_background_turns()
+            drain_background_turns()
 
     assert stop.status_code == 200 and (stop.get_json() or {})["result"]["cancelled"] is True
     assert provider.gate_opened
@@ -130,7 +130,7 @@ def test_subagent_that_finishes_without_an_answer_still_reports_no_answer_with_i
     with patch(_BUILD_CLIENT, return_value=provider):
         parent.begin()
         parent.result()
-        _drain_background_turns()
+        drain_background_turns()
 
     child_turn = db.execute(
         "SELECT turn_id FROM transcript WHERE channel = ? AND role = 'web_search'", (_CHILD_CHANNEL,),

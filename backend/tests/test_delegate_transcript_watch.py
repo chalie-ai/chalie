@@ -28,7 +28,6 @@ import json
 import logging
 import sqlite3
 import threading
-import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -46,7 +45,7 @@ from services.database import Database
 from services.garbage_collector_service import GarbageCollectorService
 from services.tool_call_service import ToolCallService
 from services.websocket import Websocket
-from tests.helpers import NO_PLAN, is_planning_request
+from tests.helpers import NO_PLAN, drain_background_turns, is_planning_request
 
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 
@@ -187,23 +186,6 @@ class _RecordingClient:
             self._on_frame(frame)
 
 
-def _drain_background_turns(timeout_s: float = 15.0) -> None:
-    """Join the fire-and-forget post-turn daemon turns a completed ``user`` turn
-    spawns (skill suggestion, thread gist) so they finish inside THIS test's
-    provider+DB patch and never leak into the next — the same cross-test
-    corruption guard as ``test_message_processor_runaway_loop.py``'s helper."""
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        pending = [
-            t for t in threading.enumerate()
-            if t.name in ("skill-suggest", "thread-gist") or t.name.startswith("turn-")
-        ]
-        if not pending:
-            return
-        for t in pending:
-            t.join(timeout=max(0.0, deadline - time.monotonic()))
-
-
 @contextmanager
 def _listening(on_frame: Callable[[dict[str, object]], None] | None = None) -> Iterator[_RecordingClient]:
     """A client connected to the real socket registry for the duration of the
@@ -227,7 +209,7 @@ def _run(
         with patch(_BUILD_CLIENT, return_value=provider):
             mp.begin()
             mp.result()
-            _drain_background_turns()
+            drain_background_turns()
     return mp, listener.frames
 
 

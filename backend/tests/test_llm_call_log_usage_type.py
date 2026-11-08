@@ -25,8 +25,6 @@ Three claims, one per way the constant resolves:
 """
 
 import sqlite3
-import threading
-import time
 from unittest.mock import patch
 
 import pytest
@@ -38,6 +36,7 @@ from configs.enums.policy_channel import PolicyChannel
 from controllers.message_processor import MessageProcessor
 from models.provider_response import ProviderResponse
 from services.processor_config import ProcessorConfig
+from tests.helpers import drain_background_turns
 
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 
@@ -71,25 +70,6 @@ class _ScriptedProvider:
         )
 
 
-def _drain_background_turns(timeout_s: float = 10.0) -> None:
-    """Join the fire-and-forget post-turn daemon turns a completed turn spawns
-    (skill suggestion, thread gist) so they run to completion inside THIS test's
-    provider+DB patch and never leak into the next. Each is a whole
-    MessageProcessor turn on its own daemon; left running it would call
-    ``build_client`` while the NEXT test holds the patch — and, here, would append
-    its own 'background' rows to the ledger mid-assertion."""
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        pending = [
-            t for t in threading.enumerate()
-            if t.name in ("skill-suggest", "thread-gist") or t.name.startswith("turn-")
-        ]
-        if not pending:
-            return
-        for t in pending:
-            t.join(timeout=deadline - time.monotonic())
-
-
 def _run(config: ProcessorConfig, raw_input: str) -> _ScriptedProvider:
     """Drive a real turn on *config* to termination, then quiesce any post-turn
     daemon turns inside the patch so the ledger settles before it is read."""
@@ -98,7 +78,7 @@ def _run(config: ProcessorConfig, raw_input: str) -> _ScriptedProvider:
     with patch(_BUILD_CLIENT, return_value=provider):
         mp.begin()
         mp.result()
-        _drain_background_turns()
+        drain_background_turns()
     return provider
 
 

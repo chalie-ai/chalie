@@ -26,8 +26,6 @@ records every request so steer injection is asserted on the actual bodies sent.
 """
 
 import sqlite3
-import threading
-import time
 from typing import cast
 from unittest.mock import patch
 
@@ -42,7 +40,7 @@ from controllers.message_processor import (
 from models.provider_response import ProviderResponse
 from models.transcript import Transcript
 from models.turn_execution import TurnExecution
-from tests.helpers import NO_PLAN, is_planning_request
+from tests.helpers import NO_PLAN, drain_background_turns, is_planning_request
 
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 
@@ -74,28 +72,12 @@ class _ScriptedProvider:
         return self._responses[len(self.requests) - 1]
 
 
-def _drain_background_turns(timeout_s: float = 10.0) -> None:
-    """Join the fire-and-forget post-turn daemon turns a completed ``user`` turn
-    spawns, so they run to completion inside THIS test's provider+DB patch (see
-    ``test_message_processor_runaway_loop.py`` for the full rationale)."""
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        pending = [
-            t for t in threading.enumerate()
-            if t.name in ("skill-suggest", "thread-gist") or t.name.startswith("turn-")
-        ]
-        if not pending:
-            return
-        for t in pending:
-            t.join(timeout=deadline - time.monotonic())
-
-
 def _run(provider: _ScriptedProvider, raw_input: str) -> MessageProcessor:
     mp = MessageProcessor(UserConfig(), raw_input=raw_input)  # inert (I2)
     with patch(_BUILD_CLIENT, return_value=provider):
         mp.begin()
         mp.result()
-        _drain_background_turns()
+        drain_background_turns()
     return mp
 
 

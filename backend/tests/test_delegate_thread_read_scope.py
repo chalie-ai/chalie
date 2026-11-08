@@ -23,8 +23,6 @@ actually holds.
 """
 
 import sqlite3
-import threading
-import time
 
 import pytest
 from flask.testing import FlaskClient
@@ -37,6 +35,7 @@ from configs.enums.channels import WATCHABLE_DELEGATE_CHANNELS
 from configs.enums.policy_channel import PolicyChannel
 from controllers.message_processor import MessageProcessor
 from models.turn_execution import TurnExecution
+from tests.helpers import drain_background_turns
 from tests.test_delegate_transcript_watch import _listening
 
 pytestmark = pytest.mark.unit
@@ -45,16 +44,6 @@ _MULTIPART = "multipart/form-data"
 _DELEGATE_CHANNEL_PREFIX = "delegate:"
 _DELEGATE_CHANNEL = "delegate:web_search"
 _TURN = 7
-
-
-def _join_turn_threads(timeout_s: float = 10.0) -> None:
-    """Join any turn a send started on a daemon thread, so a regression that lets
-    a steered send through fails THIS test instead of leaking a live turn into the
-    next one."""
-    deadline = time.monotonic() + timeout_s
-    for thread in threading.enumerate():
-        if thread.name.startswith("turn-"):
-            thread.join(timeout=max(0.0, deadline - time.monotonic()))
 
 
 def _open_user_and_delegate_turns() -> None:
@@ -153,7 +142,7 @@ def test_send_cannot_be_addressed_by_channel(
         assert control.status_code == 422
         assert steered.status_code == 400
     finally:
-        _join_turn_threads()
+        drain_background_turns()
 
 
 @pytest.mark.parametrize(

@@ -37,8 +37,6 @@ returns a deterministic ``ToolResult.ok("steer probe done")`` so the persisted
 row carries the success envelope and the steer can be asserted on it."""
 
 import sqlite3
-import threading
-import time
 from unittest.mock import patch
 
 import pytest
@@ -56,7 +54,7 @@ from models.policy import Policy
 from models.provider_response import ProviderResponse
 from models.turn_execution import TurnExecution
 from services.dispatch_service import _REPEAT_CALL_STEER
-from tests.helpers import NO_PLAN, is_planning_request
+from tests.helpers import NO_PLAN, drain_background_turns, is_planning_request
 
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 
@@ -100,30 +98,6 @@ class _ScriptedProvider:
         return response
 
 
-def _drain_background_turns(timeout_s: float = 10.0) -> None:
-    """Join the fire-and-forget post-turn daemon turns a completed ``user`` turn
-    spawns (skill suggestion, thread gist) so they run to completion inside THIS
-    test's provider+DB patch and never leak into the next test.
-
-    ``_end`` starts them unjoined (``services.skill_suggestion_message_processor``
-    / ``thread_gist_message_processor``): each is a whole ``MessageProcessor``
-    turn on its own daemon (named ``skill-suggest``/``thread-gist`` and,
-    transitively, a ``turn-*`` drive thread). Left running, such a turn would call
-    ``build_client`` while the *next* test holds the patch, hitting that test's
-    scripted provider and repatched DB — the exact cross-test corruption this
-    guards against."""
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        pending = [
-            t for t in threading.enumerate()
-            if t.name in ("skill-suggest", "thread-gist") or t.name.startswith("turn-")
-        ]
-        if not pending:
-            return
-        for t in pending:
-            t.join(timeout=deadline - time.monotonic())
-
-
 def _run(provider: _ScriptedProvider, raw_input: str) -> MessageProcessor:
     """Drive a real user turn to termination against *provider*, then quiesce any
     post-turn daemon turns inside the patch so the test stays hermetic."""
@@ -131,7 +105,7 @@ def _run(provider: _ScriptedProvider, raw_input: str) -> MessageProcessor:
     with patch(_BUILD_CLIENT, return_value=provider):
         mp.begin()
         mp.result()
-        _drain_background_turns()
+        drain_background_turns()
     return mp
 
 

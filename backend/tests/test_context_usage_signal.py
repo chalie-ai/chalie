@@ -29,8 +29,6 @@ Three claims, one per branch the emit site actually carries:
 
 import json
 import sqlite3
-import threading
-import time
 from unittest.mock import patch
 
 import pytest
@@ -42,6 +40,7 @@ from models.provider_response import ProviderResponse
 from services.processor_config import ProcessorConfig
 from services.provider_api import ProviderApiResponse
 from services.websocket import Websocket
+from tests.helpers import drain_background_turns
 
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 
@@ -135,25 +134,6 @@ class _WireReplyProvider:
         )
 
 
-def _drain_background_turns(timeout_s: float = 10.0) -> None:
-    """Join the fire-and-forget post-turn daemon turns a completed turn spawns
-    (skill suggestion, thread gist) so they run to completion inside THIS test's
-    provider+DB patch and never leak into the next — the same cross-test
-    corruption guard as test_message_processor_runaway_loop.py's helper of the
-    same name. Each is a whole MessageProcessor turn on its own daemon; left
-    running it would call ``build_client`` while the NEXT test holds the patch."""
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        pending = [
-            t for t in threading.enumerate()
-            if t.name in ("skill-suggest", "thread-gist") or t.name.startswith("turn-")
-        ]
-        if not pending:
-            return
-        for t in pending:
-            t.join(timeout=deadline - time.monotonic())
-
-
 def _run(
     config: ProcessorConfig,
     provider: _TokenReportingProvider | _WireReplyProvider,
@@ -169,7 +149,7 @@ def _run(
         with patch(_BUILD_CLIENT, return_value=provider):
             mp.begin()
             mp.result()
-            _drain_background_turns()
+            drain_background_turns()
     finally:
         Websocket._disconnect(client)
     return mp, client
