@@ -154,7 +154,7 @@ def _forward(viewer: Viewer, raw: str | bytes) -> None:
         logger.warning("[BROWSER] dropped a malformed input message for tab %s: %s", viewer.tab.id, details)
         return
     if isinstance(message, BrowserSizeInput):
-        viewer.resize(int(message.width), int(message.height))
+        viewer.resize(int(message.width), int(message.height), message.scale)
         return
     viewer.input(*_cdp_input(message))
 

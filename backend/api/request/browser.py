@@ -77,11 +77,12 @@ class BrowserTextInput(Request):
 
 
 class BrowserSizeInput(Request):
-    """The viewer's size in device px — the largest frame worth sending it."""
+    """The viewer's size in CSS px and its device pixel ratio — the window the tab's page lays out for."""
 
     type: Literal["size"]
     width: float = Field(..., ge=1, le=16_384, allow_inf_nan=False)
     height: float = Field(..., ge=1, le=16_384, allow_inf_nan=False)
+    scale: float = Field(..., gt=0, le=64, allow_inf_nan=False)
 
 
 BrowserInput = Annotated[

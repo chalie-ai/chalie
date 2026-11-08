@@ -151,7 +151,6 @@ function onServerMessage(text: string): void {
       meta = msg;
       emit('meta', msg);
       browser.patchTab(props.tabId, msg.url, msg.title);
-      draw();
       return;
     case 'closed':
       ended.value = true;
@@ -198,19 +197,27 @@ async function drawFrames(): Promise<void> {
   decoding = false;
 }
 
+/** Each frame fits by its own size: a resized page's new size arrives before its first frame at that size. */
 function draw(): void {
   const canvas = canvasRef.value;
   const ctx = canvas?.getContext('2d');
-  const page = pageSize();
-  if (!canvas || !ctx || !frame || !page) return;
-  const box = letterbox(canvas.width, canvas.height, page);
+  if (!canvas || !ctx || !frame) return;
+  const box = letterbox(canvas.width, canvas.height, frame);
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.drawImage(frame, box.x, box.y, box.width, box.height);
 }
 
+/** Make the page's window this view: its CSS px at this screen's density. */
 function sendSize(): void {
   const canvas = canvasRef.value;
-  if (canvas) send({ type: 'size', width: canvas.width, height: canvas.height });
+  if (canvas) {
+    send({
+      type: 'size',
+      width: canvas.clientWidth,
+      height: canvas.clientHeight,
+      scale: globalThis.devicePixelRatio || 1,
+    });
+  }
 }
 
 function queueSize(): void {

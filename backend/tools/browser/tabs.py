@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 
 Opener = Literal["chalie", "user"]
 
-VIEWPORT_WIDTH = 1280      # CSS px every tab renders at
+VIEWPORT_WIDTH = 1280      # CSS px a new tab renders at, until a viewer sizes it
 VIEWPORT_HEIGHT = 720
 
 _GONE = frozenset({"Target.targetDestroyed", "Target.targetCrashed", "Target.detachedFromTarget"})
@@ -85,7 +85,9 @@ class Tab:
         self.viewers = 0
         self.frame = ""            # newest screencast frame, base64 JPEG
         self.frames = 0            # bumped per frame
-        self.metas = 0             # bumped per url/title change
+        self.metas = 0             # bumped per url, title or size change
+        self.width, self.height = VIEWPORT_WIDTH, VIEWPORT_HEIGHT  # the page's window, CSS px
+        self.scale = 1.0           # device px per CSS px
         self.closed = False
         self.changed = threading.Condition()
 
@@ -102,6 +104,22 @@ class Tab:
             self.metas += 1
             self.changed.notify_all()
         announce()
+
+    def resize(self, width: int, height: int, scale: float) -> bool:
+        """Make the page's window *width* x *height* CSS px at *scale* device px each, as resizing
+        a browser window does: the page lays itself out again. The last size set wins; returns
+        whether the size changed."""
+        with self.changed:
+            if (width, height, scale) == (self.width, self.height, self.scale):
+                return False
+            # Sent under the lock, so the browser applies sizes in the order they are recorded.
+            self.browser.post("Emulation.setDeviceMetricsOverride",
+                              {"width": width, "height": height, "deviceScaleFactor": scale, "mobile": False},
+                              session_id=self.session_id)
+            self.width, self.height, self.scale = width, height, scale
+            self.metas += 1
+            self.changed.notify_all()
+        return True
 
     def close(self) -> None:
         """Mark the tab gone and drop it from the list; idempotent."""

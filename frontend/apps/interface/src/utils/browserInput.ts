@@ -24,7 +24,10 @@ export type StreamServerMessage = StreamMeta | { type: 'closed' } | { type: 'pin
 
 export type MouseButtonName = 'left' | 'middle' | 'right' | 'none';
 
-/** Client → server messages. Coordinates are page CSS px; `size` is the view in device px. */
+/**
+ * Client → server messages. Coordinates are page CSS px; `size` is the view in
+ * CSS px with its device pixel ratio as `scale`, which the page's window becomes.
+ */
 export type StreamInput =
   | {
       type: 'mouse';
@@ -46,7 +49,7 @@ export type StreamInput =
       modifiers: number;
     }
   | { type: 'text'; text: string }
-  | ({ type: 'size' } & PageSize);
+  | ({ type: 'size'; scale: number } & PageSize);
 
 /** The page's rectangle inside a view: scaled to fit whole, centred, bars on the spare side. */
 export interface Letterbox {

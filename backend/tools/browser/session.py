@@ -40,7 +40,7 @@ from typing import cast
 
 from tools.browser import tabs
 from tools.browser.cdp import CLOSED, COMMAND_TIMEOUT, Browser, BrowserError, Event, get, get_dict, get_objects
-from tools.browser.tabs import VIEWPORT_HEIGHT, VIEWPORT_WIDTH, Opener, Tab
+from tools.browser.tabs import Opener, Tab
 
 logger = logging.getLogger(__name__)
 
@@ -252,10 +252,8 @@ class PageSession:
         try:
             self._send("Page.enable")
             self._send("Page.setLifecycleEventsEnabled", {"enabled": True})
-            if opener == "chalie":
-                self._send("Security.setIgnoreCertificateErrors", {"ignore": True})
-            self._send("Emulation.setDeviceMetricsOverride",
-                       {"width": VIEWPORT_WIDTH, "height": VIEWPORT_HEIGHT, "deviceScaleFactor": 1, "mobile": False})
+            self._send("Emulation.setDeviceMetricsOverride", {"width": self.tab.width, "height": self.tab.height,
+                                                              "deviceScaleFactor": self.tab.scale, "mobile": False})
             self._send("Emulation.setFocusEmulationEnabled", {"enabled": True})
             info = get_dict(browser.send("Target.getTargetInfo", {"targetId": self._target}), "targetInfo")
             self.tab.describe(str(info.get("url", "")), str(info.get("title", "")))
@@ -432,8 +430,12 @@ class PageSession:
         return self._envelope(data=self._act(f"style {target!r}", find, _COMPUTED_STYLE_JS))
 
     def grab(self) -> dict[str, object]:
-        """Viewport PNG + page info — NOT an envelope; the ability layer ingests it."""
-        png = base64.b64decode(get(self._send("Page.captureScreenshot", {"format": "png"}), "data", str))
+        """Viewport PNG at one image px per CSS px, whatever the tab's scale, + page info —
+        NOT an envelope; the ability layer ingests it."""
+        view = get_dict(self._send("Page.getLayoutMetrics"), "cssVisualViewport")
+        clip = {"x": view["pageX"], "y": view["pageY"], "width": view["clientWidth"], "height": view["clientHeight"],
+                "scale": 1 / self.tab.scale}
+        png = base64.b64decode(get(self._send("Page.captureScreenshot", {"format": "png", "clip": clip}), "data", str))
         self._pump()
         return {"png": png, "page": {"url": self._url, "title": self._title(), "status": None}}
 

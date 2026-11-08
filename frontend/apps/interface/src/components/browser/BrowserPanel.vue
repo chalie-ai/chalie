@@ -327,8 +327,8 @@ function onKeydown(e: KeyboardEvent): void {
 </template>
 
 <style scoped lang="scss">
-// As wide as the page's 1280px viewport needs, at most 95% of the window;
-// the whole window on a phone.
+// At most 1280px and 95% of the window wide; the whole window on a phone. The
+// page's window is whatever size this leaves the view.
 .browser-panel {
   position: fixed;
   top: 56px;

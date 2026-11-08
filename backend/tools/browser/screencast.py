@@ -10,7 +10,11 @@
 
 Each socket on ``/ws/browser/<tab_id>`` is one :class:`Viewer`. The first
 viewer of a tab starts its screencast and the last one to leave stops it; a
-viewer's ``size`` sets the largest frame the browser sends. Frames, input and
+viewer's ``size`` resizes the tab's window, so the page lays itself out for
+that view the way it would in a browser window that size. The size belongs to
+the tab — the last viewer to send one sets it, and it stays once they leave —
+and every viewer is told it, so the others fit that page into their own
+view. Frames come at the window's size in CSS px. Frames, input and
 the history lookup go straight to the browser connection, never through the
 pool, so a viewer never waits on a browsing run and a run never waits on a
 viewer.
@@ -33,7 +37,7 @@ from typing import TYPE_CHECKING
 from simple_websocket import ConnectionClosed
 
 from tools.browser.cdp import BrowserError, get, get_objects
-from tools.browser.tabs import VIEWPORT_HEIGHT, VIEWPORT_WIDTH, Tab
+from tools.browser.tabs import Tab
 
 if TYPE_CHECKING:
     from simple_websocket import Server
@@ -41,7 +45,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _QUALITY = 60              # JPEG quality of streamed frames
-_MIN_SIZE = 16             # px — the smallest frame a viewer may ask for
+_MIN_SIZE = 16             # CSS px — the smallest window a viewer may ask for
+_MAX_SCALE = 2.0           # device px per CSS px a page is offered at most — frames stay CSS px regardless
 _HISTORY_TIMEOUT = 5.0     # s — the back/forward lookup behind each meta update
 _IDLE_WAIT = 1.0           # s — how often a quiet stream rechecks the browser is still up
 _PING_AFTER = 30.0         # s — a stream silent this long pings, so no proxy times the socket out
@@ -53,7 +58,6 @@ class Viewer:
     def __init__(self, tab: Tab) -> None:
         self.tab = tab
         self.gone = False
-        self._size = (VIEWPORT_WIDTH, VIEWPORT_HEIGHT)
 
     def open(self) -> None:
         """Join the tab's viewers, starting its screencast as the first, and seed the current picture."""
@@ -76,16 +80,14 @@ class Viewer:
                 self.tab.frames += 1
                 self.tab.changed.notify_all()
 
-    def resize(self, width: int, height: int) -> None:
-        """Send frames no larger than *width* x *height*; restarts the screencast only on a new size.
+    def resize(self, width: int, height: int, scale: float) -> None:
+        """Resize the tab's window to this view: *width* x *height* CSS px at *scale* device px each.
 
-        The browser ignores a start while its screencast runs, so the new size needs a stop first."""
-        size = (max(_MIN_SIZE, min(width, VIEWPORT_WIDTH)), max(_MIN_SIZE, min(height, VIEWPORT_HEIGHT)))
-        if size == self._size:
-            return
-        self._size = size
-        self.tab.browser.post("Page.stopScreencast", session_id=self.tab.session_id)
-        self._start()
+        The browser does not reliably send a frame at a new size until its screencast starts
+        again, and it ignores a start while one runs, so a new size stops it first."""
+        if self.tab.resize(max(_MIN_SIZE, width), max(_MIN_SIZE, height), min(scale, _MAX_SCALE)):
+            self.tab.browser.post("Page.stopScreencast", session_id=self.tab.session_id)
+            self._start()
 
     def input(self, method: str, params: dict[str, object]) -> None:
         """Forward one input event to the page without waiting for it."""
@@ -101,9 +103,7 @@ class Viewer:
             self.tab.changed.notify_all()
 
     def _start(self) -> None:
-        width, height = self._size
-        self.tab.browser.post("Page.startScreencast",
-                              {"format": "jpeg", "quality": _QUALITY, "maxWidth": width, "maxHeight": height},
+        self.tab.browser.post("Page.startScreencast", {"format": "jpeg", "quality": _QUALITY},
                               session_id=self.tab.session_id)
 
 
@@ -153,5 +153,5 @@ def _meta(tab: Tab) -> dict[str, object]:
         back, forward = index > 0, index < count - 1
     except BrowserError as e:
         logger.debug("[BROWSER] no history for tab %s: %s", tab.id, e)
-    return {"type": "meta", "width": VIEWPORT_WIDTH, "height": VIEWPORT_HEIGHT, "url": tab.url, "title": tab.title,
+    return {"type": "meta", "width": tab.width, "height": tab.height, "url": tab.url, "title": tab.title,
             "can_go_back": back, "can_go_forward": forward}
