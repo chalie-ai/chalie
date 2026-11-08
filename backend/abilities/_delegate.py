@@ -94,6 +94,7 @@ class DelegateAbility(Ability[B], ABC):
             raise RuntimeError(f"{self.NAME}.run() dispatched without a bound MessageProcessor")
         child = self.spawn(config(mp.config.policy_channel), instructions)
         answer = child.result()
+        self.child_ended(child)
         if child.execution is not None and child.execution.state == TurnExecution.CANCELLED:
             return ToolResult.err(
                 "The user stopped this subagent before it finished. Do not retry it or "
@@ -102,6 +103,10 @@ class DelegateAbility(Ability[B], ABC):
                 code="delegate-stopped",
             )
         return delegate_result(answer, hint=hint)
+
+    def child_ended(self, child: "MessageProcessor") -> None:
+        """Release what *child*'s turn held once it has ended — completed,
+        crashed or stopped alike. Nothing by default."""
 
 
 def delegate_result(result: str, *, hint: str) -> ToolResult:

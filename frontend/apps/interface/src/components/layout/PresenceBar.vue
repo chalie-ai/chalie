@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { Brain, CalendarClock, Clock, Moon, Search, Sun } from '@lucide/vue';
+import { Brain, CalendarClock, Clock, Globe, Moon, Search, Sun } from '@lucide/vue';
 import { useSessionStore } from '../../stores/session';
 import { useTasksStore } from '../../stores/tasks';
+import { useBrowserStore } from '../../stores/browser';
 import { ChalieMark, ConfigType, webPlatformAdapter, useTheme } from '@chalie/shared';
 import { emit } from '../../composables/useEventBus';
 import { useDockBusy } from '../../composables/useDockBusy';
@@ -23,6 +24,12 @@ const session = useSessionStore();
 const isSending = useDockBusy(() => null, () => ConfigType.USER);
 
 const tasks = useTasksStore();
+const browser = useBrowserStore();
+
+function toggleBrowser(): void {
+  if (browser.open) browser.closePanel();
+  else browser.openPanel();
+}
 
 /** DOM-derived (no store) — see `utils/threadActivity.ts`. */
 const threadActivity = useThreadActivity();
@@ -80,6 +87,17 @@ onBeforeUnmount(() => {
         @click="tasks.open()"
       >
         <Clock :size="16" aria-hidden="true" />
+      </button>
+      <button
+        id="browserBtn"
+        class="btn-icon"
+        :class="{ 'has-activity': browser.waiting }"
+        :aria-expanded="browser.open"
+        :aria-label="browser.waiting ? 'Browser, a tab is waiting for you' : 'Browser'"
+        title="Browser"
+        @click="toggleBrowser"
+      >
+        <Globe :size="16" aria-hidden="true" />
       </button>
       <button id="settingsBtn" class="btn-icon" aria-label="Settings" @click="handleSettings">
         <Brain :size="16" />

@@ -205,7 +205,7 @@ interface ListingEnvelope<T> {
   pagination: { page: number; limit: number; total: number };
 }
 
-interface SingleEnvelope<T> {
+export interface SingleEnvelope<T> {
   success: true;
   result: T;
 }

@@ -266,6 +266,11 @@ class FileMapperService:
         return cls._BROWSER_DIR / "chrome-headless-shell"
 
     @classmethod
+    def get_browser_profile_path(cls) -> Path:
+        """Return data/browser/profile/ — the browser's one persistent profile, so logins outlive a run."""
+        return cls._DATA_DIR / "browser" / "profile"
+
+    @classmethod
     def get_voice_path(cls, *parts: str) -> Path:
         """Return data/generated/voice/ joined with any additional path parts."""
         return cls._VOICE_DIR.joinpath(*parts) if parts else cls._VOICE_DIR

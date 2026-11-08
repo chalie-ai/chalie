@@ -3,10 +3,12 @@ import { computed, onBeforeUnmount, onMounted } from 'vue';
 import { useTheme } from '@chalie/shared';
 import { useSessionStore } from './stores/session';
 import { useVoiceStore } from './stores/voice';
+import { useBrowserStore } from './stores/browser';
 import { useHeartbeat } from './composables/useHeartbeat';
 import PresenceBar from './components/layout/PresenceBar.vue';
 import ConversationFeed from './components/conversation/ConversationFeed.vue';
 import ThreadPanel from './components/conversation/ThreadPanel.vue';
+import BrowserPanel from './components/browser/BrowserPanel.vue';
 import SearchOverlay from './components/overlays/SearchOverlay.vue';
 import InputDock from './components/layout/InputDock.vue';
 import LoadingOverlay from './components/layout/LoadingOverlay.vue';
@@ -17,10 +19,14 @@ import VoicePlayerDialog from './components/voice/VoicePlayerDialog.vue';
 const { init: initTheme } = useTheme();
 const session = useSessionStore();
 const voiceStore = useVoiceStore();
+const browser = useBrowserStore();
 
-// When a thread panel is open the base layer (feed + footer dock) dims and
-// blurs behind it — the mockup's baseStyle. The panel and top bar stay crisp.
-const baseDimmed = computed(() => session.panelThreadId != null || session.panelDelegate != null);
+// When a thread or the browser panel is open the base layer (feed + footer
+// dock) dims and blurs behind it — the mockup's baseStyle. The panels and top
+// bar stay crisp.
+const baseDimmed = computed(
+  () => session.panelThreadId != null || session.panelDelegate != null || browser.open,
+);
 
 // Cmd/Ctrl-K toggles the thread-search overlay; the overlay owns Esc-to-close.
 function onSearchHotkey(e: KeyboardEvent): void {
@@ -83,6 +89,10 @@ onBeforeUnmount(() => {
   <!-- Slide-over thread panel — opens over the feed when a pill or Reply action
        sets session.panelThreadId; carries its own reply dock. -->
   <ThreadPanel />
+
+  <!-- Slide-over browser panel — the top-bar browser button opens it, and so
+       does Chalie handing a tab to the user; it sits above a thread panel. -->
+  <BrowserPanel />
 
   <!-- Thread search overlay — Cmd/Ctrl-K or the top-bar search button. -->
   <SearchOverlay />

@@ -19,7 +19,7 @@ from abilities._result import ToolResult
 from configs.enums.param_key import Keys
 from contracts.params.param_bag import ParamBag
 
-_ACTIONS = ("open", "read", "find", "click", "fill", "select", "scroll", "back", "screenshot", "style")
+_ACTIONS = ("open", "read", "find", "click", "fill", "select", "scroll", "back", "screenshot", "style", "handoff")
 
 
 class BrowserParamsBag(ParamBag):
@@ -51,6 +51,8 @@ class BrowserParamsBag(ParamBag):
                 return BrowserScreenshotParams.from_params(params)
             case "style":
                 return BrowserStyleParams.from_params(params)
+            case "handoff":
+                return BrowserHandoffParams.from_params(params)
             case unknown:
                 return ToolResult.err(
                     f"Unknown browser action: {unknown!r}.",
@@ -198,3 +200,17 @@ class BrowserStyleParams(BrowserParamsBag):
         if isinstance(target, ToolResult):
             return target
         return cls(target=target)
+
+
+@dataclass(frozen=True, slots=True)
+class BrowserHandoffParams(BrowserParamsBag):
+    """``reason`` is required — what the user needs to do on the page before the run carries on."""
+
+    reason: str
+
+    @classmethod
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
+        reason = cls.require_str(params, Keys.reason)
+        if isinstance(reason, ToolResult):
+            return reason
+        return cls(reason=reason)

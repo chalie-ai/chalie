@@ -120,6 +120,7 @@ class Keys(StrEnum):
     provider = "provider"
     query = "query"
     quota_mb = "quota_mb"
+    reason = "reason"
     recurrence = "recurrence"
     replace_ = "replace"  # trailing underscore: bare `replace` is a str method (StrEnum base)
     replaces = "replaces"

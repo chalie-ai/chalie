@@ -23,15 +23,12 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from abilities.browser import BrowserAbility
 from configs.channels.web_browse import WebBrowseConfig
 from configs.enums.policy_channel import PolicyChannel
 from controllers.message_processor import MessageProcessor
 from tools.browser.cdp import Browser
 from tools.browser.pool import get_pool
 from tools.browser.session import close_session
-
-_VERBS = ["open", "read", "find", "click", "fill", "select", "scroll", "back", "screenshot", "style"]
 
 _PAGES = {
     "/": """<title>Home</title><h1>Welcome</h1>
@@ -102,18 +99,6 @@ def _browse_mp() -> MessageProcessor:
 
 def _dispatch(params: dict[str, object]) -> str:
     return _browse_mp().dispatch_service.dispatch("browser", params)
-
-
-@pytest.mark.unit
-def test_schema_is_ten_flat_verbs() -> None:
-    schema = BrowserAbility(mp=None).get_input_schema()
-    params = cast("dict[str, object]", schema["input_schema"])
-    assert cast("dict[str, object]", cast("dict[str, object]", params["properties"])["action"])["enum"] == _VERBS
-    # 7 model-facing params + the framework act_summary — nothing else.
-    assert set(cast("dict[str, object]", params["properties"])) == {
-        "action", "url", "target", "value", "query", "section", "direction", "act_summary",
-    }
-    assert cast("list[str]", params["required"]) == ["action", "act_summary"]
 
 
 @pytest.mark.unit

@@ -34,6 +34,7 @@ import {
   upsertTurnToSurfaces,
 } from './turnDom';
 import { usePermissionsStore } from '../stores/permissions';
+import { useBrowserStore } from '../stores/browser';
 import { useContextUsageStore } from '../stores/contextUsage';
 import { useVoiceTranscriptsStore } from '../stores/voiceTranscripts';
 
@@ -469,6 +470,14 @@ function _dispatchSimpleEvent(data: WsPushEvent): boolean {
       // answer nobody can deliver.
       const requestId = (data as { request_id?: unknown }).request_id;
       if (typeof requestId === 'string') usePermissionsStore().remove(requestId);
+      return true;
+    }
+    case 'browser_tabs_changed':
+      void useBrowserStore().refresh();
+      return true;
+    case 'browser_handoff': {
+      const h = hooks();
+      useBrowserStore().receiveHandoff(data, { turnId: h.getPanelThreadId(), type: h.getPanelType() });
       return true;
     }
     default:

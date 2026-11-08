@@ -10,7 +10,8 @@ browser and every session; everyone else queues work onto it.
 
 Lifecycle:
   - Browser launches lazily on first work item
-  - Idles out after 5 minutes of no activity
+  - Idles out after 5 minutes of no activity, unless a tab is watched, the
+    user's own, or handed off to the user (``tabs.busy``)
   - Re-launches transparently on next request, or after it crashed
   - Clean shutdown via atexit or SIGTERM (daemon thread)
 """
@@ -25,6 +26,7 @@ import time
 from concurrent.futures import Future
 from typing import Callable, cast
 
+from tools.browser import tabs
 from tools.browser.cdp import Browser
 
 logger = logging.getLogger(__name__)
@@ -101,9 +103,9 @@ class BrowserPool:
             try:
                 item = self._queue.get(timeout=_QUEUE_POLL)
             except queue.Empty:
-                if browser is not None and (time.time() - last_used) > _IDLE_TTL:
+                if browser is not None and (time.time() - last_used) > _IDLE_TTL and not tabs.busy():
                     logger.info("[BROWSER POOL] Idle timeout — closing browser")
-                    browser.close()
+                    _close(browser)
                     browser = None
                 continue
 
@@ -120,7 +122,7 @@ class BrowserPool:
                 if browser is None or not browser.connected:
                     if browser is not None:
                         logger.warning("[BROWSER POOL] Browser disconnected — re-launching")
-                        browser.close()  # reaps the dead process and removes its profile
+                        _close(browser)  # reaps the dead process
                     browser = Browser()
                     self._browser_launches += 1
                     logger.info("[BROWSER POOL] Chromium launched")
@@ -135,8 +137,14 @@ class BrowserPool:
 
         # Loop exiting — clean shutdown
         if browser is not None:
-            browser.close()
+            _close(browser)
         logger.info("[BROWSER POOL] Thread stopped")
+
+
+def _close(browser: Browser) -> None:
+    """Close *browser*; its tabs leave the list with it."""
+    browser.close()
+    tabs.drop(browser)
 
 
 # -- Module-level singleton ----------------------------------------------------

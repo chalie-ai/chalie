@@ -46,6 +46,7 @@ import {
 import { laneKey, useQueueStore } from './queue';
 import { useNotificationsStore } from './notifications';
 import { usePermissionsStore } from './permissions';
+import { useBrowserStore } from './browser';
 import { useVoiceTranscriptsStore } from './voiceTranscripts';
 
 /** Guard: init() must be idempotent (HMR / Vue StrictMode). */
@@ -167,6 +168,9 @@ export const useSessionStore = defineStore('session', {
         // every connect, first load and reconnect alike, so a reload or a drop
         // brings the asks back instead of parking the turn for ever.
         void usePermissionsStore().refreshPending();
+        // Likewise the browser's tabs and their hand-offs: a reload or a drop
+        // would otherwise miss the frames that announced them.
+        void useBrowserStore().refresh();
         // An open delegate panel froze with the socket and lost its live pills
         // on disconnect, and only a frame for its turn would re-read it.
         const delegate = this.panelDelegate;

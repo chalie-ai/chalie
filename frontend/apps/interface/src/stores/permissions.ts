@@ -43,7 +43,7 @@ export interface PermissionRequest {
 }
 
 /** The `origin` object as sent, or null when absent/malformed — never a guessed one. */
-function readOrigin(raw: unknown): PermissionOrigin | null {
+export function readOrigin(raw: unknown): PermissionOrigin | null {
   if (raw == null || typeof raw !== 'object') return null;
   const o = raw as Partial<PermissionOrigin>;
   if (typeof o.type !== 'string' || typeof o.turn_id !== 'number') return null;

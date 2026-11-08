@@ -6,14 +6,18 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Headless chromium driven over the Chrome DevTools Protocol — stdlib only.
+"""Headless chromium driven over the Chrome DevTools Protocol.
 
 The browser runs with ``--remote-debugging-pipe``: it reads commands on fd 3
 and writes replies and events on fd 4, each message one NUL-terminated JSON
 object. One reader thread owns fd 4. It resolves pending replies, dismisses a
 JavaScript dialog the moment it opens (an open dialog blocks every other
-command on its page), and queues each attached session's events for the pool
-thread to drain.
+command on its page), hands a watched session's screencast frames and target
+lifecycle events to its listener, and queues each attached session's other
+events for the pool thread to drain.
+
+The browser keeps one persistent profile under the data directory, so cookies
+and logins outlive both a run and a relaunch.
 """
 
 from __future__ import annotations
@@ -24,12 +28,10 @@ import itertools
 import json
 import logging
 import os
-import shutil
 import signal
-import tempfile
 import threading
 import time
-from typing import NamedTuple, TypeVar
+from typing import Callable, NamedTuple, TypeVar
 
 from services.file_mapper_service import FileMapperService
 
@@ -39,6 +41,7 @@ COMMAND_TIMEOUT = 30.0
 _STARTUP_TIMEOUT = 30.0
 _CLOSE_GRACE = 5.0
 _STDERR_TAIL = 1_000
+_POSTED_MEMORY = 256       # posted commands remembered by id, to name the one an error reply is for
 CLOSED = "Target page, context or browser has been closed"
 
 # The switch set the browser has always run with: the automation defaults
@@ -109,6 +112,20 @@ _LAUNCH_ARGS = (
 
 _T = TypeVar("_T", str, int, float, bool)
 
+# What a session's listener receives instead of (frames) or as well as (the
+# rest) the pool-thread queue: enough to stream the page and keep its tab's
+# url, title and liveness current.
+_WATCHED = frozenset({
+    "Page.screencastFrame",
+    "Page.domContentEventFired",
+    "Page.loadEventFired",
+    "Target.targetCreated",
+    "Target.targetInfoChanged",
+    "Target.targetDestroyed",
+    "Target.targetCrashed",
+    "Target.detachedFromTarget",
+})
+
 
 class BrowserError(Exception):
     """A browser command or page action failed. The message is shown to the model."""
@@ -120,6 +137,9 @@ class Event(NamedTuple):
     method: str
     params: dict[str, object]
     at: float
+
+
+Listener = Callable[[Event], None]
 
 
 # ── JSON narrowing ────────────────────────────────────────────────────────────
@@ -182,8 +202,9 @@ class Browser:
 
     def __init__(self) -> None:
         executable = find_executable()
-        self._profile = tempfile.mkdtemp(prefix="chalie_chromium_profile-")
-        stderr_path = os.path.join(self._profile, "stderr.log")
+        profile = FileMapperService.get_browser_profile_path()
+        profile.mkdir(mode=0o700, parents=True, exist_ok=True)
+        stderr_path = os.path.join(profile, "stderr.log")
         command_read, self._out = os.pipe()
         self._in, event_write = os.pipe()
         child_in, child_out = _fd_above_4(command_read), _fd_above_4(event_write)
@@ -192,7 +213,7 @@ class Browser:
             # deadlock the child before exec.
             self._pid = os.posix_spawn(
                 executable,
-                [executable, *_LAUNCH_ARGS, f"--user-data-dir={self._profile}",
+                [executable, *_LAUNCH_ARGS, f"--user-data-dir={profile}",
                  "--remote-debugging-pipe", "--no-startup-window"],
                 os.environ,
                 file_actions=[
@@ -207,7 +228,6 @@ class Browser:
         except OSError as e:
             for fd in (self._in, self._out):
                 os.close(fd)
-            shutil.rmtree(self._profile, ignore_errors=True)
             raise RuntimeError(f"Headless chromium executable could not start: {e}") from e
         finally:
             os.close(child_in)
@@ -218,8 +238,10 @@ class Browser:
         self._cv = threading.Condition()
         self._waiting: set[int] = set()
         self._replies: dict[int, dict[str, object]] = {}
+        self._posted: dict[int, str] = {}        # posted command id -> method, oldest first
         self._queues: dict[str, collections.deque[Event]] = {}
         self._targets: dict[str, str] = {}      # attached target id -> session id
+        self._listeners: dict[str, Listener] = {}
         self._connected = True
         self._closed = False
         self._reader = threading.Thread(target=self._read_loop, name="browser-cdp-reader", daemon=True)
@@ -227,6 +249,7 @@ class Browser:
         try:
             self.send("Browser.getVersion", timeout=_STARTUP_TIMEOUT)
             self.send("Target.setDiscoverTargets", {"discover": True})
+            self.send("Browser.setDownloadBehavior", {"behavior": "deny"})
         except BrowserError as e:
             with open(stderr_path, "rb") as fh:
                 tail = fh.read().decode(errors="replace")[-_STDERR_TAIL:].strip()
@@ -263,19 +286,44 @@ class Browser:
         result = reply.get("result")
         return {str(k): v for k, v in result.items()} if isinstance(result, dict) else {}
 
-    def attach(self, target_id: str) -> str:
-        """Attach to *target_id* as a flat session and start queueing its events."""
+    def post(self, method: str, params: dict[str, object] | None = None, *,
+             session_id: str | None = None) -> None:
+        """Send one command without waiting for its reply; a lost browser drops it, an error reply is logged."""
+        with self._cv:
+            msg_id = next(self._ids)
+            self._posted[msg_id] = method
+            if len(self._posted) > _POSTED_MEMORY:
+                del self._posted[next(iter(self._posted))]
+        try:
+            self._write(msg_id, method, params, session_id)
+        except OSError:
+            pass  # the pipe is gone; the reader's EOF marks us disconnected
+
+    def attach(self, target_id: str, *, queue: bool = True) -> str:
+        """Attach to *target_id* as a flat session; *queue* keeps its events for :meth:`events`."""
         session_id = get(self.send("Target.attachToTarget", {"targetId": target_id, "flatten": True}),
                          "sessionId", str)
         with self._cv:
-            self._queues[session_id] = collections.deque()
+            if queue:
+                self._queues[session_id] = collections.deque()
             self._targets[target_id] = session_id
         return session_id
 
+    def watch(self, session_id: str, listener: Listener | None) -> None:
+        """Hand *session_id*'s watched events to *listener* on the reader thread; ``None`` stops it.
+
+        A watched session's screencast frames never reach its queue."""
+        with self._cv:
+            if listener is None:
+                self._listeners.pop(session_id, None)
+            else:
+                self._listeners[session_id] = listener
+
     def release(self, session_id: str) -> None:
-        """Stop queueing *session_id*'s events."""
+        """Stop queueing and watching *session_id*'s events."""
         with self._cv:
             self._queues.pop(session_id, None)
+            self._listeners.pop(session_id, None)
             for target_id in [t for t, s in self._targets.items() if s == session_id]:
                 del self._targets[target_id]
 
@@ -292,7 +340,7 @@ class Browser:
             return drained
 
     def close(self) -> None:
-        """Browser.close, SIGKILL the process group after a grace period, remove the profile."""
+        """Browser.close, then SIGKILL the process group after a grace period."""
         if self._closed:
             return
         self._closed = True
@@ -309,9 +357,11 @@ class Browser:
             except (ProcessLookupError, ChildProcessError):
                 pass  # exited between the last poll and the kill
         self._reader.join(_CLOSE_GRACE)
-        for fd in (self._in, self._out):
-            os.close(fd)
-        shutil.rmtree(self._profile, ignore_errors=True)
+        with self._write_lock:
+            # A late post must hit a closed descriptor, never a reused one.
+            os.close(self._out)
+            self._out = -1
+        os.close(self._in)
 
     # ── Internals ────────────────────────────────────────────────────────────
 
@@ -367,6 +417,11 @@ class Browser:
                 if msg_id in self._waiting:
                     self._replies[msg_id] = message
                     self._cv.notify_all()
+                    return
+                command = self._posted.pop(msg_id, "command")
+            error = message.get("error")
+            if isinstance(error, dict):
+                logger.warning("[BROWSER] %s (#%d) failed: %s", command, msg_id, error.get("message"))
             return
         method, params, session_id = message.get("method"), message.get("params"), message.get("sessionId")
         if not isinstance(method, str) or not isinstance(params, dict):
@@ -376,18 +431,35 @@ class Browser:
                 self._write(next(self._ids), "Page.handleJavaScriptDialog", {"accept": False}, session_id)
             except OSError:
                 pass  # the browser is gone; the EOF that follows marks us disconnected
+        event = Event(method, params, time.monotonic())
+        listeners: list[Listener] = []
         with self._cv:
-            owner = session_id if isinstance(session_id, str) else self._owner(method, params)
+            owner: str | None
+            subject: str | None
+            if isinstance(session_id, str):
+                owner = subject = session_id
+            else:
+                owner = self._attached(method, params, "openerId")
+                subject = self._attached(method, params, "targetId")
+            if method in _WATCHED:
+                listeners = [self._listeners[s] for s in dict.fromkeys((owner, subject))
+                             if s is not None and s in self._listeners]
             queue = self._queues.get(owner) if owner else None
-            if queue is not None:
-                queue.append(Event(method, params, time.monotonic()))
+            if queue is not None and not (listeners and method == "Page.screencastFrame"):
+                queue.append(event)
                 self._cv.notify_all()
+        for listener in listeners:
+            try:
+                listener(event)
+            except Exception:
+                logger.exception("[BROWSER] %s listener failed", method)
 
-    def _owner(self, method: str, params: dict[str, object]) -> str | None:
-        """The attached session a browser-level Target event concerns, if any."""
+    def _attached(self, method: str, params: dict[str, object], key: str) -> str | None:
+        """The attached session a browser-level Target event concerns, if any:
+        ``openerId`` names the page that opened it, ``targetId`` the target itself."""
         if method == "Target.detachedFromTarget":
             session_id = params.get("sessionId")
             return session_id if isinstance(session_id, str) else None
         info = params.get("targetInfo")
-        target_id = info.get("openerId") if isinstance(info, dict) else params.get("targetId")
+        target_id = info.get(key) if isinstance(info, dict) else params.get("targetId")
         return self._targets.get(target_id) if isinstance(target_id, str) else None

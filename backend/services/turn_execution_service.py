@@ -23,7 +23,6 @@ import logging
 from typing import TYPE_CHECKING, cast
 
 from configs.channels import config_for
-from configs.enums.channels import Channel
 from models.tool_call import ToolCall
 from models.transcript import Transcript
 from models.turn_execution import TurnExecution
@@ -125,11 +124,11 @@ class TurnExecutionService:
         eventual finish(). The read and the write share one ``BEGIN
         IMMEDIATE`` transaction, so a turn settling or a message joining on
         another thread lands wholly before or wholly after it. Stopping a
-        caller's turn also stops its subtasks: every ``delegate:subtask`` turn
-        the caller's own tool calls spawned is cancelled in turn from here
-        with :data:`STOP_REASON_PARENT_STOPPED` (other delegate children are
-        already stopped by their own waiting caller, and an already-ended
-        child simply returns ``None``)."""
+        caller's turn also stops every delegate turn its own tool calls
+        spawned — a subtask running in the background as much as a child the
+        caller is blocked waiting on — each cancelled in turn from here with
+        :data:`STOP_REASON_PARENT_STOPPED`, since nothing else passes the stop
+        down to a child; an already-ended child simply returns ``None``."""
         from controllers.message_processor import MessageProcessor  # noqa: PLC0415 — the MP imports this module
 
         try:
@@ -149,19 +148,16 @@ class TurnExecutionService:
             )
             return None
         MessageProcessor.broadcast_as(execution, execution.channel, cls._row_config(execution))
-        # Cascade: the caller's tool calls may have spawned subtasks, which
-        # now run against a stopped conversation. Only subtask children are
-        # cascaded here — every other delegate child is already stopped by its
-        # own waiting caller — and an already-ended child returns None from
-        # the recursive cancel, which is fine.
+        # Cascade to every delegate child the caller's tool calls spawned: a
+        # child only reads its own row's flag, so it would otherwise run on
+        # against a stopped conversation. An already-ended child returns None.
         calls = ToolCall.by_turn(channel, turn_id)
         children = Transcript.delegate_turns({cast("int", c.id): (c.created_at, c.ended_at) for c in calls})
         for entry in children.values():
-            if entry["channel"] == Channel.DELEGATE_SUBTASK.value:
-                cls.cancel_turn(
-                    entry["channel"], cast("int", entry["turn_id"]),
-                    stop_reason=STOP_REASON_PARENT_STOPPED,
-                )
+            cls.cancel_turn(
+                cast("str", entry["channel"]), cast("int", entry["turn_id"]),
+                stop_reason=STOP_REASON_PARENT_STOPPED,
+            )
         return execution
 
     @staticmethod

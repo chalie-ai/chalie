@@ -6,13 +6,14 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""PageSession — one persistent browser tab per delegate run.
+"""PageSession — one browser tab: a delegate run's page, or one the user opened.
 
 The model never sees a session id: the invoking delegate's transcript uid IS
 the key, so consecutive `browser` calls in one web_browse run land on the same
-live page. The tab and its CDP session live on the BrowserPool thread; the ONLY
-entry points for other threads are run_verb() (submits to the pool) and
-close_session().
+live page. The user's own tabs are keyed by target id in the tab registry
+(``tools/browser/tabs.py``), which also lists the run tabs for the live view.
+Tabs and their CDP sessions live on the BrowserPool thread; the ONLY entry
+points for other threads are the functions under "Cross-thread entry points".
 
 Every verb returns the same JSON-able envelope:
 
@@ -37,7 +38,9 @@ from collections.abc import Callable
 from functools import partial
 from typing import cast
 
-from tools.browser.cdp import CLOSED, COMMAND_TIMEOUT, Browser, BrowserError, get, get_dict, get_objects
+from tools.browser import tabs
+from tools.browser.cdp import CLOSED, COMMAND_TIMEOUT, Browser, BrowserError, Event, get, get_dict, get_objects
+from tools.browser.tabs import VIEWPORT_HEIGHT, VIEWPORT_WIDTH, Opener, Tab
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +55,8 @@ _ACTION_TIMEOUT = 5.0
 _SETTLE_TIMEOUT = 3.0
 _RETRY_PAUSES = (0.0, 0.02, 0.1, 0.1, 0.5)   # between action attempts; the last repeats
 _GROUP = "chalie-target"  # Runtime object group holding the element handles of the current action
+
+_POOL_TIMEOUT = 30.0      # s — a tab operation from the live view waits on the pool at most this long
 
 _SESSIONS: dict[int, "PageSession"] = {}
 
@@ -72,10 +77,50 @@ def run_verb(key: int, verb: str, kwargs: dict[str, object]) -> dict[str, object
 
 
 def close_session(key: int) -> None:
-    """End-of-run cleanup: close the tab (if any)."""
-    if key in _SESSIONS:
-        from tools.browser.pool import get_pool  # noqa: PLC0415
-        get_pool().submit(_close_on_thread, key)
+    """End of *key*'s run: close its tab, if it has one. A tab that went with its
+    browser is only forgotten, so a run's end never launches a browser."""
+    session = _SESSIONS.get(key)
+    if session is None:
+        return
+    if not session.tab.live:
+        _SESSIONS.pop(key, None)
+        return
+    from tools.browser.pool import get_pool  # noqa: PLC0415
+    get_pool().submit(_close_on_thread, key)
+
+
+def run_tab(key: int) -> Tab | None:
+    """*key*'s live tab, or ``None`` when its run has no page open."""
+    session = _SESSIONS.get(key)
+    return session.tab if session is not None and session.tab.live else None
+
+
+def open_tab(url: str | None) -> dict[str, object]:
+    """Open a user tab, on *url* when given; the new tab as the list shows it."""
+    from tools.browser.pool import get_pool  # noqa: PLC0415
+    return cast("dict[str, object]", get_pool().execute(_open_tab, url, timeout=_POOL_TIMEOUT))
+
+
+def close_tab(tab_id: str) -> None:
+    """Close the tab *tab_id*. Raises LookupError when no such tab is open."""
+    _on_tab(_close_tab, tab_id)
+
+
+def navigate_tab(tab_id: str, url: str) -> None:
+    """Point the tab *tab_id* at *url*, without waiting for the page to load. Raises LookupError."""
+    _on_tab(_navigate_tab, tab_id, url)
+
+
+def history_tab(tab_id: str, action: str) -> None:
+    """Go ``back``, ``forward`` or ``reload`` in the tab *tab_id*, without waiting for the load. Raises LookupError."""
+    _on_tab(_history_tab, tab_id, action)
+
+
+def _on_tab(fn: Callable[..., None], tab_id: str, *args: str) -> None:
+    """Run *fn* on the pool for an open tab — never launching a browser for a tab that is not there."""
+    _live_tab(tab_id)
+    from tools.browser.pool import get_pool  # noqa: PLC0415
+    get_pool().execute(fn, tab_id, *args, timeout=_POOL_TIMEOUT)
 
 
 def error_envelope(message: str) -> dict[str, object]:
@@ -111,6 +156,50 @@ def _close_on_thread(browser: Browser, key: int) -> None:  # noqa: ARG001 — po
         session.close()
 
 
+def _open_tab(browser: Browser, url: str | None) -> dict[str, object]:
+    tab = PageSession(browser, opener="user").tab
+    if url:
+        browser.post("Page.navigate", {"url": url}, session_id=tab.session_id)
+    return tab.to_dict()
+
+
+def _adopt(browser: Browser, target_id: str) -> None:
+    """Keep the popup *target_id* as a user tab of its own."""
+    if tabs.get(target_id) is not None:
+        return
+    try:
+        PageSession(browser, target=target_id, opener="user")
+    except BrowserError as e:
+        logger.warning("[BROWSER] could not keep popup %s as a tab: %s", target_id, e)
+
+
+def _live_tab(tab_id: str) -> Tab:
+    tab = tabs.get(tab_id)
+    if tab is None:
+        raise LookupError(f"No open tab {tab_id!r}")
+    return tab
+
+
+def _close_tab(browser: Browser, tab_id: str) -> None:  # noqa: ARG001 — pool always passes browser
+    _live_tab(tab_id).page.close()
+
+
+def _navigate_tab(browser: Browser, tab_id: str, url: str) -> None:
+    browser.post("Page.navigate", {"url": url}, session_id=_live_tab(tab_id).session_id)
+
+
+def _history_tab(browser: Browser, tab_id: str, action: str) -> None:
+    session_id = _live_tab(tab_id).session_id
+    if action == "reload":
+        browser.post("Page.reload", session_id=session_id)
+        return
+    history = browser.send("Page.getNavigationHistory", session_id=session_id)
+    index = get(history, "currentIndex", int) + (-1 if action == "back" else 1)
+    entries = get_objects(history, "entries")
+    if 0 <= index < len(entries):
+        browser.post("Page.navigateToHistoryEntry", {"entryId": get(entries[index], "id", int)}, session_id=session_id)
+
+
 def _trim(value: object, cap: int = READ_CAP) -> object:
     """Recursively cap every string in the envelope — the hard token-bomb guard."""
     if isinstance(value, str) and len(value) > cap:
@@ -134,52 +223,106 @@ def _ax_name(node: dict[str, object]) -> str:
 
 
 class PageSession:
-    """One browser context + tab over CDP. Constructed and driven ONLY on the pool thread."""
+    """One tab over CDP, in the browser's one persistent profile. Constructed and driven ONLY on the pool thread.
+
+    *target* adopts a page that already exists (a popup); otherwise a blank one opens.
+    """
 
     _CLICK_ROLES = ("button", "link", "tab", "menuitem", "checkbox", "radio")
     _FILL_ROLES = ("textbox", "searchbox", "combobox", "spinbutton")
 
-    def __init__(self, browser: Browser) -> None:
+    def __init__(self, browser: Browser, target: str | None = None, opener: Opener = "chalie") -> None:
         self._browser = browser
-        self._session = ""
-        self._context = get(browser.send("Target.createBrowserContext"), "browserContextId", str)
         self._url = "about:blank"
         self._loader = ""                  # the main-frame document loading or loaded now
         self._lifecycle: set[str] = set()  # lifecycle events _loader has reached
         self._commits = 0                  # main-frame commits, same-document ones included
         self._requested = False            # a main-frame navigation is scheduled, not yet committed
-        self._closed = False
         self._dialog: str | None = None
         self._popups: dict[str, str] = {}  # popup target id -> its latest url
+        self._target = target or get(browser.send("Target.createTarget", {"url": "about:blank"}), "targetId", str)
         try:
-            # The browser never writes to disk — ``web_fetch`` owns saving files.
-            browser.send("Browser.setDownloadBehavior", {"behavior": "deny", "browserContextId": self._context})
-            self._target = get(browser.send("Target.createTarget",
-                                            {"url": "about:blank", "browserContextId": self._context}),
-                               "targetId", str)
-            self._session = browser.attach(self._target)
+            # Only a run's tab reads its events back; the user's tabs are kept current by _listen alone.
+            self._session = browser.attach(self._target, queue=opener == "chalie")
+        except BrowserError:
+            self._close_target()
+            raise
+        self.tab = Tab(self, browser, self._target, self._session, opener)
+        browser.watch(self._session, self._listen)
+        try:
             self._send("Page.enable")
             self._send("Page.setLifecycleEventsEnabled", {"enabled": True})
-            self._send("Security.setIgnoreCertificateErrors", {"ignore": True})
+            if opener == "chalie":
+                self._send("Security.setIgnoreCertificateErrors", {"ignore": True})
             self._send("Emulation.setDeviceMetricsOverride",
-                       {"width": 1280, "height": 720, "deviceScaleFactor": 1, "mobile": False})
+                       {"width": VIEWPORT_WIDTH, "height": VIEWPORT_HEIGHT, "deviceScaleFactor": 1, "mobile": False})
             self._send("Emulation.setFocusEmulationEnabled", {"enabled": True})
+            info = get_dict(browser.send("Target.getTargetInfo", {"targetId": self._target}), "targetInfo")
+            self.tab.describe(str(info.get("url", "")), str(info.get("title", "")))
         except BrowserError:
             self.close()
             raise
+        tabs.register(self.tab)
 
     def alive(self) -> bool:
         self._pump()
-        return not self._closed and self._browser.connected
+        return self.tab.live
 
     def close(self) -> None:
-        self._closed = True
+        gone = self.tab.closed
+        self.tab.close()
         self._browser.release(self._session)
+        if not gone:
+            if self.tab.opener == "chalie":
+                self._close_popups()
+            self._close_target()
+
+    def _close_popups(self) -> None:
+        """Close the pages this run's tab opened, directly or through a popup of its own,
+        except those kept as tabs — they and what they open are the user's.
+
+        Runs while this tab is still open: the browser forgets a page's opener once it closes."""
+        if not self._browser.connected:
+            return
+        try:
+            infos = get_objects(self._browser.send("Target.getTargets"), "targetInfos")
+        except BrowserError as e:
+            logger.warning("[BROWSER] could not list the run's popups: %s", e)
+            return
+        children: dict[object, list[str]] = {}
+        for info in infos:
+            if info.get("type") == "page":
+                children.setdefault(info.get("openerId"), []).append(str(info.get("targetId")))
+        pending = children.pop(self._target, [])
+        while pending:
+            popup = pending.pop()
+            if tabs.get(popup) is None:
+                pending += children.pop(popup, [])
+                try:
+                    self._browser.send("Target.closeTarget", {"targetId": popup})
+                except BrowserError:
+                    pass  # it closed itself before we got to it
+
+    def _close_target(self) -> None:
         if self._browser.connected:
             try:
-                self._browser.send("Target.disposeBrowserContext", {"browserContextId": self._context})
+                self._browser.send("Target.closeTarget", {"targetId": self._target})
             except BrowserError as e:
-                logger.warning("[BROWSER] could not close the tab's context: %s", e)
+                logger.warning("[BROWSER] could not close the tab: %s", e)
+
+    def _listen(self, event: Event) -> None:
+        """Reader thread: keep the tab current, and keep a popup as a tab of its own when it
+        opens from a user's tab or from a run's tab the user holds."""
+        self.tab.observe(event)
+        if self.tab.closed:
+            self._browser.release(self._session)
+            return
+        info = event.params.get("targetInfo")
+        if (event.method == "Target.targetCreated" and isinstance(info, dict) and info.get("type") == "page"
+                and info.get("openerId") == self._target
+                and (self.tab.opener == "user" or self.tab.handoff is not None)):
+            from tools.browser.pool import get_pool  # noqa: PLC0415
+            get_pool().submit(_adopt, str(info.get("targetId")))
 
     # ── Verbs (each returns an envelope; kwargs match abilities/browser.py) ──
 
@@ -325,8 +468,6 @@ class PageSession:
                 # Only creation adds: a late change event must not resurrect a popup already closed.
                 if info.get("type") == "page" and (method == "Target.targetCreated" or popup in self._popups):
                     self._popups[popup] = str(info.get("url"))
-            elif method in ("Target.targetDestroyed", "Target.detachedFromTarget", "Target.targetCrashed"):
-                self._closed = True
 
     def _commit(self, url: str) -> None:
         self._url, self._commits, self._requested = url, self._commits + 1, False
@@ -338,7 +479,7 @@ class PageSession:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return False
-            if self._closed or not self._browser.connected:
+            if not self.tab.live:
                 raise BrowserError(CLOSED)
             self._pump(remaining)
         return True
@@ -359,12 +500,10 @@ class PageSession:
 
     def _changed(self, before: dict[str, object]) -> dict[str, object]:
         after = self._observe()
-        urls = list(self._popups.values())
-        for popup_id in self._popups:
-            try:
-                self._browser.send("Target.closeTarget", {"targetId": popup_id})
-            except BrowserError:
-                pass  # it closed itself before we got to it
+        # A popup kept as a tab of its own (one the user opened during a hand-off) stays open.
+        urls = [url for popup_id, url in self._popups.items() if tabs.get(popup_id) is None]
+        if urls:
+            self._close_popups()
         self._popups.clear()
         popup = (urls[-1] or "about:blank") if urls else None
         navigated = bool(before["url"]) and after["url"] != before["url"]

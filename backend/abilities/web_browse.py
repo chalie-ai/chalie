@@ -22,11 +22,14 @@ invoked the ``web_browse`` tool (``self.mp.config.policy_channel``):
 the delegate's internal tool calls are gated under the SAME policy channel as
 the caller, not a hardcoded value.  The user-facing permission check still
 happens at the outer ``web_browse`` tool.
+
+The run's browser tab, keyed by the delegate's transcript uid, closes when the
+run ends — completed, crashed or stopped.
 """
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from abilities._delegate import DelegateAbility
 from configs.enums.param_key import Keys
@@ -35,6 +38,10 @@ from configs.channels.web_browse import WebBrowseConfig
 from contracts.params.param_bag import ParamBag
 from contracts.params.delegate_params_bag import DelegateParamsBag
 from configs.enums.ability_category import AbilityCategory
+from tools.browser.session import close_session
+
+if TYPE_CHECKING:
+    from controllers.message_processor import MessageProcessor
 
 
 class WebBrowseAbility(DelegateAbility[DelegateParamsBag]):
@@ -117,3 +124,7 @@ class WebBrowseAbility(DelegateAbility[DelegateParamsBag]):
             WebBrowseConfig, params.instructions,
             hint="Restate the goal more concretely or break it into steps, then retry.",
         )
+
+    def child_ended(self, child: MessageProcessor) -> None:
+        """The run's tab closes with the run, however the run ended."""
+        close_session(child.uid or 0)

@@ -11,9 +11,9 @@
 Writes a real per-turn transcript row on its own ``delegate:web_browse``
 channel so the turn uid is assigned and the delegate renders its own
 act-trail across ACT iterations (do NOT set the two skip flags True). The
-uid keys the per-run browser PageSession and the screenshot ledger; the
-delegate runner reads the browser session directly to close it when the run
-ends. Paired with ``WebBrowseAbility`` (abilities/web_browse.py).
+uid keys the per-run browser PageSession and the screenshot ledger;
+``WebBrowseAbility`` (abilities/web_browse.py), which this config is paired
+with, closes that session when the run ends.
 """
 
 from __future__ import annotations
@@ -65,5 +65,7 @@ class WebBrowseConfig(ProcessorConfig):
         return """You are driving a real browser to accomplish one goal, given below. You can open pages, read and search them, click and fill by visible text, and take a screenshot — every screenshot comes back already described, so it is how you see the page.
 
 Accomplish the goal in the fewest steps possible. Do not linger, do not retry, do not waste cycles — the moment you can answer, stop and respond.
+
+If a step needs the user — signing in, solving a captcha, a choice only they can make — use the browser's 'handoff' action with the reason; it waits until they are done and returns the page.
 
 If you hit a problem or cannot accomplish the goal quickly, return an error instead of grinding at it; you will be invoked again with a clearer goal."""
