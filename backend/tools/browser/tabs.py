@@ -10,9 +10,13 @@
 
 A tab is one page target with an attached session: a browsing run's page
 (opener ``chalie``) or a page the user opened, including a popup kept as its
-own tab (opener ``user``). The pool thread registers and closes tabs; the CDP
-reader thread keeps each tab's url, title, newest screencast frame and
-liveness current through :meth:`Tab.observe`; any thread reads them.
+own tab (opener ``user``). A run's page, and a popup kept from it, carry the
+run's origin — the interactive turn it belongs to, the same shape as a
+hand-off's — so the interface can show the tab where the user is; the user's
+own tabs, and a run's on no conversation the user sees, carry none. The pool
+thread registers and closes tabs; the CDP reader thread keeps each tab's url,
+title, newest screencast frame and liveness current through
+:meth:`Tab.observe`; any thread reads them.
 
 Every change to the list — a tab opening or closing, a navigation, a new
 title, a hand-off opening or closing — sends one ``browser_tabs_changed``
@@ -22,7 +26,8 @@ document loads.
 
 A hand-off parks a browsing run on its tab until the user says they are done
 (:func:`hand_off`, :func:`finish_handoff`), the way a permission ask parks a
-tool call: the run's thread waits, the browser stays up.
+tool call: the run's thread waits, the browser stays up. The list is the one
+announcement of a hand-off: its tab lists it until it ends.
 """
 
 from __future__ import annotations
@@ -73,12 +78,13 @@ class Tab:
     """One open page. ``changed`` is notified on every new frame, meta change or close."""
 
     def __init__(self, page: PageSession, browser: Browser, target_id: str, session_id: str,
-                 opener: Opener) -> None:
+                 opener: Opener, origin: dict[str, object] | None) -> None:
         self.page = page
         self.browser = browser
         self.id = target_id
         self.session_id = session_id
         self.opener: Opener = opener
+        self.origin = origin
         self.url = ""
         self.title = ""
         self.handoff: Handoff | None = None
@@ -172,6 +178,7 @@ class Tab:
             "url": self.url,
             "title": self.title,
             "opener": self.opener,
+            "origin": self.origin,
             "handoff": handoff.to_dict() if handoff is not None and not handoff.done.is_set() else None,
         }
 
@@ -244,14 +251,12 @@ def hand_off(tab: Tab, reason: str, origin: dict[str, object], should_stop: Call
     """Park the caller until the user finishes the hand-off on *tab*.
 
     True once the user says they are done; False when the run is stopped or
-    the tab closes first. The tab lists the hand-off before any frame goes
-    out, so a client re-reading the list on the frame finds it.
+    the tab closes first. The tab lists the hand-off from before the change
+    frame announcing it goes out until it ends.
     """
     handoff = Handoff(reason=reason, origin=origin)
     tab.handoff = handoff
     try:
-        Websocket.broadcast(WsMessage(type="browser_handoff", tab=tab.id, handoff=handoff.id, reason=reason,
-                                      origin=origin, asked_at=handoff.asked_at))
         announce()
         while not handoff.done.wait(_PARK_POLL):
             if should_stop() or not tab.live:

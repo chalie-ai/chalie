@@ -73,12 +73,16 @@ class PageLoadError(BrowserError):
 
 # ── Cross-thread entry points ────────────────────────────────────────────────
 
-def run_verb(key: int, verb: str, kwargs: dict[str, object]) -> dict[str, object]:
-    """Execute one verb on *key*'s session via the pool thread. Returns the envelope."""
+def run_verb(key: int, verb: str, kwargs: dict[str, object],
+             origin: dict[str, object] | None = None) -> dict[str, object]:
+    """Execute one verb on *key*'s session via the pool thread. Returns the envelope.
+
+    *origin* is the run's interactive turn; the tab an ``open`` creates for the run carries it.
+    """
     if verb != "open" and key not in _SESSIONS:
         return error_envelope("No page is open. Use action='open' with a url first.")
     from tools.browser.pool import get_pool  # noqa: PLC0415
-    return cast("dict[str, object]", get_pool().execute(_dispatch, key, verb, kwargs, timeout=90))
+    return cast("dict[str, object]", get_pool().execute(_dispatch, key, verb, kwargs, origin, timeout=90))
 
 
 def close_session(key: int) -> None:
@@ -139,7 +143,8 @@ def _no_change() -> dict[str, object]:
 
 # ── Pool-thread internals ────────────────────────────────────────────────────
 
-def _dispatch(browser: Browser, key: int, verb: str, kwargs: dict[str, object]) -> dict[str, object]:
+def _dispatch(browser: Browser, key: int, verb: str, kwargs: dict[str, object],
+              origin: dict[str, object] | None) -> dict[str, object]:
     session = _SESSIONS.get(key)
     if session and not session.alive():
         session.close()
@@ -147,7 +152,7 @@ def _dispatch(browser: Browser, key: int, verb: str, kwargs: dict[str, object]) 
         session = None
     if verb == "open":
         if session is None:
-            session = PageSession(browser)
+            session = PageSession(browser, origin=origin)
             _SESSIONS[key] = session
         return session.open(**cast("dict[str, str]", kwargs))
     if session is None:
@@ -168,12 +173,12 @@ def _open_tab(browser: Browser, url: str | None) -> dict[str, object]:
     return tab.to_dict()
 
 
-def _adopt(browser: Browser, target_id: str) -> None:
-    """Keep the popup *target_id* as a user tab of its own."""
+def _adopt(browser: Browser, target_id: str, origin: dict[str, object] | None) -> None:
+    """Keep the popup *target_id* as a user tab of its own, carrying *origin*: that of the tab it opened from."""
     if tabs.get(target_id) is not None:
         return
     try:
-        PageSession(browser, target=target_id, opener="user")
+        PageSession(browser, target=target_id, opener="user", origin=origin)
     except BrowserError as e:
         logger.warning("[BROWSER] could not keep popup %s as a tab: %s", target_id, e)
 
@@ -230,13 +235,15 @@ def _ax_name(node: dict[str, object]) -> str:
 class PageSession:
     """One tab over CDP, in the browser's one persistent profile. Constructed and driven ONLY on the pool thread.
 
-    *target* adopts a page that already exists (a popup); otherwise a blank one opens.
+    *target* adopts a page that already exists (a popup); otherwise a blank one opens. *origin* is
+    the interactive turn of the run the tab belongs to, ``None`` for the user's own tabs.
     """
 
     _CLICK_ROLES = ("button", "link", "tab", "menuitem", "checkbox", "radio")
     _FILL_ROLES = ("textbox", "searchbox", "combobox", "spinbutton")
 
-    def __init__(self, browser: Browser, target: str | None = None, opener: Opener = "chalie") -> None:
+    def __init__(self, browser: Browser, target: str | None = None, opener: Opener = "chalie",
+                 origin: dict[str, object] | None = None) -> None:
         self._browser = browser
         self._url = "about:blank"
         self._loader = ""                  # the main-frame document loading or loaded now
@@ -253,7 +260,7 @@ class PageSession:
         except BrowserError:
             self._close_target()
             raise
-        self.tab = Tab(self, browser, self._target, self._session, opener)
+        self.tab = Tab(self, browser, self._target, self._session, opener, origin)
         browser.watch(self._session, self._listen)
         try:
             self._send("Page.enable")
@@ -316,7 +323,7 @@ class PageSession:
 
     def _listen(self, event: Event) -> None:
         """Reader thread: keep the tab current, and keep a popup as a tab of its own when it
-        opens from a user's tab or from a run's tab the user holds."""
+        opens from a user's tab or from a run's tab the user holds; it carries this tab's origin."""
         self.tab.observe(event)
         if self.tab.closed:
             self._browser.release(self._session)
@@ -326,7 +333,7 @@ class PageSession:
                 and info.get("openerId") == self._target
                 and (self.tab.opener == "user" or self.tab.handoff is not None)):
             from tools.browser.pool import get_pool  # noqa: PLC0415
-            get_pool().submit(_adopt, str(info.get("targetId")))
+            get_pool().submit(_adopt, str(info.get("targetId")), self.tab.origin)
 
     # ── Verbs (each returns an envelope; kwargs match abilities/browser.py) ──
 

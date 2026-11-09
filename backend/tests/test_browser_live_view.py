@@ -57,6 +57,7 @@ def test_a_tab_the_user_opens_outlives_a_browsing_run_and_closes_only_when_they_
             "url": f"{site.url}/a",
             "title": "Page A",
             "opener": "user",
+            "origin": None,
             "handoff": None,
         }
     ]

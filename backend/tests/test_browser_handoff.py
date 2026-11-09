@@ -1,24 +1,28 @@
 """Feature tests: a browsing run hands its page to the user for a step only they can take.
 
 A real browsing run (the real browser ability, dispatched by a real processor)
-asks the user to sign in; the user's own interface socket hears the ask, the
-tab list shows it with its reason, the user signs in on the real page through
-the address bar and presses Done, and the run carries on from the page as they
-left it. Real Flask app over a real socket, real headless shell, loopback site.
+asks the user to sign in; the user's own interface socket hears the tab list
+change, the list shows the ask with its reason and the conversation it belongs
+to, the user signs in on the real page through the address bar and presses
+Done, and the run carries on from the page as they left it. Real Flask app over
+a real socket, real headless shell, loopback site.
 """
 
 from __future__ import annotations
 
 import json
 import threading
+from collections.abc import Callable
 from typing import cast
 
 import pytest
 from flask import Flask
+from flask.testing import FlaskClient
 
 from controllers.message_processor import MessageProcessor
 from tests._browser_live import (
     Site,
+    StreamSocket,
     as_frame,
     close_sessions,
     listed,
@@ -29,13 +33,29 @@ from tests._browser_live import (
     signed_in,
     wait_for,
 )
-from tools.browser import session
+from tools.browser import session, tabs
 
 pytest_plugins = ("tests._browser_live",)
 pytestmark = pytest.mark.e2e
 
 _ORIGIN: dict[str, object] = {"type": "user", "turn_id": 1, "forked": False}
 _HANDOFF_WAIT = 30.0  # seconds a refused hand-off gets to answer before the test fails
+
+
+def _heard(ws: StreamSocket, frames: list[str], want: Callable[[], bool]) -> None:
+    """Read *ws* until a tab-list change arrives after which *want* holds, keeping
+    every text frame read on the way in *frames*."""
+
+    def note(message: str | bytes) -> bool:
+        if isinstance(message, str):
+            frames.append(message)
+        return as_frame(message, "browser_tabs_changed") is not None and want()
+
+    receive_until(ws, note)
+
+
+def _asking(client: FlaskClient) -> Callable[[], bool]:
+    return lambda: any(t["handoff"] is not None for t in listed(client))
 
 
 def _browse(mp: MessageProcessor, **params: str) -> tuple[str, dict[str, object]]:
@@ -59,35 +79,27 @@ def test_a_run_waits_on_the_user_to_sign_in_and_carries_on_from_the_page_they_le
         name="handoff-run",
         daemon=True,
     )
+    frames: list[str] = []
     with live_server(app) as host, main_socket(host, token) as ui:
         waiting.start()
         try:
-            asked = as_frame(
-                receive_until(ui, lambda m: as_frame(m, "browser_handoff") is not None),
-                "browser_handoff",
-            )
-            assert asked is not None
-            assert (asked["tab"], asked["reason"], asked["origin"]) == (
-                tab.id,
-                "Please sign in",
-                _ORIGIN,
-            )
+            _heard(ui, frames, _asking(client))
             [row] = listed(client)
-            shown = cast("dict[str, object]", row["handoff"])
-            assert (shown["id"], shown["reason"]) == (
-                asked["handoff"],
-                "Please sign in",
-            )
+            asked = cast("dict[str, object]", row["handoff"])
+            assert (row["id"], row["origin"]) == (tab.id, _ORIGIN)
+            assert (asked["reason"], asked["origin"]) == ("Please sign in", _ORIGIN)
 
             moved = client.post(
                 f"/api/browser/navigate/{tab.id}", json={"url": f"{site.url}/login"}
             )
             assert moved.status_code == 204
             assert wait_for(tab, lambda: tab.title == "Signed in"), tab.title
-            done = client.post(f"/api/browser/handoffs/{asked['handoff']}")
+            done = client.post(f"/api/browser/handoffs/{asked['id']}")
             assert done.status_code == 204, done.data
             waiting.join(timeout=60)
             assert not waiting.is_alive(), "the run did not carry on after Done"
+            tabs.announce()  # one more change frame; any frame the ask sent comes before it
+            _heard(ui, frames, lambda: True)
         finally:
             if waiting.is_alive():  # free the run before the browser goes away
                 session.close_session(run.uid or 0)
@@ -97,8 +109,10 @@ def test_a_run_waits_on_the_user_to_sign_in_and_carries_on_from_the_page_they_le
     assert "status=success" in header, header
     page = cast("dict[str, object]", envelope["page"])
     assert (page["url"], page["title"]) == (f"{site.url}/login", "Signed in")
-    assert client.post(f"/api/browser/handoffs/{asked['handoff']}").status_code == 404
+    assert client.post(f"/api/browser/handoffs/{asked['id']}").status_code == 404
     assert [t["handoff"] for t in listed(client)] == [None]
+    # The tab list is the one announcement: no frame of its own names the ask.
+    assert not [f for f in frames if str(asked["id"]) in f], frames
 
 
 def test_a_run_no_one_is_watching_cannot_hand_its_page_over(

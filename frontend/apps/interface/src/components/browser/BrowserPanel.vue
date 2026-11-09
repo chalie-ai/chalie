@@ -328,7 +328,8 @@ function onKeydown(e: KeyboardEvent): void {
 
 <style scoped lang="scss">
 // At most 1280px and 95% of the window wide; the whole window on a phone. The
-// page's window is whatever size this leaves the view.
+// page's window is whatever size this leaves the view. The panel takes the
+// focus only to hold the keys while no control has it, so it draws no ring.
 .browser-panel {
   position: fixed;
   top: 56px;
@@ -340,6 +341,7 @@ function onKeydown(e: KeyboardEvent): void {
   flex-direction: column;
   background: var(--surface);
   overflow: hidden;
+  outline: none;
 }
 
 @media (max-width: 640px) {

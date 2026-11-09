@@ -7,16 +7,19 @@
  * Only the newest read applies, so a read that started before a change can
  * never undo it.
  *
- * A pending hand-off means Chalie gave a tab to the user (a login, a
- * captcha). Its `browser_handoff` frame opens the panel on that tab when the
- * turn that asked is on screen. The input dock lists, from the tab list
- * alone, every hand-off the panel is not showing, so one that arrived while
- * the socket was down, before a reload, or that the user closed the panel
- * on still waits there until the user is done with it.
+ * The list is also all that opens the panel. Each read is compared with the
+ * tabs and hand-offs the last one listed: a tab Chalie opened for a turn on
+ * screen opens the panel on it, and so does a pending hand-off (Chalie giving
+ * a tab to the user for a login or a captcha) asked by one, each once,
+ * whichever read first lists it, so one that came while the socket was down
+ * still opens. A tab Chalie opened for a turn off screen is only selected,
+ * and only while the panel is closed. The first read after a page load opens
+ * nothing but a pending hand-off. The input dock lists every hand-off the
+ * panel is not showing, so one the user closed the panel on still waits
+ * there until the user is done with it.
  */
 import { defineStore } from 'pinia';
 import { HttpError, ConfigType } from '@chalie/shared';
-import type { WsPushEvent } from '@chalie/shared';
 import { browser as browserApi } from '../api';
 import type { BrowserHistoryAction, BrowserTab } from '../api/browser';
 import type { PermissionOrigin } from '../api/policies';
@@ -45,6 +48,29 @@ export function originOnScreen(origin: PermissionOrigin, panel: PanelView): bool
   return panel.turnId === origin.turn_id && panel.type === origin.type;
 }
 
+/** An origin as the server sent it, on screen; one that is missing or malformed is not. */
+function rawOnScreen(raw: unknown, panel: PanelView): boolean {
+  const origin = readOrigin(raw);
+  return origin != null && originOnScreen(origin, panel);
+}
+
+/** A browsing run's page, or a popup kept from one. */
+function isChalies(tab: BrowserTab): boolean {
+  return tab.opener === 'chalie' || tab.origin != null;
+}
+
+/**
+ * What the thread panel shows now. The session store registers the reader
+ * from its `init()`, as it does the drift dispatcher's hooks: it imports this
+ * store, so this store cannot import it. Until then only the main chat is on
+ * screen.
+ */
+let readPanelView: () => PanelView = () => ({ turnId: null, type: ConfigType.USER });
+
+export function registerPanelView(read: () => PanelView): void {
+  readPanelView = read;
+}
+
 function reportFailure(action: string, err: unknown): void {
   console.warn(`[browser] ${action} failed:`, err);
   showToast(err instanceof HttpError && err.error ? err.error : `Couldn't ${action}`);
@@ -63,6 +89,11 @@ export const useBrowserStore = defineStore('browser', {
     open: false,
     tabs: [] as BrowserTab[],
     selectedTabId: null as string | null,
+    /** A read has applied since the page loaded. */
+    listed: false,
+    /** The tab and hand-off ids the last applied read listed; any other id a read lists is new. */
+    seenTabIds: [] as string[],
+    seenHandoffIds: [] as string[],
   }),
 
   getters: {
@@ -91,9 +122,9 @@ export const useBrowserStore = defineStore('browser', {
 
   actions: {
     /**
-     * Re-read the tabs, moving the selection off a tab that closed.
-     * Best-effort: a failed read leaves everything as it was; the next
-     * connect or frame retries.
+     * Re-read the tabs, showing what is new and moving the selection off a
+     * tab that closed. Best-effort: a failed read leaves everything as it
+     * was; the next connect or frame retries.
      */
     async refresh(): Promise<void> {
       const seq = ++refreshSeq;
@@ -106,7 +137,36 @@ export const useBrowserStore = defineStore('browser', {
       }
       if (seq !== refreshSeq) return;
       this.tabs = tabs;
+      this.showArrivals(readPanelView());
       this.reconcileSelection();
+    },
+
+    /**
+     * Act on the tabs and hand-offs the read just applied lists that the one
+     * before did not, given what the thread panel shows. A hand-off asked by
+     * a turn on screen opens the panel on its tab; failing that, so does the
+     * newest tab Chalie opened for a turn on screen. Failing both, the newest
+     * tab Chalie opened becomes the selection while the panel is closed. The
+     * first read after a page load counts no tab as new.
+     */
+    showArrivals(panel: PanelView): void {
+      const opened = this.listed
+        ? this.tabs.filter((t) => isChalies(t) && !this.seenTabIds.includes(t.id))
+        : [];
+      const asked = this.tabs.filter(
+        (t) => t.handoff && !this.seenHandoffIds.includes(t.handoff.id) && rawOnScreen(t.handoff.origin, panel),
+      );
+      const shown = asked.at(-1) ?? opened.filter((t) => rawOnScreen(t.origin, panel)).at(-1);
+      const quiet = opened.at(-1);
+      if (shown) {
+        this.open = true;
+        this.selectedTabId = shown.id;
+      } else if (quiet && !this.open) {
+        this.selectedTabId = quiet.id;
+      }
+      this.listed = true;
+      this.seenTabIds = this.tabs.map((t) => t.id);
+      this.seenHandoffIds = this.tabs.flatMap((t) => (t.handoff ? [t.handoff.id] : []));
     },
 
     /** Keep the selected tab if it is still open, else prefer one waiting for the user, else the first. */
@@ -115,10 +175,16 @@ export const useBrowserStore = defineStore('browser', {
       this.selectedTabId = (this.tabs.find((t) => t.handoff) ?? this.tabs[0])?.id ?? null;
     },
 
+    /** Show the panel on `tabId`; without one, on the selection, unless it is not waiting for the user and another tab is. */
     openPanel(tabId?: string): void {
       this.open = true;
-      if (tabId) this.selectedTabId = tabId;
-      else this.reconcileSelection();
+      if (tabId) {
+        this.selectedTabId = tabId;
+      } else {
+        this.reconcileSelection();
+        const waiting = this.tabs.find((t) => t.handoff);
+        if (waiting && !this.selectedTab?.handoff) this.selectedTabId = waiting.id;
+      }
       void this.refresh();
     },
 
@@ -202,27 +268,6 @@ export const useBrowserStore = defineStore('browser', {
         await browserApi.finishHandoff(handoff.id);
       } catch (err) {
         if (!alreadyGone(err)) reportFailure('finish the hand-off', err);
-      }
-      void this.refresh();
-    },
-
-    /**
-     * A `browser_handoff` frame. `panel` is what the thread panel shows now,
-     * which decides whether the asking turn is on screen; if it is, or the
-     * frame names no turn, the panel opens on the tab. Either way the tabs
-     * are re-read, and the server lists the hand-off before it sends the
-     * frame, so the Done bar and any dock row come from that read.
-     */
-    receiveHandoff(data: WsPushEvent, panel: PanelView): void {
-      const frame = data as { tab?: unknown; origin?: unknown };
-      if (typeof frame.tab !== 'string') {
-        console.error('[browser] hand-off frame without a tab dropped:', data);
-        return;
-      }
-      const origin = readOrigin(frame.origin);
-      if (origin == null || originOnScreen(origin, panel)) {
-        this.openPanel(frame.tab);
-        return;
       }
       void this.refresh();
     },

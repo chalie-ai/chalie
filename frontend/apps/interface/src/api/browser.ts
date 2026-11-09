@@ -22,6 +22,8 @@ export interface BrowserTab {
   title: string;
   /** Who opened it: Chalie's tabs close with the run that opened them, so only the user's can be closed here. */
   opener: 'chalie' | 'user';
+  /** The turn of the run the tab belongs to (its page, or a popup kept from it); null for the user's own tabs. */
+  origin: PermissionOrigin | null;
   handoff: BrowserHandoff | null;
 }
 

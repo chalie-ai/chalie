@@ -64,6 +64,10 @@ _PAGES = {
   <input name="q" style="top: 20px; width: 300px; height: 40px">
   <button style="top: 100px; width: 200px; height: 50px">Send</button>
 </form>""",
+    # A button where the form's is, that opens page B in a popup.
+    "/opener": """<title>Opener</title>
+<button style="position: fixed; left: 20px; top: 100px; width: 200px; height: 50px; margin: 0"
+        onclick="window.open('/b')">Open page B</button>""",
     # Repaints on every animation frame, and tells the site each time it has painted
     # a few more, so a test can see the page painting without looking at it.
     "/anim": f"""<title>Moving</title>

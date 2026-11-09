@@ -475,11 +475,6 @@ function _dispatchSimpleEvent(data: WsPushEvent): boolean {
     case 'browser_tabs_changed':
       void useBrowserStore().refresh();
       return true;
-    case 'browser_handoff': {
-      const h = hooks();
-      useBrowserStore().receiveHandoff(data, { turnId: h.getPanelThreadId(), type: h.getPanelType() });
-      return true;
-    }
     default:
       return false;
   }

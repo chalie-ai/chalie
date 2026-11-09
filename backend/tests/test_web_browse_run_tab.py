@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+from typing import cast
 from unittest.mock import patch
 
 import pytest
@@ -159,8 +160,18 @@ def test_stopping_the_turn_ends_the_browsing_run_waiting_on_the_user_and_closes_
         turn.begin()
         try:
             receive_until(
-                ui, lambda m: as_frame(m, "browser_handoff") is not None, timeout=60
+                ui,
+                lambda m: (
+                    as_frame(m, "browser_tabs_changed") is not None
+                    and any(t["handoff"] is not None for t in listed(client))
+                ),
+                timeout=60,
             )
+            # The run's tab, and its ask, belong to the turn that started the run.
+            started = {"type": "user", "turn_id": turn.turn_id, "forked": False}
+            [row] = listed(client)
+            assert row["origin"] == started
+            assert cast("dict[str, object]", row["handoff"])["origin"] == started
             stopped = client.delete(f"/api/threads/{turn.turn_id}?type=user")
             assert stopped.status_code == 200, stopped.data
             run = provider.run_tab

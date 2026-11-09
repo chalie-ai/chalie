@@ -11,9 +11,8 @@ from .response import Response
 
 
 class BrowserHandoffResponse(Response):
-    """A browsing run waiting on the user to finish something on its tab — the
-    fields of the ``browser_handoff`` socket frame, so a client restoring over
-    REST shows the same prompt it missed."""
+    """A browsing run waiting on the user to finish something on its tab; the
+    tab lists it for as long as the run waits."""
 
     id: str
     reason: str
@@ -28,6 +27,7 @@ class BrowserTabResponse(Response):
     url: str = Field(description="The page's url; 'about:blank' while a tab has nothing loaded.")
     title: str
     opener: Literal["chalie", "user"] = Field(description="'chalie' for a browsing run's page, 'user' for a tab the user opened or a popup kept as its own tab.")
+    origin: PermissionOriginResponse | None = Field(description="The interactive turn of the browsing run the tab belongs to: the run's own page, or a popup kept from it. Null for the user's own tabs, and for a run on no conversation the user sees.")
     handoff: BrowserHandoffResponse | None = None
 
 

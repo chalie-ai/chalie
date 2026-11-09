@@ -117,8 +117,7 @@ export type WsPushType =
   | 'permission_request'
   | 'intent'
   | 'capability_alert'
-  | 'browser_tabs_changed'
-  | 'browser_handoff';
+  | 'browser_tabs_changed';
 export interface WsPushEvent {
   type: WsPushType;
   [k: string]: unknown;

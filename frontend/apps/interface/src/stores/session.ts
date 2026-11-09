@@ -46,7 +46,7 @@ import {
 import { laneKey, useQueueStore } from './queue';
 import { useNotificationsStore } from './notifications';
 import { usePermissionsStore } from './permissions';
-import { useBrowserStore } from './browser';
+import { registerPanelView, useBrowserStore } from './browser';
 import { useVoiceTranscriptsStore } from './voiceTranscripts';
 
 /** Guard: init() must be idempotent (HMR / Vue StrictMode). */
@@ -158,6 +158,7 @@ export const useSessionStore = defineStore('session', {
         finishTurn: (turnId, type) => this._finishTurn(turnId, type),
         drainQueues: () => this._drainQueues(),
       });
+      registerPanelView(() => ({ turnId: this.panelThreadId, type: this.panelType }));
 
       ws.onConnect(() => {
         conn.setConnected(true);
