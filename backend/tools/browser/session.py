@@ -154,21 +154,26 @@ def _dispatch(browser: Browser, key: int, verb: str, kwargs: dict[str, object],
         if session is None:
             session = PageSession(browser, origin=origin)
             _SESSIONS[key] = session
-        return session.open(**cast("dict[str, str]", kwargs))
-    if session is None:
+    elif session is None:
         return error_envelope("No page is open. Use action='open' with a url first.")
-    return cast("dict[str, object]", getattr(session, verb)(**kwargs))
+    # A navigation the page makes while a verb runs is logged as happening during that verb.
+    session.tab.acting = verb
+    try:
+        return cast("dict[str, object]", getattr(session, verb)(**kwargs))
+    finally:
+        session.tab.acting = None
 
 
 def _close_on_thread(browser: Browser, key: int) -> None:  # noqa: ARG001 — pool always passes browser
     session = _SESSIONS.pop(key, None)
     if session:
-        session.close()
+        session.close(by="run end")
 
 
 def _open_tab(browser: Browser, url: str | None) -> dict[str, object]:
     tab = PageSession(browser, opener="user").tab
     if url:
+        tab.expect("panel open")
         browser.post("Page.navigate", {"url": url}, session_id=tab.session_id)
     return tab.to_dict()
 
@@ -191,22 +196,27 @@ def _live_tab(tab_id: str) -> Tab:
 
 
 def _close_tab(browser: Browser, tab_id: str) -> None:  # noqa: ARG001 — pool always passes browser
-    _live_tab(tab_id).page.close()
+    _live_tab(tab_id).page.close(by="panel")
 
 
 def _navigate_tab(browser: Browser, tab_id: str, url: str) -> None:
-    browser.post("Page.navigate", {"url": url}, session_id=_live_tab(tab_id).session_id)
+    tab = _live_tab(tab_id)
+    tab.expect("address bar")
+    browser.post("Page.navigate", {"url": url}, session_id=tab.session_id)
 
 
 def _history_tab(browser: Browser, tab_id: str, action: str) -> None:
-    session_id = _live_tab(tab_id).session_id
+    tab = _live_tab(tab_id)
+    session_id = tab.session_id
     if action == "reload":
+        tab.expect(f"history {action}")
         browser.post("Page.reload", session_id=session_id)
         return
     history = browser.send("Page.getNavigationHistory", session_id=session_id)
     index = get(history, "currentIndex", int) + (-1 if action == "back" else 1)
     entries = get_objects(history, "entries")
     if 0 <= index < len(entries):
+        tab.expect(f"history {action}")
         browser.post("Page.navigateToHistoryEntry", {"entryId": get(entries[index], "id", int)}, session_id=session_id)
 
 
@@ -269,7 +279,9 @@ class PageSession:
                                                               "deviceScaleFactor": self.tab.scale, "mobile": False})
             self._send("Emulation.setFocusEmulationEnabled", {"enabled": True})
             info = get_dict(browser.send("Target.getTargetInfo", {"targetId": self._target}), "targetInfo")
-            self.tab.describe(str(info.get("url", "")), str(info.get("title", "")))
+            url = str(info.get("url", ""))
+            self.tab.describe(url, str(info.get("title", "")))
+            self.tab.committed = url
         except BrowserError:
             self.close()
             raise
@@ -279,9 +291,10 @@ class PageSession:
         self._pump()
         return self.tab.live
 
-    def close(self) -> None:
+    def close(self, by: str = "browser") -> None:
+        """Close the tab; *by* is who closed it, for the log."""
         gone = self.tab.closed
-        self.tab.close()
+        self.tab.close(by=by)
         self._browser.release(self._session)
         if not gone:
             if self.tab.opener == "chalie":
@@ -340,6 +353,7 @@ class PageSession:
     def open(self, url: str) -> dict[str, object]:
         before = self._observe()
         prior, start, deadline = self._loader, self._commits, time.monotonic() + _NAV_TIMEOUT
+        self.tab.expect("verb open")
         nav = self._send("Page.navigate", {"url": url}, timeout=_NAV_TIMEOUT)
         if nav.get("isDownload"):
             raise BrowserError("Download is starting")
@@ -429,6 +443,7 @@ class PageSession:
         index = get(history, "currentIndex", int)
         if index > 0:
             entry = get_objects(history, "entries")[index - 1]
+            self.tab.expect("verb back")
             self._send("Page.navigateToHistoryEntry", {"entryId": get(entry, "id", int)})
             if not self._wait(lambda: self._commits > start and "load" in self._lifecycle,
                               time.monotonic() + _NAV_TIMEOUT):

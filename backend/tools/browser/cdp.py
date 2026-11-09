@@ -113,12 +113,14 @@ _LAUNCH_ARGS = (
 _T = TypeVar("_T", str, int, float, bool)
 
 # What a session's listener receives instead of (frames) or as well as (the
-# rest) the pool-thread queue: enough to stream the page and keep its tab's
-# url, title and liveness current.
+# rest) the pool-thread queue: enough to stream the page, keep its tab's
+# url, title and liveness current, and log its navigations.
 _WATCHED = frozenset({
     "Page.screencastFrame",
     "Page.domContentEventFired",
     "Page.loadEventFired",
+    "Page.frameNavigated",
+    "Page.frameRequestedNavigation",
     "Target.targetCreated",
     "Target.targetInfoChanged",
     "Target.targetDestroyed",

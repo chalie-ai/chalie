@@ -9,6 +9,7 @@ Covers:
 
 from __future__ import annotations
 
+import logging
 from typing import ClassVar, cast
 
 from flask.typing import ResponseReturnValue
@@ -22,6 +23,8 @@ from configs.enums.param_key import Keys
 from contracts.params.browser_params_bag import BrowserOpenParams
 from exceptions import ConflictError, EndpointError, NotFoundError
 from tools.browser import session, tabs
+
+logger = logging.getLogger(__name__)
 
 
 class BrowserTabs(Action):
@@ -51,17 +54,23 @@ class BrowserTabs(Action):
                 raise EndpointError("url must not be blank")
             url = params.url
         tab = BrowserTabResponse.model_validate(session.open_tab(url))
+        # The page asked for: the tab is listed before the browser reports it there.
+        logger.info("[BROWSER] panel opened tab=%s url=%s", tab.id, url or tab.url)
         return BrowserTabCreatedResponse(tab=tab).single(), 201
 
     def delete(self, id: int | str) -> ResponseReturnValue:
         """Close the user tab *id*."""
         tab = tabs.get(str(id))
+        if tab is not None and tab.opener == "chalie":
+            logger.info("[BROWSER] panel close tab=%s url=%s outcome=conflict", tab.id, tab.url)
+            raise ConflictError("A browsing run's tab closes when its run ends")
+        if tab is not None:
+            try:
+                session.close_tab(tab.id)
+            except LookupError:
+                tab = None  # it closed since it was looked up
+        logger.info("[BROWSER] panel close tab=%s url=%s outcome=%s", id, tab.url if tab else "-",
+                    "ok" if tab else "not-found")
         if tab is None:
             raise NotFoundError("Not found")
-        if tab.opener == "chalie":
-            raise ConflictError("A browsing run's tab closes when its run ends")
-        try:
-            session.close_tab(tab.id)
-        except LookupError as e:
-            raise NotFoundError("Not found") from e
         return "", 204

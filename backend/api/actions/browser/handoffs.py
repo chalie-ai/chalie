@@ -6,6 +6,7 @@ or already-finished hand-off is a 404.
 
 from __future__ import annotations
 
+import logging
 from typing import ClassVar
 
 from flask.typing import ResponseReturnValue
@@ -16,6 +17,8 @@ from api.request import Request
 from exceptions import NotFoundError
 from tools.browser import tabs
 
+logger = logging.getLogger(__name__)
+
 
 class BrowserHandoffs(Action):
     """Action finishing a hand-off."""
@@ -25,6 +28,11 @@ class BrowserHandoffs(Action):
 
     def post(self, id: int | str, data: Request | None) -> ResponseReturnValue:
         """Finish the hand-off *id*, resuming its run."""
-        if self.is_create(id) or not tabs.finish_handoff(str(id)):
+        if self.is_create(id):
+            raise NotFoundError("Not found")
+        tab = tabs.finish_handoff(str(id))
+        logger.info("[BROWSER] panel hand-off done id=%s tab=%s outcome=%s", id, tab.id if tab else "-",
+                    "ok" if tab else "not-found")
+        if tab is None:
             raise NotFoundError("Not found")
         return "", 204

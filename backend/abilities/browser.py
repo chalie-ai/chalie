@@ -55,6 +55,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# What the router factory yields: one leaf per verb.
+_Leaf = (BrowserOpenParams | BrowserReadParams | BrowserFindParams | BrowserClickParams | BrowserFillParams
+         | BrowserSelectParams | BrowserScrollParams | BrowserBackParams | BrowserScreenshotParams
+         | BrowserStyleParams | BrowserHandoffParams)
+
 
 class BrowserAbility(Ability[BrowserParamsBag]):
     DISCOVERABLE: ClassVar[bool] = False  # delegate-exclusive; pinned on WebBrowseConfig only
@@ -203,22 +208,20 @@ class BrowserAbility(Ability[BrowserParamsBag]):
         # The router factory only ever yields the eleven leaves; a hand-built
         # foreign subclass (or the bare router) is rejected loudly BEFORE the
         # shared path reads a field it may not carry.
-        if not isinstance(
-            params,
-            (
-                BrowserOpenParams, BrowserReadParams, BrowserFindParams,
-                BrowserClickParams, BrowserFillParams, BrowserSelectParams,
-                BrowserScrollParams, BrowserBackParams, BrowserScreenshotParams,
-                BrowserStyleParams, BrowserHandoffParams,
-            ),
-        ):
+        if not isinstance(params, _Leaf):
             return ToolResult.err(
                 f"Unknown browser params bag: {type(params).__name__}.",
                 code="unknown-action",
-                valid=("open", "read", "find", "click", "fill", "select", "scroll", "back", "screenshot", "style",
-                       "handoff"),
+                valid=tuple(self.ACTION_REQUIRED),
             )
+        result = self._act(params)
+        # One line per verb, once its outcome is known. Never the params: a fill carries what is typed.
+        tab = run_tab(self._session_key()) if self.mp is not None else None  # unbound: no page, already an error
+        logger.info("[BROWSER] verb %s tab=%s url=%s outcome=%s", params.ACTION,
+                    tab.id if tab else "-", tab.url if tab else "-", result.code or "ok")
+        return result
 
+    def _act(self, params: _Leaf) -> ToolResult:
         if isinstance(params, BrowserOpenParams):
             return self._do_open(params)
         if isinstance(params, BrowserReadParams):

@@ -6,6 +6,7 @@ nothing behind (or forward with nothing ahead) is a no-op.
 
 from __future__ import annotations
 
+import logging
 from typing import ClassVar, cast
 
 from flask.typing import ResponseReturnValue
@@ -15,7 +16,9 @@ from api.endpoint import DocumentedResponse
 from api.request import Request
 from api.request.browser import BrowserHistoryRequest
 from exceptions import NotFoundError
-from tools.browser import session
+from tools.browser import session, tabs
+
+logger = logging.getLogger(__name__)
 
 
 class BrowserHistory(Action):
@@ -29,8 +32,15 @@ class BrowserHistory(Action):
         """Go ``back``, ``forward`` or ``reload`` in the tab *id*."""
         if self.is_create(id):
             raise NotFoundError("Not found")
-        try:
-            session.history_tab(str(id), cast(BrowserHistoryRequest, data).action)
-        except LookupError as e:
-            raise NotFoundError("Not found") from e
+        action = cast(BrowserHistoryRequest, data).action
+        tab = tabs.get(str(id))
+        if tab is not None:
+            try:
+                session.history_tab(tab.id, action)
+            except LookupError:
+                tab = None  # it closed since it was looked up
+        logger.info("[BROWSER] panel history %s tab=%s url=%s outcome=%s", action, id, tab.url if tab else "-",
+                    "ok" if tab else "not-found")
+        if tab is None:
+            raise NotFoundError("Not found")
         return "", 204

@@ -58,6 +58,7 @@ _GONE = frozenset({"Target.targetDestroyed", "Target.targetCrashed", "Target.det
 _LOADED = frozenset({"Page.domContentEventFired", "Page.loadEventFired"})
 _PARK_POLL = 0.25          # seconds between stop checks while a hand-off waits
 _INFO_TIMEOUT = 5.0        # seconds — the url/title lookup after a document loads
+_PAGE = "page"             # what a navigation nobody drove is put down to; a page's own request names its reason
 
 
 @dataclass(eq=False)
@@ -96,6 +97,15 @@ class Tab:
         self.scale = 1.0           # device px per CSS px
         self.closed = False
         self.changed = threading.Condition()
+        # What the navigation line reads: the url the main frame last committed (kept apart from
+        # ``url``, which the browser may move to the next page before that page's commit arrives),
+        # what the next commit is put down to, and the verb a run has in flight here. The pool
+        # thread writes them and the reader thread reads and clears them with no lock: a race
+        # costs one line its attribution, never the tab its state. A navigation a page requests
+        # and then cancels leaves its cause on the next commit.
+        self.committed = ""
+        self.cause: str | None = None
+        self.acting: str | None = None
 
     @property
     def live(self) -> bool:
@@ -127,17 +137,22 @@ class Tab:
             self.changed.notify_all()
         return True
 
-    def close(self) -> None:
-        """Mark the tab gone and drop it from the list; idempotent."""
+    def expect(self, cause: str) -> None:
+        """Put the main frame's next commit down to *cause*: the driver is about to navigate."""
+        self.cause = cause
+
+    def close(self, by: str = "browser") -> None:
+        """Mark the tab gone and drop it from the list; idempotent. *by* is who closed it, for the log."""
         with self.changed:
             if self.closed:
                 return
             self.closed = True
             self.changed.notify_all()
+        logger.info("[BROWSER] tab closed tab=%s url=%s opener=%s by=%s", self.id, self.url, self.opener, by)
         _unregister(self)
 
     def observe(self, event: Event) -> None:
-        """Reader thread: ack and keep the newest frame, track url and title, notice the end."""
+        """Reader thread: ack and keep the newest frame, track url and title, log navigations, notice the end."""
         params = event.params
         if event.method == "Page.screencastFrame":
             self.browser.post("Page.screencastFrameAck", {"sessionId": params.get("sessionId")},
@@ -149,6 +164,17 @@ class Tab:
                     self.frames += 1
                     self.changed.notify_all()
             return
+        if event.method == "Page.frameRequestedNavigation":
+            # The page asking to leave: unless the driver already said why, that request is the cause.
+            if (params.get("frameId") == self.id and params.get("disposition") == "currentTab"
+                    and self.cause is None):
+                self.cause = f"{_PAGE} ({params.get('reason', 'unknown')})"
+            return
+        if event.method == "Page.frameNavigated":
+            frame = params.get("frame")
+            if isinstance(frame, dict) and frame.get("id") == self.id:
+                self._committed(frame)
+            return
         info = params.get("targetInfo")
         if event.method == "Target.targetInfoChanged" and isinstance(info, dict) and info.get("targetId") == self.id:
             url, title = info.get("url"), info.get("title")
@@ -157,6 +183,16 @@ class Tab:
             _worker.submit(self._refresh)
         elif event.method in _GONE and (params.get("targetId") == self.id or params.get("sessionId") == self.session_id):
             self.close()
+
+    def _committed(self, frame: dict[str, object]) -> None:
+        """Log the main frame's commit, from the page it left, and put down what caused it."""
+        unreachable = frame.get("unreachableUrl")
+        to = f"{unreachable} (did not load)" if unreachable else str(frame.get("url", ""))
+        by = self.cause or _PAGE
+        if self.acting and by.startswith(_PAGE):
+            by = f"{by} during verb {self.acting}"
+        logger.info("[BROWSER] navigation tab=%s from=%s to=%s by=%s", self.id, self.committed, to, by)
+        self.committed, self.cause = to, None
 
     def _refresh(self) -> None:
         """Re-read the url and title: the browser reports a new url as a target change, but not
@@ -235,16 +271,6 @@ def busy() -> bool:
     return any(tab.live and (tab.viewers or tab.opener == "user" or tab.handoff is not None) for tab in tabs)
 
 
-def _find_handoff(handoff_id: str) -> Handoff | None:
-    with _lock:
-        tabs = list(_tabs.values())
-    for tab in tabs:
-        handoff = tab.handoff
-        if handoff is not None and handoff.id == handoff_id and not handoff.done.is_set():
-            return handoff
-    return None
-
-
 # ── Hand-off ─────────────────────────────────────────────────────────────────
 
 def hand_off(tab: Tab, reason: str, origin: dict[str, object], should_stop: Callable[[], bool]) -> bool:
@@ -256,24 +282,35 @@ def hand_off(tab: Tab, reason: str, origin: dict[str, object], should_stop: Call
     """
     handoff = Handoff(reason=reason, origin=origin)
     tab.handoff = handoff
+    logger.info("[BROWSER] hand-off started tab=%s url=%s id=%s reason=%s", tab.id, tab.url, handoff.id, reason)
+    how = "failed"  # stays so only when an exception ends the wait
     try:
         announce()
         while not handoff.done.wait(_PARK_POLL):
-            if should_stop() or not tab.live:
+            if should_stop():
+                how = "stopped"
                 return False
+            if not tab.live:
+                how = "tab closed"
+                return False
+        how = "done"
         return True
     finally:
         tab.handoff = None
+        logger.info("[BROWSER] hand-off ended tab=%s url=%s id=%s how=%s", tab.id, tab.url, handoff.id, how)
         announce()
 
 
-def finish_handoff(handoff_id: str) -> bool:
-    """The user is done with hand-off *handoff_id*; False when it is unknown or already over."""
-    handoff = _find_handoff(handoff_id)
-    if handoff is None:
-        return False
-    handoff.done.set()
-    return True
+def finish_handoff(handoff_id: str) -> Tab | None:
+    """The user is done with hand-off *handoff_id*; the tab it was on, or None when it is unknown or already over."""
+    with _lock:
+        tabs = list(_tabs.values())
+    for tab in tabs:
+        handoff = tab.handoff
+        if handoff is not None and handoff.id == handoff_id and not handoff.done.is_set():
+            handoff.done.set()
+            return tab
+    return None
 
 
 # ── Change frames ────────────────────────────────────────────────────────────

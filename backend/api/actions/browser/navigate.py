@@ -6,6 +6,7 @@ Returns once the browser has the request, not once the page loads; the tab's
 
 from __future__ import annotations
 
+import logging
 from typing import ClassVar, cast
 
 from flask.typing import ResponseReturnValue
@@ -18,6 +19,8 @@ from configs.enums.param_key import Keys
 from contracts.params.browser_params_bag import BrowserOpenParams
 from exceptions import EndpointError, NotFoundError
 from tools.browser import session
+
+logger = logging.getLogger(__name__)
 
 
 class BrowserNavigate(Action):
@@ -37,5 +40,7 @@ class BrowserNavigate(Action):
         try:
             session.navigate_tab(str(id), params.url)
         except LookupError as e:
+            logger.info("[BROWSER] panel navigate tab=%s url=%s outcome=not-found", id, params.url)
             raise NotFoundError("Not found") from e
+        logger.info("[BROWSER] panel navigate tab=%s url=%s outcome=ok", id, params.url)
         return "", 204

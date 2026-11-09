@@ -50,6 +50,7 @@ _MAX_SCALE = 2.0           # device px per CSS px a page is offered at most — 
 _HISTORY_TIMEOUT = 5.0     # s — the back/forward lookup behind each meta update
 _IDLE_WAIT = 1.0           # s — how often a quiet stream rechecks the browser is still up
 _PING_AFTER = 30.0         # s — a stream silent this long pings, so no proxy times the socket out
+_KEY_DOWNS = frozenset({"keyDown", "rawKeyDown"})  # one key pressed; its keyUp is not another
 
 
 class Viewer:
@@ -58,6 +59,8 @@ class Viewer:
     def __init__(self, tab: Tab) -> None:
         self.tab = tab
         self.gone = False
+        # How much the person did through this view — counts only, for the log; never what was typed.
+        self.clicks = self.keys = self.texts = 0
 
     def open(self) -> None:
         """Join the tab's viewers, starting its screencast as the first, and seed the current picture."""
@@ -67,6 +70,7 @@ class Viewer:
             self.tab.viewers += 1
             if self.tab.viewers == 1:
                 self._start()
+        logger.info("[BROWSER] viewer connected tab=%s url=%s", self.tab.id, self.tab.url)
         try:
             shot = self.tab.browser.send("Page.captureScreenshot", {"format": "jpeg", "quality": _QUALITY},
                                          session_id=self.tab.session_id)
@@ -91,6 +95,13 @@ class Viewer:
 
     def input(self, method: str, params: dict[str, object]) -> None:
         """Forward one input event to the page without waiting for it."""
+        kind = params.get("type")
+        if method == "Input.dispatchMouseEvent" and kind == "mousePressed":
+            self.clicks += 1
+        elif method == "Input.dispatchKeyEvent" and kind in _KEY_DOWNS:
+            self.keys += 1
+        elif method == "Input.insertText":
+            self.texts += 1
         self.tab.browser.post(method, params, session_id=self.tab.session_id)
 
     def close(self) -> None:
@@ -101,6 +112,8 @@ class Viewer:
             if self.tab.viewers == 0 and self.tab.live:
                 self.tab.browser.post("Page.stopScreencast", session_id=self.tab.session_id)
             self.tab.changed.notify_all()
+        logger.info("[BROWSER] viewer disconnected tab=%s url=%s clicks=%d keys=%d texts=%d",
+                    self.tab.id, self.tab.url, self.clicks, self.keys, self.texts)
 
     def _start(self) -> None:
         self.tab.browser.post("Page.startScreencast", {"format": "jpeg", "quality": _QUALITY},

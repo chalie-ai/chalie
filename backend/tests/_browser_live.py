@@ -55,6 +55,8 @@ _PAINTS_PER_TICK = 10
 _PAGES = {
     "/a": "<title>Page A</title><p>first page</p>",
     "/b": "<title>Page B</title><p>second page</p>",
+    # Reloads itself exactly once, as a page that checks something and starts over does.
+    "/once": '<title>Once</title><p>once</p><script>if (!sessionStorage.r) { sessionStorage.r = "1"; location.reload(); }</script>',
     "/form": """<title>Form</title>
 <style>
   body { margin: 0; background: rgb(0, 128, 255); }
