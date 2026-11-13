@@ -3,9 +3,10 @@
 A ``browser`` call lists the page it ended on: the page a success reports, or
 the page an error names when the browser had one open. A call still opening a
 page lists the address it was asked for; one that failed before any page loaded
-lists none. A
-``web_browse`` call lists the pages its run went through, in order, a page
-reached twice in a row listed once under the title it first had.
+lists none, and neither does one made while the browser shows its own error
+page where a page did not load. A ``web_browse`` call lists the pages its run
+went through, in order, a page reached twice in a row listed once under the
+title it first had.
 
 A real user turn calls the real ``web_browse`` delegate; its child turn drives
 the real ``browser`` ability in the real headless shell against a loopback
@@ -229,3 +230,43 @@ def test_a_browsing_run_lists_the_pages_it_went_through_in_order_while_it_runs_a
     assert [r.getMessage() for r in caplog.records if r.name == _SERIALIZER_LOG] == []
     states = db.execute("SELECT state FROM tool_calls WHERE tool_name = ? ORDER BY id", (BrowserAbility.NAME,))
     assert [row["state"] for row in states.fetchall()] == ["done", "done", "error", "done", "done", "done", "error"]
+
+
+def test_a_page_that_did_not_load_is_no_page_reached_by_a_call_made_on_its_error_page_nor_by_the_run(
+    app: Flask, site: Site, db: sqlite3.Connection, caplog: pytest.LogCaptureFixture,
+) -> None:
+    client, _token = signed_in(app)
+    caplog.set_level(logging.INFO, logger=BrowserAbility.__module__)
+    a, b = f"{site.url}/a", f"{site.url}/b"
+    refused = f"http://127.0.0.1:{_closed_port()}/"
+    provider = _RoutedProvider(
+        parent=[_calls(WebBrowseAbility.NAME, instructions="visit my site's pages"), _says("Visited.")],
+        child=[
+            _calls(BrowserAbility.NAME, action="open", url=a),
+            _calls(BrowserAbility.NAME, action="open", url=refused),  # the browser shows its own error page
+            _calls(BrowserAbility.NAME, action="read"),  # made on that error page
+            _calls(BrowserAbility.NAME, action="open", url=b),
+            _says("Visited what loaded."),
+        ],
+    )
+
+    _browse(provider, "visit the pages on my site", lambda _frame: None)
+
+    rows = db.execute("SELECT id, state, result FROM tool_calls WHERE tool_name = ? ORDER BY id",
+                      (BrowserAbility.NAME,)).fetchall()
+    assert [(row["state"], _detail(client, row["id"])["pages"]) for row in rows] == [
+        ("done", [_page(a, "Page A")]),
+        ("error", []),
+        ("error", []),
+        ("done", [_page(b, "Page B")]),
+    ]
+    # What the model was told about the error page: no page is open, and which address did not load.
+    assert rows[2]["result"].split("\n")[:2] == [
+        f"[{BrowserAbility.NAME}(status=error, code=no-open-page)]",
+        f"No page is open: {refused} did not load.",
+    ]
+    [run] = db.execute("SELECT id FROM tool_calls WHERE tool_name = ?", (WebBrowseAbility.NAME,)).fetchall()
+    assert _detail(client, run["id"])["pages"] == [_page(a, "Page A"), _page(b, "Page B")]
+    # The audit trail names the address that did not load, never the error page.
+    verbs = [r.getMessage() for r in caplog.records if r.getMessage().startswith("[BROWSER] verb read ")]
+    assert [line.split(" url=")[1] for line in verbs] == [f"{refused} outcome=no-open-page"]

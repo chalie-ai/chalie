@@ -720,8 +720,8 @@ class PageSession:
     def _envelope(self, data: object = None, changed: dict[str, object] | None = None,
                   status: int | None = None, error: str | None = None) -> dict[str, object]:
         self._pump()
-        if self._unreachable:  # the browser's own error page stands where the page never loaded
-            data, error = None, f"No page is open: {self._unreachable} did not load."
+        if self._unreachable:  # the browser's own error page stands where the page never loaded: no page to name
+            return cast("dict[str, object]", _trim(error_envelope(f"No page is open: {self._unreachable} did not load.")))
         try:
             page: object = {"url": self._url, "title": self._title(), "status": status}
         except BrowserError:
