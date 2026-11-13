@@ -10,13 +10,15 @@ for it (``transcript_id``); its logical turn is derived by joining ``transcript`
 — hence :meth:`by_turn` holds that join SQL (§2.6, a multi-table read the generic
 builder can't express).
 
-WS privacy (§6.2): the emitted frame (:meth:`to_json`) exposes ONLY
-type/turn_id/id/tool_name/summary/created_at/ended_at/state/delegate. ``params``
-and ``result`` are the model-facing turn DATA and NEVER cross the wire. ``type``,
-``turn_id`` and ``delegate`` are transient envelope fields the
-``ToolCallService`` sets on the instance before broadcast; they are not columns,
-so :meth:`Model.to_dict` / :meth:`save` exclude them. :meth:`to_dict` (inherited, full-field) stays the
-internal projection, distinct from this wire-safe whitelist.
+What crosses the wire: the live frame (:meth:`to_json`) carries
+type/turn_id/id/tool_name/params/summary/created_at/ended_at/state/delegate, with
+``params`` as the parsed JSON object the call was made with — the same field the
+history chips carry. ``result`` is not on the frame or the chips; it is returned
+only by the per-call read. ``type``, ``turn_id`` and ``delegate`` are transient
+envelope fields the ``ToolCallService`` sets on the instance before broadcast;
+they are not columns, so :meth:`Model.to_dict` / :meth:`save` exclude them.
+:meth:`to_dict` (inherited, full-field) stays the internal projection, distinct
+from the frame.
 """
 
 from __future__ import annotations
@@ -29,7 +31,7 @@ from models.model import Model
 
 
 class ToolCall(Model):
-    """One ``tool_calls`` row: field storage + CRUD + wire-safe projection."""
+    """One ``tool_calls`` row: field storage + CRUD + live-frame projection."""
 
     __columns__: ClassVar[tuple[str, ...]] = (
         "id",
@@ -70,20 +72,22 @@ class ToolCall(Model):
     type: str
     turn_id: int
     # The watchable child turn this call spawned (``{"channel", "turn_id"}``),
-    # or None — the frame's link from the pill to the delegate's transcript.
+    # or None — the frame's link from the call to the delegate's transcript.
     # None until the service resolves it: a call just opened has no child yet.
     delegate: dict[str, object] | None = None
 
     def to_json(self) -> str:
-        """The single WS tool frame (§6.2). Carries the row's identity + live
-        pill fields — ``params`` and ``result`` NEVER cross the wire (the surface
-        refetches the turn over REST for those). The shared DOM-contract keys
-        ``turn_id`` and ``type`` are injected by :meth:`Websocket.broadcast`'s
-        enrichment step, never hand-written here."""
+        """The single WS tool frame. Carries the row's identity, the live row
+        fields and ``params`` parsed back into the object the call was made
+        with; ``result`` stays off the frame — the per-call read returns it.
+        The shared DOM-contract keys ``turn_id`` and ``type`` are injected by
+        :meth:`Websocket.broadcast`'s enrichment step, never hand-written
+        here."""
         return json.dumps(
             {
                 "id": self.id,
                 "tool_name": self.tool_name,
+                "params": json.loads(self.params),
                 "summary": self.summary,
                 "created_at": self.created_at,
                 "ended_at": self.ended_at,

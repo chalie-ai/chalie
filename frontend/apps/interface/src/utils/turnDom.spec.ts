@@ -153,7 +153,7 @@ describe('upsertTurnToSurfaces — fan-out', () => {
 
     const b = block(1, [10]);
     b.messages[0].tool_calls = [
-      { id: 100, tool_name: 'search', summary: 's', state: 'done', ended_at: null, delegate: null },
+      { id: 100, tool_name: 'search', params: null, summary: 's', state: 'done', ended_at: null, delegate: null },
     ];
     upsertTurnToSurfaces(b, 'user');
 
@@ -271,7 +271,7 @@ describe('ticket — a read older than the last one applied to its turn is dropp
     // Everything but the ticket says apply: a higher version, and `force`.
     const stale = block(1, [10, 11], { working: true });
     stale.messages[1]!.tool_calls = [
-      { id: 6, tool_name: 'recall', summary: '', state: 'done', ended_at: null, delegate: null },
+      { id: 6, tool_name: 'recall', params: null, summary: '', state: 'done', ended_at: null, delegate: null },
     ];
     upsertTurnToSurfaces(stale, 'user', { force: true, ticket: older });
     expect(container.firstElementChild!.getAttribute('data-version')).toBe('10');

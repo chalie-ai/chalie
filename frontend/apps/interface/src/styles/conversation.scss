@@ -273,21 +273,22 @@
 }
 
 // --------------------------------------------------------------------------
-// 9. A step's work — its thinking and tool calls, above what it said
+// 9. A step's work — its thinking and tool calls, under what it said
 // --------------------------------------------------------------------------
 
 // A step's work (ThinkingAndCalls): a "Thought for 9s" head that unfolds to the
-// traces, then one row per tool call, set in the prose's own type.
+// traces, then what its tool calls did, unfolding to one row per call, set in
+// the prose's own type.
 .step {
   width: 100%;
   min-width: 0;
 }
 
-.step:not(:last-child) {
-  margin-bottom: 8px;
+.step:not(:first-child) {
+  margin-top: 8px;
 }
 
-// The head wraps as two whole units on a narrow screen: the fold, whose label
+// The head wraps as whole units on a narrow screen: each fold, whose label
 // ellipsizes, and the running step's controls.
 .step__head {
   display: flex;
@@ -316,8 +317,8 @@
   animation: rise var(--dur-2) var(--ease-out);
 }
 
-// One fold for everything that unfolds — a step's thinking, the footer's plan
-// link: muted in its line's own type, it brightens on hover and its chevron
+// One fold for everything that unfolds — a step's thinking and its calls:
+// muted in its line's own type, it brightens on hover and its chevron
 // turns down while open (the shared .trace-body collapse above).
 .fold {
   display: inline-flex;
@@ -360,9 +361,24 @@
 }
 
 .activity__label,
-.step__label {
+.step__label,
+.step__summary {
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.step__sep {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+
+.step__failed {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 4px;
+  color: var(--deny-text);
   white-space: nowrap;
 }
 
@@ -480,7 +496,9 @@
 }
 
 // Tool-call rows (ToolCallList) — plain borderless lines, one per call:
-// a status icon, then the summary; a delegate row ends with the robot icon.
+// the tool's icon, the summary, then its status mark. Each row is a button
+// that opens what the call did under it; the reset clears only what a native
+// button adds (the shared reset already inherits font and colour).
 .calls {
   display: flex;
   flex-direction: column;
@@ -491,9 +509,25 @@
   display: flex;
   align-items: baseline;
   gap: 10px;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  background: none;
+  text-align: left;
   overflow-wrap: anywhere;
+  transition: background var(--dur-1) var(--ease-out);
 }
 
+.call:hover,
+.call:focus-visible {
+  background: var(--surface-2);
+}
+
+.call:focus-visible {
+  outline: 1.5px solid var(--muted);
+}
+
+.call__icon,
 .call__mark {
   flex-shrink: 0;
   align-self: center;
@@ -516,38 +550,131 @@
   color: var(--deny-text);
 }
 
-// A tool row whose call spawned a delegate turn is a button into that turn's
-// transcript. The reset clears only what a native button adds (its box, fill,
-// centring and shrink-to-fit width; the shared reset already inherits font and
-// colour), and :where() keeps it at zero specificity so the row's own layout
-// still wins.
-:where(.delegate-pill) {
-  width: 100%;
-  margin: 0;
-  padding: 0;
-  border: 0;
-  background: none;
-  text-align: left;
-}
-
-.delegate-pill {
-  cursor: pointer;
-}
-
-.delegate-pill:hover,
-.delegate-pill:focus-visible {
+// An opened row's detail (ToolCallDetail), on a quiet panel indented under
+// the row's summary (past the icon's 16px and the row's 10px gap): muted
+// labels over plain, selectable values; commands, structured values and diffs
+// in mono. A long part scrolls inside its capped box instead of stretching
+// the chat.
+.call-detail {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-sm);
+  min-width: 0;
+  margin: 0 0 var(--space-sm) 26px;
+  padding: var(--space-sm) var(--space-md);
   background: var(--surface-2);
+  overflow-wrap: anywhere;
+}
+
+.call-detail > *,
+.call-detail__fields,
+.call-detail__pages {
+  max-width: 100%;
+}
+
+.call-detail__note,
+.call-detail__heading,
+.call-detail__label,
+.call-detail__text,
+.call-detail__box,
+.call-detail__fields,
+.call-detail__pages {
+  margin: 0;
+}
+
+.call-detail__note,
+.call-detail__heading,
+.call-detail__label {
+  font-size: var(--fs-mono);
+  color: var(--muted);
+}
+
+.call-detail__heading {
+  font-weight: 600;
+}
+
+.call-detail__note--error {
+  color: var(--deny-text);
+}
+
+.call-detail__text {
+  white-space: pre-wrap;
+}
+
+.call-detail__box {
+  width: 100%;
+  max-height: 320px;
+  overflow: auto;
+}
+
+.call-detail__code,
+.call-detail__diff {
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.call-detail__fields,
+.call-detail__pages {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  width: 100%;
+  padding: 0;
+  list-style: none;
+}
+
+// A diff line hangs its +/- mark in a gutter its wrapped text stays clear of;
+// added and removed lines take a faint fill of their colour, never a border.
+.diff-line {
+  padding: 0 var(--space-xs) 0 calc(2ch + var(--space-xs));
+  text-indent: -2ch;
+}
+
+.diff-line__mark {
+  display: inline-block;
+  width: 2ch;
+  text-indent: 0;
+  color: var(--muted);
+  user-select: none;
+}
+
+.diff-line--add {
+  background: color-mix(in srgb, var(--allow) 12%, transparent);
+  color: var(--allow-text);
+}
+
+.diff-line--remove {
+  background: color-mix(in srgb, var(--deny) 12%, transparent);
+  color: var(--deny-text);
+}
+
+.diff-line--add .diff-line__mark,
+.diff-line--remove .diff-line__mark {
+  color: inherit;
+}
+
+// The way into a delegate's transcript, at the foot of its opened row: a
+// 32px fill a step lighter than the panel it sits on.
+.delegate-pill {
+  display: inline-flex;
+  align-items: center;
+  height: var(--control-h);
+  margin: 0;
+  padding: 0 var(--space-md);
+  background: var(--cell);
+  color: var(--text);
+  transition: background var(--dur-1) var(--ease-out);
+}
+
+.delegate-pill:hover {
+  background: color-mix(in srgb, var(--cell), var(--text) 10%);
 }
 
 .delegate-pill:focus-visible {
   outline: 1.5px solid var(--muted);
-}
-
-.delegate-pill__icon {
-  flex-shrink: 0;
-  margin-right: 4px;
-  vertical-align: text-bottom;
-  color: currentColor;
 }
 
 // --------------------------------------------------------------------------

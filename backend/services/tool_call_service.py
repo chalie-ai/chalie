@@ -14,8 +14,8 @@ A tool call anchors to the assistant row of the provider call that made it
 to the turn's input row before any such row exists; its turn is derived by
 joining ``transcript`` on (channel, turn_id) inside ``ToolCall.by_turn``, so
 ``tool_calls`` carries no turn_id/channel column of its own. Every write
-emits the row's WS-safe projection (``ToolCall.to_json``, §6.2 — params/result
-never cross the wire) gated by ``self.mp.push_websocket`` and silenced
+emits the row's live frame (``ToolCall.to_json`` — ``params`` ride it, the
+result does not) gated by ``self.mp.push_websocket`` and silenced
 outright for the turn-zero memory seed (§6.10); a terminal one is followed by
 the turn's ``updated`` refetch poke. A delegate tool's frame also names the
 child turn it spawned, read off that turn's input row.
@@ -220,7 +220,8 @@ class ToolCallService:
         ``mp.push_websocket``. Sets the transient envelope (``type``/``turn_id``)
         on the row before pushing; ``delegate`` is set by the callers that may
         follow a child turn's opening (:meth:`reemit`, :meth:`finish`).
-        ``Websocket`` serializes it via ``ToolCall.to_json`` (§6.2).
+        ``Websocket.broadcast`` turns the row into its frame with
+        ``ToolCall.to_json`` and sends it to the connected clients.
 
         A terminal frame is followed by ``updated``: the turn's block carries
         every call from the moment it starts, and only ``updated`` makes a

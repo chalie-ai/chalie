@@ -45,8 +45,8 @@ export interface WsTurnSignal {
  *  frame by the presence of `tool_name` (checked BEFORE `state` and `status`). One
  *  emit function fires all three phases: `started` the instant the call begins,
  *  `done` on success/placeholder return, `error` on a failure/denial/pre-validation
- *  bounce. `params`/`result` never cross the wire — the surface refetches the turn
- *  block over REST for the persisted trail; this frame drives the live pill timer
+ *  bounce. `params` rides the frame; `result` never does — the surface refetches the
+ *  turn block over REST for the persisted trail; this frame drives the live pill
  *  only. A delegate tool's frame is re-emitted, state unchanged, once the child
  *  turn it spawned exists, so `delegate` can arrive on a later frame for the same
  *  `id`. */
@@ -54,6 +54,8 @@ export type WsToolCallState = 'started' | 'done' | 'error';
 export interface WsToolCallEvent {
   id: number;
   tool_name: string;
+  /** The arguments the call was made with. */
+  params: Record<string, unknown> | null;
   summary: string;
   created_at: string;
   ended_at: string | null;

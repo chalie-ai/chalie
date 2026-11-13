@@ -580,7 +580,7 @@ describe('a chat turn\'s subtask ring across a dropped connection', () => {
    *  the backend reads it. */
   function planTurn(subtaskWorking: boolean): ConversationTurnBlock {
     const start: ToolCallChip = {
-      id: 91, tool_name: 'subtask', summary: 'compare museum hours', state: 'done', ended_at: null,
+      id: 91, tool_name: 'subtask', params: null, summary: 'compare museum hours', state: 'done', ended_at: null,
       delegate: { ...SUBTASK, working: subtaskWorking },
     };
     return userThread(PLAN_TURN, [

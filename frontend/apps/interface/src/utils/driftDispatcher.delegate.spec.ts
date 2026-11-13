@@ -14,8 +14,8 @@
  * the real TurnView as every surface's component (so the data-type /
  * data-channel stamping the dispatcher's lookups depend on is the production
  * one), and the real session store behind the pill clicks. Only the network
- * boundary is faked (`fetch`, answering the thread reads the real REST
- * wrappers and ApiClient make), and the session-hook seam is a recording registration, as in the sibling dispatcher specs (the real one is
+ * boundary is faked (`fetch`, answering the thread and tool-call reads the
+ * real REST wrappers and ApiClient make), and the session-hook seam is a recording registration, as in the sibling dispatcher specs (the real one is
  * wired by `session.init()`, which opens the WebSocket).
  *
  * Layout used by every test: a delegate surface for `delegate:web_search`, a
@@ -27,7 +27,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises } from '@vue/test-utils';
 import type { WsPushEvent } from '@chalie/shared';
-import type { ConversationMessage, ConversationTurnBlock, DelegateTurnBlock } from '../api/conversation';
+import type { ConversationMessage, ConversationTurnBlock, DelegateTurnBlock, ToolCallDetail } from '../api/conversation';
 
 /** The backend, at the network boundary: what it will answer a thread read
  *  with, and every read it was asked for. Everything between `dispatchDrift`
@@ -37,6 +37,8 @@ const backend = {
   delegate: null as DelegateTurnBlock | null,
   userReads: [] as Array<{ turnId: number; type: string | null }>,
   delegateReads: [] as Array<{ turnId: number; channel: string }>,
+  /** Each tool call as its own read (GET /api/tool-calls/<id>) returns it. */
+  calls: new Map<number, ToolCallDetail>(),
 };
 
 function json(body: unknown, status = 200): Response {
@@ -45,6 +47,11 @@ function json(body: unknown, status = 200): Response {
 
 async function fakeBackend(input: RequestInfo | URL): Promise<Response> {
   const url = new URL(String(input), 'http://chalie.test');
+  const callRead = /^\/api\/tool-calls\/(\d+)$/.exec(url.pathname);
+  if (callRead) {
+    const call = backend.calls.get(Number(callRead[1]));
+    return call ? json({ success: true, result: call }) : json({ error: 'Tool call not found' }, 404);
+  }
   const match = /^\/api\/threads\/(\d+)$/.exec(url.pathname);
   if (!match) return json({ error: 'unrouted' }, 404);
   const turnId = Number(match[1]);
@@ -102,6 +109,7 @@ async function makeWorld(options: WorldOptions = {}) {
   backend.delegate = null;
   backend.userReads = [];
   backend.delegateReads = [];
+  backend.calls = new Map();
   vi.stubGlobal('fetch', fakeBackend);
   const { createPinia, setActivePinia } = await import('pinia');
   setActivePinia(createPinia());
@@ -336,32 +344,59 @@ describe('a delegate frame nobody is following does no REST work', () => {
   });
 });
 
-describe('a delegate call\'s live pill on its parent turn', () => {
-  it('gains its delegate link from the re-emitted "started" frame without being duplicated, and keeps the same link once "done"', async () => {
+describe('a delegate call\'s live row on its parent turn', () => {
+  /** What the backend answers a read of call 31 with, as it stands. */
+  function serveCall(state: ToolCallDetail['state'], delegate: { channel: string; turn_id: number } | null): void {
+    backend.calls.set(31, {
+      id: 31, tool_name: 'web_search', params: { instructions: 'Find the museum opening hours' },
+      result: state === 'started' ? '' : '[web_search(status=success)]\n{"answer":"Opens at nine."}\n[end:web_search]',
+      summary: 'museum hours', state, created_at: STARTED_AT,
+      ended_at: state === 'started' ? null : '2026-01-01T00:00:05Z', delegate, pages: [],
+    });
+  }
+
+  const transcriptButtons = (root: Element) =>
+    [...root.querySelectorAll<HTMLButtonElement>('button')].filter((b) => b.textContent?.includes('Open transcript'));
+
+  it('gains its delegate link from the re-emitted "started" frame without being duplicated: its opened row offers the transcript from then on, and the same one once "done"', async () => {
     const w = await makeWorld();
     const ref = { channel: CH, turn_id: 12 };
     const call = { tool_name: 'web_search', id: 31, turn_id: TURN, type: 'user', channel: 'user', summary: 'museum hours' };
+    // Read while it runs, before the child turn exists: no link in the read.
+    serveCall('started', null);
 
     w.send({ ...call, state: 'started' });
     await flushPromises();
     expect(w.userEl.querySelectorAll('.activity .call')).toHaveLength(1);
-    expect(w.userEl.querySelectorAll('.activity button.call')).toHaveLength(0);
+    // The row is a button that opens what the call is doing; nothing yet
+    // leads into a transcript.
+    w.userEl.querySelector<HTMLButtonElement>('.activity .step__summary')!.closest('button')!.click();
+    const row = w.userEl.querySelector<HTMLButtonElement>('.activity button.call')!;
+    row.click();
+    await flushPromises();
+    expect(row.getAttribute('aria-expanded')).toBe('true');
+    expect(w.userEl.textContent).toContain('Find the museum opening hours');
+    expect(transcriptButtons(w.userEl)).toHaveLength(0);
 
-    // The backend re-sends `started` once the child turn exists.
+    // The backend re-sends `started` once the child turn exists: the same row,
+    // still open, now leads into that turn's transcript.
     w.send({ ...call, state: 'started', delegate: ref });
     await flushPromises();
     expect(w.userEl.querySelectorAll('.activity .call')).toHaveLength(1);
-    expect(w.userEl.querySelectorAll('.activity button.call')).toHaveLength(1);
+    expect(transcriptButtons(w.userEl)).toHaveLength(1);
 
+    serveCall('done', ref);
     w.send({ ...call, state: 'done' });
     await flushPromises();
     expect(w.userEl.querySelectorAll('.activity .call')).toHaveLength(1);
     expect(w.userEl.querySelectorAll('.activity button.call--done')).toHaveLength(1);
+    const [open] = transcriptButtons(w.userEl);
+    expect(transcriptButtons(w.userEl)).toHaveLength(1);
 
-    // Open the call's transcript from the running block.
-    w.userEl.querySelector<HTMLButtonElement>('.activity button.call')!.click();
+    // Open the call's transcript from its opened row in the running block.
+    open!.click();
     expect(w.session.panelDelegate).toEqual(ref);
-    // The parent's pill never leaks onto a delegate turn that shares its id.
+    // The parent's row never leaks onto a delegate turn that shares its id.
     expect(w.delegateEl.querySelectorAll('.activity .call')).toHaveLength(0);
   });
 });

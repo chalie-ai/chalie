@@ -16,6 +16,8 @@ export interface LiveToolPill {
   /** Unique id — the opened tool_calls row id (matches finishLiveTool callId). */
   id: string;
   name: string;
+  /** The arguments the call was made with. */
+  params: Record<string, unknown> | null;
   summary: string | undefined;
   ok?: boolean;
   resolved: boolean;
@@ -58,6 +60,7 @@ export function startLiveTool(
   callId: number | null,
   name: string,
   summary?: string,
+  params: Record<string, unknown> | null = null,
 ): void {
   if (callId == null) return;
   const s = feedState(type);
@@ -68,6 +71,7 @@ export function startLiveTool(
   const pill: LiveToolPill = {
     id,
     name,
+    params,
     summary,
     ok: false,
     resolved: false,

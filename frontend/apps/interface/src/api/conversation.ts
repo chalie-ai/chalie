@@ -31,10 +31,28 @@ export interface ToolCallChip {
   /** The tool_calls row id — the same id a live pill is keyed on. */
   id: number;
   tool_name: string;
+  /** The arguments the call was made with. */
+  params: Record<string, unknown> | null;
   summary: string;
   state: 'started' | 'done' | 'error';
   ended_at: string | null;
   delegate: DelegateRef | null;
+}
+
+/** A page a browsing call reached. */
+export interface ToolCallPage {
+  url: string;
+  title: string;
+}
+
+/** One tool call read on its own (GET /api/tool-calls/<id>). `result` is the
+ *  text the model read back (empty while the call runs); `pages` lists the
+ *  page a browser call reached, or each page a browsing delegate went to. */
+export interface ToolCallDetail extends ToolCallChip {
+  params: Record<string, unknown>;
+  result: string | null;
+  created_at: string;
+  pages: ToolCallPage[];
 }
 
 /** One row inside a turn block (see ConversationTurnBlock.messages). */
@@ -250,6 +268,11 @@ export const conversation = {
   thread(turnId: number, type?: string): Promise<ConversationTurnBlock> {
     const params = type ? `?type=${encodeURIComponent(type)}` : '';
     return api.get<SingleEnvelope<ConversationTurnBlock>>(`/api/threads/${turnId}${params}`).then((body) => body.result);
+  },
+
+  /** GET /api/tool-calls/<id> — one tool call with its result (a row's detail). */
+  toolCall(id: number): Promise<ToolCallDetail> {
+    return api.get<SingleEnvelope<ToolCallDetail>>(`/api/tool-calls/${id}`).then((body) => body.result);
   },
 
   /**

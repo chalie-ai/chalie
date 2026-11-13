@@ -10,10 +10,13 @@ Public API:
   batch reads and the WS refetch)
 * :meth:`bulk_gists` — thread labels for a batch of turn_ids (used by the
   collapsed feed)
+* :meth:`tool_call` — one tool call's full record, result included (used by
+  the per-call read)
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import mimetypes
 import os
@@ -22,8 +25,11 @@ import urllib.parse
 from typing import cast
 
 from abilities._registry import AbilityRegistry
+from abilities.browser import BrowserAbility
 from abilities.subtask import speaker
+from abilities.web_browse import WebBrowseAbility
 from services.database import Database
+from services.dispatch_service import DispatchService
 from services.file_mapper_service import FileMapperService
 from services.locale_service import CHAT_DAY_FMT, CHAT_TIMESTAMP_FMT, format_date
 from services.rich_media_parser import parse as _parse_rich_media
@@ -63,7 +69,7 @@ def _fetch_tool_calls_for_transcripts(transcript_ids: list[int]) -> list[dict[st
             "id": tc.id,
             "transcript_id": tc.transcript_id,
             "tool_name": tc.tool_name,
-            "params": tc.params,
+            "params": json.loads(tc.params),
             "result": tc.result or "",
             "summary": tc.summary or "",
             "created_at": tc.created_at,
@@ -154,15 +160,18 @@ def _tool_call_chips(
     turn-zero memory seed, written before any provider call returns, anchors to
     the user row, so chips are role-agnostic (the ratified feed vision: tool
     calls render under WHATEVER row anchors them). Each chip carries the
-    persisted ``state`` + ``ended_at`` so a refetched error stays an error pill,
-    not a downgraded neutral chip, and ``delegate`` — the child turn the call
-    spawned, from ``delegates`` — so a settled pill still opens its transcript.
-    Each chip carries its tool_calls row ``id``, the id the live frame keys its
-    pill on, so the client can show a still-running call once."""
+    ``params`` the call was made with, the persisted ``state`` + ``ended_at``
+    so a refetched error stays an error row, not a downgraded neutral chip,
+    and ``delegate`` — the child turn the call spawned, from ``delegates`` — so
+    a settled row still opens its transcript. Each chip carries its
+    tool_calls row ``id``, the id the live frame keys its row on, so the
+    client can show a still-running call once. The result stays off the chip:
+    :meth:`TurnSerializerService.tool_call` returns it."""
     return [
         {
             "id": c["id"],
             "tool_name": c["tool_name"],
+            "params": c["params"],
             "summary": c["summary"],
             "state": c["state"],
             "ended_at": c["ended_at"],
@@ -171,6 +180,62 @@ def _tool_call_chips(
         for c in own_calls
         if c["tool_name"] != _COMPACTOR_TOOL
     ]
+
+
+def _delegates(calls: list[dict[str, object]]) -> dict[int, dict[str, object]]:
+    """The child turn each watchable delegate call spawned, keyed by call id:
+    one lookup bounded by the calls' lifetimes, and none at all when no call is
+    a watchable delegate. Each entry also says whether that turn is still
+    ``working`` as of this read — a subtask outlives the call that started it,
+    so the call's own state cannot say."""
+    delegates = Transcript.delegate_turns({
+        cast("int", c["id"]): (cast("str", c["created_at"]), cast("str | None", c["ended_at"]))
+        for c in calls
+        if AbilityRegistry.is_watchable_delegate(cast("str", c["tool_name"]))
+    })
+    for entry in delegates.values():
+        entry["working"] = TurnExecution.open_turn(
+            cast("str", entry["channel"]), cast("int", entry["turn_id"]),
+        ) is not None
+    return delegates
+
+
+def _browser_page(call: ToolCall) -> dict[str, str] | None:
+    """The page one ``browser`` call reached. A finished call's is the one its
+    stored result names; None when the result names no page, or cannot be read
+    (logged once per read). A running call has no result yet, so its page is
+    the ``url`` it was opened with, when it was given one."""
+    if not call.result:
+        url = json.loads(call.params).get("url")
+        return {"url": url, "title": ""} if isinstance(url, str) and url else None
+    try:
+        url, title = DispatchService.read_browser_page(call.result)
+    except ValueError as exc:
+        logger.warning("[TurnSerializerService.tool_call] browser result unreadable, no page listed: call=%s: %s",
+                       call.id, exc)
+        return None
+    return {"url": url, "title": title} if url else None
+
+
+def _pages(call: ToolCall, delegate: dict[str, object] | None) -> list[dict[str, str]]:
+    """The pages a browsing call reached, in order: a ``browser`` call's own
+    page; for a ``web_browse`` call, the page of every ``browser`` call its
+    child turn (*delegate*) made, a page repeated back to back listed once.
+    Empty for every other tool, and for a ``web_browse`` call whose child turn
+    is not found."""
+    if call.tool_name == BrowserAbility.NAME:
+        page = _browser_page(call)
+        return [page] if page else []
+    if call.tool_name != WebBrowseAbility.NAME or delegate is None:
+        return []
+    pages: list[dict[str, str]] = []
+    for child in ToolCall.by_turn(cast("str", delegate["channel"]), cast("int", delegate["turn_id"])):
+        if child.tool_name != BrowserAbility.NAME:
+            continue
+        page = _browser_page(child)
+        if page and (not pages or pages[-1]["url"] != page["url"]):
+            pages.append(page)
+    return pages
 
 
 def _apply_assistant_fields(
@@ -266,19 +331,7 @@ def _rows_to_messages(rows: list[dict[str, object]]) -> list[dict[str, object]]:
     turn_calls = _fetch_tool_calls_for_transcripts(turn_scope_ids)
     # Group by transcript_id for per-row chip lookup.
     calls_by_transcript = _group_calls_by_transcript(turn_calls)
-    # One lookup for the turn's delegate calls, bounded by their lifetimes, and
-    # none at all when it ran no watchable delegate.
-    delegates = Transcript.delegate_turns({
-        cast("int", c["id"]): (cast("str", c["created_at"]), cast("str | None", c["ended_at"]))
-        for c in turn_calls
-        if AbilityRegistry.is_watchable_delegate(cast("str", c["tool_name"]))
-    })
-    # Whether each child turn is still running, as of this read — a subtask
-    # outlives the call that started it, so the call's own state cannot say.
-    for entry in delegates.values():
-        entry["working"] = TurnExecution.open_turn(
-            cast("str", entry["channel"]), cast("int", entry["turn_id"]),
-        ) is not None
+    delegates = _delegates(turn_calls)
 
     # Rich-media spans resolve PER ACT CYCLE, not per turn. A turn_id spans the
     # whole thread — many user requests — and each request runs its own ACT loop
@@ -480,6 +533,29 @@ class TurnSerializerService:
 
     def bulk_gists(self, channel: str, turn_ids: list[int]) -> dict[int, str]:
         return _bulk_gists(channel, turn_ids)
+
+    def tool_call(self, call_id: int) -> dict[str, object] | None:
+        """One tool call's full record — the per-call read behind an opened row. Holds
+        what the chip holds plus ``created_at``, the stored ``result`` text
+        (``""`` while the call is still running) and the ``pages`` a browsing
+        call reached. None when no row has this id."""
+        call = ToolCall.filter("id", call_id).first()
+        if call is None:
+            return None
+        record: dict[str, object] = {
+            "id": call_id,
+            "tool_name": call.tool_name,
+            "params": json.loads(call.params),
+            "result": call.result,
+            "summary": call.summary or "",
+            "state": call.state,
+            "created_at": call.created_at,
+            "ended_at": call.ended_at,
+        }
+        delegate = _delegates([record]).get(call_id)
+        record["delegate"] = delegate
+        record["pages"] = _pages(call, delegate)
+        return record
 
 
 # Module-level singleton, mirroring the pattern in other services.

@@ -69,6 +69,7 @@ from .endpoints.providers import Providers
 from .endpoints.scheduler import Scheduler
 from .endpoints.skills import Skills
 from .endpoints.threads import ThreadsEndpoint
+from .endpoints.tool_calls import ToolCallsEndpoint
 from .endpoints.wrappers import WrappersEndpoint
 
 ROUTES: tuple[Endpoint, ...] = (
@@ -126,6 +127,8 @@ ROUTES: tuple[Endpoint, ...] = (
     ThreadsEndpoint("threads"),
     ThreadsBatch("threads", "batch"),
     ThreadsThinkingLevel("threads", "thinking-level"),
+
+    ToolCallsEndpoint("tool-calls"),
 
     VoiceHealthAction("voice", "health"),
     VoiceTranscribeAction("voice", "transcribe"),

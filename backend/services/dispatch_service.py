@@ -50,6 +50,7 @@ from typing import TYPE_CHECKING, Callable, cast
 from abilities._mcp_ability import _MCPAbility
 from services.key_healer import KeyHealer
 from abilities._registry import AbilityRegistry
+from abilities.browser import BrowserAbility
 from abilities.find_tools import FindToolsAbility
 from abilities._result import ToolResult
 from exceptions import VaultLockedError
@@ -535,6 +536,45 @@ class DispatchService:
             body_str = f"{body_str}\n{_FOLLOW_UP_BLOCK.format(text=follow_up)}"
 
         return f"[{tool_name}({', '.join(head_parts)})]\n{body_str}\n[end:{tool_name}]"
+
+    @staticmethod
+    def read_browser_page(result: str) -> tuple[str, str]:
+        """The page a stored ``browser`` result names, read back from the
+        envelope :meth:`_render` wrote, as ``(url, title)`` — ``title`` is
+        ``""`` when the result gives none, and both are ``""`` when it names no
+        page.
+
+        A success names the page in the ``page`` object of its JSON body (the
+        line after the header). An error names it in the ``url=`` and
+        ``title=`` meta its header carries when the browser had a page open; a
+        url never holds a space, and the title is always the header's last
+        field, so the title is everything after the first ``, title=``.
+
+        Raises ValueError when *result* is not a browser envelope, or when its
+        body or header meta cannot be read."""
+        prefix = f"[{BrowserAbility.NAME}("
+        header, _, rest = result.partition("\n")
+        if not (header.startswith(prefix) and header.endswith(")]")):
+            raise ValueError("not a browser envelope")
+        meta = header[len(prefix):-2]
+        url: object
+        title: object
+        if meta.startswith("status=success"):
+            body = json.loads(rest.partition("\n")[0])
+            page = body.get("page") if isinstance(body, dict) else None
+            if not isinstance(page, dict):
+                raise ValueError("success body carries no page object")
+            url, title = page.get("url"), page.get("title")
+        elif meta.startswith("status=error"):
+            fields, _, title = meta.partition(", title=")
+            url = {key: value for key, _, value in (f.partition("=") for f in fields.split(", "))}.get("url")
+        else:
+            raise ValueError("header carries no status")
+        if not url:
+            return "", ""
+        if not isinstance(url, str):
+            raise ValueError("page url is not a string")
+        return url, title if isinstance(title, str) else ""
 
     def _render_rich(self, tool_name: str, tr: ToolResult, ordinal: int) -> str:
         """Build the rich-media block that REPLACES the tool body:
