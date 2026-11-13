@@ -97,54 +97,50 @@ const metaText = computed((): string => {
 }
 
 .scheduler-card__when {
-  border-radius: 10px;
-  background: color-mix(in oklab, var(--violet) 12%, transparent);
-  border: 1px solid color-mix(in oklab, var(--violet) 26%, transparent);
+  background: var(--cell);
+  color: var(--text);
   padding: 6px 4px;
   text-align: center;
 }
 
 .scheduler-card__when-day {
   font-family: var(--font-mono);
-  font-size: 0.58rem;
+  font-size: var(--fs-mono);
   letter-spacing: 0.16em;
   text-transform: uppercase;
-  color: color-mix(in oklab, var(--violet) 80%, var(--text-secondary));
 }
 
 .scheduler-card__when-date {
-  font-size: 1.35rem;
+  font-size: var(--fs-title);
   font-weight: 500;
   letter-spacing: -0.03em;
   line-height: 1;
   margin: 2px 0;
-  color: var(--text-primary);
 }
 
 .scheduler-card__when-mon {
   font-family: var(--font-mono);
-  font-size: 0.58rem;
+  font-size: var(--fs-mono);
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--text-tertiary);
 }
 
 .scheduler-card__title {
-  font-size: 0.96rem;
+  font-size: var(--fs-body);
   font-weight: 500;
   letter-spacing: -0.005em;
   margin: 0 0 2px;
-  color: var(--text-primary);
+  color: var(--text);
 }
 
 .scheduler-card__meta {
   font-family: var(--font-mono);
-  font-size: 0.74rem;
-  color: var(--text-tertiary);
+  font-size: var(--fs-mono);
+  color: var(--muted);
   letter-spacing: 0.04em;
 
   b {
-    color: var(--text-secondary);
+    color: var(--muted);
     font-weight: 500;
   }
 }

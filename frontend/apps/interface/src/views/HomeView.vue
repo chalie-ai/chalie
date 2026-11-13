@@ -6,14 +6,13 @@ import {
   BaseCard,
   BaseField,
   getHost,
-  getToken,
   useTheme,
   useWebSocket,
 } from '@chalie/shared';
 
 const { theme, toggle } = useTheme();
 const { connected } = useWebSocket();
-const api = new ApiClient(getHost, getToken);
+const api = new ApiClient(getHost);
 const ready = ref<string>('checking…');
 const note = ref('');
 
@@ -38,7 +37,7 @@ onMounted(async () => {
       <BaseField v-model="note" data-testid="note" label="Scratch note" placeholder="type…" />
       <div class="action-row">
         <BaseButton data-testid="toggle-theme" @click="toggle">Toggle theme</BaseButton>
-        <BaseButton variant="ghost">Ghost</BaseButton>
+        <BaseButton variant="secondary">Secondary</BaseButton>
       </div>
     </BaseCard>
   </main>

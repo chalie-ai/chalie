@@ -23,6 +23,7 @@ import sqlite3
 import threading
 import time
 from collections.abc import Iterator
+from datetime import datetime, timedelta
 from typing import cast
 from unittest.mock import patch
 
@@ -40,6 +41,7 @@ from models.provider_response import ProviderResponse
 from models.turn_execution import TurnExecution
 from services.policy_manager import _ASK_NO_SURFACE, _permission_gates
 from services.websocket import Websocket
+from tests.helpers import NO_PLAN, drain_background_turns, is_planning_request
 
 pytestmark = pytest.mark.unit
 
@@ -57,6 +59,9 @@ class _RecordingClient:
 
     def __init__(self) -> None:
         self.frames: list[dict[str, object]] = []
+
+    def close(self) -> None:
+        """Nothing to release: the captured frames stay readable after the registry lets go."""
 
     def send(self, data: str) -> None:
         self.frames.append(json.loads(data))
@@ -96,7 +101,9 @@ class _ScriptedProvider:
     def get_context_limit(self) -> int:
         return 200000
 
-    def send(self, _dto: object) -> ProviderResponse:
+    def send(self, dto: object) -> ProviderResponse:
+        if is_planning_request(dto):
+            return NO_PLAN
         if self.sends >= len(self._responses):
             return self._TERMINAL
         response = self._responses[self.sends]
@@ -111,26 +118,11 @@ def _probe_call() -> _ScriptedProvider:
     )
 
 
-def _drain_background_turns(timeout_s: float = 10.0) -> None:
-    """Join the fire-and-forget post-turn daemon turns so they finish inside THIS
-    test's provider + DB patch and never leak into the next test."""
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        pending = [
-            t for t in threading.enumerate()
-            if t.name in ("skill-suggest", "thread-gist") or t.name.startswith("turn-")
-        ]
-        if not pending:
-            return
-        for t in pending:
-            t.join(timeout=deadline - time.monotonic())
-
-
 def _run(mp: MessageProcessor, provider: _ScriptedProvider) -> None:
     with patch(_BUILD_CLIENT, return_value=provider):
         mp.begin()
         mp.result()
-        _drain_background_turns()
+        drain_background_turns()
 
 
 class _Answerer:
@@ -221,12 +213,17 @@ def test_user_turn_ask_prompts_on_that_turn_with_summary(
     requests = recorder.of_type("permission_request")
     assert len(requests) == 1, recorder.frames
     rid = requests[0]["request_id"]
+    # The park instant rides on the frame as ISO-8601 UTC — it must parse back
+    # to an aware UTC datetime so a reloaded client can age the live line.
+    asked_at = datetime.fromisoformat(cast(str, requests[0]["asked_at"]))
+    assert asked_at.tzinfo is not None and asked_at.utcoffset() == timedelta(0)
     assert requests[0] == {
         "type": "permission_request",
         "request_id": rid,
         "action_id": "gate_probe",
         "summary": _SUMMARY,
         "origin": {"type": "user", "turn_id": mp.turn_id, "forked": False},
+        "asked_at": asked_at.isoformat(timespec="seconds"),
     }
     assert recorder.of_type("permission_resolved") == [{"type": "permission_resolved", "request_id": rid}]
     assert rid not in _permission_gates

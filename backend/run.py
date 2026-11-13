@@ -22,13 +22,14 @@ if TYPE_CHECKING:
     import ssl
 
     from boot_screen import BootScreen as _BootScreen
+    from models.turn_execution import TurnExecution
     from services.embedding_service import EmbeddingService
     from services.onnx_inference_service import OnnxInferenceService
     from consumer import WorkerManager as _WorkerManager
 
 
 def _parse_cli() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Chalie — personal intelligence layer")
+    parser = argparse.ArgumentParser(description="Chalie — built for day 300.")
     parser.add_argument("--port", type=int, default=31025, help="Server port (default: 31025)")
     parser.add_argument("--host", default="0.0.0.0", help="Bind address (default: 0.0.0.0)")
     return parser.parse_args()
@@ -65,19 +66,18 @@ if __name__ == "__main__":
         _boot_screen.serve_forever()
         sys.exit(1)
 
-# Force numpy/transformers to fully initialize before any background thread
+# Force numpy to fully initialize before any background thread
 # imports them. Python's import system isn't fully thread-safe for nested
 # imports — concurrent first-imports from multiple threads cause a circular
 # import in numpy._typing (NDArray not yet available from the
 # partially-initialized module), which poisons sys.modules and makes every
 # subsequent embedding call fail with "maximum recursion depth exceeded".
-# A failure here is not survivable: it means numpy/transformers is present but
+# A failure here is not survivable: it means numpy is present but
 # broken, and every embedding call downstream would fail with a recursion error
 # that reads nothing like its cause. Context is added and the error re-raised —
 # never swallowed into a warning that boots a broken process anyway.
 try:
     import numpy  # noqa: F401 — thread-safety warm-up
-    import transformers  # noqa: F401 — thread-safety warm-up
 except Exception as _e:
     print(f"[BOOT] CRITICAL: Chalie failed to load, core import failed: {_e}",
           file=sys.stderr, flush=True)
@@ -313,6 +313,23 @@ def _init_services() -> None:
     logger.info("[Startup] WriteQueueService started")
 
 
+def _reply_to_swept_subtasks(swept: list["TurnExecution"]) -> None:
+    """Tell the caller of every subtask the boot sweep closed that a restart
+    cut it off — the reply the subtask's own end would have sent, had its
+    process lived. A memory step swept on the subtask channel is not a
+    subtask (``is_subtask_turn``) and has no caller to tell. One failed
+    notice is logged and the rest still go out: a caller missing its notice
+    must never stop the boot."""
+    from abilities.subtask import is_subtask_turn, reply_to_caller
+
+    for row in swept:
+        try:
+            if is_subtask_turn(row.channel, row.turn_id):
+                reply_to_caller(row.turn_id, "")
+        except Exception:
+            logger.exception("[Startup] Subtask #%d: the restart notice to its caller failed", row.turn_id)
+
+
 def _register_workers(manager: "_WorkerManager", host: str, port: int) -> None:
     """Register all service workers with the WorkerManager.
 
@@ -464,12 +481,18 @@ def main() -> None:
     # TurnExecutionService.sweep_orphaned() every in-process turn would.
     from controllers.message_processor import MessageProcessor
     _boot_mp = MessageProcessor(config_for(ConfigTypeEnum.USER))
-    _closed = _boot_mp.turn_execution_service.sweep_orphaned()
-    if _closed:
-        logger.info("[Startup] Closed %d orphaned turn_executions row(s)", _closed)
+    _swept = _boot_mp.turn_execution_service.sweep_orphaned()
+    if _swept:
+        logger.info("[Startup] Closed %d orphaned turn_executions row(s)", len(_swept))
 
     _run_startup_migrations()
     _init_services()
+
+    # Only now, not at the sweep: each notice writes a row on the caller's
+    # thread and starts a turn whose own thread reads and writes the
+    # conversation tables, so it must run on the migrated schema, never
+    # alongside the transcript rebuild and backfills above.
+    _reply_to_swept_subtasks(_swept)
 
     _check_asset_caches()
     _warmup_models()

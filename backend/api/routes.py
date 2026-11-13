@@ -24,6 +24,10 @@ from __future__ import annotations
 from importlib import import_module
 from pkgutil import walk_packages
 
+from .actions.browser.handoffs import BrowserHandoffs
+from .actions.browser.history import BrowserHistory
+from .actions.browser.navigate import BrowserNavigate
+from .actions.browser.tabs import BrowserTabs
 from .actions.capabilities.disconnect import CapabilitiesDisconnect
 from .actions.capabilities.setup import CapabilitiesSetup
 from .actions.capabilities.status import CapabilitiesStatus
@@ -65,9 +69,15 @@ from .endpoints.providers import Providers
 from .endpoints.scheduler import Scheduler
 from .endpoints.skills import Skills
 from .endpoints.threads import ThreadsEndpoint
+from .endpoints.tool_calls import ToolCallsEndpoint
 from .endpoints.wrappers import WrappersEndpoint
 
 ROUTES: tuple[Endpoint, ...] = (
+    BrowserHandoffs("browser", "handoffs"),
+    BrowserHistory("browser", "history"),
+    BrowserNavigate("browser", "navigate"),
+    BrowserTabs("browser", "tabs"),
+
     CapabilitiesEndpoint("capabilities"),
     CapabilitiesDisconnect("capabilities", "disconnect"),
     CapabilitiesSetup("capabilities", "setup"),
@@ -117,6 +127,8 @@ ROUTES: tuple[Endpoint, ...] = (
     ThreadsEndpoint("threads"),
     ThreadsBatch("threads", "batch"),
     ThreadsThinkingLevel("threads", "thinking-level"),
+
+    ToolCallsEndpoint("tool-calls"),
 
     VoiceHealthAction("voice", "health"),
     VoiceTranscribeAction("voice", "transcribe"),

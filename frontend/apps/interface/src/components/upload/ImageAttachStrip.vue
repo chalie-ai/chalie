@@ -8,6 +8,7 @@
  */
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useAttachmentsStore } from '../../stores/attachments';
+import { FileText, X } from '@lucide/vue';
 
 const attachments = useAttachmentsStore();
 
@@ -94,7 +95,7 @@ onBeforeUnmount(() => {
       </template>
 
       <template v-else>
-        <div class="image-preview__doc-icon" aria-hidden="true">📄</div>
+        <FileText :size="16" aria-hidden="true" />
         <span class="image-preview__doc-name">{{ truncate(preview.filename) }}</span>
       </template>
 
@@ -104,7 +105,7 @@ onBeforeUnmount(() => {
         aria-label="Remove attachment"
         @click="attachments.remove(index)"
       >
-        ×
+        <X :size="16" />
       </button>
     </div>
   </div>
@@ -120,14 +121,10 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
   gap: var(--space-xs);
   padding: var(--space-sm);
-  background: var(--bg-surface-2);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  backdrop-filter: blur(20px) saturate(120%);
-  -webkit-backdrop-filter: blur(20px) saturate(120%);
+  background: var(--surface-2);
 
   &--drag {
-    outline: 2px dashed var(--accent);
+    outline: 2px dashed var(--pink-text);
     outline-offset: -2px;
   }
 
@@ -138,10 +135,8 @@ onBeforeUnmount(() => {
     justify-content: center;
     width: 56px;
     height: 56px;
-    border-radius: var(--radius-sm);
     overflow: hidden;
-    background: var(--surface-raised, var(--surface, #222));
-    border: 1px solid var(--border);
+    background: var(--surface);
     flex-shrink: 0;
 
     img {
@@ -157,21 +152,14 @@ onBeforeUnmount(() => {
       width: auto;
       min-width: 64px;
       max-width: 120px;
-      // A doc thumb shows its frame (unlike image thumbs), so it needs a real
-      // theme-aware token: --surface-raised/--surface don't exist here and fell
-      // back to #222 — illegible against the light-mode filename text.
-      background: var(--bg-surface-2);
+      background: var(--surface-2);
     }
   }
 
-  &__doc-icon {
-    font-size: 18px;
-    line-height: 1;
-  }
-
   &__doc-name {
-    font-size: 10px;
-    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono);
+    color: var(--muted);
     text-align: center;
     word-break: break-all;
     white-space: nowrap;
@@ -187,21 +175,22 @@ onBeforeUnmount(() => {
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 16px;
-    height: 16px;
-    border-radius: 50%;
-    border: none;
+    width: var(--icon);
+    height: var(--icon);
     padding: 0;
-    font-size: 12px;
-    line-height: 1;
     cursor: pointer;
-    background: var(--surface-overlay, rgba(0 0 0 / 0.6));
+    background: var(--surface);
     color: var(--text);
-    opacity: 0;
-    transition: opacity 0.15s;
+    transition:
+      background-color var(--dur-1) var(--ease-out),
+      translate var(--dur-1) var(--ease-out);
 
-    .image-preview__thumb:hover & {
-      opacity: 1;
+    &:hover {
+      background: var(--surface-2);
+    }
+
+    &:active {
+      translate: 0 1px;
     }
   }
 }

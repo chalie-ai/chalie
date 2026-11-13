@@ -70,7 +70,7 @@ def _settled_exchange(question: str, answer: str) -> MessageProcessor:
     around the turn under inspection, so an empty result can never pass by
     accident."""
     mp = _start_turn(MessageProcessor(UserConfig(), raw_input=question))  # inert (I2)
-    mp.transcript_service.append_assistant(answer)
+    mp.transcript_service.append_assistant(answer, settled=True)
     mp.turn_execution_service.finish(TurnExecution.COMPLETED)
     return mp
 

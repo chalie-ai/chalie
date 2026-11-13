@@ -250,9 +250,9 @@ def test_link_rows_exist_before_the_working_frame_is_broadcast(
     from services.database import Database
     from models.turn_execution import TurnExecution
     from models.provider_response import ProviderResponse
+    from tests.helpers import drain_background_turns
     from tests.test_message_processor_empty_completion import (
         _ScriptedProvider,
-        _drain_background_turns,
     )
 
     _redirect_docs_and_index(tmp_path, monkeypatch)
@@ -279,7 +279,7 @@ def test_link_rows_exist_before_the_working_frame_is_broadcast(
     with patch("services.provider_service.build_client", return_value=provider):
         mp.begin()
         mp.result()
-        _drain_background_turns()
+        drain_background_turns()
 
     assert rows_at_working == [["uploads/agenda.txt"]], rows_at_working
 

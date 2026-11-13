@@ -6,6 +6,7 @@
  * triggering bubble sits. Closes on backdrop click, the × button, or Escape.
  */
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { X } from '@lucide/vue';
 
 interface Props {
   src: string;
@@ -62,7 +63,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKey));
         aria-label="Close preview"
         @click="emit('close')"
       >
-        ×
+        <X :size="16" />
       </button>
       <img
         class="img-modal__img"
@@ -77,8 +78,6 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKey));
 </template>
 
 <style scoped lang="scss">
-// The dim is intentionally dark in both themes — the image is the focus, the way
-// every lightbox dims its surround regardless of the page theme.
 .img-modal {
   position: fixed;
   inset: 0;
@@ -87,16 +86,12 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKey));
   align-items: center;
   justify-content: center;
   padding: var(--space-xl);
-  background: rgba(0, 0, 0, 0.82);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  animation: imgModalFade 160ms ease;
+  background: var(--bg);
+  animation: fade var(--dur-2) var(--ease-out);
 }
 
 .img-modal__img {
   object-fit: contain;
-  border-radius: var(--radius-md);
-  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6);
 }
 
 .img-modal__close {
@@ -106,28 +101,21 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKey));
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
-  border: none;
-  border-radius: 50%;
-  background: rgba(0, 0, 0, 0.45);
-  color: #fff;
-  font-size: 24px;
-  line-height: 1;
+  width: var(--control-h);
+  height: var(--control-h);
+  background: var(--surface-2);
+  color: var(--text);
   cursor: pointer;
-  transition: background 150ms ease;
+  transition:
+    background-color var(--dur-1) var(--ease-out),
+    translate var(--dur-1) var(--ease-out);
 
   &:hover {
-    background: rgba(0, 0, 0, 0.7);
+    background: var(--cell);
   }
-}
 
-@keyframes imgModalFade {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
+  &:active {
+    translate: 0 1px;
   }
 }
 </style>

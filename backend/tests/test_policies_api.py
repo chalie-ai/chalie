@@ -1,5 +1,6 @@
 import sqlite3
 from collections.abc import Generator
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -194,12 +195,18 @@ class TestPendingListing:
         from services.policy_manager import _permission_gates
 
         rid = "0f3c9b6a-8d2e-4c1f-9a7b-2e5d6c4b8a10"
+        # The park instant the manager stamps on the frame — the test supplies
+        # its own so the endpoint's pass-through is asserted byte-for-byte.
+        asked_at = "2026-10-07T06:32:11+00:00"
+        parsed = datetime.fromisoformat(asked_at)
+        assert parsed.tzinfo is not None and parsed.utcoffset() == timedelta(0)
         frame: dict[str, object] = {
             "type": "permission_request",
             "request_id": rid,
             "action_id": "pim",
             "summary": "Check tomorrow's calendar",
             "origin": {"type": "scheduled", "turn_id": 42, "forked": True},
+            "asked_at": asked_at,
         }
         _permission_gates[rid] = {"event": threading.Event(), "result": None, "frame": frame}
         try:
@@ -213,5 +220,6 @@ class TestPendingListing:
             "action_id": "pim",
             "summary": "Check tomorrow's calendar",
             "origin": {"type": "scheduled", "turn_id": 42, "forked": True},
+            "asked_at": asked_at,
         }]
         assert body["pagination"] == {"page": 1, "limit": 1, "total": 1}

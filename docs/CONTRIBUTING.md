@@ -6,22 +6,29 @@
 
 - `backend/` — Python backend (Flask + SQLite). Entry point: `backend/run.py`. Key packages: `services/` (business logic), `abilities/` (built-in tools), `capabilities/` (external-system adapters), `api/` (REST + WebSocket), `models/`, `workers/`, `migrations/` + `schema.sql`.
 - `frontend/` — pnpm workspace (Vue 3 + TypeScript + Vite): `apps/interface` (the user-facing UI), `apps/brain` (the admin/cognitive dashboard), shared code under `packages/`.
+- `desktop/` — the macOS desktop app (Tauri 2 + Vue 3): a first-run wizard and the Rust that signs in and points its window at a Chalie server, which serves the same `frontend/` bundles a browser gets. Build steps in [desktop/README.md](../desktop/README.md). Left out of the source archive the installer extracts.
 
 ## Setup & running
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
-pip install -e backend/                 # all dependencies, voice (TTS/STT/VAD) included
+pip install -e 'backend[dev]'           # all runtime deps, voice (TTS/STT/VAD) included, plus pytest and mypy
 python backend/run.py                   # SQLite auto-initializes; no external services required
 ```
+
+The `dev` extra holds the test tooling (pytest, mypy); the installer and Docker image install the runtime set only.
 
 The database is versioned per release (`data/chalie-<version>.sqlite`) and is never rewritten in place — a change to `schema.sql` only takes effect in a fresh file. After editing the schema locally, delete the versioned database file (and its `-wal`/`-shm` sidecars) under `data/`, or bump `VERSION`, then restart. Treat a dev container the same way: it's disposable, never built on top of across a schema change.
 
 There is no `.env` and no environment-variable configuration: code-level config is Python constants, runtime settings live in the Brain interface, and secrets auto-generate on first run.
 
-This manual flow syncs Python dependencies only. The Playwright browser and the on-device voice models are fetched once by `installer/install.sh` (or the Docker build), not by `pip install -e backend/` or `python backend/run.py` — abilities that need them fail loudly with a reinstall hint until you've run the installer at least once.
+This manual flow syncs Python dependencies only. The headless browser and the on-device voice models are fetched by `installer/install.sh` (or the Docker build) into its install's `resources/`, not by `pip install -e backend/` or `python backend/run.py`. A checkout reads the git-ignored `resources/` at the repo root instead, so abilities that need them fail loudly until you copy them in from an install — on Linux the installer also adds the browser's system libraries:
 
-`run.py` will not start with a dependency missing. Before any heavy import it checks every entry in `backend/pyproject.toml` against the installed distributions; if one is absent it names it on stderr, serves a terminal error page on the public port instead of the starting page, and exits non-zero. A backend that boots without its dependencies silently takes the degraded branch of some `except ImportError` and lies about its own state. So after a pull that changes `pyproject.toml`, re-run `pip install -e backend/`.
+```bash
+cp -R ~/.chalie/app/resources .         # from the repo root, after running the installer once
+```
+
+`run.py` will not start with a dependency missing. Before any heavy import it checks every entry in `backend/pyproject.toml` against the installed distributions; if one is absent it names it on stderr, serves a terminal error page on the public port instead of the starting page, and exits non-zero. A backend that boots without its dependencies silently takes the degraded branch of some `except ImportError` and lies about its own state. So after a pull that changes `pyproject.toml`, re-run `pip install -e 'backend[dev]'`.
 
 Frontend:
 

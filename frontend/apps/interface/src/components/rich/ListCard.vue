@@ -64,7 +64,7 @@ async function onToggle(item: ListItem): Promise<void> {
     </div>
 
     <div class="list-card__bar">
-      <div class="list-card__bar-fill" :style="{ '--fill': progressPercent + '%' }" />
+      <div class="list-card__bar-fill" :style="{ width: progressPercent + '%' }" />
     </div>
 
     <div class="list-card__items">
@@ -93,40 +93,36 @@ async function onToggle(item: ListItem): Promise<void> {
 }
 
 .list-card__title {
-  font-size: 1.05rem;
+  font-size: var(--fs-title);
   font-weight: 500;
   letter-spacing: -0.005em;
   margin: 0;
-  color: var(--text-primary);
+  color: var(--text);
 }
 
 .list-card__progress {
   font-family: var(--font-mono);
-  font-size: 0.72rem;
-  color: var(--text-tertiary);
+  font-size: var(--fs-mono);
+  color: var(--muted);
   letter-spacing: 0.06em;
 }
 
 .list-card__progress b {
-  color: var(--success);
+  color: var(--allow-text);
   font-weight: 500;
 }
 
 .list-card__bar {
   height: 2px;
-  background: var(--border);
-  border-radius: 1px;
+  background: var(--cell);
   overflow: hidden;
   margin-bottom: 6px;
 }
 
 .list-card__bar-fill {
-  width: var(--fill, 0);
   height: 100%;
-  background: linear-gradient(90deg, var(--violet), var(--violet-hover));
-  box-shadow: 0 0 6px color-mix(in oklab, var(--violet) 50%, transparent);
-  border-radius: 1px;
-  transition: width 300ms ease;
+  background: var(--pink);
+  transition: width var(--dur-3) var(--ease-out);
 }
 
 .list-card__items {
@@ -140,45 +136,40 @@ async function onToggle(item: ListItem): Promise<void> {
   gap: 12px;
   align-items: flex-start;
   padding: 10px 0;
-  border-bottom: 1px solid color-mix(in oklab, var(--border) 60%, transparent);
   cursor: pointer;
-  transition: background 160ms ease;
-
-  &:last-child {
-    border-bottom: none;
-  }
+  transition: background-color var(--dur-1) var(--ease-out);
 
   &:hover {
-    background: color-mix(in oklab, var(--text) 1.5%, transparent);
+    background: var(--surface-2);
   }
 }
 
 .list-card__check {
   width: 18px;
   height: 18px;
-  border-radius: 6px;
-  border: 1.5px solid var(--border-strong);
+  border: 1.5px solid var(--control);
   background: transparent;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   margin-top: 1px;
   flex-shrink: 0;
-  transition: all 160ms ease;
+  transition:
+    background-color var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out);
 
   svg {
     width: 11px;
     height: 11px;
     opacity: 0;
-    color: white;
+    color: var(--on-pink);
   }
 }
 
 .list-card__item--done {
   .list-card__check {
-    background: var(--violet);
-    border-color: var(--violet);
-    box-shadow: 0 0 8px color-mix(in oklab, var(--violet) 50%, transparent);
+    background: var(--pink);
+    border-color: var(--pink);
 
     svg {
       opacity: 1;
@@ -186,15 +177,14 @@ async function onToggle(item: ListItem): Promise<void> {
   }
 
   .list-card__text {
-    color: var(--text-tertiary);
+    color: var(--muted);
     text-decoration: line-through;
-    text-decoration-color: color-mix(in oklab, var(--text-tertiary) 60%, transparent);
   }
 }
 
 .list-card__text {
-  font-size: 0.94rem;
-  color: var(--text-primary);
+  font-size: var(--fs-body);
+  color: var(--text);
   line-height: 1.4;
 }
 </style>

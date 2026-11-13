@@ -44,6 +44,7 @@ class Channel(str, Enum):
     DELEGATE_WEB_SEARCH  = "delegate:web_search"
     DELEGATE_VISION      = "delegate:vision"
     DELEGATE_CODE_AGENT  = "delegate:code_agent"
+    DELEGATE_SUBTASK     = "delegate:subtask"
 
     # ── External agents (dynamic: external-agent:{name}) ─────────────────────
     EXTERNAL_AGENT = "external-agent"
@@ -52,3 +53,18 @@ class Channel(str, Enum):
     def for_external_agent(cls, name: str) -> str:
         """Build the dynamic ``external-agent:{name}`` channel string."""
         return f"{cls.EXTERNAL_AGENT.value}:{name}"
+
+
+# The delegate turns a user may watch: the channels of the configs that each
+# DelegateAbility tool runs its child turn on — every one writes a transcript
+# of its own (vision and thread_gist write none, so there is nothing to show).
+# Their frames reach the wire addressed by channel, and the threads read
+# accepts no other channel. Subtasks are watched the same way, though they run
+# in the background instead of blocking the caller.
+WATCHABLE_DELEGATE_CHANNELS: frozenset[str] = frozenset({
+    Channel.DELEGATE_WEB_SEARCH.value,
+    Channel.DELEGATE_WEB_BROWSE.value,
+    Channel.DELEGATE_PIM.value,
+    Channel.DELEGATE_CODE_AGENT.value,
+    Channel.DELEGATE_SUBTASK.value,
+})

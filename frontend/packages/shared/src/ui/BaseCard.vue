@@ -11,20 +11,8 @@ defineProps<{ title?: string }>();
   </section>
 </template>
 
-<style scoped lang="scss">
-.base-card {
-  background: var(--bs-card-bg);
-  border: 1px solid var(--bs-card-border-color);
-  border-radius: var(--bs-border-radius-lg);
-  overflow: hidden;
-  &__head {
-    padding: 0.75rem 1rem;
-    background: var(--bs-card-cap-bg);
-    border-bottom: 1px solid var(--bs-card-border-color);
-    font-weight: 600;
-  }
-  &__body {
-    padding: 1rem;
-  }
-}
+<style scoped>
+.base-card { background: var(--surface); border: 1px solid var(--line); }
+.base-card__head { padding: 0.75rem 1rem; border-bottom: 1px solid var(--line); font: 700 1.125rem/1.2 var(--font-display); }
+.base-card__body { padding: 1rem; }
 </style>

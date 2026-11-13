@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Tauri's core default permissions for the main window, and nothing else: the bundled setup wizard needs no plugin permissions.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default"
+  ]
+}

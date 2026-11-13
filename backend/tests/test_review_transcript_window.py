@@ -25,9 +25,9 @@ pytestmark = pytest.mark.unit
 _ANCHOR = "2026-04-07T14:30:00+00:00"
 
 
-def _seed(channel: str, content: str, created_at: str) -> None:
+def _seed(channel: str, content: str, created_at: str, role: str = "user") -> None:
     Transcript(
-        channel=channel, role="user", content=content,
+        channel=channel, role=role, content=content,
         created_at=created_at, xml_migrated=1,
     ).save()
 
@@ -79,3 +79,27 @@ def test_include_subagent_transcripts_adds_subagent_channel_rows(db: sqlite3.Con
     assert isinstance(result.body, list)
     contents = {row["content"] for row in result.body}
     assert contents == {"approved email draft", "subagent task result"}
+
+
+def test_blank_assistant_step_rows_are_not_returned(db: sqlite3.Connection) -> None:
+    """A provider call that only made tool calls stores an empty assistant row.
+    The model uses this tool to re-read EXACT wording, and a blank entry has
+    none: the in-window question and the real answer come back, the empty and
+    whitespace-only step rows between them do not (nor do they inflate the
+    reported count)."""
+    _seed("user", "what is on my calendar", "2026-04-07 14:29:00")
+    _seed("user", "", "2026-04-07 14:29:10", role="assistant")
+    _seed("user", "  \n", "2026-04-07 14:29:20", role="assistant")
+    _seed("user", "Nothing today.", "2026-04-07 14:29:30", role="assistant")
+
+    result = ReviewTranscriptAbility().run(
+        built(ReviewTranscriptParamsBag.from_params({"date_time": _ANCHOR})),
+    )
+
+    assert result.status == "success"
+    assert isinstance(result.body, list)
+    assert [(row["role"], row["content"]) for row in result.body] == [
+        ("user", "what is on my calendar"),
+        ("assistant", "Nothing today."),
+    ]
+    assert result.meta["count"] == 2

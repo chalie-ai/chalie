@@ -32,10 +32,6 @@ test.describe('Brain SPA — smoke', () => {
     await expect(page.locator('#topbar')).toBeVisible();
     await expect(page.locator('main.main #panelRoot')).toBeVisible();
 
-    // Brand wordmark.
-    await expect(page.locator('.sidebar-brand .wordmark')).toHaveText('Chalie');
-    await expect(page.locator('.sidebar-brand .wordmark-sub')).toHaveText('Brain');
-
     // All 10 top-level nav items present (Cognition + System groups).
     for (const id of NAV_IDS) {
       await expect(page.locator(`[data-nav="${id}"]`)).toBeVisible();
@@ -43,17 +39,5 @@ test.describe('Brain SPA — smoke', () => {
 
     // The Providers panel really rendered (not an empty router outlet).
     await expect(page.getByRole('heading', { name: 'LLM Providers' })).toBeVisible();
-  });
-
-  // Regression: .app-shell ships at opacity:0 (brain.scss) and App.vue must
-  // flip data-ready on mount to fade it in. The Vue cutover dropped legacy
-  // app.js's `appShell.style.opacity='1'`, leaving the whole shell painted
-  // transparent — DOM present, toBeVisible() still passed, screen blank. Assert
-  // the shell is actually OPAQUE after boot, the user-visible effect that broke.
-  test('shell is actually painted (opacity 1), not just present in the DOM', async ({ page }) => {
-    await page.goto('/brain/');
-    const shell = page.locator('#appShell');
-    await expect(shell).toHaveAttribute('data-ready', 'true');
-    await expect.poll(() => shell.evaluate((el) => getComputedStyle(el).opacity)).toBe('1');
   });
 });

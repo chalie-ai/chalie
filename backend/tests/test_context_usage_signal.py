@@ -29,8 +29,6 @@ Three claims, one per branch the emit site actually carries:
 
 import json
 import sqlite3
-import threading
-import time
 from unittest.mock import patch
 
 import pytest
@@ -42,6 +40,7 @@ from models.provider_response import ProviderResponse
 from services.processor_config import ProcessorConfig
 from services.provider_api import ProviderApiResponse
 from services.websocket import Websocket
+from tests.helpers import drain_background_turns
 
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 
@@ -68,6 +67,9 @@ class _RecordingClient:
     def __init__(self) -> None:
         self.frames: list[dict[str, object]] = []
 
+    def close(self) -> None:
+        """Nothing to release: the captured frames stay readable after the registry lets go."""
+
     def send(self, data: str) -> None:
         self.frames.append(json.loads(data))
 
@@ -78,12 +80,12 @@ class _RecordingClient:
 class _TokenReportingProvider:
     """A real functional double at the network boundary: implements the thin
     client protocol (``get_context_limit``/``send``)
-    and answers with one benign terminal response (non-empty text, no tool
-    calls) so the turn settles in a single step — one CHAT call, hence one
-    expected move of the meter. The text must be non-empty: an empty completion
-    trips the processor's empty-completion steer, which re-sends and would move
-    the meter again. ``tokens_input=None`` models a provider whose native
-    payload exposes no usage counter."""
+    and answers every send with one benign terminal response (non-empty text,
+    no tool calls), counting the sends: one CHAT call is one expected move of
+    the meter. A user turn makes two — the planning pre-pass, then one loop
+    step. The text must be non-empty: an empty completion trips the
+    processor's empty-completion steer, which re-sends. ``tokens_input=None``
+    models a provider whose native payload exposes no usage counter."""
 
     def __init__(self, tokens_input: int | None = _TOKENS_IN) -> None:
         self._tokens_input = tokens_input
@@ -132,25 +134,6 @@ class _WireReplyProvider:
         )
 
 
-def _drain_background_turns(timeout_s: float = 10.0) -> None:
-    """Join the fire-and-forget post-turn daemon turns a completed turn spawns
-    (skill suggestion, thread gist) so they run to completion inside THIS test's
-    provider+DB patch and never leak into the next — the same cross-test
-    corruption guard as test_message_processor_runaway_loop.py's helper of the
-    same name. Each is a whole MessageProcessor turn on its own daemon; left
-    running it would call ``build_client`` while the NEXT test holds the patch."""
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        pending = [
-            t for t in threading.enumerate()
-            if t.name in ("skill-suggest", "thread-gist") or t.name.startswith("turn-")
-        ]
-        if not pending:
-            return
-        for t in pending:
-            t.join(timeout=deadline - time.monotonic())
-
-
 def _run(
     config: ProcessorConfig,
     provider: _TokenReportingProvider | _WireReplyProvider,
@@ -166,7 +149,7 @@ def _run(
         with patch(_BUILD_CLIENT, return_value=provider):
             mp.begin()
             mp.result()
-            _drain_background_turns()
+            drain_background_turns()
     finally:
         Websocket._disconnect(client)
     return mp, client
@@ -183,13 +166,14 @@ def test_user_turn_emits_context_usage_with_tokens_and_window(db: sqlite3.Connec
 
     mp, client = _run(UserConfig(), provider, "how full is my context")
 
+    assert provider.sends >= 1, "turn never reached the provider — silence proves nothing"
     usage = client.usage_frames()
-    assert len(usage) == 1, f"expected exactly one meter move per CHAT call, got {usage!r}"
-    frame = usage[0]
-    assert frame["tokens_input"] == _TOKENS_IN
-    assert frame["context_window"] == _CLIENT_WINDOW  # the client's real limit, under the cap
-    assert frame["turn_id"] == mp.turn_id
-    assert frame["type"] == "user"
+    assert len(usage) == provider.sends, f"expected exactly one meter move per CHAT call, got {usage!r}"
+    for frame in usage:
+        assert frame["tokens_input"] == _TOKENS_IN
+        assert frame["context_window"] == _CLIENT_WINDOW  # the client's real limit, under the cap
+        assert frame["turn_id"] == mp.turn_id
+        assert frame["type"] == "user"
 
 
 def test_wire_contract_reply_reaches_meter_as_occupancy(db: sqlite3.Connection) -> None:
@@ -206,12 +190,12 @@ def test_wire_contract_reply_reaches_meter_as_occupancy(db: sqlite3.Connection) 
 
     assert provider.sends >= 1, "turn never reached the provider — silence proves nothing"
     usage = client.usage_frames()
-    assert len(usage) == 1, f"expected exactly one meter move per CHAT call, got {usage!r}"
-    frame = usage[0]
-    assert frame["tokens_input"] == _TOKENS_IN + _CACHE_READ + _CACHE_CREATE
-    assert frame["context_window"] == _CLIENT_WINDOW
-    assert frame["turn_id"] == mp.turn_id
-    assert frame["type"] == "user"
+    assert len(usage) == provider.sends, f"expected exactly one meter move per CHAT call, got {usage!r}"
+    for frame in usage:
+        assert frame["tokens_input"] == _TOKENS_IN + _CACHE_READ + _CACHE_CREATE
+        assert frame["context_window"] == _CLIENT_WINDOW
+        assert frame["turn_id"] == mp.turn_id
+        assert frame["type"] == "user"
 
 
 def test_background_turn_emits_no_context_usage(db: sqlite3.Connection) -> None:

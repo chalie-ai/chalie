@@ -10,9 +10,8 @@
 race, the exact defect that let a cancelled turn resurface with
 ``cancel_requested=0``.
 
-Every provider client is one blocking, non-streaming call with no mid-flight
-abort hook, so a cancel can land (a separate connection/thread stamping the
-row CANCELLED, ``ended_at`` set) WHILE the turn's own drive thread is still
+A cancel lands on a separate connection/thread (stamping the row CANCELLED,
+``ended_at`` set), so it can land WHILE the turn's own drive thread is still
 holding a stale, pre-cancel in-memory copy of the execution row and is about
 to call its own ``finish()`` on a clean return. Before the fix, ``finish()``
 built a fresh row from that stale in-memory copy (``cancel_requested=False``,

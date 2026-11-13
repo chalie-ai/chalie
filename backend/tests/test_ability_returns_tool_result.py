@@ -40,7 +40,7 @@ def test_ability_return_types_are_statically_honoured() -> None:
     successfully (returncode ∈ {0, 1}) rather than crashing or misconfiguring.
     """
     assert importlib.util.find_spec("mypy") is not None, (
-        "mypy must be installed (it is a pyproject dependency) for the static "
+        "mypy must be installed (it is in the pyproject `dev` extra) for the static "
         "ToolResult return-type gate to run"
     )
 

@@ -95,7 +95,7 @@ function loadMore(): void {
         </tbody>
       </table>
       <div v-if="hasMore" class="records-footer">
-        <button class="btn btn-secondary" @click="loadMore">Load more</button>
+        <button class="btn" @click="loadMore">Load more</button>
       </div>
     </template>
   </template>

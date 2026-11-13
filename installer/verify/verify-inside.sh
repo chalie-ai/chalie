@@ -11,7 +11,8 @@
 #                   each reporting "ok" (embeddings ok == the embedding session
 #                   is built; onnx ok == the classifier heads registered)
 #        webserver  GET / serves the interface bundle
-#        chromium   Playwright drives the live instance and reads its title
+#        chromium   Chalie's browser session opens the live instance and reads
+#                   its title
 #        voice      a real Kokoro synthesis is fed back through Moonshine STT
 #                   (which runs Silero VAD on the way) and returns text
 #        deno       the bundled runtime executes a script and returns stdout
@@ -22,17 +23,25 @@
 # plus a final `VERDICT=<...>` line that the host driver (run-matrix.sh) collects.
 #
 # Inputs (env):
-#   CHALIE_BRANCH  branch ref to install (self-fetched by the installer)
-#   ROW_NAME       label for this matrix row (for the log)
-#   ROW_EXPECT     pass | refuse-old-python
-#   INSTALLER_PATH path to the installer (defaults to the container mount at
-#                  /verify/install.sh; set it to the checked-out installer on a
-#                  bare host where nothing is mounted).
+#   CHALIE_BRANCH     branch ref to install (self-fetched by the installer)
+#   ROW_NAME          label for this matrix row (for the log)
+#   ROW_EXPECT        pass | pass-managed-python — the latter additionally
+#                     requires the venv to have been built from a uv-managed
+#                     CPython, which is what a host with no python3 3.11+ gets.
+#   ROW_STOCK_PYTHON  stock (default) | none — whether to install the distro's
+#                     stock python3 before running the installer.
+#   INSTALLER_PATH    path to the installer (defaults to the container mount at
+#                     /verify/install.sh; set it to the checked-out installer on
+#                     a bare host where nothing is mounted).
 set -uo pipefail   # deliberately NOT -e: observe failures, don't abort on them.
 
 BRANCH="${CHALIE_BRANCH:?CHALIE_BRANCH required}"
 EXPECT="${ROW_EXPECT:-pass}"
 NAME="${ROW_NAME:-unknown}"
+STOCK_PYTHON="${ROW_STOCK_PYTHON:-stock}"
+# The series install.sh provisions when the host has nothing usable
+# (install.sh: _MANAGED_PYTHON). Asserted on, so it is named here too.
+MANAGED_SERIES="3.12"
 # In a container the installer is mounted at /verify/install.sh; on a bare host
 # (the macOS CI runner) point INSTALLER_PATH at the checked-out installer instead.
 INSTALLER="${INSTALLER_PATH:-/verify/install.sh}"
@@ -48,12 +57,14 @@ result() { printf 'RESULT %s\n' "$*"; }
 # which is why the resolved path is printed alongside the version.
 _chalie_cli() { command -v chalie 2>/dev/null || echo "$HOME/.local/bin/chalie"; }
 
-# The installer checks for Python 3.11+ but deliberately never installs it — a
-# real machine is expected to already have python3. Official distro base images
-# are more stripped than a real install (Debian/Ubuntu bases ship no python3 at
+# A real machine usually has a python3 already, and official distro base images
+# are more stripped than one (the Debian, Ubuntu and Fedora bases ship none at
 # all), so reproduce a realistic system by installing the distro's STOCK python3
-# (no version bump) before handing off to the installer. The resulting version
-# is whatever that distro ships — which is exactly what decides pass vs refuse.
+# (no version bump) before handing off to the installer. The resulting version is
+# whatever that distro ships — which is what decides whether the installer builds
+# the venv from it or provisions a uv-managed CPython instead. Rows carrying
+# python=none skip this step: their whole claim is that a host with no python3 at
+# all still installs.
 _ensure_stock_python() {
   if command -v python3 >/dev/null 2>&1; then
     echo "stock python3 already present: $(python3 --version 2>&1)"
@@ -81,19 +92,29 @@ say "environment ($NAME)"
 echo "distro-id=${ID:-?} version=${VERSION_ID:-?} id-like=${ID_LIKE:-}"
 echo "arch=$(uname -m)"
 
-say "prerequisite: distro stock python3"
-# A refuse-old-python row deliberately targets a distro whose stock python is too
-# old — establishing that stock python IS the finding. Every row runs on a
-# native-arch runner, so any other row that cannot install its distro's stock
-# python has a real problem, not an emulation artefact: fail rather than excuse it.
-if ! _ensure_stock_python && [ "$EXPECT" != "refuse-old-python" ]; then
+say "prerequisite: distro stock python3 ($STOCK_PYTHON)"
+# Every row runs on a native-arch runner, so a row that cannot install its
+# distro's stock python has a real problem, not an emulation artefact: fail
+# rather than excuse it.
+if [ "$STOCK_PYTHON" = "none" ]; then
+  echo "SKIPPED by matrix — this row runs the installer on a host with NO python3"
+elif ! _ensure_stock_python; then
   result "reason=stock-python-prereq-unavailable"
   echo "VERDICT=FAIL $NAME"
   exit 0
 fi
-py_ver="$(python3 --version 2>&1 || echo none)"
+# `python3 --version` on a host without one would bury a shell "command not
+# found" in the recorded version string; ask first.
+if command -v python3 >/dev/null 2>&1; then py_ver="$(python3 --version 2>&1)"; else py_ver="none"; fi
 echo "python3=$py_ver  bash=$(command -v bash || echo ABSENT)  curl=$(command -v curl || echo ABSENT)"
 result "python=$py_ver"
+# A `none` row that finds a python3 anyway would silently turn into a copy of
+# its stock-python sibling while still printing "NO python3" into the CI log.
+if [ "$STOCK_PYTHON" = "none" ] && [ "$py_ver" != "none" ]; then
+  result "reason=nopython-row-but-python3-present($py_ver)"
+  echo "VERDICT=FAIL $NAME"
+  exit 0
+fi
 
 # ── Run the installer, faithfully and non-interactively ──────────────────────
 say "installer (--branch=$BRANCH)"
@@ -103,16 +124,30 @@ $TO bash "$INSTALLER" --branch="$BRANCH" 2>&1 | tee "$inst_log"
 inst_rc="${PIPESTATUS[0]}"
 result "installer_rc=$inst_rc"
 
-# ── Expectation: installer should REFUSE (default python < 3.11) ─────────────
-if [ "$EXPECT" = "refuse-old-python" ]; then
-  if [ "$inst_rc" -ne 0 ] && grep -q "Python 3.11+ is required" "$inst_log"; then
-    result "reason=refused-as-expected(old-python)"
-    echo "VERDICT=REFUSED $NAME"
-  else
-    result "reason=expected-python-refusal-did-not-fire"
-    echo "VERDICT=FAIL $NAME"
-  fi
-  exit 0
+# ── Expectation: the venv came from a uv-managed CPython ─────────────────────
+# Set on rows whose host has no python3 3.11+ — an old stock one, or none at all.
+# The installer must provision its own CPython there instead of refusing. This is
+# an EXTRA assertion, not a shortcut: the row still has to install, boot and pass
+# every probe below, so the verdict folds managed_ok in with the rest.
+#
+# The interpreter is read two ways because neither alone is the whole claim: the
+# resolved symlink of the venv's python says where the interpreter LIVES (uv's
+# own store, not /usr), and sys.version_info says WHICH series it is.
+managed_ok=1
+if [ "$EXPECT" = "pass-managed-python" ]; then
+  say "expectation: venv built from a uv-managed CPython $MANAGED_SERIES"
+  managed_ok=0
+  uv_root="${XDG_DATA_HOME:-$HOME/.local/share}/uv/python"
+  venv_py="$(readlink -f "$HOME/.chalie/venv/bin/python" 2>/dev/null || echo none)"
+  venv_ver="$("$HOME/.chalie/venv/bin/python" -c \
+    'import sys; print("%d.%d.%d" % sys.version_info[:3])' 2>/dev/null || echo none)"
+  echo "uv-python-root=$uv_root"
+  echo "venv-interpreter=$venv_py"
+  echo "venv-version=$venv_ver"
+  case "$venv_py" in
+    "$uv_root"/*) case "$venv_ver" in "$MANAGED_SERIES".*) managed_ok=1 ;; esac ;;
+  esac
+  result "managed_python=$([ "$managed_ok" = "1" ] && echo ok || echo fail)"
 fi
 
 # ── Dependency audit ─────────────────────────────────────────────────────────
@@ -135,8 +170,7 @@ try:
     print("onnxruntime", ort.__version__, "CPUExecutionProvider")
 except Exception as e:
     print("ONNXRUNTIME-IMPORT-FAIL:", repr(e)); hard_ok = False
-for m in ("onnx", "numpy", "transformers", "soundfile", "playwright",
-          "kokoro_onnx", "moonshine_onnx"):
+for m in ("numpy", "tokenizers", "soundfile", "kokoro_onnx", "moonshine_onnx"):
     try:
         __import__(m); print("import-ok", m)
     except Exception as e:
@@ -160,7 +194,8 @@ PY
   done
   deno_v="$("$HOME/.local/bin/deno" --version 2>/dev/null | head -1 || echo ABSENT)"
   echo "deno=$deno_v"
-  [ -d "$HOME/.cache/ms-playwright" ] && echo "playwright-browsers=present" || echo "playwright-browsers=ABSENT"
+  browser="$APP/resources/browser/chrome-headless-shell"
+  [ -x "$browser" ] && echo "browser-ok   $browser" || echo "browser-MISS $browser"
   cli_path="$(_chalie_cli)"
   cli_v="$("$cli_path" version 2>/dev/null || echo ABSENT)"
   echo "chalie-cli=$cli_v (resolved: $cli_path)"
@@ -168,8 +203,8 @@ PY
   # Measured, not estimated — this is the number the README's disk requirement
   # has to match, so it is recorded on every run rather than guessed once.
   say "installed footprint on disk"
-  du -sh "$HOME/.chalie" "$HOME/.cache/ms-playwright" "$HOME/.local/bin" 2>/dev/null
-  du -sc "$HOME/.chalie" "$HOME/.cache/ms-playwright" "$HOME/.local/bin" 2>/dev/null | tail -1
+  du -sh "$HOME/.chalie" "$HOME/.local/bin" 2>/dev/null
+  du -sc "$HOME/.chalie" "$HOME/.local/bin" 2>/dev/null | tail -1
 else
   say "dependency audit — SKIPPED (no venv; installer did not reach it)"
   result "dep_audit_rc=skipped"
@@ -227,22 +262,20 @@ if [ "$ready" = "1" ]; then
   result "webserver=$([ "$web_ok" = "1" ] && echo ok || echo fail)"
 
   # ── chromium: drive the LIVE instance, not an empty browser ───────────────
-  # Launching alone proves the shared objects resolved; navigating and reading
-  # the title proves the renderer works too, which is what the browsing ability
-  # actually needs. --no-sandbox/--disable-dev-shm-usage because this runs as
-  # root in a container (Chromium refuses to run as root with the sandbox on).
+  # Goes through Chalie's own browser session — the path the browsing ability
+  # takes — so it proves the bundled headless shell is found, launches with
+  # Chalie's flags, and renders: launching alone would only prove its shared
+  # objects resolved. Run from backend/ because its modules resolve via cwd.
   say "probe: chromium"
-  "$VENV/bin/python" - "$PORT" <<'PY'
+  ( cd "$APP/backend" && "$VENV/bin/python" - "$PORT" <<'PY'
 import sys
-port = sys.argv[1]
-from playwright.sync_api import sync_playwright
-with sync_playwright() as p:
-    b = p.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage"])
-    page = b.new_page()
-    page.goto(f"http://localhost:{port}/", wait_until="domcontentloaded", timeout=60000)
-    print("chromium navigated, title=%r" % page.title())
-    b.close()
+from tools.browser.session import run_verb
+
+env = run_verb(1, "open", {"url": f"http://localhost:{sys.argv[1]}/"})
+assert not env["error"], env["error"]
+print("chromium navigated, title=%r" % env["page"]["title"])
 PY
+  )
   [ $? -eq 0 ] && chromium_ok=1
   result "chromium=$([ "$chromium_ok" = "1" ] && echo ok || echo fail)"
 
@@ -322,7 +355,8 @@ fi
 say "verdict"
 if [ "$inst_rc" = "0" ] && [ "$ort_ok" = "1" ] && [ "$ready" = "1" ] \
    && [ "$web_ok" = "1" ] && [ "$chromium_ok" = "1" ] \
-   && [ "$voice_ok" = "1" ] && [ "$deno_ok" = "1" ]; then
+   && [ "$voice_ok" = "1" ] && [ "$deno_ok" = "1" ] \
+   && [ "$managed_ok" = "1" ]; then
   echo "VERDICT=PASS $NAME"
 else
   echo "VERDICT=FAIL $NAME"

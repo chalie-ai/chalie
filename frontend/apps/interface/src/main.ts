@@ -1,4 +1,3 @@
-import './styles/fonts.css';
 import '@chalie/shared/styles/main.scss';
 import './styles/interface.scss';
 import './styles/conversation.scss';

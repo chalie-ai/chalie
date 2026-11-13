@@ -25,7 +25,7 @@ let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 // Scheduled turns don't render on the spine, so `threadPhase` reads DOM
 // contract state globally (any rendered copy, e.g. an open thread panel) —
-// bumped on every 'turn-state-changed' so the dock's dots/borders stay live.
+// bumped on every 'turn-state-changed' so the dock's dots stay live.
 const activityTick = ref(0);
 function bumpActivity(): void {
   activityTick.value++;
@@ -101,7 +101,6 @@ function cadence(turn: SchedulerTurn): string {
       v-for="turn in turns"
       :key="turn.turn_id"
       class="sched-dock__row"
-      :class="phase(turn) ? `sched-dock__row--${phase(turn)}` : ''"
       @click="openTurn(turn)"
     >
       <span class="sched-dock__row-top">
@@ -122,8 +121,8 @@ function cadence(turn: SchedulerTurn): string {
 // ── Empty state ───────────────────────────────────────────────────────────────
 
 .sched-dock__empty {
-  font-size: 13px;
-  color: var(--text-secondary);
+  font-size: var(--fs-body);
+  color: var(--muted);
   padding: 10px 16px;
   font-style: italic;
   margin: 0;
@@ -138,21 +137,19 @@ function cadence(turn: SchedulerTurn): string {
   width: 100%;
   text-align: left;
   background: transparent;
-  border: none;
-  border-left: 2px solid transparent;
   padding: 10px 16px;
   cursor: pointer;
+  transition:
+    background-color var(--dur-1) var(--ease-out),
+    translate var(--dur-1) var(--ease-out);
 
   &:hover {
-    background: var(--surface-hover, rgba(128, 128, 128, 0.06));
+    background: var(--cell);
   }
-}
 
-.sched-dock__row--working {
-  border-left-color: var(--status-main);
-}
-.sched-dock__row--done {
-  border-left-color: var(--cyan);
+  &:active {
+    translate: 0 1px;
+  }
 }
 
 .sched-dock__row-top {
@@ -164,17 +161,17 @@ function cadence(turn: SchedulerTurn): string {
 .sched-dock__row-label {
   flex: 1;
   min-width: 0;
-  font-size: 13px;
+  font-size: var(--fs-body);
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .sched-dock__row-sub {
-  font-size: 11.5px;
-  color: var(--text-secondary);
+  font-size: var(--fs-mono);
+  color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

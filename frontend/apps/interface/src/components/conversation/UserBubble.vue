@@ -1,16 +1,26 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { FileText, Image as ImageIcon } from '@lucide/vue';
+import { ChevronRight, FileText, Image as ImageIcon } from '@lucide/vue';
 import type { ConversationAttachment, ConversationMessage } from '../../api/conversation';
 import ImagePreviewModal from '../overlays/ImagePreviewModal.vue';
 
-const props = defineProps<{ message: ConversationMessage }>();
+const props = withDefaults(defineProps<{
+  message: ConversationMessage;
+  /** Caption naming who wrote this row, when it isn't the user. */
+  label?: string | null;
+  /** A subtask's reply — starts folded to its label, a click opens it, another folds it. */
+  collapsible?: boolean;
+}>(), { label: null, collapsible: false });
 
 // File-only messages carry the '[File attached]' placeholder text — drop the
 // empty bubble and let the attachment list stand on its own.
 const showText = computed(
   () => !(props.message.content === '[File attached]' && props.message.attachments?.length),
 );
+
+// A subtask's reply starts folded to its label; a click opens it, another folds it.
+const open = ref(false);
+const showBody = computed(() => !props.collapsible || open.value);
 
 // Long messages collapse to a clamped 5-line preview with a show more/less toggle.
 const textEl = ref<HTMLElement | null>(null);
@@ -43,7 +53,7 @@ const previewSrc = ref<string | null>(null);
 const previewAlt = ref('');
 
 // Image → lightbox; document → download.
-function open(att: ConversationAttachment): void {
+function openAttachment(att: ConversationAttachment): void {
   if (!att.url) return;
   if (att.is_image) {
     previewSrc.value = att.url;
@@ -63,11 +73,26 @@ function open(att: ConversationAttachment): void {
 <template>
   <div
     class="user-message"
+    :class="{ 'user-message--collapsed': collapsible && !open }"
     :data-transcript-row-id="message.id"
+    :data-speaker="message.speaker ?? undefined"
     :data-user-text="message.content"
   >
+    <button
+      v-if="label && collapsible"
+      type="button"
+      class="user-message__label user-message__label--toggle"
+      :aria-expanded="open"
+      @click="open = !open"
+    >
+      <ChevronRight class="user-message__chevron" :size="14" />
+      {{ label }}
+    </button>
+    <span v-else-if="label" class="user-message__label">{{ label }}</span>
+
     <div
       v-if="showText"
+      v-show="showBody"
       ref="textEl"
       class="user-text"
       :class="{ 'user-text--clamped': overflowing && collapsed }"
@@ -77,6 +102,7 @@ function open(att: ConversationAttachment): void {
 
     <button
       v-if="showText && overflowing"
+      v-show="showBody"
       type="button"
       class="user-text__toggle"
       @click="collapsed = !collapsed"
@@ -85,13 +111,13 @@ function open(att: ConversationAttachment): void {
     </button>
 
     <!-- Attachments rendered from the API model directly. -->
-    <ul v-if="message.attachments && message.attachments.length" class="user-attachments">
+    <ul v-if="message.attachments && message.attachments.length" v-show="showBody" class="user-attachments">
       <li v-for="att in message.attachments" :key="att.filename">
-        <button type="button" class="user-attachments__item" @click="open(att)">
+        <button type="button" class="user-attachments__item" @click="openAttachment(att)">
           <component
             :is="att.is_image ? ImageIcon : FileText"
             class="user-attachments__icon"
-            :size="13"
+            :size="16"
           />
           <span class="user-attachments__name">{{ att.filename || 'attachment' }}</span>
         </button>

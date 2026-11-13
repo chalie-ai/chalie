@@ -1,7 +1,7 @@
 /**
- * The single seam between Chalie's UI and host-platform capabilities, so the
- * interface app can later be wrapped natively (capacitor/tauri) without touching
- * callers. Web is the only implementation today.
+ * The single seam between Chalie's UI and host-platform capabilities, so a host
+ * with different primitives can be added without touching callers. The web
+ * adapter is the only implementation — the desktop app runs this same frontend.
  */
 export interface PlatformAdapter {
   getUserMedia(constraints: MediaStreamConstraints): Promise<MediaStream>;
@@ -19,17 +19,11 @@ export interface PlatformAdapter {
   setItem(key: string, value: string): void;
   removeItem(key: string): void;
 
-  // web opens a tab; native opens an in-app webview (later epic)
+  // opens the Brain dashboard (a new tab on the web adapter)
   openBrain(): void;
 
   // keeps the display on during voice record/playback
   createWakeLock(): WakeLockHandle;
-
-  // native on-device streaming STT (final result arrives via the
-  // 'chalie:voice-transcript' document event). web rejects 'STT_UNSUPPORTED'
-  // so callers fall back to MediaRecorder -> POST /voice/transcribe.
-  startSTT(): Promise<void>;
-  stopSTT(): Promise<void>;
 }
 
 export interface WakeLockHandle {

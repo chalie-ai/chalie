@@ -4,19 +4,21 @@ Pure CRUD (Rule-3 depth): holds no ``mp``, imports no service, never emits WS,
 never reaches upstream. It only stores its fields, projects itself, and runs its
 own table's SQL on the connection bound onto the :class:`Model` base.
 
-A tool call anchors ONLY to the transcript input row that drove it
-(``transcript_id``); its logical turn is derived by joining ``transcript`` on
+A tool call anchors ONLY to the transcript row of the provider call that asked
+for it (``transcript_id``); its logical turn is derived by joining ``transcript`` on
 (channel, turn_id), so this table carries no turn_id / channel column of its own
 — hence :meth:`by_turn` holds that join SQL (§2.6, a multi-table read the generic
 builder can't express).
 
-WS privacy (§6.2): the emitted frame (:meth:`to_json`) exposes ONLY
-type/turn_id/id/tool_name/summary/created_at/ended_at/state. ``params`` and
-``result`` are the model-facing turn DATA and NEVER cross the wire. ``type`` and
-``turn_id`` are transient envelope fields the ``ToolCallService`` sets on the
-instance before broadcast; they are not columns, so :meth:`Model.to_dict` /
-:meth:`save` exclude them. :meth:`to_dict` (inherited, full-field) stays the
-internal projection, distinct from this wire-safe whitelist.
+What crosses the wire: the live frame (:meth:`to_json`) carries
+type/turn_id/id/tool_name/params/summary/created_at/ended_at/state/delegate, with
+``params`` as the parsed JSON object the call was made with — the same field the
+history chips carry. ``result`` is not on the frame or the chips; it is returned
+only by the per-call read. ``type``, ``turn_id`` and ``delegate`` are transient
+envelope fields the ``ToolCallService`` sets on the instance before broadcast;
+they are not columns, so :meth:`Model.to_dict` / :meth:`save` exclude them.
+:meth:`to_dict` (inherited, full-field) stays the internal projection, distinct
+from the frame.
 """
 
 from __future__ import annotations
@@ -29,7 +31,7 @@ from models.model import Model
 
 
 class ToolCall(Model):
-    """One ``tool_calls`` row: field storage + CRUD + wire-safe projection."""
+    """One ``tool_calls`` row: field storage + CRUD + live-frame projection."""
 
     __columns__: ClassVar[tuple[str, ...]] = (
         "id",
@@ -69,21 +71,28 @@ class ToolCall(Model):
     # to_dict.
     type: str
     turn_id: int
+    # The watchable child turn this call spawned (``{"channel", "turn_id"}``),
+    # or None — the frame's link from the call to the delegate's transcript.
+    # None until the service resolves it: a call just opened has no child yet.
+    delegate: dict[str, object] | None = None
 
     def to_json(self) -> str:
-        """The single WS tool frame (§6.2). Carries the row's identity + live
-        pill fields — ``params`` and ``result`` NEVER cross the wire (the surface
-        refetches the turn over REST for those). The shared DOM-contract keys
-        ``turn_id`` and ``type`` are injected by :meth:`Websocket.broadcast`'s
-        enrichment step, never hand-written here."""
+        """The single WS tool frame. Carries the row's identity, the live row
+        fields and ``params`` parsed back into the object the call was made
+        with; ``result`` stays off the frame — the per-call read returns it.
+        The shared DOM-contract keys ``turn_id`` and ``type`` are injected by
+        :meth:`Websocket.broadcast`'s enrichment step, never hand-written
+        here."""
         return json.dumps(
             {
                 "id": self.id,
                 "tool_name": self.tool_name,
+                "params": json.loads(self.params),
                 "summary": self.summary,
                 "created_at": self.created_at,
                 "ended_at": self.ended_at,
                 "state": self.state,
+                "delegate": self.delegate,
             },
             default=self._json_default,
         )
@@ -131,15 +140,15 @@ class ToolCall(Model):
 
     @classmethod
     def by_transcript(cls, transcript_id: int) -> list[Self]:
-        """All tool calls anchored to one input row, ordered by autoincrement id
-        — the narrow single-anchor read. Equivalent to :meth:`by_turn` for a turn
-        with a single input row; the turn-keyed read is preferred in the loop
-        because it also spans async / delegate re-entries."""
+        """All tool calls anchored to one transcript row, ordered by
+        autoincrement id — the narrow single-anchor read; the turn-keyed
+        :meth:`by_turn` is preferred in the loop because it spans every row of
+        the turn."""
         return cls.filter("transcript_id", transcript_id).order_by("id").get()
 
     @classmethod
     def by_transcripts(cls, transcript_ids: list[int]) -> list[Self]:
-        """All tool calls anchored to any of the given input rows, ordered by
+        """All tool calls anchored to any of the given transcript rows, ordered by
         autoincrement id — the batch-anchor read. Empty input short-circuits to
         ``[]``."""
         return cls.filter_in("transcript_id", transcript_ids).order_by("id").get()
@@ -176,14 +185,7 @@ class ToolCall(Model):
         ``?`` per id, since a first-run sweep's candidate set can exceed
         SQLite's bound-variable limit. Empty ``transcript_ids`` is a clean
         no-op — no query runs. Returns rows deleted."""
-        if not transcript_ids:
-            return 0
-        cursor = cls._bound_connection().execute(
-            f"DELETE FROM {cls.get_table()} "
-            "WHERE transcript_id IN (SELECT value FROM json_each(?))",
-            (json.dumps(transcript_ids),),
-        )
-        return cursor.rowcount or 0
+        return cls._delete_where_in_json("transcript_id", transcript_ids)
 
     @classmethod
     def decay(cls) -> int:

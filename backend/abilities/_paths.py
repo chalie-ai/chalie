@@ -28,17 +28,19 @@ from pathlib import Path
 from abilities._result import ToolResult
 
 
-def absolute_target(path_str: str) -> Path | ToolResult:
+def absolute_target(path_str: str, label: str = "Path") -> Path | ToolResult:
     """Resolve *path_str* to an absolute :class:`pathlib.Path`, or refuse.
 
     A non-absolute path is rejected with ``code=invalid-path`` and a hint that
     names the fix. The blank-path case cannot happen here: the caller's bag
     rejects a missing or blank ``path`` before this function is reached.
+    *label* names the offending parameter in the error message (default
+    ``"Path"``) for callers validating more than one path argument.
     """
     candidate = Path(path_str)
     if not candidate.is_absolute():
         return ToolResult.err(
-            f"Path is not absolute: {path_str!r}.",
+            f"{label} is not absolute: {path_str!r}.",
             code="invalid-path",
             hint="pass an absolute path (one starting from the filesystem root).",
         )

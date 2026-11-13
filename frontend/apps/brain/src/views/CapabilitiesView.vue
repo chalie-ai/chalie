@@ -105,8 +105,8 @@ async function disconnect(c: Capability): Promise<void> {
   <template v-else-if="viewMode === 'form' && formCap">
     <div class="provider-form-page">
       <div class="form-page-header">
-        <button class="btn btn-secondary btn-sm back-btn" @click="viewMode = 'list'">
-          <ChevronLeft :size="14" /> Back
+        <button class="btn btn-sm back-btn" @click="viewMode = 'list'">
+          <ChevronLeft :size="16" /> Back
         </button>
         <h3>{{ formCap.name }} {{ formConnected ? 'Settings' : 'Setup' }}</h3>
       </div>
@@ -166,7 +166,7 @@ async function disconnect(c: Capability): Promise<void> {
         </template>
 
         <div class="form-actions">
-          <button type="button" class="btn btn-secondary" @click="viewMode = 'list'">Cancel</button>
+          <button type="button" class="btn" @click="viewMode = 'list'">Cancel</button>
           <button type="submit" class="btn btn-primary">
             {{ formConnected ? 'Save' : 'Connect' }}
           </button>
@@ -193,11 +193,11 @@ async function disconnect(c: Capability): Promise<void> {
       <div v-if="c.version" class="cap-version">{{ c.version }}</div>
       <div class="cap-actions">
         <template v-if="isConnected(c)">
-          <button class="btn btn-sm btn-secondary" @click="openForm(c)">Edit</button>
+          <button class="btn btn-sm" @click="openForm(c)">Edit</button>
           <button class="btn btn-sm btn-danger" @click="disconnect(c)">Disconnect</button>
         </template>
         <template v-else>
-          <button class="btn btn-sm btn-primary" @click="openForm(c)">Setup</button>
+          <button class="btn btn-sm" @click="openForm(c)">Setup</button>
         </template>
       </div>
     </div>
