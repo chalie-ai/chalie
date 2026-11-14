@@ -11,9 +11,9 @@
 Writes a real per-turn transcript row on its own ``delegate:web_browse``
 channel so the turn uid is assigned and the delegate renders its own
 act-trail across ACT iterations (do NOT set the two skip flags True). The
-uid keys the per-run browser PageSession and the screenshot ledger;
-``WebBrowseAbility`` (abilities/web_browse.py), which this config is paired
-with, closes that session when the run ends.
+uid keys the per-run browser PageSession and the screenshot ledger; the
+run's turn closes that session when it ends, however it ended. The config is
+paired with ``WebBrowseAbility`` (abilities/web_browse.py).
 """
 
 from __future__ import annotations

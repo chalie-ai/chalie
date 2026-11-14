@@ -1,33 +1,35 @@
 """Feature tests: a browsing run's tab lives exactly as long as the run.
 
-A real user turn calls the real ``web_browse`` delegate; its child turn drives
-the real ``browser`` ability, which opens a real page in the real headless
-shell. When the child turn ends, its tab closes in the browser itself, whether
-the run finished or the user stopped the turn that started it while the run
-was waiting on the user. The only substitution is the LLM network boundary
-(``services.provider_service.build_client``), answered from a script chosen by
-the tools each request offers.
+A real chat turn, or a real scheduled task, calls the real ``web_browse``
+helper; the helper's own turn drives the real ``browser`` ability, which opens
+a real page in the real headless shell. The person's chat gets the call back at
+once and the run's answer later as a reply; a scheduled task waits for the run.
+Whichever way the run ends — it finishes, the person stops it from its own
+panel while it waits on them, or the person stops the scheduled task waiting on
+it — its tab closes in the browser itself, and only the chat ever hears back.
+
+The only substitution is the LLM network boundary, answered per channel by the
+shared :class:`tests._delegates.ChannelProvider`.
 """
 
 from __future__ import annotations
 
 import sqlite3
-import threading
+from collections.abc import Callable
 from typing import cast
-from unittest.mock import patch
 
 import pytest
 from flask import Flask
+from flask.testing import FlaskClient
 
 from abilities.browser import BrowserAbility
 from abilities.web_browse import WebBrowseAbility
+from configs.channels.scheduled import ScheduledConfig
 from configs.channels.user import UserConfig
-from configs.channels.web_browse import WebBrowseConfig
-from configs.enums.policy_channel import PolicyChannel
 from controllers.message_processor import MessageProcessor
-from models.provider_request import ProviderRequest
 from models.provider_response import ProviderResponse
 from models.turn_execution import TurnExecution
+from services.turn_execution_service import STOP_REASON_PARENT_STOPPED
 from tests._browser_live import (
     Site,
     as_frame,
@@ -41,161 +43,233 @@ from tests._browser_live import (
     signed_in,
     wait_for,
 )
-from tests.helpers import NO_PLAN, drain_background_turns, is_planning_request
+from tests._delegates import (
+    USER,
+    ChannelProvider,
+    Entry,
+    Held,
+    assistant_texts,
+    begin,
+    calls,
+    calls_of,
+    child_turn,
+    drain,
+    execution,
+    helper_channel,
+    linked_rows,
+    patched,
+    replies,
+    text,
+    tool,
+)
 from tools.browser import tabs
 from tools.browser.tabs import Tab
 
 pytest_plugins = ("tests._browser_live",)
 pytestmark = [pytest.mark.e2e, pytest.mark.usefixtures("chat_provider")]
 
-_BUILD_CLIENT = "services.provider_service.build_client"
-_CHILD_CHANNEL = WebBrowseConfig(PolicyChannel.CHAT).channel
-_TERMINAL = ProviderResponse(text="", model="scripted-overflow", tool_calls=None)
+_RUN_CHANNEL = helper_channel(WebBrowseAbility.NAME)
+_SCHEDULE_ID = 7
+_RUN_WAIT_S = 60.0  # a first page load launches the browser
+_ANSWER = "The page is titled Page A."
+_STARTED = "I have started it."
 
 
-def _says(text: str) -> ProviderResponse:
-    return ProviderResponse(text=text, model="m", tool_calls=None)
+class _RunTab:
+    """The tab a browsing run has open, noted when the run's next model call
+    arrives — its page is open by then."""
+
+    def __init__(self) -> None:
+        self.tab: Tab | None = None
+
+    def noted_then(self, outcome: ProviderResponse) -> Entry:
+        def entry() -> ProviderResponse:
+            [row] = tabs.listing()
+            self.tab = tabs.get(str(row["id"]))
+            return outcome
+
+        return entry
+
+    def open(self) -> Tab:
+        assert self.tab is not None, "the run never had a page open"
+        return self.tab
 
 
-def _calls(name: str, **params: object) -> ProviderResponse:
-    return ProviderResponse(
-        text="", model="m", tool_calls=[{"name": name, "input": params}]
+def _signs_in(site: Site, run: _RunTab) -> list[Entry]:
+    """A run that opens page A, then hands its tab to the person to sign in."""
+    return [
+        calls(tool(BrowserAbility.NAME, action="open", url=f"{site.url}/a")),
+        run.noted_then(calls(tool(BrowserAbility.NAME, action="handoff", reason="Please sign in"))),
+    ]
+
+
+def _waits_on_the_person(client: FlaskClient) -> Callable[[str | bytes], bool]:
+    """A tab-list change after which a listed tab is handed to the person."""
+    return lambda m: (
+        as_frame(m, "browser_tabs_changed") is not None
+        and any(t["handoff"] is not None for t in listed(client))
     )
 
 
-class _RoutedProvider:
-    """Answers the browsing run from *child* and the turn that started it from
-    *parent*, told apart by whether the request offers the raw browser tool.
-
-    Past either script it answers with an empty terminal response, which the
-    post-turn background turns this test does not script for receive. The tab
-    the run has open is noted when its second request arrives, the page being
-    open by then."""
-
-    def __init__(
-        self, parent: list[ProviderResponse], child: list[ProviderResponse]
-    ) -> None:
-        self._parent = parent
-        self._child = child
-        self._lock = threading.Lock()
-        self._child_sends = 0
-        self.run_tab: Tab | None = None
-
-    def get_context_limit(self) -> int:
-        return 200000
-
-    def send(self, dto: object) -> ProviderResponse:
-        if is_planning_request(dto):
-            return NO_PLAN
-        assert isinstance(dto, ProviderRequest)
-        offered = {str(tool["name"]) for tool in dto.tools or []}
-        with self._lock:
-            if BrowserAbility.NAME not in offered:
-                return self._parent.pop(0) if self._parent else _TERMINAL
-            self._child_sends += 1
-            if self._child_sends == 2:
-                [row] = tabs.listing()
-                self.run_tab = tabs.get(str(row["id"]))
-            return self._child.pop(0) if self._child else _TERMINAL
+def _assert_owned_by(client: FlaskClient, origin: dict[str, object]) -> None:
+    """The one listed tab, and the person's hand-off on it, belong to *origin*."""
+    [row] = listed(client)
+    assert row["origin"] == origin
+    assert cast("dict[str, object]", row["handoff"])["origin"] == origin
 
 
-def _call_result(db: sqlite3.Connection, tool: str, needle: str) -> sqlite3.Row:
-    """The one recorded call of *tool* whose params mention *needle*."""
-    rows: list[sqlite3.Row] = db.execute(
-        "SELECT state, result FROM tool_calls WHERE tool_name = ? AND params LIKE ?",
-        (tool, f"%{needle}%"),
-    ).fetchall()
-    [row] = rows
-    return row
-
-
-def test_a_browsing_runs_tab_closes_in_the_browser_when_the_run_finishes(
-    app: Flask, site: Site, db: sqlite3.Connection
-) -> None:
-    client, _token = signed_in(app)
-    provider = _RoutedProvider(
-        parent=[
-            _calls(WebBrowseAbility.NAME, instructions="read the title of page A"),
-            _says("Page A is called Page A."),
-        ],
-        child=[
-            _calls(BrowserAbility.NAME, action="open", url=f"{site.url}/a"),
-            _says("The page is titled Page A."),
-        ],
-    )
-    turn = MessageProcessor(UserConfig(), raw_input="what is page A called?")
-    with patch(_BUILD_CLIENT, return_value=provider):
-        turn.begin()
-        turn.result()
-        drain_background_turns()
-
-    browsed = _call_result(db, WebBrowseAbility.NAME, "page A")
-    assert browsed["state"] == "done" and "titled Page A" in browsed["result"]
-    run = provider.run_tab
-    assert run is not None, "the run never had a page open"
+def _assert_closed(client: FlaskClient, run: Tab) -> None:
+    """The run's tab is gone from the browser itself — the same browser, not a
+    fresh one — and from the tab list."""
     browsers = launches()
     assert closed_in_browser(run.id)
-    assert launches() == browsers  # the same browser answered, not a fresh one
+    assert launches() == browsers
     assert not run.live
     assert listed(client) == []
 
 
-def test_stopping_the_turn_ends_the_browsing_run_waiting_on_the_user_and_closes_its_tab(
+def _hand_off_ended(db: sqlite3.Connection) -> bool:
+    """The run's second browser call — its hand-off — failed as ended."""
+    _opened, waited = calls_of(db, BrowserAbility.NAME)
+    return waited["state"] == "error" and "handoff-ended" in waited["result"]
+
+
+def test_a_browsing_run_started_from_the_chat_answers_later_and_its_tab_closes_when_it_finishes(
     app: Flask, site: Site, db: sqlite3.Connection
 ) -> None:
-    client, token = signed_in(app)
-    provider = _RoutedProvider(
-        parent=[_calls(WebBrowseAbility.NAME, instructions="sign in to the site")],
-        child=[
-            _calls(BrowserAbility.NAME, action="open", url=f"{site.url}/a"),
-            _calls(BrowserAbility.NAME, action="handoff", reason="Please sign in"),
+    """The chat's call comes back at once under the run's number and reply
+    label, with no answer in it, and the chat's turn ends before the run has
+    even opened its page. The run then reads the page and finishes: its answer
+    comes back to the chat as one reply the chat answers, and its tab is closed
+    in the same browser and no longer listed."""
+    client, _token = signed_in(app)
+    run = _RunTab()
+    held = Held(calls(tool(BrowserAbility.NAME, action="open", url=f"{site.url}/a")))
+    provider = ChannelProvider(
+        chat=[
+            calls(tool(WebBrowseAbility.NAME, instructions="read the title of page A")),
+            text(_STARTED),
+            text("Page A is called Page A."),
         ],
+        web_browse=[held, run.noted_then(text(_ANSWER))],
     )
-    turn = MessageProcessor(UserConfig(), raw_input="sign me in to the site")
-    with (
-        patch(_BUILD_CLIENT, return_value=provider),
-        live_server(app) as host,
-        main_socket(host, token) as ui,
-    ):
-        turn.begin()
-        try:
-            receive_until(
-                ui,
-                lambda m: (
-                    as_frame(m, "browser_tabs_changed") is not None
-                    and any(t["handoff"] is not None for t in listed(client))
-                ),
-                timeout=60,
-            )
-            # The run's tab, and its ask, belong to the turn that started the run.
-            started = {"type": "user", "turn_id": turn.turn_id, "forked": False}
-            [row] = listed(client)
-            assert row["origin"] == started
-            assert cast("dict[str, object]", row["handoff"])["origin"] == started
-            stopped = client.delete(f"/api/threads/{turn.turn_id}?type=user")
-            assert stopped.status_code == 200, stopped.data
-            run = provider.run_tab
-            assert run is not None, "the run never had a page open"
-            assert wait_for(run, lambda: not run.live, timeout=30), (
-                "the run's page stayed open after the stop"
-            )
-        finally:
-            close_sessions()  # frees a run still waiting, so the turn can end
-            turn.result()
-            drain_background_turns()
 
-    [child_turn] = db.execute(
-        "SELECT DISTINCT turn_id FROM transcript WHERE channel = ?", (_CHILD_CHANNEL,)
-    ).fetchall()
-    child = TurnExecution.latest(_CHILD_CHANNEL, int(child_turn["turn_id"]))
-    assert child is not None
-    assert (child.state, child.stop_reason) == (
-        TurnExecution.CANCELLED,
-        "parent stopped",
+    with patched(provider):
+        parent = begin(UserConfig(), "what is page A called?")
+        parent.result()
+        provider.release_all()
+        drain(_RUN_WAIT_S)
+
+    assert held.opened and provider.unused() == {}
+    [call] = calls_of(db, WebBrowseAbility.NAME)
+    n = child_turn(db, _RUN_CHANNEL, call["id"])
+    assert call["state"] == "done", call["result"]
+    assert f"Reply from web_browse #{n}" in call["result"]
+    assert _ANSWER not in call["result"]
+    assert assistant_texts(db, USER, parent.turn_id)[-1] == _STARTED
+
+    [reply] = replies(db, call["id"])
+    assert reply["content"] == _ANSWER
+    assert reply["turn_id"] != parent.turn_id
+    assert execution(USER, reply["turn_id"]).state == TurnExecution.COMPLETED
+    assert assistant_texts(db, USER, reply["turn_id"]) == ["Page A is called Page A."]
+    assert f"Reply from web_browse #{n}" in provider.texts("chat")[-1]
+
+    _assert_closed(client, run.open())
+
+
+def test_the_person_stops_a_browsing_run_waiting_on_them_from_its_panel_and_the_chat_hears_once(
+    app: Flask, site: Site, db: sqlite3.Connection
+) -> None:
+    """The chat's turn has ended and the run it started has handed its tab to
+    the person, both carrying the chat turn as their origin. The person stops
+    the run from the run's own panel: the run ends cancelled, its hand-off
+    fails as ended, its tab is closed in the browser and no longer listed, and
+    the chat gets exactly one reply — read under the label its call promised —
+    which it answers."""
+    client, token = signed_in(app)
+    run = _RunTab()
+    provider = ChannelProvider(
+        chat=[
+            calls(tool(WebBrowseAbility.NAME, instructions="sign in to the site")),
+            text(_STARTED),
+            text("It was stopped before signing in."),
+        ],
+        web_browse=_signs_in(site, run),
     )
-    waited = _call_result(db, BrowserAbility.NAME, "handoff")
-    assert waited["state"] == "error" and "handoff-ended" in waited["result"]
-    browsers = launches()
-    assert closed_in_browser(run.id)
-    assert launches() == browsers  # the same browser answered, not a fresh one
-    assert listed(client) == []
+
+    with patched(provider), live_server(app) as host, main_socket(host, token) as ui:
+        parent = begin(UserConfig(), "sign me in to the site")
+        try:
+            parent.result()
+            receive_until(ui, _waits_on_the_person(client), timeout=_RUN_WAIT_S)
+            assert execution(USER, parent.turn_id).state == TurnExecution.COMPLETED
+            _assert_owned_by(client, {"type": "user", "turn_id": parent.turn_id, "forked": False})
+
+            [call] = calls_of(db, WebBrowseAbility.NAME)
+            n = child_turn(db, _RUN_CHANNEL, call["id"])
+            stopped = client.delete(f"/api/threads/{n}?channel={_RUN_CHANNEL}")
+            assert stopped.status_code == 200, stopped.data
+            assert (stopped.get_json() or {})["result"]["cancelled"] is True
+            tab = run.open()
+            assert wait_for(tab, lambda: not tab.live, timeout=30), "the run's page stayed open after the stop"
+        finally:
+            close_sessions()  # frees a run still waiting, so its turn can end
+
+    assert provider.unused() == {}
+    assert execution(_RUN_CHANNEL, n).state == TurnExecution.CANCELLED
+    assert _hand_off_ended(db)
+    _assert_closed(client, tab)
+
+    [reply] = replies(db, call["id"])
+    assert reply["content"] == "This web_browse was stopped before it finished."
+    assert execution(USER, reply["turn_id"]).state == TurnExecution.COMPLETED
+    assert assistant_texts(db, USER, reply["turn_id"]) == ["It was stopped before signing in."]
+    assert f"Reply from web_browse #{n}" in provider.texts("chat")[-1]
+
+
+def test_stopping_a_scheduled_task_stops_the_browsing_run_it_waits_on_and_nobody_is_replied_to(
+    app: Flask, site: Site, db: sqlite3.Connection
+) -> None:
+    """A scheduled task calls ``web_browse`` and waits on it; the run hands
+    its tab to the person, both carrying the scheduled task's run as their
+    origin. The person stops the scheduled task, which is still open: the stop
+    reaches the run, which ends cancelled because its caller stopped, its
+    hand-off fails as ended, and its tab is closed in the browser and no longer
+    listed. Nothing is sent back as a reply — not to the schedule, not to the
+    person's chat."""
+    client, token = signed_in(app)
+    run = _RunTab()
+    provider = ChannelProvider(
+        chat=[calls(tool(WebBrowseAbility.NAME, instructions="sign in to the site"))],
+        web_browse=_signs_in(site, run),
+    )
+    schedule = ScheduledConfig().channel
+
+    with patched(provider), live_server(app) as host, main_socket(host, token) as ui:
+        task = MessageProcessor.process(ScheduledConfig(), raw_input="sign in to the site", turn_id=_SCHEDULE_ID)
+        try:
+            receive_until(ui, _waits_on_the_person(client), timeout=_RUN_WAIT_S)
+            _assert_owned_by(client, {"type": "scheduled", "turn_id": _SCHEDULE_ID, "forked": False})
+
+            stopped = client.delete(f"/api/threads/{_SCHEDULE_ID}?type=scheduled")
+            assert stopped.status_code == 200, stopped.data
+            assert (stopped.get_json() or {})["result"]["cancelled"] is True
+            tab = run.open()
+            assert wait_for(tab, lambda: not tab.live, timeout=30), "the run's page stayed open after the stop"
+        finally:
+            close_sessions()  # frees a run still waiting, so its turn can end
+            task.result()
+
+    assert provider.unused() == {}
+    assert execution(schedule, _SCHEDULE_ID).state == TurnExecution.CANCELLED
+    [call] = calls_of(db, WebBrowseAbility.NAME)
+    n = child_turn(db, _RUN_CHANNEL, call["id"])
+    ended = execution(_RUN_CHANNEL, n)
+    assert (ended.state, ended.stop_reason) == (TurnExecution.CANCELLED, STOP_REASON_PARENT_STOPPED)
+    assert _hand_off_ended(db)
+    _assert_closed(client, tab)
+
+    assert replies(db, call["id"]) == []
+    assert replies(db, call["id"], schedule) == []
+    assert linked_rows(db, USER) == []

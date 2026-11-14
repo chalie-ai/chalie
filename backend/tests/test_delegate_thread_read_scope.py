@@ -36,7 +36,7 @@ from configs.enums.policy_channel import PolicyChannel
 from controllers.message_processor import MessageProcessor
 from models.turn_execution import TurnExecution
 from tests.helpers import drain_background_turns
-from tests.test_delegate_transcript_watch import _listening
+from tests._delegates import listening
 
 pytestmark = pytest.mark.unit
 
@@ -173,7 +173,7 @@ def test_stop_by_channel_cancels_the_delegate_turn_never_the_users_same_numbered
     client, _db, _store = authed_client
     _open_user_and_delegate_turns()
 
-    with _listening() as listener:
+    with listening() as listener:
         response = client.delete(f"/api/threads/{_TURN}?channel={_DELEGATE_CHANNEL}")
 
     assert response.status_code == 200
@@ -197,7 +197,7 @@ def test_stop_by_channel_with_no_running_delegate_turn_is_a_quiet_ack(
     client, _db, _store = authed_client
     assert MessageProcessor(UserConfig(), _TURN).turn_execution_service.open() is not None
 
-    with _listening() as listener:
+    with listening() as listener:
         response = client.delete(f"/api/threads/{_TURN}?channel={_DELEGATE_CHANNEL}")
 
     assert response.status_code == 200

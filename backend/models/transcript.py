@@ -116,6 +116,18 @@ class Transcript(Model):
         return int(row[0]) if row and row[0] is not None else None
 
     @classmethod
+    def last_answer(cls, channel: str, turn_id: int) -> str | None:
+        """Content of the turn's newest settled assistant row — the answer its
+        latest completed exchange ended on, as stored — or None for a turn that
+        never settled. Mirrors :meth:`settle0`'s style."""
+        row = cls._bound_connection().execute(
+            f"SELECT content FROM transcript WHERE channel = ? AND turn_id = ? "
+            f"AND {cls._SETTLE_PREDICATE} ORDER BY id DESC LIMIT 1",
+            (channel, turn_id),
+        ).fetchone()
+        return cast("str | None", row[0]) if row else None
+
+    @classmethod
     def ids_for_turn(cls, channel: str, turn_id: int) -> list[int]:
         """Every transcript row id for ``(channel, turn_id)``, ordered by
         ``id`` ascending — the act-trail anchor lookup. Empty list when the

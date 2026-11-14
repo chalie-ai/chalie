@@ -65,7 +65,8 @@ class Message(DTO):
     row never has one, its tasks join the plan of the message it joined.
     ``speaker`` names who wrote an input row a tool call caused — ``Task from
     Chalie`` / ``Message from Chalie`` on a subtask's own rows, ``Reply from
-    subtask #N`` on a subtask's reply to its caller; ``None`` on every other row.
+    <tool> #N`` on a delegate's late reply to its caller; ``None`` on every
+    other row.
     """
 
     id: str

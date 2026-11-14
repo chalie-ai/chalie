@@ -313,21 +313,22 @@ def _init_services() -> None:
     logger.info("[Startup] WriteQueueService started")
 
 
-def _reply_to_swept_subtasks(swept: list["TurnExecution"]) -> None:
-    """Tell the caller of every subtask the boot sweep closed that a restart
-    cut it off — the reply the subtask's own end would have sent, had its
-    process lived. A memory step swept on the subtask channel is not a
-    subtask (``is_subtask_turn``) and has no caller to tell. One failed
-    notice is logged and the rest still go out: a caller missing its notice
-    must never stop the boot."""
-    from abilities.subtask import is_subtask_turn, reply_to_caller
+def _reply_to_swept_delegates(swept: list["TurnExecution"]) -> None:
+    """Tell the caller of every delegate turn the boot sweep closed that a
+    restart cut it off — the reply the delegate's own end would have sent,
+    had its process lived. ``reply_to_caller`` settles, from the stored rows,
+    whether a swept turn has a caller that did not wait for it; any other
+    swept turn is skipped. One failed notice is logged and the rest still go
+    out: a caller missing its notice must never stop the boot."""
+    from abilities._delegate import reply_to_caller
 
     for row in swept:
         try:
-            if is_subtask_turn(row.channel, row.turn_id):
-                reply_to_caller(row.turn_id, "")
+            reply_to_caller(row.channel, row.turn_id, "")
         except Exception:
-            logger.exception("[Startup] Subtask #%d: the restart notice to its caller failed", row.turn_id)
+            logger.exception(
+                "[Startup] %s turn %d: the restart notice to its caller failed", row.channel, row.turn_id,
+            )
 
 
 def _register_workers(manager: "_WorkerManager", host: str, port: int) -> None:
@@ -492,7 +493,7 @@ def main() -> None:
     # thread and starts a turn whose own thread reads and writes the
     # conversation tables, so it must run on the migrated schema, never
     # alongside the transcript rebuild and backfills above.
-    _reply_to_swept_subtasks(_swept)
+    _reply_to_swept_delegates(_swept)
 
     _check_asset_caches()
     _warmup_models()

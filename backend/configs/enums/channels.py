@@ -59,8 +59,7 @@ class Channel(str, Enum):
 # DelegateAbility tool runs its child turn on — every one writes a transcript
 # of its own (vision and thread_gist write none, so there is nothing to show).
 # Their frames reach the wire addressed by channel, and the threads read
-# accepts no other channel. Subtasks are watched the same way, though they run
-# in the background instead of blocking the caller.
+# accepts no other channel — whether the caller waits for the child or not.
 WATCHABLE_DELEGATE_CHANNELS: frozenset[str] = frozenset({
     Channel.DELEGATE_WEB_SEARCH.value,
     Channel.DELEGATE_WEB_BROWSE.value,

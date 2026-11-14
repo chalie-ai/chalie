@@ -1,8 +1,10 @@
 """Feature test: a delegate's child turn can be followed from the parent's tool pill.
 
 A delegate ability (``web_search`` here) runs a child turn on its own
-``delegate:<name>`` channel while the caller's tool call is still open. The
-surface needs three things to let a person watch that child:
+``delegate:<name>`` channel. Called from the person's chat, the call returns at
+once and the child's answer comes back later as a message of its own on the
+chat, linked to the same call. The surface needs three things to let a person
+watch that child:
 
 * a durable link from the parent's ``tool_calls`` row to the child's input row;
 * live frames addressed by channel (the child's numeric turn id collides with the
@@ -19,198 +21,54 @@ fully-migrated SQLite DB: the real ``DelegateAbility``, ``DispatchService``,
 registry via an in-process client implementing the broker's ``send(str)``
 Protocol. The only substitution is the LLM network boundary
 (``services.provider_service.build_client``, the seam
-``test_message_processor_runaway_loop.py`` uses). The two failure tests inject
-their fault into the real database (a trigger, or a row write from the child's
-own provider call) — nothing in-process is replaced.
+``test_message_processor_runaway_loop.py`` uses). The child is held inside its
+first model call until the caller's turn has ended, so its answer always comes
+back as a turn of its own. The two failure tests inject their fault into the
+real database (a trigger, or a row write) at the moment the caller's own
+thread reaches it — nothing in-process is replaced.
 """
 
-import json
 import logging
 import sqlite3
 import threading
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import cast
-from unittest.mock import patch
 
 import pytest
 from flask.testing import FlaskClient
 
 from configs.channels.user import UserConfig
 from controllers.message_processor import MessageProcessor
-from models.provider_response import ProviderResponse
 from models.turn_execution import TurnExecution
 from services.database import Database
 from services.garbage_collector_service import GarbageCollectorService
-from services.tool_call_service import ToolCallService
-from services.websocket import Websocket
-from tests.helpers import NO_PLAN, drain_background_turns, is_planning_request
+from tests._delegates import (
+    USER,
+    ChannelProvider,
+    Held,
+    assistant_texts,
+    block,
+    calls,
+    calls_of,
+    chip,
+    child_turn,
+    execution,
+    messages,
+    replies,
+    run_turn,
+    text,
+    tool,
+    watching_warnings,
+)
 
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 
-# ProviderService builds its thin transport client via this factory call — the
-# real network boundary (see test_message_processor_runaway_loop.py).
-_BUILD_CLIENT = "services.provider_service.build_client"
-
 _CHILD_CHANNEL = "delegate:web_search"
+_QUESTION = "what is the capital of France?"
 _INSTRUCTIONS = "find the capital of France"
 _CHILD_ANSWER = "Paris is the capital of France."
-
-
-def _tool(name: str, **params: object) -> dict[str, object]:
-    """A provider-shaped tool call: ``{"name": ..., "input": {...}}``."""
-    return {"name": name, "input": params}
-
-
-class _ScriptedProvider:
-    """Replays one scripted ``ProviderResponse`` per ``send()`` call, in order.
-
-    One provider serves the parent turn AND its child turn (they run one after the
-    other, the parent blocked on the child), so the script interleaves both.
-    Past the end of the script it returns a benign terminal response: a completed
-    ``user`` turn spawns fire-and-forget post-turn turns that make their own
-    provider calls on daemon threads this test does not script for — hence the
-    lock. A scripted response consumed by the wrong turn would break the asserted
-    turn's outcome, so the tolerance cannot mask a failure."""
-
-    _TERMINAL = ProviderResponse(text="", model="scripted-overflow", tool_calls=None)
-
-    def __init__(self, *responses: ProviderResponse) -> None:
-        self._responses = list(responses)
-        self._sends = 0
-        self._lock = threading.Lock()
-
-    def get_context_limit(self) -> int:
-        return 200000
-
-    def send(self, dto: object) -> ProviderResponse:
-        if is_planning_request(dto):
-            return NO_PLAN
-        with self._lock:
-            if self._sends >= len(self._responses):
-                return self._TERMINAL
-            response = self._responses[self._sends]
-            self._sends += 1
-            return response
-
-
-class _HeldChildProvider(_ScriptedProvider):
-    """A scripted provider whose SECOND ``send()`` — the child turn's first model
-    call, the parent being blocked on its delegate — waits for *gate* before
-    answering, then runs *then* on the child's own thread.
-
-    The child is otherwise free to finish before the parent has even tried to
-    announce it, which would make a fault injected "between the announcement and
-    the finish" land in a different place on every run. Holding the child on a
-    ``threading.Event`` pins the order. ``entered`` is set the moment the child's
-    call arrives, so a test can act on the running child; ``gate_opened`` records
-    whether the wait ended because the gate opened (not because it timed out) so
-    a test can fail on a gate that never opened instead of on its downstream
-    symptom."""
-
-    _GATE_TIMEOUT_S = 10.0
-
-    def __init__(self, gate: threading.Event, then: Callable[[], None], *responses: ProviderResponse) -> None:
-        super().__init__(*responses)
-        self._gate = gate
-        self._then = then
-        self._calls = 0
-        self.entered = threading.Event()
-        self.gate_opened = False
-
-    def send(self, dto: object) -> ProviderResponse:
-        if is_planning_request(dto):
-            return NO_PLAN
-        with self._lock:
-            self._calls += 1
-            is_child_first_call = self._calls == 2
-        if is_child_first_call:
-            self.entered.set()
-            self.gate_opened = self._gate.wait(timeout=self._GATE_TIMEOUT_S)
-            self._then()
-        return super().send(dto)
-
-
-class _WarningWatch(logging.Handler):
-    """A real logging handler that notes every WARNING-or-worse record it is given
-    and, when given a *gate*, opens it on the first. The contract under test is
-    that a failed bookkeeping step is reported loudly yet non-fatally, so its
-    warning is both the signal that the failure happened and — for the held child
-    — the cue to let it run on."""
-
-    def __init__(self, gate: threading.Event | None = None) -> None:
-        super().__init__(level=logging.WARNING)
-        self._gate = gate
-        self.records: list[logging.LogRecord] = []
-
-    def emit(self, record: logging.LogRecord) -> None:
-        self.records.append(record)
-        if self._gate is not None:
-            self._gate.set()
-
-
-@contextmanager
-def _watching_warnings(
-    gate: threading.Event | None = None, source_name: str = ToolCallService.__module__,
-) -> Iterator[_WarningWatch]:
-    """Watch the warnings of one service — by default the one that owns the
-    call's frames — and only them. Unrelated services warn on their own (the
-    on-device model loaders do whenever their files are absent, as on a fresh
-    checkout), and such a warning must neither release the held child early nor
-    count as a report of the failure under test."""
-    watch = _WarningWatch(gate)
-    source = logging.getLogger(source_name)
-    source.addHandler(watch)
-    try:
-        yield watch
-    finally:
-        source.removeHandler(watch)
-
-
-class _RecordingClient:
-    """A real socket-registry subscriber: implements the registry's ``send(str)``
-    Protocol and captures every broadcast frame."""
-
-    def __init__(self, on_frame: Callable[[dict[str, object]], None] | None = None) -> None:
-        self.frames: list[dict[str, object]] = []
-        self._on_frame = on_frame
-
-    def close(self) -> None:
-        """Nothing to release: the captured frames stay readable after the registry lets go."""
-
-    def send(self, data: str) -> None:
-        frame = json.loads(data)
-        self.frames.append(frame)
-        if self._on_frame is not None:
-            self._on_frame(frame)
-
-
-@contextmanager
-def _listening(on_frame: Callable[[dict[str, object]], None] | None = None) -> Iterator[_RecordingClient]:
-    """A client connected to the real socket registry for the duration of the
-    block, recording every frame broadcast meanwhile."""
-    listener = _RecordingClient(on_frame)
-    Websocket._connect(listener)
-    try:
-        yield listener
-    finally:
-        Websocket._disconnect(listener)
-
-
-def _run(
-    provider: _ScriptedProvider, raw_input: str, on_frame: Callable[[dict[str, object]], None] | None = None,
-) -> tuple[MessageProcessor, list[dict[str, object]]]:
-    """Drive a real user turn to termination against *provider*, returning the
-    processor and every WS frame the registry saw while it ran (each also handed
-    to *on_frame* as it arrives, on the thread that broadcast it)."""
-    with _listening(on_frame) as listener:
-        mp = MessageProcessor(UserConfig(), raw_input=raw_input)  # inert (I2)
-        with patch(_BUILD_CLIENT, return_value=provider):
-            mp.begin()
-            mp.result()
-            drain_background_turns()
-    return mp, listener.frames
+_STARTED_ANSWER = "I have started a search."
+_REPLY_ANSWER = "It is Paris."
 
 
 @dataclass(frozen=True)
@@ -232,55 +90,40 @@ class _DelegateRun:
 @pytest.fixture
 def delegate_run(db: sqlite3.Connection) -> _DelegateRun:
     """A user turn that runs an ordinary tool and a ``web_search`` delegate whose
-    child turn makes a tool call of its own and answers."""
-    provider = _ScriptedProvider(
-        ProviderResponse(text="", model="m", tool_calls=[
-            _tool("find_tools", query=["weather"]),
-            _tool("web_search", instructions=_INSTRUCTIONS),
-        ]),
-        ProviderResponse(text="", model="m", tool_calls=[_tool("recall", query="capital of France")]),
-        ProviderResponse(text=_CHILD_ANSWER, model="m", tool_calls=None),
-        ProviderResponse(text="It is Paris.", model="m", tool_calls=None),
+    child turn makes a tool call of its own and answers once the caller's turn
+    has ended; the reply that brings the answer back is answered in turn."""
+    held = Held(calls(tool("recall", query="capital of France")))
+    provider = ChannelProvider(
+        chat=[
+            calls(tool("find_tools", query=["weather"]), tool("web_search", instructions=_INSTRUCTIONS)),
+            text(_STARTED_ANSWER),
+            text(_REPLY_ANSWER),
+        ],
+        web_search=[held, text(_CHILD_ANSWER)],
     )
-    parent, frames = _run(provider, "what is the capital of France?")
-    call = db.execute("SELECT id FROM tool_calls WHERE tool_name = 'web_search'").fetchone()
-    child = db.execute(
-        "SELECT turn_id FROM transcript WHERE channel = ? AND role = 'web_search'", (_CHILD_CHANNEL,),
-    ).fetchone()
-    return _DelegateRun(parent, frames, call["id"], child["turn_id"])
-
-
-def _block(client: FlaskClient, path: str) -> dict[str, object]:
-    """GET *path* and return the thread block under ``result``."""
-    response = client.get(path)
-    assert response.status_code == 200, response.data
-    return cast("dict[str, object]", cast("dict[str, object]", response.get_json())["result"])
-
-
-def _chips(block: dict[str, object]) -> list[dict[str, object]]:
-    messages = cast("list[dict[str, object]]", block["messages"])
-    return [
-        chip for message in messages
-        for chip in cast("list[dict[str, object]]", message.get("tool_calls") or [])
-    ]
-
-
-def _chip(block: dict[str, object], tool_name: str) -> dict[str, object]:
-    return next(c for c in _chips(block) if c["tool_name"] == tool_name)
+    parent, frames = run_turn(provider, UserConfig(), _QUESTION)
+    assert held.opened and provider.unused() == {}
+    call_id = cast("int", calls_of(db, "web_search")[0]["id"])
+    return _DelegateRun(parent, frames, call_id, child_turn(db, _CHILD_CHANNEL, call_id))
 
 
 def test_delegate_input_row_is_stamped_with_the_parent_tool_call(
     db: sqlite3.Connection, delegate_run: _DelegateRun,
 ) -> None:
-    """The child's input row — and only it — carries the parent's ``tool_calls``
-    id, so the pill can be followed to the child's transcript."""
+    """The child's input row and the reply that carries its answer back to the
+    chat — and only they — carry the parent's ``tool_calls`` id, so the pill can
+    be followed to the child's transcript and the answer traced to its call."""
     stamped = db.execute(
-        "SELECT channel, role, content, tool_call_id FROM transcript WHERE tool_call_id IS NOT NULL"
+        "SELECT channel, role, content, tool_call_id FROM transcript WHERE tool_call_id IS NOT NULL ORDER BY id"
     ).fetchall()
 
-    assert [tuple(r) for r in stamped] == [
-        (_CHILD_CHANNEL, "web_search", _INSTRUCTIONS, str(delegate_run.web_search_call_id)),
+    call_id = str(delegate_run.web_search_call_id)
+    assert [(r["channel"], r["role"], r["tool_call_id"]) for r in stamped] == [
+        (_CHILD_CHANNEL, "web_search", call_id),
+        (USER, "user", call_id),
     ]
+    assert stamped[0]["content"] == _INSTRUCTIONS
+    assert cast("str", stamped[1]["content"]).startswith(_CHILD_ANSWER)
 
 
 def test_every_delegate_frame_is_addressed_by_channel_never_by_type(delegate_run: _DelegateRun) -> None:
@@ -321,12 +164,9 @@ def test_user_turn_without_a_delegate_stays_user_addressed(db: sqlite3.Connectio
     """Nothing about a turn that calls no delegate changes shape: every frame is
     typed ``user`` and none is addressed to a delegate channel, tool frames gain
     only an explicit ``delegate: null``, and no delegate transcript exists."""
-    provider = _ScriptedProvider(
-        ProviderResponse(text="", model="m", tool_calls=[_tool("find_tools", query=["weather"])]),
-        ProviderResponse(text="All done.", model="m", tool_calls=None),
-    )
+    provider = ChannelProvider(chat=[calls(tool("find_tools", query=["weather"])), text("All done.")])
 
-    _mp, frames = _run(provider, "check the weather tools")
+    _mp, frames = run_turn(provider, UserConfig(), "check the weather tools")
 
     tool_frames = [f for f in frames if "tool_name" in f]
     assert tool_frames
@@ -346,12 +186,12 @@ def test_parent_thread_read_links_the_delegate_chip_to_its_child_turn(
     unlinked, and keeps the block itself a plain user thread."""
     client, _db, _store = authed_client
 
-    block = _block(client, f"/api/threads/{delegate_run.parent.turn_id}")
+    thread = block(client, f"/api/threads/{delegate_run.parent.turn_id}")
 
-    # The read also says the child is no longer running — it finished before the parent did.
-    assert _chip(block, "web_search")["delegate"] == {**delegate_run.ref, "working": False}
-    assert _chip(block, "find_tools")["delegate"] is None
-    assert block["type"] == "user" and block["channel"] is None
+    # The read also says the child is no longer running — it has replied.
+    assert chip(thread, "web_search")["delegate"] == {**delegate_run.ref, "working": False}
+    assert chip(thread, "find_tools")["delegate"] is None
+    assert thread["type"] == "user" and thread["channel"] is None
 
 
 def test_child_turn_reads_by_channel_with_its_instruction_as_a_user_message(
@@ -365,16 +205,16 @@ def test_child_turn_reads_by_channel_with_its_instruction_as_a_user_message(
     The user thread sharing the same numeric turn id is a different block."""
     client, _db, _store = authed_client
 
-    block = _block(client, f"/api/threads/{delegate_run.child_turn_id}?channel={_CHILD_CHANNEL}")
+    thread = block(client, f"/api/threads/{delegate_run.child_turn_id}?channel={_CHILD_CHANNEL}")
 
-    assert block["channel"] == _CHILD_CHANNEL and block["type"] is None
-    assert block["cancelled"] is False
-    messages = cast("list[dict[str, object]]", block["messages"])
-    assert (messages[0]["role"], messages[0]["content"]) == ("user", _INSTRUCTIONS)
-    assert [m["content"] for m in messages if m["role"] == "assistant"] == ["", _CHILD_ANSWER]
-    user_block = _block(client, f"/api/threads/{delegate_run.child_turn_id}")
-    assert user_block["type"] == "user" and user_block["channel"] is None
-    assert _INSTRUCTIONS not in [m["content"] for m in cast("list[dict[str, object]]", user_block["messages"])]
+    assert thread["channel"] == _CHILD_CHANNEL and thread["type"] is None
+    assert thread["cancelled"] is False
+    rows = messages(thread)
+    assert (rows[0]["role"], rows[0]["content"]) == ("user", _INSTRUCTIONS)
+    assert [m["content"] for m in rows if m["role"] == "assistant"] == ["", _CHILD_ANSWER]
+    user_thread = block(client, f"/api/threads/{delegate_run.child_turn_id}")
+    assert user_thread["type"] == "user" and user_thread["channel"] is None
+    assert _INSTRUCTIONS not in [m["content"] for m in messages(user_thread)]
 
 
 def test_purged_delegate_turn_unlinks_the_chip_and_reads_as_an_unknown_turn(
@@ -387,7 +227,7 @@ def test_purged_delegate_turn_unlinks_the_chip_and_reads_as_an_unknown_turn(
     client, db, _store = authed_client
     parent_path = f"/api/threads/{delegate_run.parent.turn_id}"
     child_path = f"/api/threads/{delegate_run.child_turn_id}?channel={_CHILD_CHANNEL}"
-    assert _chip(_block(client, parent_path), "web_search")["delegate"] == {**delegate_run.ref, "working": False}
+    assert chip(block(client, parent_path), "web_search")["delegate"] == {**delegate_run.ref, "working": False}
 
     db.execute(
         "UPDATE transcript SET created_at = datetime('now', '-200 days') WHERE channel = ?", (_CHILD_CHANNEL,),
@@ -396,102 +236,103 @@ def test_purged_delegate_turn_unlinks_the_chip_and_reads_as_an_unknown_turn(
     GarbageCollectorService().run()
 
     assert db.execute("SELECT COUNT(*) FROM transcript WHERE channel = ?", (_CHILD_CHANNEL,)).fetchone()[0] == 0
-    assert _chip(_block(client, parent_path), "web_search")["delegate"] is None
-    purged = _block(client, child_path)
-    never_existed = _block(client, f"/api/threads/987654?channel={_CHILD_CHANNEL}")
+    assert chip(block(client, parent_path), "web_search")["delegate"] is None
+    purged = block(client, child_path)
+    never_existed = block(client, f"/api/threads/987654?channel={_CHILD_CHANNEL}")
     assert purged["messages"] == []
     assert {k: v for k, v in purged.items() if k != "turn_id"} == {
         k: v for k, v in never_existed.items() if k != "turn_id"
     }
 
 
-def _write_on_this_thread(sql: str) -> None:
-    """Run *sql* through the calling thread's real database connection."""
+def _write_on_this_thread(*statements: str) -> None:
+    """Run *statements* through the calling thread's real database connection."""
     conn = Database.conn()
-    conn.execute(sql)
+    for sql in statements:
+        conn.execute(sql)
     conn.commit()
 
 
 def _web_search_call(db: sqlite3.Connection) -> sqlite3.Row:
-    return cast("sqlite3.Row", db.execute(
-        "SELECT state, result, ended_at, created_at FROM tool_calls WHERE tool_name = 'web_search'"
-    ).fetchone())
+    [call] = calls_of(db, "web_search")
+    return call
 
 
-def _assert_child_answered_and_closed_before_the_call_ended(db: sqlite3.Connection, call: sqlite3.Row) -> None:
-    """The child turn ran to the end — its answer is stored and its execution is
-    COMPLETED — and it finished BEFORE the parent's call did: a delegate that
-    outlived its caller would be a turn running detached."""
-    child_turn = db.execute(
-        "SELECT turn_id FROM transcript WHERE channel = ? AND role = 'web_search'", (_CHILD_CHANNEL,),
-    ).fetchone()["turn_id"]
-    answers = db.execute(
-        "SELECT content FROM transcript WHERE channel = ? AND turn_id = ? AND role = 'assistant'",
-        (_CHILD_CHANNEL, child_turn),
-    ).fetchall()
-    assert [r["content"] for r in answers] == [_CHILD_ANSWER]
-    execution = TurnExecution.latest(_CHILD_CHANNEL, child_turn)
-    assert execution is not None and execution.state == TurnExecution.COMPLETED
-    assert execution.ended_at is not None and execution.ended_at <= call["ended_at"]
+def _late_web_search_provider() -> tuple[ChannelProvider, Held]:
+    """A chat turn that calls ``web_search`` and answers its started result,
+    then answers the reply; the child, held until the chat turn has ended,
+    answers at once."""
+    held = Held(text(_CHILD_ANSWER))
+    provider = ChannelProvider(
+        chat=[calls(tool("web_search", instructions=_INSTRUCTIONS)), text(_STARTED_ANSWER), text(_REPLY_ANSWER)],
+        web_search=[held],
+    )
+    return provider, held
 
 
-def _assert_parent_turn_completed_with_its_answer(
-    db: sqlite3.Connection, parent: MessageProcessor, reply: str = "It is Paris.",
+def _assert_call_returned_at_once_and_its_child_replied(
+    db: sqlite3.Connection, call: sqlite3.Row, parent: MessageProcessor,
 ) -> None:
-    execution = TurnExecution.latest(UserConfig().channel, parent.turn_id)
-    assert execution is not None and execution.state == TurnExecution.COMPLETED
-    replies = db.execute(
-        "SELECT content FROM transcript WHERE channel = ? AND turn_id = ? AND role = 'assistant'",
-        (UserConfig().channel, parent.turn_id),
-    ).fetchall()
+    """The call finished without waiting for its child — its result carries no
+    answer — while the child ran to its end on its own: its answer is stored, its
+    execution is COMPLETED, and the answer came back to the chat as one reply
+    linked to the call, opening a turn of its own that completed with the
+    model's answer to it."""
+    assert call["state"] == "done" and _CHILD_ANSWER not in call["result"]
+    child = child_turn(db, _CHILD_CHANNEL, call["id"])
+    assert assistant_texts(db, _CHILD_CHANNEL, child) == [_CHILD_ANSWER]
+    assert execution(_CHILD_CHANNEL, child).state == TurnExecution.COMPLETED
+    [reply] = replies(db, call["id"])
+    assert cast("str", reply["content"]).startswith(_CHILD_ANSWER)
+    assert reply["turn_id"] != parent.turn_id
+    assert execution(USER, reply["turn_id"]).state == TurnExecution.COMPLETED
+    assert assistant_texts(db, USER, reply["turn_id"]) == [_REPLY_ANSWER]
+
+
+def _assert_parent_turn_completed_with_its_answer(db: sqlite3.Connection, parent: MessageProcessor) -> None:
+    assert execution(USER, parent.turn_id).state == TurnExecution.COMPLETED
     # The call that ran the delegate stored an empty row; the answer is the next.
-    assert [r["content"] for r in replies] == ["", reply]
+    assert assistant_texts(db, USER, parent.turn_id) == ["", _STARTED_ANSWER]
 
 
 def test_failed_announcement_does_not_fail_the_delegate_call(db: sqlite3.Connection) -> None:
     """The parent's pill is announced again once the child exists — and that
     announcement can fail (here: its ``tool_calls`` row is gone at that moment, a
     purge or a rewrite racing the delegate). It is reported with a warning but
-    never fails the work: the call still finishes normally with the child's
-    answer, the child runs to its end first, the model gets the answer and the
-    turn completes.
+    never fails the work: the call still finishes normally, the child runs to
+    its end, its answer comes back to the chat and the turns complete.
 
     The fault is a database trigger that moves the parent's row out of reach the
-    instant the child's input row is written, and the child's own model call puts
-    it back once the warning has been logged — so the row is missing for exactly
-    the announcement and present again for the finish."""
-    gate = threading.Event()
-    provider = _HeldChildProvider(
-        gate,
-        lambda: _write_on_this_thread("UPDATE tool_calls SET id = -id WHERE id < 0"),
-        ProviderResponse(text="", model="m", tool_calls=[_tool("web_search", instructions=_INSTRUCTIONS)]),
-        ProviderResponse(text=_CHILD_ANSWER, model="m", tool_calls=None),
-        ProviderResponse(text="It is Paris.", model="m", tool_calls=None),
-    )
+    instant the child's input row is written; the warning puts it back (and
+    drops the trigger) on the caller's own thread before the warning call
+    returns — so the row is missing for exactly the announcement and present
+    again for the finish."""
     db.execute(
         "CREATE TRIGGER vanish_caller_row AFTER INSERT ON transcript WHEN NEW.tool_call_id IS NOT NULL "
         "BEGIN UPDATE tool_calls SET id = -id WHERE id = CAST(NEW.tool_call_id AS INTEGER); END"
     )
     db.commit()
+    provider, held = _late_web_search_provider()
 
-    with _watching_warnings(gate) as watch:
-        parent, frames = _run(provider, "what is the capital of France?")
+    def put_the_row_back() -> None:
+        _write_on_this_thread("UPDATE tool_calls SET id = -id WHERE id < 0", "DROP TRIGGER IF EXISTS vanish_caller_row")
 
-    assert provider.gate_opened, "the failed announcement must be reported with a warning"
-    assert watch.records
+    with watching_warnings(put_the_row_back) as watch:
+        parent, frames = run_turn(provider, UserConfig(), _QUESTION)
+
+    assert watch.records, "the failed announcement must be reported with a warning"
+    assert held.opened and provider.unused() == {}
     call = _web_search_call(db)
-    assert call["state"] == "done" and _CHILD_ANSWER in call["result"]
-    _assert_child_answered_and_closed_before_the_call_ended(db, call)
+    _assert_call_returned_at_once_and_its_child_replied(db, call, parent)
     _assert_parent_turn_completed_with_its_answer(db, parent)
     web_search = [f for f in frames if f.get("tool_name") == "web_search" and "channel" not in f]
     assert not any(f["state"] == "started" and f["delegate"] is not None for f in web_search), (
         "the announcement must not have gone out"
     )
-    child_turn = db.execute(
-        "SELECT turn_id FROM transcript WHERE channel = ? AND role = 'web_search'", (_CHILD_CHANNEL,),
-    ).fetchone()["turn_id"]
     assert web_search[-1]["state"] == "done"
-    assert web_search[-1]["delegate"] == {"channel": _CHILD_CHANNEL, "turn_id": child_turn}
+    assert web_search[-1]["delegate"] == {
+        "channel": _CHILD_CHANNEL, "turn_id": child_turn(db, _CHILD_CHANNEL, call["id"]),
+    }
 
 
 @dataclass(frozen=True)
@@ -499,7 +340,6 @@ class _SpoiledStampRun:
     """One finished user turn whose ``web_search`` call's own timestamp became
     unreadable once its child was running."""
 
-    parent: MessageProcessor
     frames: list[dict[str, object]]
     warnings: list[logging.LogRecord]
 
@@ -513,42 +353,26 @@ class _SpoiledStampRun:
 def spoiled_stamp_run(db: sqlite3.Connection) -> _SpoiledStampRun:
     """A ``web_search`` turn whose call row has its ``created_at`` overwritten with
     garbage after the parent's pill was announced and before the call finishes —
-    so only the lookup of "which child did this call spawn" at finish can trip."""
-    announced = threading.Event()
+    so only the lookup of "which child did this call spawn" at finish can trip.
+    The overwrite runs on the caller's own thread, as the announcement is
+    broadcast, so it always lands between the two."""
+    spoiled = threading.Event()
 
-    def watch_for_announcement(frame: dict[str, object]) -> None:
+    def spoil_on_announcement(frame: dict[str, object]) -> None:
         if (
-            frame.get("tool_name") == "web_search" and "channel" not in frame
+            not spoiled.is_set()
+            and frame.get("tool_name") == "web_search" and "channel" not in frame
             and frame["state"] == "started" and frame["delegate"] is not None
         ):
-            announced.set()
+            _write_on_this_thread("UPDATE tool_calls SET created_at = 'not-a-timestamp' WHERE tool_name = 'web_search'")
+            spoiled.set()
 
-    provider = _HeldChildProvider(
-        announced,
-        lambda: _write_on_this_thread("UPDATE tool_calls SET created_at = 'not-a-timestamp' WHERE tool_name = 'web_search'"),
-        ProviderResponse(text="", model="m", tool_calls=[_tool("web_search", instructions=_INSTRUCTIONS)]),
-        ProviderResponse(text=_CHILD_ANSWER, model="m", tool_calls=None),
-        ProviderResponse(text="It is Paris.", model="m", tool_calls=None),
-    )
-    with _watching_warnings() as watch:
-        parent, frames = _run(provider, "what is the capital of France?", on_frame=watch_for_announcement)
-    assert provider.gate_opened, "the call must have been announced before the stamp was spoiled"
-    return _SpoiledStampRun(parent, frames, watch.records)
-
-
-def test_unreadable_call_stamp_does_not_fail_the_delegate_call_or_its_turn(
-    db: sqlite3.Connection, spoiled_stamp_run: _SpoiledStampRun,
-) -> None:
-    """Finding the child a call spawned is bookkeeping for the pill. When the
-    call's own timestamp cannot be read at the moment it finishes, the call still
-    finishes with the child's answer, the child runs to its end first, and the
-    parent's turn completes with its reply."""
-    call = _web_search_call(db)
-
-    assert call["created_at"] == "not-a-timestamp"
-    assert call["state"] == "done" and _CHILD_ANSWER in call["result"]
-    _assert_child_answered_and_closed_before_the_call_ended(db, call)
-    _assert_parent_turn_completed_with_its_answer(db, spoiled_stamp_run.parent)
+    provider, held = _late_web_search_provider()
+    with watching_warnings() as watch:
+        _, frames = run_turn(provider, UserConfig(), _QUESTION, on_frame=spoil_on_announcement)
+    assert spoiled.is_set(), "the call must have been announced before the stamp was spoiled"
+    assert held.opened
+    return _SpoiledStampRun(frames, watch.records)
 
 
 def test_live_pill_still_finishes_when_its_child_cannot_be_looked_up(

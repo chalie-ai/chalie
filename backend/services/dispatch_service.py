@@ -47,6 +47,7 @@ import json
 import logging
 from typing import TYPE_CHECKING, Callable, cast
 
+from abilities._ability import FOLLOW_UP_BLOCK
 from abilities._mcp_ability import _MCPAbility
 from services.key_healer import KeyHealer
 from abilities._registry import AbilityRegistry
@@ -347,21 +348,7 @@ class DispatchService:
         if tr.rich is not None and self.mp.config.RENDERS_CARDS:
             ordinal = self._next_ordinal(tool_name)
 
-        # The follow-up block fires only on a real SUCCESS: never on an error
-        # result. Empty => nothing appended, so a tool with neither a nudge nor
-        # untrusted output renders byte-identical to before.
-        #
-        # An action that brings outside content in adds ITS OWN steer to the same
-        # block, LAST — the closest instruction to the point of generation, and
-        # pressed against the payload it describes instead of sitting in a system
-        # prompt that a long result has buried. The steer is per action because
-        # `email.read` and `browser.scroll` are not the same warning, and a tool
-        # whose current action isn't in the map gets none.
-        follow_up = ""
-        if tr.status == "success":
-            follow_up = ability.get_follow_up(tr)
-            steer = ability.UNTRUSTED_CONTENT.get(action or "", "")
-            follow_up = f"{follow_up}\n\n{steer}".strip() if steer else follow_up
+        follow_up = ability.follow_up(tr, action)
         return self._render(tool_name, tr, ordinal, follow_up=follow_up), call_id, state
 
     # ── Action pre-validation (ACTION_REQUIRED) ────────────────────────────────
@@ -532,7 +519,7 @@ class DispatchService:
             body_str = self._render_rich(tool_name, tr, ordinal)
 
         if follow_up:
-            body_str = f"{body_str}\n{_FOLLOW_UP_BLOCK.format(text=follow_up)}"
+            body_str = f"{body_str}\n{FOLLOW_UP_BLOCK.format(text=follow_up)}"
 
         return f"[{tool_name}({', '.join(head_parts)})]\n{body_str}\n[end:{tool_name}]"
 
@@ -565,10 +552,6 @@ _RICH_INSTRUCTION = (
     "<span id='{tag}'>your synthesis here</span>. The span renders as a card; "
     "without it the user sees only plain text."
 )
-
-# A standing next-step nudge a tool appends to its OWN successful result. Placed
-# INSIDE the envelope (after any rich block, before ``[end:<tool>]``).
-_FOLLOW_UP_BLOCK = "[follow_up_instruction]\n{text}\n[end:follow_up_instruction]"
 
 # Appended to the SECOND (and later) identical error a tool returns in one turn,
 # to break a retry loop. Written plainly so smaller models act on it.

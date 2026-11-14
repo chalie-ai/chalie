@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 #: Stamped as ``stop_reason`` when the boot sweep finds a row a killed process
 #: never got to close.
 STOP_REASON_PROCESS_DEATH = "process death"
-#: Stamped as ``stop_reason`` on a subtask stopped by its caller's own stop.
+#: Stamped as ``stop_reason`` on a delegate's turn stopped by its caller's own stop.
 STOP_REASON_PARENT_STOPPED = "parent stopped"
 
 
@@ -242,7 +242,7 @@ class TurnExecutionService:
         stale. The whole sweep runs inside one ``self.mp.db`` transaction
         (I6) so a mid-loop write failure rolls back every row it already
         touched rather than stranding a partially-swept boot; returns the
-        rows it closed — so boot can tell each swept subtask's caller — or
+        rows it closed — so boot can reply to each swept delegate's caller — or
         an empty list if the sweep did not commit."""
         swept: list[TurnExecution] = []
         try:

@@ -70,6 +70,7 @@ from contextlib import contextmanager
 from threading import Thread, get_ident
 from typing import TYPE_CHECKING, Protocol, cast
 
+from abilities._delegate import replies_late, reply_to_caller, replying_tools
 from abilities.plan import PlanAbility
 from abilities.recall import Recall
 from configs.channels.user import UserConfig
@@ -87,6 +88,7 @@ from exceptions import (
 )
 from models.plan_task import PlanTask
 from models.provider_request import ProviderRequest
+from models.tool_call import ToolCall
 from models.turn_execution import TurnExecution
 from models.transcript import Transcript
 from models.transcript_thinking import TranscriptThinking
@@ -101,6 +103,7 @@ from services.tool_call_service import ToolCallService
 from services.transcript_service import TranscriptService
 from services.turn_execution_service import TurnExecutionService
 from services.websocket import Websocket
+from tools.browser.session import close_session
 
 if TYPE_CHECKING:
     from contracts.json_serializable import JsonSerializable
@@ -482,11 +485,12 @@ class MessageProcessor:
         offered to the memory step, and only once its execution row is
         closed: the step is a background turn of its own on this channel, so
         it can never open beside a live loop or a row still marked working,
-        and this thread never waits on it. A subtask's turn then reports its
-        outcome to its caller after every ending (completed, stopped, crashed),
-        the reply carrying the model's raw final text — the reply is an input
-        row on the caller's channel, and input rows are raw text — rather than
-        the HTML-formatted result."""
+        and this thread never waits on it. After every ending (completed,
+        stopped, crashed) the turn closes the browser tab it opened, then a
+        delegate's turn reports its outcome to a caller that did not wait for
+        it, the reply carrying the model's raw final text — the reply is an
+        input row on the caller's channel, and input rows are raw text —
+        rather than the HTML-formatted result."""
         answer = ""
         try:
             self._setup()
@@ -503,6 +507,7 @@ class MessageProcessor:
             answer = response.text or ""
             self._post_turn(response.text)
             self._offer_memory_step()
+        self._close_browser_tab()
         self._report_to_caller(answer)
 
     def _step(self) -> "ProviderResponse":
@@ -651,25 +656,32 @@ class MessageProcessor:
         rows = self.transcript_service.joined_since(self._consumed_through)
         if not rows:
             return
-        self._offer_subtask_tool(rows)
+        self._offer_replying_tools(rows)
         anchor = self.current_transcript_id
         if anchor is None:
             raise RuntimeError(f"turn {self.turn_id}: joined messages arrived with no row to file them under")
         self.consumed_joins.setdefault(anchor, []).extend(rows)
         self._consumed_through = cast("int", rows[-1].id)
 
-    def _offer_subtask_tool(self, rows: Sequence[Transcript]) -> None:
-        """Activate the subtask tool on a turn whose message is a reply to a
-        subtask's tool call: a reply from a subtask arrives with the subtask
-        tool already active, so the turn can follow up without looking it up.
-        A subtask never gets the tool itself — one level only."""
-        if self.config.type() is None:
+    def _offer_replying_tools(self, rows: Sequence[Transcript]) -> None:
+        """Activate, on a turn whose message is a delegate's late reply, the
+        tools that reply needs (:func:`~abilities._delegate.replying_tools`):
+        the delegate itself, so the turn can follow up without looking it up,
+        and the tools its follow-up instruction names. A reply's row carries
+        its delegate call's ``tool_calls`` id. Only a turn that is replied to
+        late gets them — a subtask's or a delegate's own turn never does."""
+        if not replies_late(self.config.type()):
             return
-        if not any(row.tool_call_id is not None for row in rows):
-            return
-        from abilities.subtask import SubtaskAbility  # noqa: PLC0415
-        if SubtaskAbility.NAME not in self.active_tools:
-            self.active_tools.append(SubtaskAbility.NAME)
+        for row in rows:
+            link = row.tool_call_id
+            if link is None or not link.isdecimal():
+                continue
+            call = ToolCall.get(int(link))
+            if call is None:
+                continue
+            for name in replying_tools(call.tool_name):
+                if name not in self.active_tools:
+                    self.active_tools.append(name)
 
     # ── provider send ──────────────────────────────────────────────────────────
 
@@ -906,20 +918,31 @@ class MessageProcessor:
         except Exception as exc:  # noqa: BLE001 — the turn is already complete; log, never raise
             logger.warning("[MessageProcessor] memory step trigger failed (isolated): %s", exc)
 
+    def _close_browser_tab(self) -> None:
+        """Close the browser tab this turn opened, however the turn ended. The
+        browser keys a run's tab by the run's input row; a turn that never
+        browsed has none, and closing it is a no-op. Never raises: the turn is
+        already terminal, so a failed close is logged."""
+        if self.uid is None:
+            return
+        try:
+            close_session(self.uid)
+        except Exception:  # noqa: BLE001 — the turn is already terminal; log, never raise
+            logger.exception("[MessageProcessor] %s turn %s: closing its browser tab failed", self.channel, self.turn_id)
+
     def _report_to_caller(self, answer: str) -> None:
         """Hand this turn's outcome — the model's raw final text, since the
         reply is an input row on the caller's channel and input rows are raw
-        text — to the turn that started it: a subtask's reply always lands,
-        however the subtask ended. Only a subtask's own turn has a caller
-        (:func:`~abilities.subtask.is_subtask_turn`); the memory step's turn
-        on the subtask channel has none. Never raises: the turn is already
-        terminal, so a failed reply is logged and dropped."""
+        text — to the turn that started it, when that caller did not wait for
+        it (:func:`~abilities._delegate.reply_to_caller` settles whether there
+        is one). Every ending is offered — completed, stopped or crashed — and
+        :func:`~abilities._delegate.reply_to_caller` settles whether it is
+        sent. Never raises: the turn is already terminal, so a reply that
+        fails is logged and dropped, and the caller gets nothing."""
         try:
-            from abilities.subtask import is_subtask_turn, reply_to_caller  # noqa: PLC0415
-            if is_subtask_turn(self.channel, self.turn_id):
-                reply_to_caller(self.turn_id, answer)
+            reply_to_caller(self.channel, self.turn_id, answer)
         except Exception:  # noqa: BLE001 — the turn is already terminal; log, never raise
-            logger.exception("[MessageProcessor] subtask %s: reply to its caller failed", self.turn_id)
+            logger.exception("[MessageProcessor] %s turn %s: reply to its caller failed", self.channel, self.turn_id)
 
     def _voice_presynthesis(self) -> None:
         """Kick background speech pre-synthesis for the row this exchange just
@@ -979,7 +1002,7 @@ class MessageProcessor:
         self.active_tools = list(self.config.always_available or [])
         anchor = self.transcript_service.anchor_row()
         if anchor is not None:
-            self._offer_subtask_tool([anchor])
+            self._offer_replying_tools([anchor])
         # Resolve thinking override from the transcript row written by begin()
         # (the current turn's input row). medium/high becomes the override,
         # auto/NULL leaves it unset so the deliberation gate decides normally.

@@ -33,6 +33,7 @@ import base64
 import logging
 from typing import TYPE_CHECKING, cast
 
+from abilities._delegate import reply_follow_up
 from abilities._registry import AbilityRegistry
 from abilities.find_tools import FindToolsAbility
 from abilities.plan import PlanAbility
@@ -372,8 +373,10 @@ class PromptService:
         the order they arrived: a message sent while a call was in flight
         follows that call's reply and tool results. A message taken in before
         a compaction still renders — the compaction folds earlier turns, never
-        this exchange — and one not yet taken in does not. With nothing
-        joined the trail is unchanged."""
+        this exchange — and one not yet taken in does not. A joined delegate
+        reply carrying an answer is followed by its tool's follow-up block
+        (:func:`reply_follow_up`). With nothing joined the trail is
+        unchanged."""
         calls = self.mp.tool_call_service.by_exchange()
         last_compaction = max(
             (cast("int", call.id) for call in calls if call.tool_name == "chat_history_compactor"),
@@ -414,7 +417,8 @@ class PromptService:
         def joined_after(tid: int) -> None:
             lead_in(tid)
             parts.extend(
-                f"[{self._format_ts(row.created_at)}] {speaker(row) or 'user'}: {row.content}"
+                f"[{self._format_ts(row.created_at)}] {speaker(row) or 'user'}: "
+                f"{row.content}{reply_follow_up(row)}"
                 for row in joins[tid]
             )
 
@@ -535,7 +539,8 @@ class PromptService:
         present), the stamped input line, then this turn's act trail. The
         input line carries the turn's stamp (the model's only time source);
         the heartbeat never rides the user message — its locale line sits at
-        the bottom of the system prompt."""
+        the bottom of the system prompt. A delegate reply carrying an answer
+        is followed by its tool's follow-up block (:func:`reply_follow_up`)."""
         parts: list[str] = []
 
         user_def = self.user_definition()
@@ -553,8 +558,8 @@ class PromptService:
             parts.append(handover)
 
         anchor = self.mp.transcript_service.anchor_row()
-        label = speaker(anchor) if anchor is not None else None
-        parts.append(f"[{self._input_stamp(anchor)}] {label or 'user'}: {self.mp.raw_input}")
+        label, follow_up = (speaker(anchor), reply_follow_up(anchor)) if anchor is not None else (None, "")
+        parts.append(f"[{self._input_stamp(anchor)}] {label or 'user'}: {self.mp.raw_input}{follow_up}")
 
         trail = self._trail()
         if trail:
