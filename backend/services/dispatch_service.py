@@ -192,11 +192,12 @@ class DispatchService:
     ) -> tuple[str, int | None, str]:
         """The ability-found path for ALREADY-canonicalised params (:meth:`_prepare`
         has sanitised the values, lifted ``act_summary``, and healed the keys):
-        ACTION_REQUIRED pre-gate → resolve permission → policy-gate ``_execute``.
-        Returns the rendered result, the tool_calls row id opened on the allow path
-        (``None`` when the call never executed), and the terminal state to write."""
-        if (pre := self._prevalidate(ability, params)) is not None:
-            # ACTION_REQUIRED pre-gate fires BEFORE the permission is formed: a
+        unknown-parameter refusal → ACTION_REQUIRED pre-gate → resolve permission →
+        policy-gate ``_execute``. Returns the rendered result, the tool_calls row id
+        opened on the allow path (``None`` when the call never executed), and the
+        terminal state to write."""
+        if (pre := self._refuse_unknown(ability, params) or self._prevalidate(ability, params)) is not None:
+            # Both pre-gates fire BEFORE the permission is formed: a
             # hallucinated action would otherwise lazily seed a bogus
             # '<tool>.<action>' ask row and freeze the turn waiting for human
             # approval. Malformed input never reaches the policy gate or run().
@@ -364,6 +365,35 @@ class DispatchService:
             steer = ability.UNTRUSTED_CONTENT.get(action or "", "")
             follow_up = f"{follow_up}\n\n{steer}".strip() if steer else follow_up
         return self._render(tool_name, tr, ordinal, follow_up=follow_up), call_id, state
+
+    # ── Unknown-parameter refusal ──────────────────────────────────────────────
+
+    def _refuse_unknown(self, ability: "Ability", params: dict[str, object]) -> "ToolResult | None":
+        """Refuse the whole call when it names a parameter the tool does not
+        declare, so nothing runs. Read after healing, so an alias already rewritten
+        to its declared name passes. A dropped key would otherwise let the call do
+        something other than what was asked: a schedule sent ``cron`` lost it and
+        ran every minute.
+
+        Not checked: an outside (MCP) tool whose schema lists no parameters, which
+        leaves nothing to check against, and the turn-zero seed, whose params are
+        built by code and carry the framework's ``_auto`` marker. A built-in tool
+        that declares no parameters refuses every key."""
+        if self.mp.seeding_turn_zero:
+            return None
+        properties = ability.get_parameters().get("properties")
+        if not isinstance(properties, dict):
+            if isinstance(ability, _MCPAbility):
+                return None
+            properties = {}
+        unknown = [key for key in params if key not in properties]
+        if not unknown:
+            return None
+        return ToolResult.err(
+            f"Unknown parameter(s): {', '.join(unknown)}. Nothing was done.",
+            code="unknown-params",
+            valid=tuple(str(key) for key in properties),
+        )
 
     # ── Action pre-validation (ACTION_REQUIRED) ────────────────────────────────
 

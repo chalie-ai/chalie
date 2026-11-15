@@ -214,6 +214,9 @@ class CalendarAbility(CapabilityAbility):
                     "'FREQ=MONTHLY'. Omit for a one-off event."
                 ),
             },
+            Keys.location: {"type": "string", "description": "Optional location"},
+            Keys.description: {"type": "string", "description": "Optional description"},
+            Keys.calendar_name: {"type": "string", "description": "Target calendar name"},
         },
         "required": [Keys.action],
     }
