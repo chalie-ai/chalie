@@ -1,15 +1,18 @@
 // @vitest-environment happy-dom
 /**
- * The running-subtasks ring — feature spec.
+ * The running-subagents ring — feature spec.
  *
- * A `subtask` call starts a background turn on channel `delegate:subtask` and
- * returns at once, so the subtask keeps running after the call — often after
- * the whole turn that started it settled. While any of a turn's subtasks still
- * runs, the turn shows a round button at its bottom right, just above its
- * footer, counting them; clicking it lists them, and picking one opens its
- * transcript in the thread panel, as a delegate pill does.
+ * On the person's chat a subagent call (`subtask`, `web_search`, `web_browse`,
+ * `pim`, `code_agent`) starts a background turn on its own `delegate:<name>`
+ * channel and returns at once, so the subagent keeps running after the call —
+ * often after the whole turn that started it settled. While any of a turn's
+ * subagents still runs, the turn shows a round button at its bottom right,
+ * just above its footer, counting them; clicking it lists them, each named as
+ * its transcript's panel names it with its turn number, and picking one opens
+ * its transcript in the thread panel, as a delegate pill does. Turn numbers
+ * are counted per subagent, so two subagents can share one.
  *
- * Whether a subtask still runs is decided by its own execution frames once one
+ * Whether a subagent still runs is decided by its own execution frames once one
  * was seen, else by the REST read's `working` on its chip. The frames are
  * driven through the real dispatcher (`dispatchDrift`), the same entry point
  * the WebSocket feeds. No delegate surface is registered, so the dispatcher
@@ -33,8 +36,10 @@ import { clearAll, clearDelegateFeeds, setDelegateRunning } from '../../utils/li
 import type { ConversationMessage, ConversationTurnBlock, ToolCallChip } from '../../api/conversation';
 
 const SUBTASK = 'delegate:subtask';
+const WEB_SEARCH = 'delegate:web_search';
 const TURN = 901;
-const SUBTASK_IDS = [4, 5];
+/** Every subagent turn this spec drives frames for, as [channel, turn]. */
+const FRAMED: [string, number][] = [[SUBTASK, 4], [SUBTASK, 5]];
 
 let mounted: VueWrapper[] = [];
 
@@ -51,10 +56,10 @@ afterEach(() => {
   for (const w of mounted) w.unmount();
   mounted = [];
   clearAll(ConfigType.USER);
-  // An ended subtask's state is final and survives `clearDelegateFeeds()`,
-  // which drops only still-running entries — so mark every subtask this spec
-  // uses as running first, and the clear leaves none of them seen.
-  for (const id of SUBTASK_IDS) setDelegateRunning(SUBTASK, id, true);
+  // An ended subagent's state survives `clearDelegateFeeds()`, which drops
+  // only still-running entries — so mark every subagent this spec drives
+  // frames for as running first, and the clear leaves none of them seen.
+  for (const [channel, id] of FRAMED) setDelegateRunning(channel, id, true);
   clearDelegateFeeds();
   document.body.innerHTML = '';
 });
@@ -98,9 +103,9 @@ function mountTurn(toolCalls: ToolCallChip[]): VueWrapper {
 
 /** A delegate turn's execution frame, as the WebSocket delivers it: no `type`,
  *  its channel in its place. */
-function executionFrame(turnId: number, state: 'working' | 'completed'): WsPushEvent {
+function executionFrame(channel: string, turnId: number, state: 'working' | 'completed'): WsPushEvent {
   return {
-    id: turnId, channel: SUBTASK, type: null, turn_id: turnId,
+    id: turnId, channel, type: null, turn_id: turnId,
     started_at: '2026-01-01T00:00:01Z', ended_at: state === 'working' ? null : '2026-01-01T00:00:09Z',
     cancel_requested: false, state, stop_reason: null,
   } as unknown as WsPushEvent;
@@ -122,13 +127,14 @@ function menuItems(wrapper: VueWrapper) {
 }
 
 describe('a settled turn whose subtask still runs', () => {
-  it('shows the ring above its footer counting the running subtask; its menu lists it and a pick opens its transcript', async () => {
+  it('shows the ring above its footer counting the running subagent; its menu lists it and a pick opens its transcript', async () => {
     const wrapper = mountTurn([START_4, START_5, PLAIN]);
     const session = useSessionStore();
 
     const ring = wrapper.get('.subtask-ring');
     expect(ring.get('.subtask-ring__count').text()).toBe('1');
-    expect(trigger(wrapper).attributes('aria-label')).toBe('1 running subtask(s)');
+    expect(trigger(wrapper).attributes('aria-label')).toBe('1 running subagent(s)');
+    expect(trigger(wrapper).attributes('title')).toBe('Running subagents');
 
     // Its row stands right before the turn's last footer, in the turn's own
     // row order: the prompt, the step, the ring, the footer.
@@ -150,7 +156,7 @@ describe('a settled turn whose subtask still runs', () => {
     const items = menuItems(wrapper);
     // Only the running subtask: #5 had finished as of the read.
     expect(items).toHaveLength(1);
-    expect(items[0]!.get('.subtask-ring__name').text()).toBe('Subtask #4');
+    expect(items[0]!.get('.subtask-ring__name').text()).toBe('subtask #4');
     expect(items[0]!.get('.subtask-ring__summary').text()).toBe('compare museum hours');
 
     await items[0]!.trigger('click');
@@ -192,18 +198,18 @@ describe('the subtasks\' own execution frames decide once seen', () => {
     const wrapper = mountTurn([START_4, START_5, PLAIN]);
     expect(wrapper.find('.subtask-ring').exists()).toBe(true);
 
-    dispatchDrift(executionFrame(4, 'completed'));
+    dispatchDrift(executionFrame(SUBTASK, 4, 'completed'));
     await nextTick();
     expect(wrapper.find('.subtask-ring').exists()).toBe(false);
     expect(wrapper.find('.msg-row--subtasks').exists()).toBe(false);
 
     // #5's read said done, but its own frame says it runs — the frame wins.
-    dispatchDrift(executionFrame(5, 'working'));
+    dispatchDrift(executionFrame(SUBTASK, 5, 'working'));
     await nextTick();
     expect(wrapper.get('.subtask-ring__count').text()).toBe('1');
     await trigger(wrapper).trigger('click');
     const items = menuItems(wrapper);
-    expect(items.map((i) => i.get('.subtask-ring__name').text())).toEqual(['Subtask #5']);
+    expect(items.map((i) => i.get('.subtask-ring__name').text())).toEqual(['subtask #5']);
     expect(items[0]!.get('.subtask-ring__summary').text()).toBe('book a table');
   });
 });
@@ -217,7 +223,7 @@ describe('one subtask called twice', () => {
     await trigger(wrapper).trigger('click');
     const items = menuItems(wrapper);
     expect(items).toHaveLength(1);
-    expect(items[0]!.get('.subtask-ring__name').text()).toBe('Subtask #4');
+    expect(items[0]!.get('.subtask-ring__name').text()).toBe('subtask #4');
     expect(items[0]!.get('.subtask-ring__summary').text()).toBe('compare museum hours');
   });
 });
@@ -251,15 +257,47 @@ describe('closing the open menu', () => {
   });
 });
 
-describe('a turn with no running subtask', () => {
-  it('a block with no subtask call draws no ring — not even for another subagent\'s call still marked working', () => {
-    const otherDelegate = chip(95, 'web_search', 'museum hours', { channel: 'delegate:web_search', turn_id: 4, working: true });
-    const wrapper = mountTurn([PLAIN, otherDelegate]);
+describe('every kind of subagent', () => {
+  it('another subagent\'s call still marked working draws the ring, named as its transcript\'s panel names it; a block with no running subagent draws none', async () => {
+    const search = chip(95, 'web_search', 'museum hours', { channel: WEB_SEARCH, turn_id: 4, working: true });
+    const wrapper = mountTurn([PLAIN, search]);
+    const session = useSessionStore();
 
-    expect(wrapper.find('.subtask-ring').exists()).toBe(false);
-    expect(wrapper.find('.msg-row--subtasks').exists()).toBe(false);
+    expect(wrapper.get('.subtask-ring__count').text()).toBe('1');
+    await trigger(wrapper).trigger('click');
+    const items = menuItems(wrapper);
+    expect(items.map((i) => i.get('.subtask-ring__name').text())).toEqual(['web_search #4']);
+    expect(items[0]!.get('.subtask-ring__summary').text()).toBe('museum hours');
+    await items[0]!.trigger('click');
+    expect(session.panelDelegate).toEqual({ channel: WEB_SEARCH, turn_id: 4 });
+
+    const ended = chip(96, 'web_search', 'museum hours', { channel: WEB_SEARCH, turn_id: 4, working: false });
+    const quiet = mountTurn([PLAIN, ended]);
+    expect(quiet.find('.subtask-ring').exists()).toBe(false);
+    expect(quiet.find('.msg-row--subtasks').exists()).toBe(false);
     // The rest of the turn still draws: prompt, step, footer.
-    expect(rowsOf(wrapper)).toHaveLength(3);
-    expect(wrapper.find('.msg-row--footer').exists()).toBe(true);
+    expect(rowsOf(quiet)).toHaveLength(3);
+    expect(quiet.find('.msg-row--footer').exists()).toBe(true);
+  });
+
+  it('two subagents sharing a turn number are two entries, each opening its own transcript', async () => {
+    const subtask = chip(97, 'subtask', 'compare museum hours', { channel: SUBTASK, turn_id: 3, working: true });
+    const search = chip(98, 'web_search', 'search museum prices', { channel: WEB_SEARCH, turn_id: 3, working: true });
+    const wrapper = mountTurn([subtask, search, PLAIN]);
+    const session = useSessionStore();
+
+    expect(wrapper.get('.subtask-ring__count').text()).toBe('2');
+    expect(trigger(wrapper).attributes('aria-label')).toBe('2 running subagent(s)');
+    await trigger(wrapper).trigger('click');
+    expect(menuItems(wrapper).map((i) => [i.get('.subtask-ring__name').text(), i.get('.subtask-ring__summary').text()])).toEqual([
+      ['subtask #3', 'compare museum hours'],
+      ['web_search #3', 'search museum prices'],
+    ]);
+
+    await menuItems(wrapper)[0]!.trigger('click');
+    expect(session.panelDelegate).toEqual({ channel: SUBTASK, turn_id: 3 });
+    await trigger(wrapper).trigger('click');
+    await menuItems(wrapper)[1]!.trigger('click');
+    expect(session.panelDelegate).toEqual({ channel: WEB_SEARCH, turn_id: 3 });
   });
 });

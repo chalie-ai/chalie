@@ -79,8 +79,8 @@ export interface DelegateRef {
   channel: string;
   turn_id: number;
   /** Set only on a REST read's chip: whether that delegate turn still ran as
-   *  of the read (a subtask outlives the call that started it). Live frames
-   *  never carry it. */
+   *  of the read (on the person's chat a subagent outlives the call that
+   *  started it). Live frames never carry it. */
   working?: boolean;
 }
 

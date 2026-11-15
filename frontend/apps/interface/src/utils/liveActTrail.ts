@@ -133,9 +133,10 @@ export function clearAll(type: string): void {
 
 /**
  * A delegate turn's live run state, keyed `${channel}#${turnId}` — from each
- * delegate turn's own execution frames: true while working, false once ended;
- * ended is final. `undefined` means no frame has been seen yet, so a REST
- * read's `working` decides instead.
+ * delegate turn's own execution frames: true while working, false once ended.
+ * An ended turn can work again: a follow-up message to a subtask reopens the
+ * same turn, and its frames mark it working. `undefined` means no frame has
+ * been seen yet, so a REST read's `working` decides instead.
  */
 const _delegateRunning = reactive(new Map<string, boolean>());
 
@@ -153,7 +154,7 @@ export function delegateRunning(channel: string, turnId: number): boolean | unde
 /** Tear down every delegate feed. A delegate's pills settle only on its own
  *  terminal frame, which a dropped socket loses for good. The run map loses
  *  its still-running entries the same way — the session re-reads every turn
- *  that showed a running subtask, so the REST read's `working` decides
+ *  that showed a running subagent, so the REST read's `working` decides
  *  again; ended entries stay. */
 export function clearDelegateFeeds(): void {
   for (const feed of _feeds.keys()) {

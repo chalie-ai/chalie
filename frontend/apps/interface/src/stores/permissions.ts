@@ -15,11 +15,13 @@
  * open.
  *
  * An ask is shown and answered on the live activity line of its origin's
- * turn. Each mounted live line calls `markShown(requestId)` on mount and
- * `unmarkShown(requestId)` on unmount — a count, since the same turn can
- * render twice, on the main chat and in the thread panel — and the input
- * dock lists `offScreen`: the queued asks no mounted line is showing (a
- * scheduled task, or a thread whose panel is closed).
+ * turn while that turn works. Each mounted live line calls
+ * `markShown(requestId)` on mount and `unmarkShown(requestId)` on unmount — a
+ * count, since the same turn can render twice, on the main chat and in the
+ * thread panel — and the input dock lists `offScreen`, where each ask can be
+ * answered too: the queued asks no mounted line is showing (a scheduled task,
+ * a thread whose panel is closed, or a subagent asking after the turn that
+ * started it ended).
  */
 import { defineStore } from 'pinia';
 import type { WsPushEvent } from '@chalie/shared';
@@ -38,7 +40,9 @@ export interface PermissionRequest {
   summary: string;
   /** The instant the ask parked (ISO-8601 UTC with offset); empty when the backend sent none. */
   asked_at: string;
-  /** The turn the gate belongs to — its live activity line shows and answers the ask. */
+  /** The turn the gate belongs to — its live activity line shows and answers
+   *  the ask while that turn works; when no live line shows it, the input
+   *  dock does. */
   origin: PermissionOrigin;
 }
 

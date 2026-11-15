@@ -92,8 +92,8 @@ export const useSessionStore = defineStore('session', {
      *  silently die). */
     _offlineWorking: new Set<string>(),
 
-    /** `type:turnId` keys of turns showing a running-subtasks ring when the WS
-     *  dropped. The drop clears the subtasks' live run state, and a subtask
+    /** `type:turnId` keys of turns showing a running-subagents ring when the WS
+     *  dropped. The drop clears the subagents' live run state, and a subagent
      *  that ends behind the dead socket sends no frame anyone receives, so
      *  these turns are re-read on reconnect for their chips' `working` to
      *  decide again. Kept apart from `_offlineWorking`: such a turn may be
@@ -206,7 +206,7 @@ export const useSessionStore = defineStore('session', {
         // A delegate's terminal frame is lost the same way — drop its pills
         // and timers now; reconnect re-reads the delegate panel, if open, and
         // every turn whose ring the clear below leaves to a stale read. Read
-        // BEFORE the clear, which can hide a ring whose subtask still runs.
+        // BEFORE the clear, which can hide a ring whose subagent still runs.
         for (const el of Array.from(document.querySelectorAll<HTMLElement>('[data-subtasks-running][data-turn-id][data-type]'))) {
           this._offlineSubtaskTurns.add(`${el.getAttribute('data-type')}:${el.getAttribute('data-turn-id')}`);
         }
@@ -285,10 +285,10 @@ export const useSessionStore = defineStore('session', {
     },
 
     /**
-     * Re-read every turn that showed a running-subtasks ring when the WS
+     * Re-read every turn that showed a running-subagents ring when the WS
      * dropped (the `_offlineSubtaskTurns` snapshot). The drop cleared the
-     * subtasks' live run state, so each ring now answers from the chips of the
-     * turn's last read — and a subtask that ended during the outage would read
+     * subagents' live run state, so each ring now answers from the chips of the
+     * turn's last read — and a subagent that ended during the outage would read
      * as running until a page reload. A fresh read's chips decide again; any
      * later frame still wins over them.
      */

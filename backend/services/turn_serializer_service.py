@@ -186,8 +186,8 @@ def _delegates(calls: list[dict[str, object]]) -> dict[int, dict[str, object]]:
     """The child turn each watchable delegate call spawned, keyed by call id:
     one lookup bounded by the calls' lifetimes, and none at all when no call is
     a watchable delegate. Each entry also says whether that turn is still
-    ``working`` as of this read — a subtask outlives the call that started it,
-    so the call's own state cannot say."""
+    ``working`` as of this read — on the person's chat a subagent outlives the
+    call that started it, so the call's own state cannot say."""
     delegates = Transcript.delegate_turns({
         cast("int", c["id"]): (cast("str", c["created_at"]), cast("str | None", c["ended_at"]))
         for c in calls

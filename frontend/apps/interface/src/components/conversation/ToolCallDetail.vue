@@ -1,10 +1,11 @@
 <!-- An opened tool-call row: only what matters for its kind of call, read on
-     its own the first time the row opens and again once a running call
-     settles. A call that spawned a delegate turn ends on the way into that
-     turn's transcript. -->
+     its own the first time the row opens, again once a running call settles,
+     and again once the subagent a call started ends. A call that started a
+     subagent ends on the way into that subagent's transcript. -->
 <script setup lang="ts">
 import { computed, shallowRef, watch } from 'vue';
 import { delegatePillAttrs } from '../../composables/useDelegatePill';
+import { delegateRunning } from '../../utils/liveActTrail';
 import { lastDetail, readDetail } from '../../utils/toolCallDetails';
 import { toolDetailView, type DiffLine } from '../../utils/toolDetail';
 import type { StepCall } from '../../utils/turnSteps';
@@ -17,18 +18,27 @@ const detail = shallowRef(lastDetail(props.call.id));
 const failed = shallowRef(false);
 const view = computed(() => (detail.value ? toolDetailView(detail.value) : null));
 const delegate = computed(() => detail.value?.delegate ?? props.call.delegate);
+/** Whether the subagent this call started still runs, as the running-subagents
+ *  ring decides it: its live frames when seen, else the call's chip as the
+ *  turn was last drawn — which a reconnect re-reads after a dropped socket
+ *  loses the frames — else this call's own newest read. */
+const subagentRunning = computed(() => {
+  const d = delegate.value;
+  return d ? (delegateRunning(d.channel, d.turn_id) ?? props.call.delegate?.working ?? d.working) : undefined;
+});
 
 watch(
-  () => props.call.state,
-  (state) => {
+  [() => props.call.state, subagentRunning],
+  ([state, running]) => {
     failed.value = false;
-    readDetail(props.call).then(
+    const current = (): boolean => props.call.state === state && subagentRunning.value === running;
+    readDetail({ id: props.call.id, state, subagentRunning: running }).then(
       (read) => {
-        if (props.call.state === state) detail.value = read;
+        if (current()) detail.value = read;
       },
       (err: unknown) => {
         console.error(`Couldn't load tool call ${props.call.id}`, err);
-        if (props.call.state === state) failed.value = true;
+        if (current()) failed.value = true;
       },
     );
   },

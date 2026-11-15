@@ -1,9 +1,10 @@
-<!-- One dock row per pending ask no live line on screen shows (a scheduled
-     task, or a thread whose panel is closed). Open shows the turn in the
-     thread panel; the ask is answered on that turn's live line. A browser
-     hand-off gets a row while the browser panel is closed, or while it is
-     open on behalf of another turn; its Open shows the tab in the browser
-     panel, where Done answers it. -->
+<!-- One dock row per pending ask no live line on screen shows: a scheduled
+     task's, one from a thread whose panel is closed, or a subagent's raised
+     after the turn that started it ended. Deny and Allow answer the ask right
+     here; Open shows its turn in the thread panel. A browser hand-off gets a
+     row while the browser panel is closed, or while it is open on behalf of
+     another turn; its Open shows the tab in the browser panel, where Done
+     answers it. -->
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue';
 import { useSessionStore } from '../../stores/session';
@@ -61,6 +62,20 @@ function open(ask: PermissionRequest): void {
       <span class="activity__controls">
         <span class="activity__wait">· waiting for you · {{ waitedSeconds(ask.asked_at, now) }}s</span>
         <span v-if="ask.summary" class="activity__ask">{{ actionLabel(ask.action_id) }}</span>
+        <button
+          type="button"
+          class="activity__answer activity__answer--deny"
+          @click="permissions.respond(ask.request_id, false)"
+        >
+          Deny
+        </button>
+        <button
+          type="button"
+          class="activity__answer activity__answer--allow"
+          @click="permissions.respond(ask.request_id, true)"
+        >
+          Allow
+        </button>
         <button type="button" class="activity__stop" @click="open(ask)">Open</button>
       </span>
     </div>

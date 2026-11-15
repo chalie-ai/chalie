@@ -391,7 +391,8 @@ function _dispatchTurnExecution(data: WsPushEvent): boolean {
  */
 function _dispatchDelegateExecution(turnId: number, channel: string, state: string): void {
   const terminal = state !== 'working';
-  // A subtask outlives its caller: record its run state from its own frame.
+  // On the chat a subagent outlives its caller: record its run state from its
+  // own frame.
   setDelegateRunning(channel, turnId, !terminal);
   if (terminal) clearLiveTurn(channel, turnId);
   if (!hasDelegateSurface(channel, turnId)) return;

@@ -1,21 +1,23 @@
-<!-- The running-subtasks ring: a turn that started subtasks still running shows
-     a round button at its bottom right, just above the footer icons. Clicking
-     it lists those subtasks; picking one opens its transcript in the thread
-     panel, the same way a delegate pill does. -->
+<!-- The running-subagents ring: a turn that started subagents still running
+     shows a round button at its bottom right, just above the footer icons.
+     Clicking it lists those subagents, each named as its transcript's panel
+     names it, with its turn number; picking one opens its transcript in the
+     thread panel, the same way a delegate pill does. -->
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue';
 import type { DelegateRef } from '@chalie/shared';
 import { useSessionStore } from '../../stores/session';
+import { delegateName } from '../../utils/delegateChannel';
 
-/** The running subtasks — non-empty: the parent unmounts this component when
- *  none is left. `summary` is the call's one-line label, empty when the call
- *  had none. */
+/** The running subagents — non-empty: the parent unmounts this component
+ *  when none is left. `summary` is the call's one-line label, empty when the
+ *  call had none. */
 defineProps<{ subtasks: { delegate: DelegateRef; summary: string }[] }>();
 
 const open = ref(false);
 const wrapRef = ref<HTMLDivElement | null>(null);
 
-/** Open the picked subtask's transcript in the thread panel, then close. */
+/** Open the picked subagent's transcript in the thread panel, then close. */
 function pick(delegate: DelegateRef): void {
   useSessionStore().openDelegatePanel(delegate);
   open.value = false;
@@ -50,8 +52,8 @@ onBeforeUnmount(() => {
       class="subtask-ring__trigger"
       aria-haspopup="menu"
       :aria-expanded="open"
-      :aria-label="`${subtasks.length} running subtask(s)`"
-      title="Running subtasks"
+      :aria-label="`${subtasks.length} running subagent(s)`"
+      title="Running subagents"
       @click.stop="open = !open"
     >
       <svg class="subtask-ring__ring" viewBox="0 0 32 32" aria-hidden="true">
@@ -63,13 +65,13 @@ onBeforeUnmount(() => {
     <div v-if="open" class="subtask-ring__menu" role="menu">
       <button
         v-for="s in subtasks"
-        :key="s.delegate.turn_id"
+        :key="`${s.delegate.channel}#${s.delegate.turn_id}`"
         type="button"
         role="menuitem"
         class="subtask-ring__item"
         @click="pick(s.delegate)"
       >
-        <span class="subtask-ring__name">Subtask #{{ s.delegate.turn_id }}</span>
+        <span class="subtask-ring__name">{{ delegateName(s.delegate.channel) }} #{{ s.delegate.turn_id }}</span>
         <span v-if="s.summary" class="subtask-ring__summary">{{ s.summary }}</span>
       </button>
     </div>

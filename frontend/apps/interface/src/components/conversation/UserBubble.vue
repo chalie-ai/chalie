@@ -8,7 +8,7 @@ const props = withDefaults(defineProps<{
   message: ConversationMessage;
   /** Caption naming who wrote this row, when it isn't the user. */
   label?: string | null;
-  /** A subtask's reply — starts folded to its label, a click opens it, another folds it. */
+  /** A subagent's reply — starts folded to its label, a click opens it, another folds it. */
   collapsible?: boolean;
 }>(), { label: null, collapsible: false });
 
@@ -18,7 +18,7 @@ const showText = computed(
   () => !(props.message.content === '[File attached]' && props.message.attachments?.length),
 );
 
-// A subtask's reply starts folded to its label; a click opens it, another folds it.
+// A subagent's reply starts folded to its label; a click opens it, another folds it.
 const open = ref(false);
 const showBody = computed(() => !props.collapsible || open.value);
 

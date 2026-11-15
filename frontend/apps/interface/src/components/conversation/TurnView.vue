@@ -18,7 +18,6 @@ import type {
 import { usePermissionsStore } from '../../stores/permissions';
 import type { PermissionRequest } from '../../stores/permissions';
 import { delegateRunning, liveTrailsFor } from '../../utils/liveActTrail';
-import { SUBTASK_CHANNEL } from '../../utils/delegateChannel';
 import { didWork, showsWork } from '../../utils/turnSteps';
 import UserBubble from './UserBubble.vue';
 import ChalieBubble from './ChalieBubble.vue';
@@ -80,19 +79,20 @@ const liveLine = computed(() => ({
   ask: pendingAsk.value,
 }));
 
-/** This turn's subtasks that are still running — the ring's menu, in
- *  first-seen order. A subtask outlives the call that started it, so its live
- *  frames decide when seen, else the read's `working`. A live pill's child
- *  just started, so its fallback is running; a stored chip's is the REST
- *  read's `working`. Deduped by turn_id — a follow-up "message" call points
- *  at the same subtask, and the first summary wins. */
+/** This turn's subagents that are still running — the ring's menu, in
+ *  first-seen order. On the chat a subagent outlives the call that started
+ *  it, so its live frames decide when seen, else the read's `working`. A live
+ *  pill's child just started, so its fallback is running; a stored chip's is
+ *  the REST read's `working`. Deduped by channel and turn — turn numbers are
+ *  counted per subagent, and a follow-up "message" call points at the same
+ *  subtask, the first summary winning. */
 const runningSubtasks = computed(() => {
-  const found = new Map<number, { delegate: DelegateRef; summary: string }>();
+  const found = new Map<string, { delegate: DelegateRef; summary: string }>();
   const consider = (delegate: DelegateRef, summary: string | undefined, fallback: boolean): void => {
-    if (delegate.channel !== SUBTASK_CHANNEL) return;
+    const key = `${delegate.channel}#${delegate.turn_id}`;
     const running = delegateRunning(delegate.channel, delegate.turn_id) ?? fallback;
-    if (!running || found.has(delegate.turn_id)) return;
-    found.set(delegate.turn_id, { delegate, summary: summary ?? '' });
+    if (!running || found.has(key)) return;
+    found.set(key, { delegate, summary: summary ?? '' });
   };
   for (const pill of liveLine.value.pills) {
     if (pill.delegate) consider(pill.delegate, pill.summary, true);
@@ -141,7 +141,7 @@ interface PlanRow {
   tasks: PlanTask[];
 }
 
-/** The running-subtasks ring, standing just above the turn's last footer. */
+/** The running-subagents ring, standing just above the turn's last footer. */
 interface SubtasksRow {
   kind: 'subtasks';
   key: 'subtasks';
@@ -256,7 +256,7 @@ const displayRows = computed<DisplayRow[]>(() => {
   return rows;
 });
 
-/** The rows as drawn: `displayRows` plus, while any of this turn's subtasks
+/** The rows as drawn: `displayRows` plus, while any of this turn's subagents
  *  still runs, the ring at the bottom — right above the footer that closes the
  *  list, or last when the list ends on anything else (an exchange still
  *  running, whatever exchange an earlier footer closed). */
@@ -414,7 +414,7 @@ function onOpenThread(): void {
   margin-top: var(--space-lg);
 }
 
-// The running-subtasks ring stands at the row's right edge.
+// The running-subagents ring stands at the row's right edge.
 .msg-row--subtasks {
   justify-content: flex-end;
 }

@@ -105,9 +105,9 @@ export interface ConversationMessage {
   /**
    * Who wrote this row, when it is not the user — a subtask transcript's own
    * input row carries 'Task from Chalie' or 'Message from Chalie' (on the
-   * `delegate:subtask` channel), and a subtask's reply landing on the user or
-   * schedule channel carries 'Reply from subtask #N'. Absent/null on every
-   * other row.
+   * `delegate:subtask` channel), and a subagent's reply landing on the chat
+   * carries 'Reply from <subagent> #N', e.g. 'Reply from web_search #2'.
+   * Absent/null on every other row.
    */
   speaker?: string | null;
   /**

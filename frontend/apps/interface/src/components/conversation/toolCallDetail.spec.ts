@@ -9,8 +9,11 @@
  * browser action acted on and the pages it reached, what a delegate was asked
  * and the way into its transcript, an email's fields in a fixed order, and
  * for anything else every argument it was called with. A running call that
- * settles while open is read again; an open row stays open, with what it
- * read, when its step settles into its stored row.
+ * settles while open is read again, and so is a chat subagent's call when its
+ * subagent ends, since the call itself settled when the subagent started —
+ * whether the end arrives as a frame or, the frame lost to a dropped socket,
+ * as the turn drawn again; an open row stays open, with what it read, when
+ * its step settles into its stored row.
  *
  * Exchanges reach the page as they do in the app: a settled exchange through
  * the real surface registry, a running one through live frames into the real
@@ -111,6 +114,16 @@ function block(messages: ConversationMessage[], working: boolean): ConversationT
 
 const QUESTION = row(600, 'user', 'Sort out my Saturday trip to Gozo');
 const ANSWER = row(602, 'assistant', 'Your trip is sorted.', { settled: true, created_at: '2026-01-01T09:00:30Z' });
+
+/** A subagent turn's execution frame, as the WebSocket delivers it: no `type`,
+ *  its channel in its place. */
+function subagentFrame(channel: string, turnId: number, state: 'working' | 'completed'): WsPushEvent {
+  return {
+    id: turnId, channel, type: null, turn_id: turnId,
+    started_at: '2026-01-01T09:00:02Z', ended_at: state === 'working' ? null : '2026-01-01T09:01:00Z',
+    cancel_requested: false, state, stop_reason: null,
+  } as unknown as WsPushEvent;
+}
 
 function toolFrame(c: ToolCallDetail): WsPushEvent {
   return { tool_name: c.tool_name, id: c.id, turn_id: TURN, type: 'user', state: c.state, summary: c.summary, params: c.params } as unknown as WsPushEvent;
@@ -536,5 +549,144 @@ describe('opening and reading a call', () => {
     await flushPromises();
     expect(pages(detailOf(live))).toEqual(timetable);
     expect(backend.reads).toEqual([9401, 9401]);
+  });
+
+  it('a chat subagent\'s call opened while its subagent works is read again once that subagent ends, then lists every page it went through, and is read no more after', async () => {
+    const w = await makeWorld();
+    const params = { instructions: 'Find the cheapest Gozo crossing' };
+    const fares = { title: 'Ferry fares', url: 'https://ferries.example/fares' };
+    const fast = { title: 'Fast ferry', url: 'https://fastferry.example/' };
+    // On the chat the call settled as soon as its subagent started.
+    await w.settled(call(9501, 'web_browse', 'Comparing ferry fares', params, {
+      delegate: { channel: 'delegate:web_browse', turn_id: 21, working: true }, pages: [fares],
+    }));
+    const browse = rowNamed(w.el, 'Comparing ferry fares');
+    expect(pages(await open(browse))).toEqual([['Ferry fares', 'https://ferries.example/fares']]);
+    expect(backend.reads).toEqual([9501]);
+
+    // Its subagent's own frames: still working reads nothing.
+    await w.send(subagentFrame('delegate:web_browse', 21, 'working'));
+    expect(backend.reads).toEqual([9501]);
+
+    serve(call(9501, 'web_browse', 'Comparing ferry fares', params, {
+      delegate: { channel: 'delegate:web_browse', turn_id: 21, working: false }, pages: [fares, fast],
+    }));
+    await w.send(subagentFrame('delegate:web_browse', 21, 'completed'));
+    expect(backend.reads).toEqual([9501, 9501]);
+    expect(pages(detailOf(browse))).toEqual([
+      ['Ferry fares', 'https://ferries.example/fares'],
+      ['Fast ferry', 'https://fastferry.example/'],
+    ]);
+
+    // Its end repeated, and the row closed and opened again: no further read.
+    await w.send(subagentFrame('delegate:web_browse', 21, 'completed'));
+    browse.click();
+    await nextTick();
+    expect(pages(await open(browse))).toEqual([
+      ['Ferry fares', 'https://ferries.example/fares'],
+      ['Fast ferry', 'https://fastferry.example/'],
+    ]);
+    expect(backend.reads).toEqual([9501, 9501]);
+  });
+
+  it('a chat subagent\'s call opened just as its subagent ends sets aside the read made while it worked for one made after', async () => {
+    const w = await makeWorld();
+    const params = { instructions: 'Price the fast ferry' };
+    const fares = { title: 'Ferry fares', url: 'https://ferries.example/fares' };
+    const fast = { title: 'Fast ferry', url: 'https://fastferry.example/' };
+    await w.settled(call(9701, 'web_browse', 'Pricing the fast ferry', params, {
+      delegate: { channel: 'delegate:web_browse', turn_id: 23, working: true }, pages: [fares],
+    }));
+    const browse = rowNamed(w.el, 'Pricing the fast ferry');
+    backend.holding = true;
+    browse.click();
+    await flushPromises();
+    expect(detailOf(browse).textContent).toContain('Loading…');
+
+    // The subagent ends while that first read is still on its way.
+    serve(call(9701, 'web_browse', 'Pricing the fast ferry', params, {
+      delegate: { channel: 'delegate:web_browse', turn_id: 23, working: false }, pages: [fares, fast],
+    }));
+    await w.send(subagentFrame('delegate:web_browse', 23, 'completed'));
+    expect(backend.reads).toEqual([9701, 9701]);
+    releaseHeld();
+    backend.holding = false;
+    await flushPromises();
+
+    expect(pages(detailOf(browse))).toEqual([
+      ['Ferry fares', 'https://ferries.example/fares'],
+      ['Fast ferry', 'https://fastferry.example/'],
+    ]);
+    expect(backend.reads).toEqual([9701, 9701]);
+  });
+
+  it('a call whose subagent had already ended when its row was first opened is read once', async () => {
+    const w = await makeWorld();
+    const ended = { channel: 'delegate:web_browse', turn_id: 22, working: false };
+    await w.settled(call(9601, 'web_browse', 'Checking the return ferry', { instructions: 'Find the last ferry back' }, {
+      delegate: ended, pages: [{ title: 'Return times', url: 'https://ferries.example/return' }],
+    }));
+    const browse = rowNamed(w.el, 'Checking the return ferry');
+    expect(pages(await open(browse))).toEqual([['Return times', 'https://ferries.example/return']]);
+
+    // Its end arriving afterwards, and the row closed and opened again.
+    await w.send(subagentFrame('delegate:web_browse', 22, 'completed'));
+    browse.click();
+    await nextTick();
+    expect(pages(await open(browse))).toEqual([['Return times', 'https://ferries.example/return']]);
+    expect(backend.reads).toEqual([9601]);
+  });
+
+  it('a chat subagent\'s call opened while its subagent works, whose end the dropped socket lost, is read again once its exchange is drawn again saying the subagent ended, and is read no more after', async () => {
+    const w = await makeWorld();
+    const { clearDelegateFeeds } = await import('../../utils/liveActTrail');
+    const params = { instructions: 'Find the ferry to Comino' };
+    const fares = { title: 'Ferry fares', url: 'https://ferries.example/fares' };
+    const comino = { title: 'Comino crossing', url: 'https://ferries.example/comino' };
+    await w.settled(call(9801, 'web_browse', 'Finding the Comino ferry', params, {
+      delegate: { channel: 'delegate:web_browse', turn_id: 24, working: true }, pages: [fares],
+    }));
+    expect(pages(await open(rowNamed(w.el, 'Finding the Comino ferry')))).toEqual([['Ferry fares', 'https://ferries.example/fares']]);
+    await w.send(subagentFrame('delegate:web_browse', 24, 'working'));
+    expect(backend.reads).toEqual([9801]);
+
+    // The socket drops — the session clears the subagent feeds, losing the
+    // subagent's running state — and its end is never framed. The re-read
+    // after reconnecting draws the exchange again, its chip saying it ended.
+    clearDelegateFeeds();
+    await w.settled(call(9801, 'web_browse', 'Finding the Comino ferry', params, {
+      delegate: { channel: 'delegate:web_browse', turn_id: 24, working: false }, pages: [fares, comino],
+    }));
+    await flushPromises();
+    const browse = rowNamed(w.el, 'Finding the Comino ferry');
+    expect(browse.getAttribute('aria-expanded')).toBe('true');
+    expect(backend.reads).toEqual([9801, 9801]);
+    expect(pages(detailOf(browse))).toEqual([
+      ['Ferry fares', 'https://ferries.example/fares'],
+      ['Comino crossing', 'https://ferries.example/comino'],
+    ]);
+
+    // Closed and opened again: no further read.
+    browse.click();
+    await nextTick();
+    expect(pages(await open(browse))).toEqual([
+      ['Ferry fares', 'https://ferries.example/fares'],
+      ['Comino crossing', 'https://ferries.example/comino'],
+    ]);
+    expect(backend.reads).toEqual([9801, 9801]);
+  });
+
+  it('a read that failed is not tried again when its exchange is drawn again unchanged', async () => {
+    const w = await makeWorld();
+    const c = call(6802, 'bash', 'Checking the deposit', { command: 'python check_deposit.py' });
+    await w.settled(c);
+    backend.failing.add(6802);
+    vi.spyOn(console, 'error').mockImplementation(() => { /* the failed read's console line */ });
+    await open(rowNamed(w.el, 'Checking the deposit'));
+    expect(backend.reads).toEqual([6802]);
+    await w.settled(c);
+    await flushPromises();
+    expect(rowNamed(w.el, 'Checking the deposit').getAttribute('aria-expanded')).toBe('true');
+    expect(backend.reads).toEqual([6802]);
   });
 });
