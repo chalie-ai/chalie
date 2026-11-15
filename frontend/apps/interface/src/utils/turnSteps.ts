@@ -10,10 +10,11 @@ import { formatElapsed } from './time';
 
 export type StepCall = Pick<ToolCallChip, 'id' | 'tool_name' | 'params' | 'summary' | 'state' | 'delegate'>;
 
-/** One step's work — a stored row's, or the calls running now. */
+/** One step's work — a stored row's, or the calls running now. A stored row
+ *  that made no calls carries `null`, as the server sends it. */
 export interface StepWork {
   thinking?: ConversationMessage['thinking'];
-  tool_calls?: StepCall[];
+  tool_calls?: StepCall[] | null;
 }
 
 /** A call's one-line label: the summary the backend wrote, else the tool's name. */
@@ -35,8 +36,8 @@ export function didWork(work: StepWork): boolean {
 }
 
 /** The calls a step shows — all but the kinds the catalog hides. */
-export function visibleCalls(calls: readonly StepCall[] = []): StepCall[] {
-  return calls.filter((c) => !callKind(c).hidden);
+export function visibleCalls(calls: readonly StepCall[] | null | undefined): StepCall[] {
+  return (calls ?? []).filter((c) => !callKind(c).hidden);
 }
 
 /** Whether the step has work the person can see: it thought, or made a call
