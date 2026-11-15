@@ -12,7 +12,9 @@ A subtask is an ordinary turn on the ``delegate:subtask`` channel, one turn per
 subtask. It thinks as the turn that started it: the same system prompt,
 permissions and provider, because each config here IS its caller's config with
 only the routing, the background posture and (for the user's) the ready tools
-changed (``DiscoveryConfig``'s shape). They must stay subclasses: the prompt
+changed (``DiscoveryConfig``'s shape). The one part of the chat's system prompt
+a subtask is not given is its section on handing work to subagents: a subtask
+waits for its own subagents' answers. They must stay subclasses: the prompt
 builder picks the user persona by ``isinstance(config, UserConfig)``, so a copy
 or a fresh class would lose it.
 

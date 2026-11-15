@@ -33,12 +33,16 @@ import base64
 import logging
 from typing import TYPE_CHECKING, cast
 
-from abilities._delegate import reply_follow_up
+from abilities._delegate import replies_late, reply_follow_up
 from abilities._registry import AbilityRegistry
+from abilities.code_agent import CodeAgentAbility
 from abilities.find_tools import FindToolsAbility
+from abilities.pim import PimAbility
 from abilities.plan import PlanAbility, plans
 from abilities.recall import Recall
-from abilities.subtask import speaker
+from abilities.subtask import SubtaskAbility, speaker
+from abilities.web_browse import WebBrowseAbility
+from abilities.web_search import WebSearchAbility
 from configs.channels.external_agent import EAMPConfig
 from configs.channels.memory_step import PROMPT_CHANNEL as MEMORY_STEP_PROMPT_CHANNEL
 from configs.channels.user import UserConfig
@@ -138,6 +142,25 @@ _PLANNING_INSTRUCTION = (
 )
 _NO_PLAN = f'You have no plan for the current message yet — create one first with {PlanAbility.NAME}(action="create").'
 
+#: Added after the body on a turn whose subagent calls are answered
+#: later (``replies_late``): hand longer work to a subagent, end the turn, and
+#: pass its reply on when it arrives. Gated by the same rule that makes the
+#: calls reply late, so being told so and doing so cannot drift apart.
+_KEEPING_THE_CHAT_MOVING = (
+    "\n\n## Keeping the chat moving\n\n"
+    "Answer straight away when you already know the answer or can get it with "
+    "one or two tool calls. Anything longer — research, browsing, coding, any "
+    "job of several steps — goes to a subagent: "
+    f"`{CodeAgentAbility.NAME}` for coding, `{WebBrowseAbility.NAME}` for working a website, "
+    f"`{WebSearchAbility.NAME}` for research on the web, `{PimAbility.NAME}` for email, "
+    f"calendar and contacts, `{SubtaskAbility.NAME}` for anything else. Start it, tell the "
+    "user in a sentence or two what you started and that you will come back to "
+    "them when it is done, and end your turn there. Never wait for a subagent and "
+    "never guess its result. Its answer arrives later as a message labelled "
+    '"Reply from <tool> #N": pass that result on to the user straight away — '
+    "that is a quick answer, not new work to hand off."
+)
+
 #: The tag list the model is given, rendered from the sanitiser's own authority
 #: (``markup.PROMPT_TAGS``) so widening or narrowing the contract rewrites this
 #: instruction in the same edit. Built separately rather than inlined into an
@@ -179,11 +202,15 @@ class PromptService:
 
     def system_prompt(self) -> str:
         """The turn's system instruction block: the per-channel body, the
-        shared response-format contract on any channel that renders to a human
-        (``RENDERS_HTML``), then the user's locale line on every channel — the
-        one place all system-prompt assembly and placeholder substitution
-        lands."""
+        hand-off section on a turn whose subagent calls are answered later
+        (``replies_late``: the person's chat, never a discovery pass or a
+        subtask though they share its body), the shared response-format
+        contract on any channel that renders to a human (``RENDERS_HTML``),
+        then the user's locale line on every channel — the one place all
+        system-prompt assembly and placeholder substitution lands."""
         base = self._system_prompt_body()
+        if replies_late(self.mp.config.type()):
+            base += _KEEPING_THE_CHAT_MOVING
         if self.mp.config.RENDERS_HTML:
             base += _RESPONSE_FORMAT
         if locale := self.locale_line():
@@ -221,10 +248,11 @@ class PromptService:
 
         Static channels carry their prompt as the ``system_prompt`` property on
         their ProcessorConfig (pure declarative data). The two dynamic channels
-        — ``UserConfig`` (and its ``DiscoveryConfig`` subclass) and
+        — ``UserConfig`` (and its subclasses: discovery and a user subtask) and
         ``EAMPConfig`` — wrap that base literal with runtime data (voice line,
         provider content-field, resolved names) here. Branching is on the config
-        class, never the channel string, so subclass routing is automatic."""
+        class, never the channel string, so subclass routing is automatic; what
+        only one kind of turn is told is added by :meth:`system_prompt`."""
         config = self.mp.config
         if isinstance(config, UserConfig):
             return self._user_system_prompt()
@@ -523,8 +551,9 @@ class PromptService:
 
     def _user_system_prompt(self) -> str:
         """``UserConfig``: the voice line (cache-warm prefix) over the config's
-        ``system_prompt`` base literal. Runs for ``UserConfig`` and its
-        ``DiscoveryConfig`` subclass."""
+        ``system_prompt`` base literal. Runs for ``UserConfig`` and every
+        subclass (discovery, a user subtask), so nothing here is the chat's
+        alone: the chat's hand-off section is added by :meth:`system_prompt`."""
         try:
             voice_line = f"When responding; {personality_service.get_voice()}"
             prompt = f"{voice_line}\n\n{self.mp.config.system_prompt}"

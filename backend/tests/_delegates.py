@@ -172,6 +172,7 @@ class Request(NamedTuple):
     route: str
     text: str
     tools: frozenset[str]
+    system: str = ""
 
 
 def _as_read(request_text: str) -> str:
@@ -247,7 +248,7 @@ class ChannelProvider:
         names = frozenset(str(t["name"]) for t in dto.tools or [])
         route = self._route(dto, text, names)
         with self._lock:
-            self.requests.append(Request(route, text, names))
+            self.requests.append(Request(route, text, names, dto.system))
             script = self._scripts.get(route)
             if not script:
                 return self._NOTHING_NEW if route == "background" else self._TERMINAL
@@ -258,6 +259,11 @@ class ChannelProvider:
         """The messages of every call routed to *route*, in arrival order."""
         with self._lock:
             return [r.text for r in self.requests if r.route == route]
+
+    def systems(self, route: str) -> list[str]:
+        """The system prompt of every call routed to *route*, in arrival order."""
+        with self._lock:
+            return [r.system for r in self.requests if r.route == route]
 
     def read(self, route: str) -> list[str]:
         """What the model read on every call routed to *route*, in arrival
@@ -471,15 +477,17 @@ def run_turn(
     config: ProcessorConfig,
     raw_input: str,
     on_frame: Callable[[dict[str, object]], None] | None = None,
+    turn_id: int = -1,
 ) -> tuple[MessageProcessor, list[dict[str, object]]]:
     """Drive a real turn on *config* to its end against *provider*, then open
     every held call — so a subagent held there finishes only after its caller's
     turn has ended — and wait for every turn that follows, a subagent's reply
-    among them. Returns the processor and every frame the socket registry saw
-    meanwhile (each also handed to *on_frame*, on the thread that broadcast
-    it)."""
+    among them. *turn_id* sends into an existing turn (a thread reply) or names
+    the turn a caller that owns its ids runs as (a schedule's). Returns the
+    processor and every frame the socket registry saw meanwhile (each also
+    handed to *on_frame*, on the thread that broadcast it)."""
     with listening(on_frame) as listener, patched(provider):
-        mp = begin(config, raw_input)
+        mp = begin(config, raw_input, turn_id)
         mp.result()
         provider.release_all()
         drain()
