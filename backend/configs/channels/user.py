@@ -4,7 +4,6 @@ from typing import ClassVar
 
 from abilities.find_tools import FindToolsAbility
 from abilities.image_preview import ImagePreviewAbility
-from abilities.plan import PlanAbility
 from abilities.recall import Recall
 from configs.channels._common import DEFAULT_ALWAYS_AVAILABLE
 from configs.enums.channels import Channel
@@ -26,12 +25,26 @@ class UserConfig(ProcessorConfig):
     USAGE_TYPE = "foreground"
 
     def __init__(self, metadata: dict[str, object] | None = None) -> None:
+        # Lazy: each subagent's ability module imports the channel configs.
+        from abilities.code_agent import CodeAgentAbility  # noqa: PLC0415
+        from abilities.pim import PimAbility  # noqa: PLC0415
+        from abilities.subtask import SubtaskAbility  # noqa: PLC0415
+        from abilities.web_browse import WebBrowseAbility  # noqa: PLC0415
+        from abilities.web_search import WebSearchAbility  # noqa: PLC0415
+
         _metadata = metadata or {}
         super().__init__(
             channel=Channel.USER.value,
             role="user",
             policy_channel=PolicyChannel.CHAT,
-            always_available=[*DEFAULT_ALWAYS_AVAILABLE, PlanAbility.NAME],
+            always_available=[
+                *DEFAULT_ALWAYS_AVAILABLE,
+                SubtaskAbility.NAME,
+                CodeAgentAbility.NAME,
+                WebBrowseAbility.NAME,
+                WebSearchAbility.NAME,
+                PimAbility.NAME,
+            ],
             skip_transcript=False,
             skip_input_row=bool(_metadata.get("hidden_input")),
             suppress_history=False,

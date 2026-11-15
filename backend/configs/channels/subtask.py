@@ -9,11 +9,12 @@
 """Subtask configs — a background turn that runs with its caller's settings.
 
 A subtask is an ordinary turn on the ``delegate:subtask`` channel, one turn per
-subtask. It thinks exactly as the turn that started it: the same system prompt,
-tools, permissions and provider, because each config here IS its caller's config
-with only the routing and background posture changed (``DiscoveryConfig``'s
-shape). They must stay subclasses: the prompt builder picks the user persona by
-``isinstance(config, UserConfig)``, so a copy or a fresh class would lose it.
+subtask. It thinks as the turn that started it: the same system prompt,
+permissions and provider, because each config here IS its caller's config with
+only the routing, the background posture and (for the user's) the ready tools
+changed (``DiscoveryConfig``'s shape). They must stay subclasses: the prompt
+builder picks the user persona by ``isinstance(config, UserConfig)``, so a copy
+or a fresh class would lose it.
 
 Every subtask turn is its own conversation (``turn_scoped_history``): it reads
 none of the caller's history and none of another subtask's work, only its own
@@ -22,6 +23,8 @@ thread.
 
 from __future__ import annotations
 
+from abilities.plan import PlanAbility
+from configs.channels._common import DEFAULT_ALWAYS_AVAILABLE
 from configs.channels.scheduled import ScheduledConfig
 from configs.channels.user import UserConfig
 from configs.enums.channels import Channel
@@ -48,7 +51,9 @@ class UserSubtaskConfig(UserConfig):
     (a watched delegate streams by channel instead), it pairs no rich-media
     cards (its reply goes to its caller, whose ordinals a card would collide
     with), and its spend is background — the user did not start it. It has no
-    routing type, like every delegate, so nothing addresses it as a spine."""
+    routing type, like every delegate, so nothing addresses it as a spine.
+    Its ready tools are re-declared too: it plans, which the chat does not, and
+    the subagents the chat has ready are not ready on a subtask."""
 
     BROADCASTS_STATE = False
     RENDERS_CARDS = False
@@ -57,6 +62,7 @@ class UserSubtaskConfig(UserConfig):
     def __init__(self) -> None:
         super().__init__()
         _as_subtask(self, Channel.USER)
+        object.__setattr__(self, "always_available", [*DEFAULT_ALWAYS_AVAILABLE, PlanAbility.NAME])
 
     def type(self) -> None:
         return None

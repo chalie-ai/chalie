@@ -175,16 +175,16 @@ def delegate_result(result: str, *, hint: str) -> ToolResult:
 
 
 def replying_tools(tool_name: str) -> tuple[str, ...]:
-    """The tools a turn answering a late reply from ``tool_name`` needs active:
-    the delegate itself, to follow up, and the tools its follow-up instruction
-    names. Empty for any other tool."""
+    """The tools a turn answering a late reply from ``tool_name`` needs active
+    beyond its pinned ones: those the delegate's follow-up instruction names.
+    The delegate itself is already pinned on the chat, the only kind replied to
+    late. Empty for any other tool."""
     # Lazy: the registry imports this module.
     from abilities._registry import AbilityRegistry  # noqa: PLC0415
 
     if not AbilityRegistry.is_watchable_delegate(tool_name):
         return ()
-    ability = cast("DelegateAbility", AbilityRegistry.get(tool_name))
-    return (ability.NAME, *ability.FOLLOW_UP_TOOLS)
+    return cast("DelegateAbility", AbilityRegistry.get(tool_name)).FOLLOW_UP_TOOLS
 
 
 def reply_to_caller(channel: str, turn_id: int, answer: str) -> None:

@@ -1,39 +1,56 @@
-"""Feature tests: every message the agent works on is planned first, then
-worked with its plan in view.
+"""Feature tests: on a kind of turn that plans, every message is planned first,
+then worked with its plan in view.
 
-A new message on a config that pins the ``plan`` tool gets a planning pre-pass:
-one or more provider calls that may call only ``recall`` and ``plan`` and that
-show the other tools as a catalogue. The loop that follows sees the plan as a
-``[plan]`` block that tracks every update, keyed by the message's input row;
-once the exchange settles the plan leaves the context and stays on its message,
-where the thread view returns it. A message joined into a working turn adds
-tasks to the running plan and is never planned on its own. A response that
-answers while its only calls close the plan's last open tasks is the turn's
-settled answer.
+A scheduled task, a subtask and a subagent plan; the person's chat does not
+(``test_chat_offers_subagents_and_never_plans.py`` proves that side). A new
+message on a turn that plans gets a planning pre-pass: one or more provider
+calls that may call only ``recall`` and ``plan`` and that show the other tools
+as a catalogue. The loop that follows sees the plan as a ``[plan]`` block that
+tracks every update, keyed by the message's input row; once the exchange
+settles the plan leaves the context and stays on its message, where the
+thread view returns it. A message joined into a working turn adds tasks to
+the running plan and is never planned on its own. A response that answers
+while its only calls close the plan's last open tasks is the turn's settled
+answer.
 
-These drive the real send endpoint (``POST /api/threads/<turn_id>``) or the
-real ``MessageProcessor`` for a delegate, the real plan ability through real
-dispatch, the real prompt, transcript, tool-call and ``plan_tasks`` tables, the
-real turn serializer and the real migration runner, against the real migrated
-SQLite database. The only substitution is the LLM network boundary
+The turn is a scheduled task, fired exactly as the scheduler fires it (its
+schedule's id is the thread's turn id); the person's later messages into its
+thread go through the real send endpoint (``POST /api/threads/<turn_id>`` with
+``type=scheduled``), which joins the turn while it works and replies into the
+thread once it has finished. Each subagent's turn, and a subtask a scheduled
+task starts, is driven through the real ``MessageProcessor`` on its own config,
+as the call that starts it opens it. Both run the real plan ability through
+real dispatch, the real prompt, transcript, tool-call and ``plan_tasks``
+tables, the real turn serializer and the real migration runner, against the
+real migrated SQLite database. The only substitution is the LLM network boundary
 (``services.provider_service.build_client``): a scripted double.
 """
 
 import logging
 import sqlite3
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import cast
 
 import pytest
 from flask.testing import FlaskClient
 
 import services.provider_service as provider_service
+from abilities.code_agent import CodeAgentAbility
 from abilities.find_tools import FindToolsAbility
+from abilities.pim import PimAbility
 from abilities.plan import PlanAbility
 from abilities.recall import Recall
-from configs.channels.user import UserConfig
+from abilities.subtask import SubtaskAbility
+from abilities.web_browse import WebBrowseAbility
+from abilities.web_search import WebSearchAbility
+from configs.channels.code_agent import CodeAgentConfig
+from configs.channels.pim import PimConfig
+from configs.channels.scheduled import ScheduledConfig
+from configs.channels.subtask import ScheduledSubtaskConfig
+from configs.channels.web_browse import WebBrowseConfig
 from configs.channels.web_search import WebSearchConfig
+from configs.enums.channels import Channel
 from configs.enums.policy_channel import PolicyChannel
 from controllers.message_processor import MessageProcessor
 from migrations.runner import run_all
@@ -43,13 +60,20 @@ from models.provider_response import ProviderResponse
 from models.tool_call import ToolCall
 from models.transcript import Transcript
 from services.file_mapper_service import FileMapperService
+from services.processor_config import ProcessorConfig
 from services.prompt_service import _NO_PLAN, _PLAN_INSTRUCTION, _PLANNING_INSTRUCTION
-from tests.test_turn_join import AuthedClient, _drain, _label_thread, _post, _result, _say
+from tests.test_turn_join import AuthedClient, _drain, _post, _result, _say
 
 pytestmark = pytest.mark.unit
 
-_CHANNEL = "user"
+_CHANNEL = Channel.SCHEDULE.value
+#: The schedule the task belongs to: the scheduler fires it with this id as the
+#: thread's turn id.
+_SCHEDULE = 7
 _PLANNING = frozenset({Recall.NAME, PlanAbility.NAME})
+_SUBAGENTS = frozenset({
+    SubtaskAbility.NAME, CodeAgentAbility.NAME, WebBrowseAbility.NAME, WebSearchAbility.NAME, PimAbility.NAME,
+})
 _MIGRATION_KEY = "plan-tasks-table-v1"
 
 
@@ -112,6 +136,35 @@ def provider(chat_provider: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch)
     _drain()
 
 
+def _fire(text: str) -> MessageProcessor:
+    """Fire the scheduled task the way the scheduler does: a scheduled turn on
+    the schedule's own thread."""
+    return MessageProcessor.process(ScheduledConfig(), raw_input=text, turn_id=_SCHEDULE)
+
+
+def _send(client: FlaskClient, turn_id: int, text: str) -> dict[str, object]:
+    """The person's message into the task's thread, through the send endpoint:
+    it joins the turn while it works and replies into the thread otherwise."""
+    return _result(_post(client, turn_id, text, type="scheduled"))
+
+
+def _steps(provider: _PlanningProvider) -> list[str | list[str]]:
+    """Each recorded request of a scheduled task, named by what it offered:
+    ``"planning"`` when it offered only ``recall`` and ``plan``; ``"loop"``
+    when it offered ``plan`` and ``find_tools`` and none of the five
+    subagents, which a scheduled task reaches through ``find_tools`` alone.
+    Any other request shows as its sorted tool names, so a failure says what
+    was offered."""
+    def step(names: frozenset[str]) -> str | list[str]:
+        if names == _PLANNING:
+            return "planning"
+        if {PlanAbility.NAME, FindToolsAbility.NAME} <= names and not names & _SUBAGENTS:
+            return "loop"
+        return sorted(names)
+
+    return [step(names) for names in provider.tools]
+
+
 def _task(title: str, task: str) -> dict[str, str]:
     return {"title": title, "task": task}
 
@@ -139,7 +192,9 @@ def _plan_rows(message_id: int) -> list[tuple[int, str, str, str]]:
 
 def _thread_users(client: FlaskClient, turn_id: int) -> list[dict[str, object]]:
     """The thread view's user messages, as the client receives them."""
-    messages = cast("list[dict[str, object]]", _result(client.get(f"/api/threads/{turn_id}"))["messages"])
+    messages = cast(
+        "list[dict[str, object]]", _result(client.get(f"/api/threads/{turn_id}?type=scheduled"))["messages"],
+    )
     return [m for m in messages if m["role"] == "user"]
 
 
@@ -166,10 +221,10 @@ def test_a_new_message_is_planned_first_then_worked_with_its_plan_in_view(
         _calls(_plan(action="update", task=2, status="done")),
         _say("Your flight leaves at 9."),
     )
-    turn_id = cast("int", _result(_post(client, -1, "when does my flight leave?"))["turn_id"])
+    turn_id = _fire("when does my flight leave?").turn_id
     _drain()
 
-    assert provider.tools == [_PLANNING] + [frozenset(UserConfig().always_available)] * 4
+    assert _steps(provider) == ["planning"] + ["loop"] * 4
     prepass = provider.bodies[0]
     assert "when does my flight leave?" in prepass
     assert _PLANNING_INSTRUCTION in prepass
@@ -207,12 +262,11 @@ def test_a_new_message_is_planned_first_then_worked_with_its_plan_in_view(
 
     # A reply is a new message: it is planned afresh, and the settled plan
     # above it never reaches its context.
-    _label_thread(turn_id)
     provider.script(_say(""), _say("Anything else?"))
-    _result(_post(client, turn_id, "thanks"))
+    _send(client, turn_id, "thanks")
     _drain()
 
-    assert provider.tools[5:] == [_PLANNING, frozenset(UserConfig().always_available)]
+    assert _steps(provider)[5:] == ["planning", "loop"]
     reply_step = provider.bodies[6]
     assert _NO_PLAN in reply_step
     assert "[plan]\n" not in reply_step
@@ -226,21 +280,20 @@ def test_a_new_message_is_planned_first_then_worked_with_its_plan_in_view(
 
 
 def test_a_planning_call_to_any_other_tool_is_never_run(
-    authed_client: AuthedClient, provider: _PlanningProvider, caplog: pytest.LogCaptureFixture,
+    provider: _PlanningProvider, caplog: pytest.LogCaptureFixture,
 ) -> None:
     """The model reaches for a catalogue tool while planning. Dispatch would
     run any registered tool, so the call is dropped and logged, never run;
     with nothing run, planning ends and the loop asks for the plan instead."""
-    client, _db, _store = authed_client
     caplog.set_level(logging.WARNING)
     provider.script(
         _calls({"name": FindToolsAbility.NAME, "input": {"query": "weather"}}),
         _say("It is sunny."),
     )
-    turn_id = cast("int", _result(_post(client, -1, "what is the weather?"))["turn_id"])
+    turn_id = _fire("what is the weather?").turn_id
     _drain()
 
-    assert provider.tools == [_PLANNING, frozenset(UserConfig().always_available)]
+    assert _steps(provider) == ["planning", "loop"]
     assert _NO_PLAN in provider.bodies[1]
     assert [c.tool_name for c in ToolCall.by_turn(_CHANNEL, turn_id)] == [Recall.NAME]  # the memory seed alone
     assert f"planning skipped calls to ['{FindToolsAbility.NAME}']" in caplog.text
@@ -251,7 +304,7 @@ def test_a_planning_call_to_any_other_tool_is_never_run(
 
 
 def test_plan_refusals_reach_the_model_and_planning_gives_up_after_three_sends(
-    authed_client: AuthedClient, provider: _PlanningProvider,
+    provider: _PlanningProvider,
 ) -> None:
     """Three planning calls that each fail: a task added before any plan, a
     plan over the ten-task cap, a task updated that does not exist. Each
@@ -259,7 +312,6 @@ def test_plan_refusals_reach_the_model_and_planning_gives_up_after_three_sends(
     loop asks for the plan; there, a second plan and an unknown task number
     are refused too, naming the numbers that exist, and nothing but the one
     good plan is stored."""
-    client, _db, _store = authed_client
     eleven = [_task(f"Step {n}", f"Do step {n}") for n in range(1, 12)]
     provider.script(
         _calls(_plan(action="add", tasks=[_FLIGHT])),
@@ -269,11 +321,10 @@ def test_plan_refusals_reach_the_model_and_planning_gives_up_after_three_sends(
         _calls(_plan(action="create", tasks=[_ANSWER]), _plan(action="update", task=5, status="done")),
         _say("Your flight leaves at 9."),
     )
-    turn_id = cast("int", _result(_post(client, -1, "when does my flight leave?"))["turn_id"])
+    turn_id = _fire("when does my flight leave?").turn_id
     _drain()
 
-    loop = frozenset(UserConfig().always_available)
-    assert provider.tools == [_PLANNING] * 3 + [loop] * 3
+    assert _steps(provider) == ["planning"] * 3 + ["loop"] * 3
     assert "code=no-plan" in provider.bodies[1]
     assert "This message has no plan yet." in provider.bodies[1]
     assert "code=too-many-tasks" in provider.bodies[2]
@@ -310,14 +361,15 @@ def test_a_joined_message_adds_to_the_running_plan_and_is_never_planned_itself(
         _say("Flight at 9, hotel from 3."),
     )
     provider.hold_at(1)
-    opened = _result(_post(client, -1, "when does my flight leave?"))
-    turn_id = cast("int", opened["turn_id"])
+    fired = _fire("when does my flight leave?")
+    turn_id = fired.turn_id
     assert provider.entered.wait(10), "the loop never reached its first step"
-    assert _result(_post(client, turn_id, "and my hotel?"))["id"] == opened["id"]
+    assert fired.execution is not None
+    assert _send(client, turn_id, "and my hotel?")["id"] == fired.execution.id
     provider.release.set()
     _drain()
 
-    assert provider.tools == [_PLANNING] + [frozenset(UserConfig().always_available)] * 3
+    assert _steps(provider) == ["planning"] + ["loop"] * 3
     assert "and my hotel?" in provider.bodies[2]
     assert "Added task 3." in provider.bodies[3]
     assert "3. [todo] Check the hotel — Look up the hotel booking too" in provider.bodies[3]
@@ -335,22 +387,44 @@ def test_a_joined_message_adds_to_the_running_plan_and_is_never_planned_itself(
 # ── 5. a delegate plans its own brief ────────────────────────────────────────
 
 
-def test_a_delegate_plans_its_brief_before_working_it(provider: _PlanningProvider) -> None:
-    """A subagent is handed a brief: memory is recalled for it, it plans it
-    with only recall and plan callable, then works it with its own toolset and
-    the plan in view, and the plan is stored on the brief's input row."""
-    config = WebSearchConfig(PolicyChannel.CHAT)
+@pytest.mark.parametrize(
+    ("make_config", "ready_subagents"),
+    [
+        pytest.param(lambda: WebSearchConfig(PolicyChannel.CHAT), frozenset[str](), id=WebSearchAbility.NAME),
+        pytest.param(lambda: WebBrowseConfig(PolicyChannel.CHAT), frozenset[str](), id=WebBrowseAbility.NAME),
+        # The coding agent researches through web_search, which it has ready.
+        pytest.param(
+            lambda: CodeAgentConfig(PolicyChannel.CHAT), frozenset({WebSearchAbility.NAME}), id=CodeAgentAbility.NAME,
+        ),
+        pytest.param(lambda: PimConfig(PolicyChannel.CHAT), frozenset[str](), id=PimAbility.NAME),
+        pytest.param(ScheduledSubtaskConfig, frozenset[str](), id="scheduled_subtask"),
+    ],
+)
+def test_a_delegate_plans_its_brief_before_working_it(
+    provider: _PlanningProvider, make_config: Callable[[], ProcessorConfig], ready_subagents: frozenset[str],
+) -> None:
+    """Each subagent, and a subtask a scheduled task starts, is handed a brief
+    on its own config: memory is recalled for it, its first request plans it
+    with only recall and plan callable, then it works the brief with the plan
+    in view, and the plan is stored on the brief's input row. No request of
+    its turn offers a subagent, save one it has ready of its own (the coding
+    agent's ``web_search``)."""
     provider.script(
         _calls(_plan(action="create", tasks=[_task("Search", "Find the final score")])),
         _calls(_plan(action="update", task=1, status="done")),
         _say("Team A won 2-1."),
     )
-    mp = MessageProcessor(config, raw_input="who won the match")
+    mp = MessageProcessor(make_config(), raw_input="who won the match")
     mp.begin()
     mp.result()
     _drain()
 
-    assert provider.tools == [_PLANNING] + [frozenset(config.always_available)] * 2
+    assert len(provider.tools) == 3, provider.tools
+    planning, *loop = provider.tools
+    assert planning == _PLANNING, planning
+    for names in loop:
+        assert PlanAbility.NAME in names and Recall.NAME in names, names
+        assert names & _SUBAGENTS <= ready_subagents, names
     assert "1. [todo] Search — Find the final score" in provider.bodies[1]
     assert mp.uid is not None
     assert _plan_rows(mp.uid) == [(1, "Search", "Find the final score", "done")]
@@ -364,14 +438,11 @@ def _answer(text: str, *calls: dict[str, object]) -> ProviderResponse:
     return ProviderResponse(text=text, model="scripted", tool_calls=list(calls))
 
 
-def test_the_answer_that_closes_the_plan_ends_the_turn(
-    authed_client: AuthedClient, provider: _PlanningProvider,
-) -> None:
+def test_the_answer_that_closes_the_plan_ends_the_turn(provider: _PlanningProvider) -> None:
     """The model answers in the same response as the updates that close its
     plan — one task done, the other no longer needed. That response is the
     turn's last: the updates ran, its row is the settled answer, and the model
     is never sent another step."""
-    client, _db, _store = authed_client
     provider.script(
         _calls(_plan(action="create", tasks=[_FLIGHT, _ANSWER])),
         _calls(_plan(action="update", task=1, status="in_progress")),
@@ -381,10 +452,10 @@ def test_the_answer_that_closes_the_plan_ends_the_turn(
             _plan(action="update", task=2, status="cancelled"),
         ),
     )
-    turn_id = cast("int", _result(_post(client, -1, "when does my flight leave?"))["turn_id"])
+    turn_id = _fire("when does my flight leave?").turn_id
     _drain()
 
-    assert provider.tools == [_PLANNING] + [frozenset(UserConfig().always_available)] * 2
+    assert _steps(provider) == ["planning"] + ["loop"] * 2
     [message_id] = _input_rows(turn_id)
     assert [status for *_, status in _plan_rows(message_id)] == ["done", "cancelled"]
     assert _assistant_rows(turn_id) == [("", 0), ("Your flight leaves at 9.", 1)]
@@ -417,18 +488,17 @@ def test_the_answer_that_closes_the_plan_ends_the_turn(
     ],
 )
 def test_a_response_that_does_not_both_answer_and_close_the_plan_is_a_step(
-    authed_client: AuthedClient, provider: _PlanningProvider, answer: ProviderResponse,
+    provider: _PlanningProvider, answer: ProviderResponse,
 ) -> None:
     """Prose beside plan updates is a step, not the answer, unless the updates
     are all it called and they close the plan: a task still open, another
     tool's call, or no prose at all, and the loop asks again. The reply after
     it is the turn's settled row."""
-    client, _db, _store = authed_client
     provider.script(_calls(_plan(action="create", tasks=[_FLIGHT, _ANSWER])), answer, _say("Anything else?"))
-    turn_id = cast("int", _result(_post(client, -1, "when does my flight leave?"))["turn_id"])
+    turn_id = _fire("when does my flight leave?").turn_id
     _drain()
 
-    assert provider.tools == [_PLANNING] + [frozenset(UserConfig().always_available)] * 2
+    assert _steps(provider) == ["planning"] + ["loop"] * 2
     assert _assistant_rows(turn_id) == [(answer.text, 0), ("Anything else?", 1)]
 
 
@@ -443,22 +513,21 @@ _ECHO = f'[{PlanAbility.NAME}] {{"action": "update", "task": 2, "status": "done"
     ],
 )
 def test_a_line_echoing_the_responses_own_call_is_never_its_prose(
-    authed_client: AuthedClient, provider: _PlanningProvider, text: str, rows: list[tuple[str, int]],
+    provider: _PlanningProvider, text: str, rows: list[tuple[str, int]],
 ) -> None:
     """The model writes its own plan update out in the act trail's call
     notation beside the real updates that close the plan. That line is never
     stored or taken for the answer: alone, the response is a silent step and
     the reply after it settles; beside prose, the prose is the settled answer."""
-    client, _db, _store = authed_client
     provider.script(
         _calls(_plan(action="create", tasks=[_FLIGHT, _ANSWER])),
         _answer(text, _plan(action="update", task=1, status="done"), _plan(action="update", task=2, status="done")),
         _say("Anything else?"),
     )
-    turn_id = cast("int", _result(_post(client, -1, "when does my flight leave?"))["turn_id"])
+    turn_id = _fire("when does my flight leave?").turn_id
     _drain()
 
-    assert provider.tools == [_PLANNING] + [frozenset(UserConfig().always_available)] * len(rows)
+    assert _steps(provider) == ["planning"] + ["loop"] * len(rows)
     assert _assistant_rows(turn_id) == rows
 
 
@@ -475,14 +544,15 @@ def test_a_message_joined_while_the_plan_closes_keeps_the_turn_going(
         _say("Your hotel is from 3."),
     )
     provider.hold_at(1)
-    opened = _result(_post(client, -1, "when does my flight leave?"))
-    turn_id = cast("int", opened["turn_id"])
+    fired = _fire("when does my flight leave?")
+    turn_id = fired.turn_id
     assert provider.entered.wait(10), "the loop never reached its first step"
-    assert _result(_post(client, turn_id, "and my hotel?"))["id"] == opened["id"]
+    assert fired.execution is not None
+    assert _send(client, turn_id, "and my hotel?")["id"] == fired.execution.id
     provider.release.set()
     _drain()
 
-    assert provider.tools == [_PLANNING] + [frozenset(UserConfig().always_available)] * 2
+    assert _steps(provider) == ["planning"] + ["loop"] * 2
     assert "and my hotel?" in provider.bodies[2]
     assert _assistant_rows(turn_id) == [("Your flight leaves at 9.", 0), ("Your hotel is from 3.", 1)]
 

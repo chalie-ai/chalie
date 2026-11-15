@@ -71,7 +71,7 @@ from threading import Thread, get_ident
 from typing import TYPE_CHECKING, Protocol, cast
 
 from abilities._delegate import replies_late, reply_to_caller, replying_tools
-from abilities.plan import PlanAbility
+from abilities.plan import PlanAbility, plans
 from abilities.recall import Recall
 from configs.channels.user import UserConfig
 from configs.enums.channels import WATCHABLE_DELEGATE_CHANNELS, Channel
@@ -665,11 +665,12 @@ class MessageProcessor:
 
     def _offer_replying_tools(self, rows: Sequence[Transcript]) -> None:
         """Activate, on a turn whose message is a delegate's late reply, the
-        tools that reply needs (:func:`~abilities._delegate.replying_tools`):
-        the delegate itself, so the turn can follow up without looking it up,
-        and the tools its follow-up instruction names. A reply's row carries
-        its delegate call's ``tool_calls`` id. Only a turn that is replied to
-        late gets them — a subtask's or a delegate's own turn never does."""
+        tools its follow-up instruction names
+        (:func:`~abilities._delegate.replying_tools`); the delegate itself is
+        already pinned, so the turn can follow up without looking it up. A
+        reply's row carries its delegate call's ``tool_calls`` id. Only a turn
+        that is replied to late gets them — a subtask's or a delegate's own
+        turn never does."""
         if not replies_late(self.config.type()):
             return
         for row in rows:
@@ -1018,11 +1019,11 @@ class MessageProcessor:
         """The planning pre-pass: before the loop's first step, the model plans
         the message with only ``recall`` and ``plan`` callable, while
         ``PromptService`` shows it the planning instruction and every other tool
-        as a catalogue. Runs on a config that pins the plan tool, for a message
-        with an input row. Stops once a plan is stored, when the model calls no
-        tool it may call, or after ``_PLANNING_STEP_LIMIT`` sends; a message
-        left unplanned reaches the loop with the instruction to create its plan
-        first.
+        as a catalogue. Runs on a config that plans
+        (:func:`~abilities.plan.plans`), for a message with an input row. Stops
+        once a plan is stored, when the model calls no tool it may call, or
+        after ``_PLANNING_STEP_LIMIT`` sends; a message left unplanned reaches
+        the loop with the instruction to create its plan first.
 
         Writes no assistant row and no thinking trace and leaves the runaway
         tallies alone: its calls anchor to the input row, where the act trail
@@ -1030,7 +1031,7 @@ class MessageProcessor:
         dispatch itself runs any registered tool — and, with nothing run, the
         next send would repeat this one, so planning ends there."""
         message_id = self.uid
-        if PlanAbility.NAME not in self.active_tools or message_id is None:
+        if not plans(self.config) or message_id is None:
             return
         pinned = self.active_tools
         self.active_tools = [name for name in pinned if name in _PLANNING_TOOLS]

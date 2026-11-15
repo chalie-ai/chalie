@@ -42,7 +42,6 @@ from models.turn_execution import TurnExecution
 from services.llm_clients.openai_compatible import OpenAICompatibleClient
 from services.turn_serializer_service import get_service as _serializer
 from services.websocket import Websocket
-from tests.helpers import NO_PLAN, is_planning_request
 
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 
@@ -101,9 +100,7 @@ class _ScriptedProvider:
     def get_context_limit(self) -> int:
         return 200000
 
-    def send(self, dto: object) -> ProviderResponse:
-        if is_planning_request(dto):
-            return NO_PLAN
+    def send(self, _dto: object) -> ProviderResponse:
         if self._sent >= len(self._responses):
             return ProviderResponse(text="unreached", model="recorder", tool_calls=None)
         response = self._responses[self._sent]

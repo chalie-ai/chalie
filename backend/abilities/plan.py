@@ -10,7 +10,7 @@ short acknowledgement — the prompt is the one display of state.
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from abilities._ability import Ability
 from abilities._result import ToolResult
@@ -27,6 +27,18 @@ from contracts.params.plan_params_bag import (
 )
 from models.plan_task import PlanTask
 from services.database import Database
+
+if TYPE_CHECKING:
+    from services.processor_config import ProcessorConfig
+
+
+def plans(config: ProcessorConfig) -> bool:
+    """Whether a turn on ``config`` plans its message — the planning pass, the
+    ``plan`` tool and the plan section of its prompt. The one rule the
+    processor and the prompt builder both read. Each kind of turn declares it
+    in code by pinning ``plan`` among its ready tools: a subagent's own turn
+    and a scheduled task do; the person's chat does not."""
+    return PlanAbility.NAME in config.always_available
 
 
 class PlanAbility(Ability[PlanParamsBag]):

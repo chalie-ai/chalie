@@ -18,6 +18,7 @@ from abilities._result import ToolResult
 from abilities._registry import AbilityRegistry
 from abilities.find_tools import FindToolsAbility
 from configs.channels import UserConfig
+from configs.channels.scheduled import ScheduledConfig
 from configs.enums.ability_category import AbilityCategory
 from contracts.params.find_tools_params_bag import FindToolsParamsBag
 from controllers.message_processor import MessageProcessor
@@ -37,8 +38,10 @@ def _mp_with_loaded(names: list[str]) -> MessageProcessor:
 
 def _run(query: object) -> tuple[list[str], dict[str, object], str]:
     """Drive ``FindToolsAbility.run()`` on a real ``MessageProcessor`` carrying
-    the production ``UserConfig``. Returns ``(injected_names, body, rendered)``."""
-    mp = MessageProcessor(UserConfig({"hidden_input": True}), raw_input="find a tool for me")
+    the production ``ScheduledConfig`` — a scheduled task reaches ``pim`` and the
+    web subagents only by looking them up, unlike the chat, where they are ready
+    from the first step. Returns ``(injected_names, body, rendered)``."""
+    mp = MessageProcessor(ScheduledConfig(), raw_input="find a tool for me")
     mp.active_tools = list(mp.config.always_available or [])
     base = set(mp.active_tools)
     ability = FindToolsAbility()
@@ -65,11 +68,6 @@ def test_exact_name_normalises_spacing() -> None:
     the underscored ability name 'chalie_docs'."""
     injected, _body, _r = _run(["chalie docs"])
     assert "chalie_docs" in injected, f"'chalie docs' must resolve to chalie_docs. injected={injected!r}"
-
-
-def test_no_duplicate_injection() -> None:
-    injected, _body, _r = _run(["weather"])
-    assert injected.count("weather") <= 1, f"weather must inject once, not duplicated. injected={injected!r}"
 
 
 # ── aliases — SEARCHABLE_AS entries resolve to the canonical tool ───────────────

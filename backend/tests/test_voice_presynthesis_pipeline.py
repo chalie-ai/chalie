@@ -39,7 +39,7 @@ from models.voice_transcript import VoiceTranscript
 from services.file_mapper_service import FileMapperService
 from services.voice_transcript_service import VoiceTranscriptService
 from services.websocket import Websocket
-from tests.helpers import NO_PLAN, drain_background_turns, is_planning_request
+from tests.helpers import drain_background_turns
 
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 
@@ -95,8 +95,6 @@ class _ToolThenReplyProvider:
         return 120_000
 
     def send(self, dto: object) -> ProviderResponse:
-        if is_planning_request(dto):
-            return NO_PLAN
         if not cast(ProviderRequest, dto).tools:
             return ProviderResponse(
                 text=_REPLY, model="scripted-presynthesis", tool_calls=None, tokens_input=1,

@@ -54,7 +54,7 @@ from models.policy import Policy
 from models.provider_response import ProviderResponse
 from models.turn_execution import TurnExecution
 from services.dispatch_service import _REPEAT_CALL_STEER
-from tests.helpers import NO_PLAN, drain_background_turns, is_planning_request
+from tests.helpers import drain_background_turns
 
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 
@@ -88,9 +88,7 @@ class _ScriptedProvider:
         return 200000
 
 
-    def send(self, dto: object) -> ProviderResponse:
-        if is_planning_request(dto):
-            return NO_PLAN
+    def send(self, _dto: object) -> ProviderResponse:
         if self.sends >= len(self._responses):
             return self._TERMINAL
         response = self._responses[self.sends]

@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING, cast
 from abilities._delegate import reply_follow_up
 from abilities._registry import AbilityRegistry
 from abilities.find_tools import FindToolsAbility
-from abilities.plan import PlanAbility
+from abilities.plan import PlanAbility, plans
 from abilities.recall import Recall
 from abilities.subtask import speaker
 from configs.channels.external_agent import EAMPConfig
@@ -240,8 +240,8 @@ class PromptService:
     def user_prompt(self) -> str:
         """The turn's user-message body (:meth:`_channel_prompt`), followed by
         the current message's plan (:meth:`_plan_section`) on a config that
-        pins the plan tool. The plan goes last so the history and trail above
-        it stay a stable, cacheable prefix while its statuses change."""
+        plans. The plan goes last so the history and trail above it stay a
+        stable, cacheable prefix while its statuses change."""
         body = self._channel_prompt()
         plan = self._plan_section()
         return f"{body}\n\n{plan}" if plan else body
@@ -457,9 +457,9 @@ class PromptService:
         current, or the instruction to create one when there is none yet.
         Read from the database on every step, keyed by this exchange's input
         row, so it reflects the latest update and leaves the context once the
-        exchange settles. ``""`` when the config does not pin the plan tool or
-        the turn has no input row."""
-        if PlanAbility.NAME not in self.mp.config.always_available or self.mp.uid is None:
+        exchange settles. ``""`` when the config does not plan
+        (:func:`~abilities.plan.plans`) or the turn has no input row."""
+        if not plans(self.mp.config) or self.mp.uid is None:
             return ""
         if self.mp.planning:
             return self._planning_section()

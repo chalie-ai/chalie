@@ -15,9 +15,9 @@ when it finished with nothing to say, was stopped, crashed, or was cut off by a
 restart. The warning that a helper's answer is third-party content, and the
 next step the helper suggests, reach the model only while it answers that
 reply — directly after the answer — never in what the person reads, never in a
-later exchange, and never on a notice. The turn that answers the reply can use
-the helper and the tools its next step names; a helper's own turn is never
-offered itself.
+later exchange, and never on a notice. The chat is offered the subagent on
+every request; the turn that answers the reply is offered, besides, the tools
+the subagent's next step names. A subagent's own turn is never offered itself.
 
 Drives the real production entry point (construct inertly, ``begin()``,
 ``result()``), the real boot sweep and the real Flask routes against the real,
@@ -38,6 +38,9 @@ from flask.testing import FlaskClient
 from abilities._delegate import DelegateAbility
 from abilities._registry import AbilityRegistry
 from abilities._result import ToolResult
+from abilities.code_agent import CodeAgentAbility
+from abilities.web_browse import WebBrowseAbility
+from abilities.web_fetch import WebFetchAbility
 from configs.channels import config_for
 from configs.channels.user import UserConfig
 from configs.enums.config_type import ConfigTypeEnum
@@ -138,13 +141,13 @@ def test_a_helper_called_from_the_chat_returns_at_once_and_its_answer_comes_back
     also all the person reads under that label. The model answering it reads
     the label, then the answer, then — directly after it — the
     third-party-content warning and suggested next step the helper carries
-    (``code_agent`` carries none), with the helper and every tool its next step
-    names on offer, none of which the chat had before the call. A later,
-    unrelated exchange still reads the label and the answer in its history,
-    with neither the warning nor the next step."""
+    (``code_agent`` carries none). The subagent is on offer on every chat
+    request; the tools its next step names are on offer only while the chat
+    answers the reply. A later, unrelated exchange still reads the label and
+    the answer in its history, with neither the warning nor the next step."""
     client, db, _store = authed_client
     ability = cast("DelegateAbility[DelegateParamsBag]", AbilityRegistry.get(helper))
-    follow_up_tools = {helper, *ability.FOLLOW_UP_TOOLS}
+    follow_up_tools = set(ability.FOLLOW_UP_TOOLS)
     steer = ability.UNTRUSTED_CONTENT.get("", "")
     nudge = ability.get_follow_up(ToolResult.ok(_ANSWER))
     held = Held(text(_ANSWER))
@@ -187,8 +190,9 @@ def test_a_helper_called_from_the_chat_returns_at_once_and_its_answer_comes_back
     else:
         assert follow_up is None and _BLOCK_OPENER not in answering
     offered = provider.offered("chat")
-    assert not offered[0] & follow_up_tools
+    assert all(ability.NAME in names for names in offered), offered
     assert follow_up_tools <= offered[2]
+    assert not any(names & follow_up_tools for names in (*offered[:2], *offered[3:])), offered
 
     assert label in unrelated and _ANSWER in unrelated
     assert _BLOCK_OPENER not in unrelated
@@ -259,44 +263,45 @@ def test_a_helper_that_finishes_without_an_answer_says_so_in_its_reply(db: sqlit
 
 
 def test_two_helpers_that_answer_while_their_caller_works_are_each_answered_once(db: sqlite3.Connection) -> None:
-    """One chat turn calls ``web_search`` and ``code_agent``; both finish
+    """One chat turn calls ``web_browse`` and ``code_agent``; both finish
     while that turn is still working. Both answers join the working turn —
     no turn of their own — and the turn reads them together on one more step,
-    with both helpers on offer, so each answer is answered exactly once. On
-    that step the search's answer is followed directly by its
-    third-party-content warning; ``code_agent``'s, which carries none, is
-    not."""
+    so each answer is answered exactly once. On that step the browse's answer
+    is followed directly by its third-party-content warning; ``code_agent``'s,
+    which carries none, is not. That step is offered both subagents and, as
+    well, the tool the browse's next step names (``web_fetch``), which no
+    earlier request of the turn was offered."""
     caller = Held(text("Both started."))
-    search = Held(text("Search: Paris."))
+    browse = Held(text("Browse: Paris."))
     code = Held(text("Code: the script prints Paris."))
     provider = ChannelProvider(
         chat=[
             calls(
-                tool("web_search", instructions=_INSTRUCTIONS),
-                tool("code_agent", instructions="write a script that prints the capital of France"),
+                tool(WebBrowseAbility.NAME, instructions=_INSTRUCTIONS),
+                tool(CodeAgentAbility.NAME, instructions="write a script that prints the capital of France"),
             ),
             caller,
             text("Both answered."),
         ],
-        web_search=[search],
+        web_browse=[browse],
         code_agent=[code],
     )
-    steer = AbilityRegistry.get("web_search").UNTRUSTED_CONTENT[""]
+    steer = AbilityRegistry.get(WebBrowseAbility.NAME).UNTRUSTED_CONTENT[""]
 
     with patched(provider):
         parent = begin(UserConfig(), _QUESTION)
-        for h, what in ((caller, "the caller's second step"), (search, "the search"), (code, "the code agent")):
+        for h, what in ((caller, "the caller's second step"), (browse, "the browse"), (code, "the code agent")):
             wait(h.entered, what)
-        search.gate.set()
+        browse.gate.set()
         code.gate.set()
-        _held_threads_end(search, code)
+        _held_threads_end(browse, code)
         caller.gate.set()
         parent.result()
         drain()
 
-    assert caller.opened and search.opened and code.opened and provider.unused() == {}
+    assert caller.opened and browse.opened and code.opened and provider.unused() == {}
     numbers: dict[str, int] = {}
-    for tool_name in ("web_search", "code_agent"):
+    for tool_name in (WebBrowseAbility.NAME, CodeAgentAbility.NAME):
         [call] = calls_of(db, tool_name)
         [reply] = replies(db, call["id"])
         assert (reply["turn_id"], reply["joined"]) == (parent.turn_id, 1), tool_name
@@ -305,14 +310,19 @@ def test_two_helpers_that_answer_while_their_caller_works_are_each_answered_once
     chat = provider.read("chat")
     assert len(chat) == 3
     answering = chat[-1]
-    search_block = _block_opening(
-        _after_reply(answering, f"Reply from web_search #{numbers['web_search']}", "Search: Paris."),
+    browse_block = _block_opening(_after_reply(
+        answering, f"Reply from {WebBrowseAbility.NAME} #{numbers[WebBrowseAbility.NAME]}", "Browse: Paris.",
+    ))
+    assert browse_block is not None and steer in browse_block
+    code_tail = _after_reply(
+        answering, f"Reply from {CodeAgentAbility.NAME} #{numbers[CodeAgentAbility.NAME]}",
+        "Code: the script prints Paris.",
     )
-    assert search_block is not None and steer in search_block
-    code_tail = _after_reply(answering, f"Reply from code_agent #{numbers['code_agent']}", "Code: the script prints Paris.")
     assert _block_opening(code_tail) is None
     assert answering.count(_BLOCK_OPENER) == 1
-    assert {"web_search", "code_agent"} <= provider.offered("chat")[-1]
+    offered = provider.offered("chat")
+    assert {WebBrowseAbility.NAME, CodeAgentAbility.NAME, WebFetchAbility.NAME} <= offered[-1], offered[-1]
+    assert not any(WebFetchAbility.NAME in names for names in offered[:-1]), offered
     assert execution(USER, parent.turn_id).state == TurnExecution.COMPLETED
     assert assistant_texts(db, USER, parent.turn_id)[-1] == "Both answered."
 
@@ -457,8 +467,8 @@ def test_boot_tells_the_chat_a_helper_was_cut_off_by_a_restart(db: sqlite3.Conne
 @pytest.mark.parametrize("helper", ["web_search", "web_browse", "code_agent", "pim", "subtask"])
 def test_a_helpers_own_turn_is_never_offered_itself(authed_client: _Client, helper: str) -> None:
     """A helper's own turn opens with a row carrying the call that started it,
-    just as a reply does — yet only the chat's turn answering the reply is
-    offered the helper; the helper's own turn never is."""
+    just as a reply does — yet while the chat is offered the subagent on every
+    request, the subagent's own turn never is."""
     client, db, _store = authed_client
     route = "subtask" if helper == "subtask" else helper
     start = (
