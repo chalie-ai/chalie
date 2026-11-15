@@ -13,7 +13,7 @@ import { syncDaymarks } from '../../utils/daymarks';
 import { preloadRichCards } from '../rich/richRegistry';
 import SpineTurn from './SpineTurn.vue';
 
-const PAGE_SIZE = 20;
+const PAGE_SIZE = 10;
 // Retained-turn window: while pinned near the bottom, older off-screen turns
 // past this many are evicted and lazy-reloaded on scroll-up (bounds the DOM).
 const KEEP_RENDERED = 30;
@@ -61,33 +61,33 @@ async function _loadRecent(): Promise<{ isInitialLoad: boolean; loadedAny: boole
   return { isInitialLoad, loadedAny: loaded > 0 };
 }
 
-async function _loadMore(): Promise<void> {
-  if (!hasMoreRef.value) return;
-  const loaded = await _fetchPage(offset.value);
-  offset.value += loaded;
+// The top of the feed is in view: within 150px of it, or the page is too
+// short to scroll at all (no scroll event will ever come to reach it).
+function _topInView(): boolean {
+  const scrollable = document.documentElement.scrollHeight > window.innerHeight + 100;
+  return !scrollable || window.scrollY < 150;
 }
 
-// History pagination: on scroll within 150px of the top (and not already
-// loading/exhausted), anchor-preserve then paginate.
+// History pagination: while the top is in view and history remains, load the
+// next older page and keep the reader's place, so a page too short to push the
+// top out of view is followed by the next one.
 let _paginating = false;
 
 async function _onScrollPaginate(): Promise<void> {
   if (_paginating) return;
-  if (session.historyLoading || !hasMoreRef.value) return;
-
-  const scrollable = document.documentElement.scrollHeight > window.innerHeight + 100;
-  if (!scrollable) return;
-  if (window.scrollY >= 150) return;
-
   _paginating = true;
   try {
-    const prevHeight = document.body.scrollHeight;
-    const prevScrollY = window.scrollY;
-    await _loadMore();
-    await nextTick();
-    const added = document.body.scrollHeight - prevHeight;
-    if (added > 0) {
-      window.scrollTo({ top: prevScrollY + added, behavior: 'instant' });
+    while (hasMoreRef.value && !session.historyLoading && _topInView()) {
+      const prevHeight = document.body.scrollHeight;
+      const prevScrollY = window.scrollY;
+      const loaded = await _fetchPage(offset.value);
+      if (!loaded) break;
+      offset.value += loaded;
+      await nextTick();
+      const added = document.body.scrollHeight - prevHeight;
+      if (added > 0) {
+        window.scrollTo({ top: prevScrollY + added, behavior: 'instant' });
+      }
     }
   } finally {
     _paginating = false;
@@ -116,6 +116,12 @@ function onTurnUpserted(): void {
   scrollToBottom();
 }
 
+// The first load's jump to the bottom, settled once the jump has been made.
+let landed: Promise<void> = Promise.resolve();
+function onInitialLoaded(): void {
+  landed = forceScrollToBottom();
+}
+
 onMounted(async () => {
   if (turnsRef.value) {
     registerSurface({
@@ -126,18 +132,23 @@ onMounted(async () => {
     });
   }
 
-  document.addEventListener('session:history-initial-loaded', forceScrollToBottom);
+  document.addEventListener('session:history-initial-loaded', onInitialLoaded);
   document.addEventListener('turn-upserted', onTurnUpserted);
 
   session.registerHistoryLoader(_loadRecent);
   await session.loadRecentConversation();
 
+  // Pagination starts only once the first load has landed at the bottom: the
+  // autoscroll that follows each rendered turn sets off from the top, and its
+  // first step would otherwise read as the reader reaching the top.
+  await landed;
   window.addEventListener('scroll', _onScrollPaginate, { passive: true });
+  void _onScrollPaginate();
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener('scroll', _onScrollPaginate);
-  document.removeEventListener('session:history-initial-loaded', forceScrollToBottom);
+  document.removeEventListener('session:history-initial-loaded', onInitialLoaded);
   document.removeEventListener('turn-upserted', onTurnUpserted);
   unregisterSurface(SPINE_SURFACE_ID);
 });
