@@ -1,11 +1,11 @@
-<!-- One step of Chalie's as a chat message: its work — thinking and tool calls
-     — then what it said. Every step is this same block, the running one too,
-     whose live work fills the `step` slot — with no row yet until a refetch
-     returns it. -->
+<!-- One step of Chalie's as a chat message: what it said, then its work —
+     thinking and tool calls. Every step is this same block, the running one
+     too, whose live work fills the `step` slot — with no row yet until a
+     refetch returns it. -->
 <script setup lang="ts">
 import type { ConversationMessage } from '../../api/conversation';
 import { renderMarkup } from '../../composables/useMarkup';
-import { didWork } from '../../utils/turnSteps';
+import { showsWork } from '../../utils/turnSteps';
 import SegmentRenderer from './SegmentRenderer.vue';
 import ThinkingAndCalls from './ThinkingAndCalls.vue';
 
@@ -17,9 +17,6 @@ defineProps<{ message: ConversationMessage | null }>();
     class="speech-form speech-form--chalie"
     :data-transcript-row-id="message?.id"
   >
-    <slot name="step">
-      <ThinkingAndCalls v-if="message && didWork(message)" :work="message" />
-    </slot>
     <template v-if="message?.content.trim()">
       <SegmentRenderer
         v-if="message.segments && message.segments.length"
@@ -31,6 +28,9 @@ defineProps<{ message: ConversationMessage | null }>();
         v-html="renderMarkup(message.content)"
       />
     </template>
+    <slot name="step">
+      <ThinkingAndCalls v-if="message && showsWork(message)" :work="message" />
+    </slot>
   </div>
 </template>
 

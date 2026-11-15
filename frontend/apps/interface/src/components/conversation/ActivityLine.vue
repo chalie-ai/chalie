@@ -42,7 +42,9 @@ const work = computed<StepWork>(() => ({
   tool_calls: [
     ...(props.work?.tool_calls ?? []),
     ...props.pills.map((p): StepCall => ({
+      id: Number(p.id),
       tool_name: p.name,
+      params: p.params,
       summary: p.summary ?? '',
       state: p.resolved ? (p.ok ? 'done' : 'error') : 'started',
       delegate: p.delegate,

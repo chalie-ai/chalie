@@ -60,7 +60,7 @@ afterEach(() => {
 });
 
 function chip(id: number, toolName: string, summary: string, delegate: ToolCallChip['delegate']): ToolCallChip {
-  return { id, tool_name: toolName, summary, state: 'done', ended_at: null, delegate };
+  return { id, tool_name: toolName, params: null, summary, state: 'done', ended_at: null, delegate };
 }
 
 /** The chips of a turn that started two subtasks — #4 still running and #5

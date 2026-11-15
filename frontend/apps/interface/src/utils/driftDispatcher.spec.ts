@@ -149,12 +149,22 @@ describe('dispatchDrift — discrimination order', () => {
 });
 
 describe('dispatchDrift — tool_call frame', () => {
-  it('state=started calls startLiveTool with (type, turn_id, id, tool_name, summary)', () => {
+  it('state=started calls startLiveTool with (type, turn_id, id, tool_name, summary, params) — the call\'s params ride along', () => {
     dispatchDrift(frame({
       tool_name: 'calendar', state: 'started', turn_id: 3, id: 42,
+      summary: 'checking calendar', type: 'scheduled', params: { action: 'list_events', day: '2026-01-02' },
+    }));
+    expect(startLiveToolMock).toHaveBeenCalledWith(
+      'scheduled', 3, 42, 'calendar', 'checking calendar', { action: 'list_events', day: '2026-01-02' },
+    );
+  });
+
+  it('state=started with no params on the frame starts the pill with params null', () => {
+    dispatchDrift(frame({
+      tool_name: 'calendar', state: 'started', turn_id: 3, id: 43,
       summary: 'checking calendar', type: 'scheduled',
     }));
-    expect(startLiveToolMock).toHaveBeenCalledWith('scheduled', 3, 42, 'calendar', 'checking calendar');
+    expect(startLiveToolMock).toHaveBeenCalledWith('scheduled', 3, 43, 'calendar', 'checking calendar', null);
   });
 
   it('state=done calls finishLiveTool with ok=true', () => {

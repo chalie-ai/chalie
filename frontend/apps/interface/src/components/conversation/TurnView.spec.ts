@@ -24,9 +24,9 @@
  * untouched elsewhere).
  *
  * The second half pins the exchange layout, in the order it happened: the
- * question, one block per assistant row that did work or spoke (the user row's
- * turn-zero calls are its memory seed and draw none) — its step block, then its
- * own prose, visible outside the fold — and a footer right under the row that
+ * question, one row per assistant row that did work or spoke (the user row's
+ * turn-zero calls are its memory seed and draw none) — its own prose, visible
+ * outside any fold, and its step block — and a footer right under the row that
  * closes a segment — the timestamp, the segment's duration when it did work,
  * and actions. A still-working exchange keeps the same blocks and closes the
  * list with the live activity line.
@@ -98,7 +98,7 @@ let nextCallId = 9000;
  *  its own tool_calls row id, none shared with a live pill. */
 function calls(...names: string[]): ToolCalls {
   return names.map((tool_name) => ({
-    id: nextCallId++, tool_name, summary: `ran ${tool_name}`, state: 'done' as const, ended_at: null, delegate: null,
+    id: nextCallId++, tool_name, params: null, summary: `ran ${tool_name}`, state: 'done' as const, ended_at: null, delegate: null,
   }));
 }
 
@@ -127,10 +127,11 @@ const SPEAK = 'button[aria-label="Read this message aloud"]';
 const REPLY = 'button[aria-label="Reply in a thread"]';
 
 /** The rendered turn read top to bottom, one entry per row: a user bubble, the
- *  live plan card, a footer (a timestamp and actions), or one of Chalie's step
- *  blocks — its work (`live` while it runs, else `step:<head · calls>`), then
- *  what it said, joined as `step:<work> | <text>`; a block that only spoke
- *  reads `bubble:<text>`. */
+ *  live plan card, a footer (a timestamp and actions), or one of Chalie's rows
+ *  — its block's work (`live` while it runs, else `step:<head · calls>`) and
+ *  what it said, always written as `step:<work> | <text>` whichever stands
+ *  first on the page (the step-blocks spec pins that order: the prose, then
+ *  the block); a row that only spoke reads `bubble:<text>`. */
 function layout(wrapper: VueWrapper): string[] {
   return wrapper.findAll('.msg-row').map((r) => {
     if (r.classes('msg-row--plan')) return 'plan';
@@ -231,7 +232,7 @@ describe('live act-trail visibility — working turn on the spine', () => {
     // `started` chip carrying that id. An earlier finished call has no pill.
     const turnId = 104;
     const chip = (id: number, tool_name: string, state: ToolCalls[number]['state']): ToolCalls[number] => ({
-      id, tool_name, summary: `ran ${tool_name}`, state, ended_at: null, delegate: null,
+      id, tool_name, params: null, summary: `ran ${tool_name}`, state, ended_at: null, delegate: null,
     });
     const rows = (running: ToolCalls[number]): ConversationMessage[] => [
       row('1040', 'user', 'find the museum hours', turnId),
@@ -713,7 +714,7 @@ describe('tool-call placement — a block per row of work, the answer\'s too, th
     const turnId = 233;
     const asked = row('2330', 'user', 'find the opening hours', turnId);
     const searched = (): ConversationMessage => row('2331', 'assistant', '', turnId, { tool_calls: [
-      { id: 2381, tool_name: 'web_search', summary: 'ran web_search', state: 'done', ended_at: null, delegate: null },
+      { id: 2381, tool_name: 'web_search', params: null, summary: 'ran web_search', state: 'done', ended_at: null, delegate: null },
     ] });
     startLiveTool(ConfigType.USER, turnId, 2389, 'read', 'reading the venue page');
     const wrapper = mount(TurnView, { props: { block: block(turnId, [asked, searched()]), type: ConfigType.USER, fullThread: false } });
@@ -970,7 +971,10 @@ describe('the plan — live under its message, gone once it settles', () => {
       },
     });
 
-    expect(layout(wrapper)).toEqual(['user:what is the weather', 'plan', 'step:ran plan, ran web_search', 'live']);
+    // The plan call is the card's: the step shows the search alone, in its rows
+    // and in what its head says it did.
+    expect(layout(wrapper)).toEqual(['user:what is the weather', 'plan', 'step:ran web_search', 'live']);
+    expect(wrapper.find('.step:not(.activity) .step__summary').text()).toBe('Delegated 1 web search');
     const rows = wrapper.findAll('.msg-row');
     expect(rows[1]!.classes()).toEqual(expect.arrayContaining(['msg-row--chalie', 'msg-row--lead']));
     expect(rows[2]!.classes()).toContain('msg-row--cont');
@@ -1033,8 +1037,9 @@ describe('the plan — live under its message, gone once it settles', () => {
     });
 
     expect(layout(wrapper)).toEqual([
-      'user:what is the weather', 'step:ran plan, ran web_search | Sunny, 24°.', 'footer',
+      'user:what is the weather', 'step:ran web_search | Sunny, 24°.', 'footer',
     ]);
+    expect(wrapper.find('.step .step__summary').text()).toBe('Delegated 1 web search');
     expect(wrapper.find('.plan-card').exists()).toBe(false);
     expect(footerOf(wrapper).text()).not.toContain('plan');
   });

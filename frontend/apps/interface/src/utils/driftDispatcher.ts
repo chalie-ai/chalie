@@ -188,12 +188,13 @@ function _dispatchToolCall(data: WsPushEvent): boolean {
   const frame = data as {
     id?: number;
     tool_name?: string;
+    params?: Record<string, unknown> | null;
     summary?: string;
     state?: string;
     delegate?: DelegateRef | null;
   };
   if (frame.state === 'started') {
-    startLiveTool(feed, turnId, frame.id ?? null, frame.tool_name ?? '', frame.summary);
+    startLiveTool(feed, turnId, frame.id ?? null, frame.tool_name ?? '', frame.summary, frame.params ?? null);
   } else {
     finishLiveTool(feed, turnId, frame.id ?? null, frame.state === 'done');
   }

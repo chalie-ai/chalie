@@ -10,19 +10,22 @@
  * ThinkingAndCalls, ToolCallList, ChalieBubble, BubbleFooter, ActivityLine,
  * Pinia and event bus — and asserts what a person reads and can press:
  *
- *   - one block per row of work, the settled answer's too: "Thought for Xs"
- *     only when the row thought, then one row per call, then what it said; the
- *     user row's turn-zero calls are its memory seed and draw no block; a
- *     thought with nothing to unfold has no chevron;
- *   - every block's thinking is folded and out of the tab order until pressed,
- *     and opens onto the row's reasoning; its calls are always in view;
+ *   - what a row said comes first, then its block: one muted head line —
+ *     "Thought for Xs" only when the row thought, then what its calls did
+ *     ("Delegated 3 web searches") — over one row per call; the user row's
+ *     turn-zero calls are its memory seed and draw no block; plan calls are the
+ *     plan card's, never a block's; a thought with nothing to unfold has no
+ *     chevron;
+ *   - a block's thinking and its calls are each folded and out of the tab order
+ *     until pressed: the thought opens onto the row's reasoning, the summary
+ *     onto its calls;
  *   - the same block stands live and settled, its thinking open across the
  *     settle;
  *   - the running block names its calls with no clock on them, is the running
  *     row's own block once a refetch returns that row, and a permission ask is
  *     named and answered on its head, beside Stop;
  *   - speech is offered for the settled answer only — never for a step's work
- *     or an interim row's prose, which reads in its own block, outside the fold.
+ *     or an interim row's prose, which reads in its own row, outside the fold.
  *
  * The REST transport the permission answer goes out on is the one stand-in:
  * the spec reads the decision the block sent off it.
@@ -54,7 +57,7 @@ const SPEAK_BUTTON = 'button.speech-form__act-btn--speak';
 type ToolCalls = NonNullable<ConversationMessage['tool_calls']>;
 
 function call(id: number, tool_name: string, summary: string): ToolCalls[number] {
-  return { id, tool_name, summary, state: 'done', ended_at: null, delegate: null };
+  return { id, tool_name, params: null, summary, state: 'done', ended_at: null, delegate: null };
 }
 
 /** One stored assistant row of turn 3: no text, its own reasoning and calls. */
@@ -112,13 +115,16 @@ const ANSWER_ROW: ConversationMessage = {
   settled: true, thinking: { traces: ['Rank by effort.'], duration_ms: 33023, tokens: 900 },
 };
 
+/** Each step row's block as `workText` reads it. The plan calls (10, 18, 19)
+ *  are in none of them: row 57 called only the plan, so its block is its
+ *  thought alone. */
 const STEP_LABELS = [
-  'Thought for 9s · Closing recall task, Loading web search tools',
-  'Thought for 4s · Searching Malta winter rentals',
-  'Thought for 3s · Searching Spain winter rentals',
-  'Thought for 11s · Searching Albania winter rentals, Albania winter weather, Albania cost of living',
-  'Thought for 6s · Reading the Albania cost page, Starting final synthesis of the answer',
-  'Thought for 2s · Drafting the comparison',
+  'Thought for 9s · Used load_tools › Loading web search tools',
+  'Thought for 4s · Delegated 1 web search › Searching Malta winter rentals',
+  'Thought for 3s · Delegated 1 web search › Searching Spain winter rentals',
+  'Thought for 11s · Delegated 3 web searches › Searching Albania winter rentals, Albania winter weather, Albania cost of living',
+  'Thought for 6s · Read 1 file › Reading the Albania cost page',
+  'Thought for 2s',
 ];
 
 /** Row 33's block: the fourth, the user row's seed drawing none. */
@@ -148,32 +154,52 @@ beforeEach(() => {
   respondMock.mockResolvedValue(undefined);
 });
 
+/** Each block's summary toggle — the button that folds and unfolds its calls. */
+const summaryToggle = (block: ReturnType<VueWrapper['find']>) => block.find('.step__summary').element.closest('button')!;
+
 afterEach(() => {
-  for (const w of mounted) w.unmount();
+  // Which call lists are open outlives a mount (it is how a list stays open
+  // as its step settles), so fold every list a test opened before unmounting.
+  for (const w of mounted) {
+    for (const s of w.findAll('.step__summary')) {
+      const toggle = s.element.closest('button')!;
+      if (toggle.getAttribute('aria-expanded') === 'true') toggle.click();
+    }
+    w.unmount();
+  }
   mounted = [];
   clearAll(ConfigType.USER);
   vi.useRealTimers();
   document.body.innerHTML = '';
 });
 
-/** What a block's work reads as: its head, then its calls joined with ", ". */
+/** What a block's work reads as: its head line — the thought, then what its
+ *  calls did, then how many failed — then its calls' rows joined with ", ". */
 function workText(block: ReturnType<VueWrapper['find']>): string {
-  const head = block.find('.step__label');
+  const head = ['.step__label', '.step__summary', '.step__failed']
+    .map((sel) => block.find(sel))
+    .filter((el) => el.exists())
+    .map((el) => el.text())
+    .join(' · ');
   const calls = block.findAll('.call__summary').map((c) => c.text()).join(', ');
-  return [head.exists() ? head.text() : '', calls].filter(Boolean).join(' · ');
+  return [head, calls].filter(Boolean).join(' › ');
 }
 
-/** The rendered exchange read top to bottom, one entry per row: a block of
- *  Chalie's as its work, then what it said. */
+/** The rendered exchange read top to bottom, one entry per row. A row of
+ *  Chalie's reads its parts in the order they stand on the page — what it
+ *  said, its block (`step:` and its work, or `live` for the running one) —
+ *  joined with " | "; a row of prose alone reads `bubble:` and its text. */
 function layout(wrapper: VueWrapper): string[] {
   return wrapper.findAll('.msg-row').map((r) => {
     if (r.find('.speech-form__timestamp').exists()) return 'footer';
     if (r.find('.user-message').exists()) return 'user';
     if (!r.find('.speech-form--chalie').exists()) return 'other';
-    const work = r.find('.activity').exists() ? 'live' : r.find('.step').exists() ? `step:${workText(r)}` : '';
-    const text = r.find('.speech-form__text');
-    if (!text.exists()) return work;
-    return work ? `${work} | ${text.text()}` : `bubble:${text.text()}`;
+    const parts = r.findAll('.speech-form__text, .step');
+    if (!parts.some((p) => p.classes('step'))) return parts.map((p) => `bubble:${p.text()}`).join(' | ');
+    return parts.map((p) => {
+      if (!p.classes('step')) return p.text();
+      return p.classes('activity') ? 'live' : `step:${workText(p)}`;
+    }).join(' | ');
   });
 }
 
@@ -181,52 +207,74 @@ function layout(wrapper: VueWrapper): string[] {
 const steps = (wrapper: VueWrapper) => wrapper.findAll('.step:not(.activity)');
 
 describe('a researched exchange reads as one block per row of work', () => {
-  it('draws no block for the user row\'s seed calls, then each row\'s block, then the answer\'s — its thought over the answer — and the footer', () => {
+  it('draws no block for the user row\'s seed calls, then each row\'s block, then the answer — its thought under it — and the footer', () => {
     const wrapper = mountTurn(settledTurn());
 
     expect(layout(wrapper)).toEqual([
       'user',
       ...STEP_LABELS.map((l) => `step:${l}`),
-      'step:Thought for 33s | Malta is the easiest quiet winter.',
+      'Malta is the easiest quiet winter. | step:Thought for 33s',
       'footer',
     ]);
   });
 
-  it('keeps every block\'s thinking folded and out of the tab order until pressed, its calls in view; pressed, it opens onto the row\'s reasoning, and a second press folds it again', async () => {
+  it('keeps every block\'s thinking and calls folded and out of the tab order until pressed; the thought opens onto the row\'s reasoning, the summary onto its calls, and a second press folds each again', async () => {
     const wrapper = mountTurn(settledTurn());
     const folds = () => wrapper.findAll('.step:not(.activity) button.fold');
 
-    expect(folds().map((f) => f.attributes('aria-expanded'))).toEqual(Array(7).fill('false'));
+    // Seven thoughts, and a summary for each of the five rows with calls to show.
+    expect(folds().map((f) => f.attributes('aria-expanded'))).toEqual(Array(12).fill('false'));
     expect(wrapper.findAll('.step:not(.activity) .trace-body').every((b) => b.attributes('inert') !== undefined)).toBe(true);
 
     const block = steps(wrapper)[ROW_33]!;
-    const body = block.find('.trace-body');
-    // The calls read while the thinking is folded, outside the fold.
+    const thinking = block.find('.trace-body');
+    const callsBody = () => block.find('.calls').element.closest('.trace-body')!;
+    const thoughtFold = block.find('button.fold');
+    const toggle = summaryToggle(block);
+    // The calls are on the page, but folded where no one can reach them.
+    expect(callsBody().hasAttribute('inert')).toBe(true);
+
+    await thoughtFold.trigger('click');
+
+    expect(thoughtFold.attributes('aria-expanded')).toBe('true');
+    expect(thinking.classes()).toContain('trace-body--open');
+    expect(thinking.attributes('inert')).toBeUndefined();
+    expect(thinking.findAll('pre.step__trace').map((t) => t.text())).toEqual([
+      'Albania is the unknown.',
+      'Three angles: rent, weather, cost.',
+    ]);
+    expect(thinking.find('.call').exists()).toBe(false);
+    // Opening the thought leaves the calls folded, and only the pressed block opened.
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(callsBody().hasAttribute('inert')).toBe(true);
+    expect(folds().filter((f) => f.attributes('aria-expanded') === 'true')).toHaveLength(1);
+
+    await thoughtFold.trigger('click');
+
+    expect(thoughtFold.attributes('aria-expanded')).toBe('false');
+    expect(thinking.classes()).not.toContain('trace-body--open');
+    expect(thinking.attributes('inert')).toBeDefined();
+
+    toggle.click();
+    await wrapper.vm.$nextTick();
+
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(callsBody().classList).toContain('trace-body--open');
+    expect(callsBody().hasAttribute('inert')).toBe(false);
     expect(block.findAll('.call__summary').map((c) => c.text())).toEqual([
       'Searching Albania winter rentals',
       'Albania winter weather',
       'Albania cost of living',
     ]);
-    expect(block.find('.calls').element.closest('[inert]')).toBeNull();
-
-    await block.find('button.fold').trigger('click');
-
-    expect(block.find('button.fold').attributes('aria-expanded')).toBe('true');
-    expect(body.classes()).toContain('trace-body--open');
-    expect(body.attributes('inert')).toBeUndefined();
-    expect(body.findAll('pre.step__trace').map((t) => t.text())).toEqual([
-      'Albania is the unknown.',
-      'Three angles: rent, weather, cost.',
-    ]);
-    expect(body.find('.call').exists()).toBe(false);
-    // Only the pressed block opened.
+    expect(thoughtFold.attributes('aria-expanded')).toBe('false');
     expect(folds().filter((f) => f.attributes('aria-expanded') === 'true')).toHaveLength(1);
 
-    await block.find('button.fold').trigger('click');
+    toggle.click();
+    await wrapper.vm.$nextTick();
 
-    expect(block.find('button.fold').attributes('aria-expanded')).toBe('false');
-    expect(body.classes()).not.toContain('trace-body--open');
-    expect(body.attributes('inert')).toBeDefined();
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(callsBody().classList).not.toContain('trace-body--open');
+    expect(callsBody().hasAttribute('inert')).toBe(true);
   });
 });
 
@@ -245,14 +293,14 @@ describe('a block says only what its row did', () => {
     expect(layout(mountTurn(thinTurn()))).toEqual([
       'user',
       'step:Thought for 5s',
-      'step:Thought · web_search',
-      'step:Reading the visa page',
-      'step:Thought for 33s | Malta is the easiest quiet winter.',
+      'step:Thought · Delegated 1 web search › web_search',
+      'step:Read 1 file › Reading the visa page',
+      'Malta is the easiest quiet winter. | step:Thought for 33s',
       'footer',
     ]);
   });
 
-  it('gives a thought with nothing to unfold no chevron and no fold to open, a thought that left reasoning both, and a row that never thought no head', () => {
+  it('gives a thought with nothing to unfold no chevron and no fold to open, a thought that left reasoning both, and a row that never thought its summary alone on the head', () => {
     const [bare, reasoned, unthought] = steps(mountTurn(thinTurn()));
 
     expect(bare!.find('.step__label').text()).toBe('Thought for 5s');
@@ -260,10 +308,15 @@ describe('a block says only what its row did', () => {
     expect(bare!.find('.trace-body').exists()).toBe(false);
     expect(bare!.find('[aria-expanded]').exists()).toBe(false);
 
-    expect(reasoned!.find('.fold-chev').exists()).toBe(true);
+    expect(reasoned!.find('button.fold .fold-chev').exists()).toBe(true);
     expect(reasoned!.find('.trace-body').text()).toContain('Check the dates first.');
 
-    expect(unthought!.find('.step__head').exists()).toBe(false);
+    // No thought: no thought label and nothing to separate from it — the head
+    // is what the calls did, which unfolds onto them.
+    expect(unthought!.find('.step__label').exists()).toBe(false);
+    expect(unthought!.find('.step__sep').exists()).toBe(false);
+    expect(unthought!.findAll('.step__head button.fold').map((b) => b.find('.step__summary').exists())).toEqual([true]);
+    expect(unthought!.find('.step__summary').text()).toBe('Read 1 file');
     expect(unthought!.find('.call__summary').text()).toBe('Reading the visa page');
   });
 });
@@ -281,7 +334,7 @@ describe('one step block, live and settled', () => {
     expect(after.element).toBe(element);
     expect(after.find('button.fold').attributes('aria-expanded')).toBe('true');
     expect(wrapper.find('.activity').exists()).toBe(false);
-    expect(layout(wrapper).slice(-2)).toEqual(['step:Thought for 33s | Malta is the easiest quiet winter.', 'footer']);
+    expect(layout(wrapper).slice(-2)).toEqual(['Malta is the easiest quiet winter. | step:Thought for 33s', 'footer']);
   });
 });
 
@@ -302,35 +355,43 @@ describe('the running block', () => {
     finishLiveTool(ConfigType.USER, TURN, 502, true);
     const wrapper = mountTurn(workingTurn());
     const live = wrapper.find('.activity');
+    summaryToggle(live).click();
+    await wrapper.vm.$nextTick();
+    const atStart = live.text();
 
     vi.advanceTimersByTime(12_000);
     await wrapper.vm.$nextTick();
 
-    expect(workText(live)).toBe('Thinking… · Searching Albania winter rentals, Reading the cost page');
+    expect(workText(live)).toBe('Thinking… · Delegated 1 web search and read 1 file › Searching Albania winter rentals, Reading the cost page');
     expect(live.findAll('.call').map((c) => [c.find('.call__summary').text(), c.find('.call__mark').attributes('aria-label')])).toEqual([
       ['Searching Albania winter rentals', 'running'],
       ['Reading the cost page', 'succeeded'],
     ]);
-    // Twelve seconds in, nothing on the block counts them.
-    expect(live.text()).not.toMatch(/\d/);
+    // Twelve seconds in, nothing on the block has moved, and no call row counts anything.
+    expect(live.text()).toBe(atStart);
+    for (const c of live.findAll('.call')) expect(c.text()).not.toMatch(/\d/);
   });
 
   it('becomes the running row\'s own block once a refetch returns that row — its reasoning and live call in one block, the same block as before', async () => {
+    // A plan update runs beside a search; the plan is the plan card's, never the block's.
     startLiveTool(ConfigType.USER, TURN, 19, 'plan', 'Drafting the comparison');
+    startLiveTool(ConfigType.USER, TURN, 59, 'web_search', 'Checking the exchange rate');
     const before = STEP_ROWS.slice(0, -1);
     const wrapper = mountTurn(turn([USER_ROW, ...before], true));
     const element = wrapper.find('.activity').element;
-    expect(workText(wrapper.find('.activity'))).toBe('Thinking… · Drafting the comparison');
+    expect(workText(wrapper.find('.activity'))).toBe('Thinking… · Delegated 1 web search › Checking the exchange rate');
 
-    // The refetch returns the running row: its reasoning, its call still running.
+    // The refetch returns the running row: its reasoning, its calls still running.
     const running = stepRow(57, { traces: ['Table first.'], duration_ms: 2400, tokens: 60 }, [
       { ...call(19, 'plan', 'Drafting the comparison'), state: 'started' },
+      { ...call(59, 'web_search', 'Checking the exchange rate'), state: 'started' },
     ]);
     await wrapper.setProps({ block: turn([USER_ROW, ...before, running], true) });
 
     expect(layout(wrapper)).toEqual(['user', ...STEP_LABELS.slice(0, -1).map((l) => `step:${l}`), 'live']);
     expect(wrapper.find('.activity').element).toBe(element);
-    expect(workText(wrapper.find('.activity'))).toBe('Thought for 2s · Drafting the comparison');
+    expect(workText(wrapper.find('.activity'))).toBe('Thought for 2s · Delegated 1 web search › Checking the exchange rate');
+    expect(wrapper.find('.activity').text()).not.toContain('Drafting the comparison');
   });
 
   it('parked on its own turn\'s ask, names it and waits for you beside Stop — Allow and Deny each send their own answer and hand the head back', async () => {
@@ -383,11 +444,11 @@ describe('speech is offered for the settled answer only', () => {
     const wrapper = mountTurn(turn([USER_ROW, ...withProse, ANSWER_ROW], false));
     for (const fold of steps(wrapper)) await fold.find('button.fold').trigger('click');
 
-    // Every interim reply reads in its own block under its work, outside the fold.
+    // Every interim reply reads in its own row above its work, outside the fold.
     expect(layout(wrapper)).toEqual([
       'user',
-      ...STEP_ROWS.map((r, i) => `step:${STEP_LABELS[i]} | Working on ${r.id}.`),
-      'step:Thought for 33s | Malta is the easiest quiet winter.',
+      ...STEP_ROWS.map((r, i) => `Working on ${r.id}. | step:${STEP_LABELS[i]}`),
+      'Malta is the easiest quiet winter. | step:Thought for 33s',
       'footer',
     ]);
     expect(wrapper.findAll('.step .speech-form__text')).toHaveLength(0);

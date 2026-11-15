@@ -19,7 +19,7 @@ import { usePermissionsStore } from '../../stores/permissions';
 import type { PermissionRequest } from '../../stores/permissions';
 import { delegateRunning, liveTrailsFor } from '../../utils/liveActTrail';
 import { SUBTASK_CHANNEL } from '../../utils/delegateChannel';
-import { didWork } from '../../utils/turnSteps';
+import { didWork, showsWork } from '../../utils/turnSteps';
 import UserBubble from './UserBubble.vue';
 import ChalieBubble from './ChalieBubble.vue';
 import ActivityLine from './ActivityLine.vue';
@@ -232,7 +232,7 @@ const displayRows = computed<DisplayRow[]>(() => {
     const work = live || didWork(message);
     const text = message.content.trim();
     if (live) activity.message = message;
-    if (work || text) body.push(live ? activity : own);
+    if (live || showsWork(message) || text) body.push(live ? activity : own);
     worked ||= work;
     // A segment shows its duration only when it did work; the footer drops a
     // NaN or negative one.
