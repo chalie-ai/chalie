@@ -39,13 +39,13 @@ from models.provider_response import ProviderResponse
 from models.tool_call import ToolCall
 from services.turn_serializer_service import TurnSerializerService
 from tests._browser_live import bearer_header, signed_in, use_own_data_dir
-from tests._delegates import ChannelProvider, Held, child_turn, helper_channel, replies, run_turn
+from tests._delegates import ChannelProvider, Held, child_turn, delegate_channel, replies, run_turn
 
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 
 _SERIALIZER_LOG = TurnSerializerService.__module__
-_WEB_SEARCH_CHANNEL = helper_channel(WebSearchAbility.NAME)
-_WEB_BROWSE_CHANNEL = helper_channel(WebBrowseAbility.NAME)
+_WEB_SEARCH_CHANNEL = delegate_channel(WebSearchAbility.NAME)
+_WEB_BROWSE_CHANNEL = delegate_channel(WebBrowseAbility.NAME)
 _SUMMARY = "Looking for the weather tools"
 _ANSWER = "Paris is the capital of France."
 

@@ -19,7 +19,7 @@ returns it at once. Who waits for the child is settled by the caller's kind
 alone (:func:`replies_late`): the person's chat never waits — the call returns
 the child's number, and the child's outcome arrives later in the chat as a
 message of its own (:func:`reply_to_caller`), sent at the end of the child's
-turn however it ended; every other caller — a scheduled task, a helper's own
+turn however it ended; every other caller — a scheduled task, a subagent's own
 turn, discovery, an outside agent — waits for the answer and gets it as the
 call's result (:meth:`DelegateAbility.wait_for`). A DelegateAbility's call is
 exactly one whose child turn can be watched. Each ``run()`` still owns its pre-flight

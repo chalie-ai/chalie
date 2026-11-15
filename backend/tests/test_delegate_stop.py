@@ -40,9 +40,9 @@ from tests._delegates import (
     calls,
     calls_of,
     child_turn,
+    delegate_channel,
     drain,
     execution,
-    helper_channel,
     listening,
     messages,
     patched,
@@ -58,7 +58,7 @@ _QUESTION = "what is the capital of France?"
 _TASK = "find out the capital of France"
 _INSTRUCTIONS = "find the capital of France"
 _CHILD_ANSWER = "Paris is the capital of France."
-_SEARCH = helper_channel("web_search")
+_SEARCH = delegate_channel("web_search")
 _SUBTASK = Channel.DELEGATE_SUBTASK.value
 _ERROR_CODE = re.compile(r"\A\[web_search\(status=error, code=([\w-]+)")
 _HINT_LINE = re.compile(r"^hint: \S", re.MULTILINE)

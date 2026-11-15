@@ -1,7 +1,7 @@
 """Feature tests: a browsing run's tab lives exactly as long as the run.
 
 A real chat turn, or a real scheduled task, calls the real ``web_browse``
-helper; the helper's own turn drives the real ``browser`` ability, which opens
+subagent; the subagent's own turn drives the real ``browser`` ability, which opens
 a real page in the real headless shell. The person's chat gets the call back at
 once and the run's answer later as a reply; a scheduled task waits for the run.
 Whichever way the run ends — it finishes, the person stops it from its own
@@ -53,9 +53,9 @@ from tests._delegates import (
     calls,
     calls_of,
     child_turn,
+    delegate_channel,
     drain,
     execution,
-    helper_channel,
     linked_rows,
     patched,
     replies,
@@ -68,7 +68,7 @@ from tools.browser.tabs import Tab
 pytest_plugins = ("tests._browser_live",)
 pytestmark = [pytest.mark.e2e, pytest.mark.usefixtures("chat_provider")]
 
-_RUN_CHANNEL = helper_channel(WebBrowseAbility.NAME)
+_RUN_CHANNEL = delegate_channel(WebBrowseAbility.NAME)
 _SCHEDULE_ID = 7
 _RUN_WAIT_S = 60.0  # a first page load launches the browser
 _ANSWER = "The page is titled Page A."

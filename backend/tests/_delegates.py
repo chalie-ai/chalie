@@ -6,11 +6,11 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Shared harness for the feature tests of the helper tools that run a turn of
+"""Shared harness for the feature tests of the subagent tools that run a turn of
 their own (``web_search``, ``web_browse``, ``code_agent``, ``pim``,
 ``subtask``).
 
-A helper's turn runs on its own thread beside its caller's — at once for a
+A subagent's turn runs on its own thread beside its caller's — at once for a
 caller that is replied to later, one after the other for a caller that waits —
 so one ordered script cannot say whose provider call comes next.
 :class:`ChannelProvider` answers each call from the script of the channel that
@@ -63,20 +63,20 @@ BUILD_CLIENT = "services.provider_service.build_client"
 USER = Channel.USER.value
 WAIT_S = 15.0
 
-# Each helper's own config, keyed by the route its turns are answered from —
-# the helper's tool name.
-_HELPER_CONFIGS: dict[str, Callable[[PolicyChannel], ProcessorConfig]] = {
+# Each subagent's own config, keyed by the route its turns are answered from —
+# the subagent's tool name.
+_DELEGATE_CONFIGS: dict[str, Callable[[PolicyChannel], ProcessorConfig]] = {
     "web_search": WebSearchConfig,
     "web_browse": WebBrowseConfig,
     "code_agent": CodeAgentConfig,
     "pim": PimConfig,
 }
-ROUTES = ("chat", "subtask", "background", *_HELPER_CONFIGS)
+ROUTES = ("chat", "subtask", "background", *_DELEGATE_CONFIGS)
 
 
-def helper_channel(tool_name: str) -> str:
-    """The channel a helper's own turn runs on."""
-    return _HELPER_CONFIGS[tool_name](PolicyChannel.CHAT).channel
+def delegate_channel(tool_name: str) -> str:
+    """The channel a subagent's own turn runs on."""
+    return _DELEGATE_CONFIGS[tool_name](PolicyChannel.CHAT).channel
 
 
 def tool(name: str, **params: object) -> dict[str, object]:
@@ -192,8 +192,8 @@ class ChannelProvider:
     """Answers each provider call from the script of the channel that made it.
 
     ``ProviderRequest`` names no channel, so the route is read off what the
-    request carries, most specific first: a helper's turn is sent under that
-    helper's own system prompt (its first line, read from the helper's real
+    request carries, most specific first: a subagent's turn is sent under that
+    subagent's own system prompt (its first line, read from the subagent's real
     config, so a reworded prompt moves the route with it); a request that
     offers no ``find_tools`` is background work a finished turn spawns (the
     memory step among it); a subtask's conversation opens with its "Task from
@@ -201,7 +201,7 @@ class ChannelProvider:
     thread reply, or discovery.
 
     Each script is consumed in order under a lock; past its end a chat-shaped
-    or helper route gets an empty answer and background work gets "nothing
+    or subagent route gets an empty answer and background work gets "nothing
     new", which is how the memory step ends a pass with nothing to save. A test
     asserts its scripts were used up (:meth:`unused`), so a response consumed by
     the wrong turn fails it. A callable entry runs outside the lock, so a held
@@ -218,7 +218,7 @@ class ChannelProvider:
         self._held = [e for script in self._scripts.values() for e in script if isinstance(e, Held)]
         self._heads = {
             route: config(PolicyChannel.CHAT).system_prompt.splitlines()[0]
-            for route, config in _HELPER_CONFIGS.items()
+            for route, config in _DELEGATE_CONFIGS.items()
         }
         self._lock = threading.Lock()
         self.requests: list[Request] = []
@@ -292,7 +292,7 @@ def turn_threads() -> list[threading.Thread]:
 
 def drain(timeout_s: float = WAIT_S) -> None:
     """Join every turn and the background work turns spawn — including a turn
-    a joined one opened on its way out, such as a helper's reply — and fail
+    a joined one opened on its way out, such as a subagent's reply — and fail
     loudly if any is still running when the deadline passes."""
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
@@ -473,8 +473,8 @@ def run_turn(
     on_frame: Callable[[dict[str, object]], None] | None = None,
 ) -> tuple[MessageProcessor, list[dict[str, object]]]:
     """Drive a real turn on *config* to its end against *provider*, then open
-    every held call — so a helper held there finishes only after its caller's
-    turn has ended — and wait for every turn that follows, a helper's reply
+    every held call — so a subagent held there finishes only after its caller's
+    turn has ended — and wait for every turn that follows, a subagent's reply
     among them. Returns the processor and every frame the socket registry saw
     meanwhile (each also handed to *on_frame*, on the thread that broadcast
     it)."""
@@ -495,7 +495,7 @@ def calls_of(db: sqlite3.Connection, tool_name: str) -> list[sqlite3.Row]:
 
 
 def child_turn(db: sqlite3.Connection, channel: str, call_id: int) -> int:
-    """The helper turn on *channel* the call *call_id* started — read off the
+    """The subagent turn on *channel* the call *call_id* started — read off the
     turn's first input row, which carries the call's id."""
     row = db.execute(
         "SELECT turn_id FROM transcript WHERE channel = ? AND tool_call_id = ? ORDER BY id LIMIT 1",

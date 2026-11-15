@@ -8,8 +8,8 @@ showing in flight under the reply until the next assistant row lands — minutes
 for a long delegate. Each finished call (done, failed or rejected before it
 ran) must therefore be followed on the same address by ``updated``, and the
 block that refetch reads must already show the call finished. A call that is
-still running sends no ``updated``: the live pill shows it. A helper the chat
-calls returns at once and its child works on in its own turn, so the helper's
+still running sends no ``updated``: the live pill shows it. A subagent the chat
+calls returns at once and its child works on in its own turn, so the subagent's
 call and its child's own calls finish on different surfaces at different
 times; each still sends its own ``updated``.
 
@@ -37,13 +37,13 @@ from abilities.subtask import SubtaskAbility
 from abilities.web_search import WebSearchAbility
 from configs.channels.user import UserConfig
 from models.provider_response import ProviderResponse
-from tests._delegates import ChannelProvider, Held, calls, chip, helper_channel, run_turn, text, tool
+from tests._delegates import ChannelProvider, Held, calls, chip, delegate_channel, run_turn, text, tool
 
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 
 _READ_TIMEOUT_S = 30.0
 _STEP_WAIT_S = 10.0
-_CHILD_CHANNEL = helper_channel(WebSearchAbility.NAME)
+_CHILD_CHANNEL = delegate_channel(WebSearchAbility.NAME)
 
 Frame = dict[str, object]
 
@@ -161,7 +161,7 @@ def refetch_run(authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -
 
 def test_every_finished_call_is_followed_by_updated_on_its_own_surface(refetch_run: _RefetchRun) -> None:
     """A call that ran to ``done``, one that failed while running, one rejected
-    before it ran, a helper's call that returned at once, and that helper's
+    before it ran, a subagent's call that returned at once, and that subagent's
     child's own call each send ``updated`` to the surface showing them, as the
     very next frame that surface receives — before the model's next step on
     that surface has answered, not only once its row lands."""

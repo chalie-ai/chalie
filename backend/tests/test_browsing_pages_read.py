@@ -39,13 +39,13 @@ from configs.channels.user import UserConfig
 from models.provider_response import ProviderResponse
 from services.turn_serializer_service import TurnSerializerService
 from tests._browser_live import Site, signed_in
-from tests._delegates import ChannelProvider, Entry, Held, calls_of, child_turn, helper_channel, replies, run_turn
+from tests._delegates import ChannelProvider, Entry, Held, calls_of, child_turn, delegate_channel, replies, run_turn
 
 pytest_plugins = ("tests._browser_live",)
 pytestmark = [pytest.mark.e2e, pytest.mark.usefixtures("chat_provider")]
 
 _SERIALIZER_LOG = TurnSerializerService.__module__
-_RUN_CHANNEL = helper_channel(WebBrowseAbility.NAME)
+_RUN_CHANNEL = delegate_channel(WebBrowseAbility.NAME)
 _MISSING = "Nothing like this"
 
 Frame = dict[str, object]

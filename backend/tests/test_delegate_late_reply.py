@@ -1,19 +1,19 @@
-"""Feature test: a helper the person's chat calls answers later, as a reply.
+"""Feature test: a subagent the person's chat calls answers later, as a reply.
 
-When the person's chat calls a helper that runs a turn of its own
+When the person's chat calls a subagent that runs a turn of its own
 (``web_search``, ``web_browse``, ``code_agent``, ``pim``), the call does not
-keep the chat waiting: it returns at once with the helper's number and the
-label its answer will arrive under. Once the helper's turn ends, its outcome
+keep the chat waiting: it returns at once with the subagent's number and the
+label its answer will arrive under. Once the subagent's turn ends, its outcome
 comes back to the chat as a reply under that label, and the chat answers it.
 The reply goes where the call was made — a new turn for a call from the
 thread's opening exchange, the thread itself for a call from a thread reply,
 the very turn that made the call while that turn is still working — and never
 into some other turn that happens to be working.
 
-The reply holds exactly what the helper said: its answer, or a one-line notice
+The reply holds exactly what the subagent said: its answer, or a one-line notice
 when it finished with nothing to say, was stopped, crashed, or was cut off by a
-restart. The warning that a helper's answer is third-party content, and the
-next step the helper suggests, reach the model only while it answers that
+restart. The warning that a subagent's answer is third-party content, and the
+next step the subagent suggests, reach the model only while it answers that
 reply — directly after the answer — never in what the person reads, never in a
 later exchange, and never on a notice. The chat is offered the subagent on
 every request; the turn that answers the reply is offered, besides, the tools
@@ -22,7 +22,7 @@ the subagent's next step names. A subagent's own turn is never offered itself.
 Drives the real production entry point (construct inertly, ``begin()``,
 ``result()``), the real boot sweep and the real Flask routes against the real,
 fully-migrated SQLite DB. The only substitution is the LLM network boundary
-(``services.provider_service.build_client``); each helper is held inside its
+(``services.provider_service.build_client``); each subagent is held inside its
 own model call on a ``threading.Event`` so it finishes exactly when the test
 says. ``pim`` is connected to a mailbox through the product's own setup route,
 against an IMAP peer on loopback.
@@ -61,10 +61,10 @@ from tests._delegates import (
     calls_of,
     child_turn,
     connected_mail,
+    delegate_channel,
     dies,
     drain,
     execution,
-    helper_channel,
     messages,
     patched,
     process_deaths_expected,
@@ -96,18 +96,18 @@ def _user_turns(db: sqlite3.Connection) -> list[int]:
 
 
 def _held_threads_end(*held: Held) -> None:
-    """Wait for each released helper's own turn to end — the turn that sends
+    """Wait for each released subagent's own turn to end — the turn that sends
     its reply on the way out."""
     for h in held:
-        assert h.thread is not None, "the helper never reached its model call"
+        assert h.thread is not None, "the subagent never reached its model call"
         h.thread.join(timeout=WAIT_S)
-        assert not h.thread.is_alive(), f"the helper's turn {h.thread.name} did not end"
+        assert not h.thread.is_alive(), f"the subagent's turn {h.thread.name} did not end"
 
 
-def _mailbox(client: FlaskClient, helper: str) -> AbstractContextManager[None]:
+def _mailbox(client: FlaskClient, delegate: str) -> AbstractContextManager[None]:
     """A connected mailbox for ``pim``, which refuses without one; nothing for
-    any other helper."""
-    return connected_mail(client) if helper == "pim" else nullcontext()
+    any other subagent."""
+    return connected_mail(client) if delegate == "pim" else nullcontext()
 
 
 def _after_reply(request: str, label: str, answer: str) -> str:
@@ -130,34 +130,34 @@ def _block_opening(tail: str) -> str | None:
     return tail[:tail.index(_BLOCK_CLOSER) + len(_BLOCK_CLOSER)]
 
 
-@pytest.mark.parametrize("helper", ["web_search", "web_browse", "code_agent", "pim"])
-def test_a_helper_called_from_the_chat_returns_at_once_and_its_answer_comes_back_as_a_reply(
-    authed_client: _Client, helper: str,
+@pytest.mark.parametrize("delegate", ["web_search", "web_browse", "code_agent", "pim"])
+def test_a_subagent_called_from_the_chat_returns_at_once_and_its_answer_comes_back_as_a_reply(
+    authed_client: _Client, delegate: str,
 ) -> None:
-    """The call ends at once under the helper's number and the label its
+    """The call ends at once under the subagent's number and the label its
     answer will arrive under, with no answer and no warning in it. Once the
-    chat's turn has ended, the helper finishes and its answer comes back as one
+    chat's turn has ended, the subagent finishes and its answer comes back as one
     reply that opens a turn of its own, holding exactly the answer — which is
     also all the person reads under that label. The model answering it reads
     the label, then the answer, then — directly after it — the
-    third-party-content warning and suggested next step the helper carries
+    third-party-content warning and suggested next step the subagent carries
     (``code_agent`` carries none). The subagent is on offer on every chat
     request; the tools its next step names are on offer only while the chat
     answers the reply. A later, unrelated exchange still reads the label and
     the answer in its history, with neither the warning nor the next step."""
     client, db, _store = authed_client
-    ability = cast("DelegateAbility[DelegateParamsBag]", AbilityRegistry.get(helper))
+    ability = cast("DelegateAbility[DelegateParamsBag]", AbilityRegistry.get(delegate))
     follow_up_tools = set(ability.FOLLOW_UP_TOOLS)
     steer = ability.UNTRUSTED_CONTENT.get("", "")
     nudge = ability.get_follow_up(ToolResult.ok(_ANSWER))
     held = Held(text(_ANSWER))
     script: list[Entry] = [held]
     provider = ChannelProvider(
-        chat=[calls(tool(helper, instructions=_INSTRUCTIONS)), text(_STARTED), text(_ANSWERED), text("Noon.")],
-        **{helper: script},
+        chat=[calls(tool(delegate, instructions=_INSTRUCTIONS)), text(_STARTED), text(_ANSWERED), text("Noon.")],
+        **{delegate: script},
     )
 
-    with _mailbox(client, helper):
+    with _mailbox(client, delegate):
         parent, _frames = run_turn(provider, UserConfig(), _QUESTION)
         with patched(provider):
             later = begin(UserConfig(), "thanks, unrelated: what time is it?")
@@ -165,9 +165,9 @@ def test_a_helper_called_from_the_chat_returns_at_once_and_its_answer_comes_back
             drain()
 
     assert held.opened and provider.unused() == {}
-    [call] = calls_of(db, helper)
-    n = child_turn(db, helper_channel(helper), call["id"])
-    label = f"Reply from {helper} #{n}"
+    [call] = calls_of(db, delegate)
+    n = child_turn(db, delegate_channel(delegate), call["id"])
+    label = f"Reply from {delegate} #{n}"
     assert call["state"] == "done", call["result"]
     assert label in call["result"]
     assert _ANSWER not in call["result"] and _BLOCK_OPENER not in call["result"]
@@ -201,7 +201,7 @@ def test_a_helper_called_from_the_chat_returns_at_once_and_its_answer_comes_back
     assert _BLOCK_OPENER not in opening
 
 
-def test_a_helper_called_from_a_thread_reply_answers_in_that_thread(db: sqlite3.Connection) -> None:
+def test_a_subagent_called_from_a_thread_reply_answers_in_that_thread(db: sqlite3.Connection) -> None:
     """A thread reply on a finished exchange calls ``web_search``; the search
     ends after the thread reply has ended. Its answer comes back into that
     thread — the same turn, never a new one — and the chat's answer to it ends
@@ -235,7 +235,7 @@ def test_a_helper_called_from_a_thread_reply_answers_in_that_thread(db: sqlite3.
     assert assistant_texts(db, USER, opener.turn_id)[-1] == _ANSWERED
 
 
-def test_a_helper_that_finishes_without_an_answer_says_so_in_its_reply(db: sqlite3.Connection) -> None:
+def test_a_subagent_that_finishes_without_an_answer_says_so_in_its_reply(db: sqlite3.Connection) -> None:
     """A search that ends with nothing to say still replies, so the chat is
     not left waiting on a promise: the reply says the search finished without
     an answer, and the model answering it reads that notice with no
@@ -262,7 +262,7 @@ def test_a_helper_that_finishes_without_an_answer_says_so_in_its_reply(db: sqlit
     assert AbilityRegistry.get("web_search").UNTRUSTED_CONTENT[""][:60] not in answering
 
 
-def test_two_helpers_that_answer_while_their_caller_works_are_each_answered_once(db: sqlite3.Connection) -> None:
+def test_two_subagents_that_answer_while_their_caller_works_are_each_answered_once(db: sqlite3.Connection) -> None:
     """One chat turn calls ``web_browse`` and ``code_agent``; both finish
     while that turn is still working. Both answers join the working turn —
     no turn of their own — and the turn reads them together on one more step,
@@ -305,7 +305,7 @@ def test_two_helpers_that_answer_while_their_caller_works_are_each_answered_once
         [call] = calls_of(db, tool_name)
         [reply] = replies(db, call["id"])
         assert (reply["turn_id"], reply["joined"]) == (parent.turn_id, 1), tool_name
-        numbers[tool_name] = child_turn(db, helper_channel(tool_name), call["id"])
+        numbers[tool_name] = child_turn(db, delegate_channel(tool_name), call["id"])
     assert _user_turns(db) == [parent.turn_id]
     chat = provider.read("chat")
     assert len(chat) == 3
@@ -361,14 +361,14 @@ def test_a_reply_never_lands_in_another_turn_that_is_working(db: sqlite3.Connect
     assert assistant_texts(db, USER, reply["turn_id"]) == [_ANSWERED]
 
 
-def test_a_helper_the_person_stops_tells_the_chat_it_was_stopped(authed_client: _Client) -> None:
+def test_a_subagent_the_person_stops_tells_the_chat_it_was_stopped(authed_client: _Client) -> None:
     """After the chat's turn has ended, the person stops the search from its
     transcript panel while it is mid-call. The search ends cancelled with its
     late answer never stored, and the chat is told, in a reply that opens a
     turn of its own, that the search was stopped before it finished — with no
     third-party-content warning — and answers it."""
     client, db, _store = authed_client
-    channel = helper_channel("web_search")
+    channel = delegate_channel("web_search")
     held = Held(text(_ANSWER))
     provider = ChannelProvider(
         chat=[calls(tool("web_search", instructions=_INSTRUCTIONS)), text(_STARTED), text("It was stopped.")],
@@ -399,7 +399,7 @@ def test_a_helper_the_person_stops_tells_the_chat_it_was_stopped(authed_client: 
     assert _BLOCK_OPENER not in answering
 
 
-def test_a_helper_whose_provider_keeps_failing_tells_the_chat_why_it_crashed(db: sqlite3.Connection) -> None:
+def test_a_subagent_whose_provider_keeps_failing_tells_the_chat_why_it_crashed(db: sqlite3.Connection) -> None:
     """The search's provider fails on every attempt after the chat's turn has
     ended. The search crashes, and the chat is told why, in a reply that opens
     a turn of its own — with no third-party-content warning — and answers
@@ -417,7 +417,7 @@ def test_a_helper_whose_provider_keeps_failing_tells_the_chat_why_it_crashed(db:
     assert first.opened and provider.unused() == {}
     assert len(provider.texts("web_search")) == _MAX_PROVIDER_ATTEMPTS
     [call] = calls_of(db, "web_search")
-    search = execution(helper_channel("web_search"), child_turn(db, helper_channel("web_search"), call["id"]))
+    search = execution(delegate_channel("web_search"), child_turn(db, delegate_channel("web_search"), call["id"]))
     assert (search.state, search.stop_reason) == (TurnExecution.CRASHED, _EXHAUSTED)
     [reply] = replies(db, call["id"])
     assert reply["content"] == f"This web_search crashed: {_EXHAUSTED}"
@@ -427,12 +427,12 @@ def test_a_helper_whose_provider_keeps_failing_tells_the_chat_why_it_crashed(db:
     assert _BLOCK_OPENER not in provider.read("chat")[-1]
 
 
-def test_boot_tells_the_chat_a_helper_was_cut_off_by_a_restart(db: sqlite3.Connection) -> None:
+def test_boot_tells_the_chat_a_subagent_was_cut_off_by_a_restart(db: sqlite3.Connection) -> None:
     """The process dies while the search is mid-call, so nothing is sent back
     then. The next boot closes the search's turn as cut off by the restart and
     tells the chat so, once, in a reply that opens a turn of its own — with no
     third-party-content warning — which the chat answers."""
-    channel = helper_channel("web_search")
+    channel = delegate_channel("web_search")
     script: list[Entry] = [dies]
     provider = ChannelProvider(
         chat=[calls(tool("web_search", instructions=_INSTRUCTIONS)), text(_STARTED), text("It was cut off.")],
@@ -464,27 +464,27 @@ def test_boot_tells_the_chat_a_helper_was_cut_off_by_a_restart(db: sqlite3.Conne
     assert list(TurnExecution.open_rows()) == []
 
 
-@pytest.mark.parametrize("helper", ["web_search", "web_browse", "code_agent", "pim", "subtask"])
-def test_a_helpers_own_turn_is_never_offered_itself(authed_client: _Client, helper: str) -> None:
-    """A helper's own turn opens with a row carrying the call that started it,
+@pytest.mark.parametrize("delegate", ["web_search", "web_browse", "code_agent", "pim", "subtask"])
+def test_a_subagents_own_turn_is_never_offered_itself(authed_client: _Client, delegate: str) -> None:
+    """A subagent's own turn opens with a row carrying the call that started it,
     just as a reply does — yet while the chat is offered the subagent on every
     request, the subagent's own turn never is."""
     client, db, _store = authed_client
-    route = "subtask" if helper == "subtask" else helper
+    route = "subtask" if delegate == "subtask" else delegate
     start = (
-        tool("subtask", action="start", instructions=_INSTRUCTIONS) if helper == "subtask"
-        else tool(helper, instructions=_INSTRUCTIONS)
+        tool("subtask", action="start", instructions=_INSTRUCTIONS) if delegate == "subtask"
+        else tool(delegate, instructions=_INSTRUCTIONS)
     )
     own: list[Entry] = [Held(text(_ANSWER))]
     provider = ChannelProvider(chat=[calls(start), text(_STARTED), text(_ANSWERED)], **{route: own})
 
-    with _mailbox(client, helper):
+    with _mailbox(client, delegate):
         run_turn(provider, UserConfig(), _QUESTION)
 
     assert provider.unused() == {}
-    [call] = calls_of(db, helper)
+    [call] = calls_of(db, delegate)
     [reply] = replies(db, call["id"])
     assert reply["content"] == _ANSWER
     [own_turn] = provider.offered(route)
-    assert helper not in own_turn
-    assert helper in provider.offered("chat")[-1]
+    assert delegate not in own_turn
+    assert delegate in provider.offered("chat")[-1]
