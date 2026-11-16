@@ -132,9 +132,9 @@ interface FooterRow {
   durationMs: number | null;
 }
 
-/** The still-working exchange's plan, standing sticky under the message it
- *  plans and ticking as the agent works it. It is scaffolding for the work,
- *  so a settled exchange shows no plan at all. */
+/** The still-working exchange's plan, standing under the message it plans
+ *  and ticking as the agent works it; it scrolls with its turn. It is
+ *  scaffolding for the work, so a settled exchange shows no plan at all. */
 interface PlanRow {
   kind: 'plan';
   key: string;
@@ -321,7 +321,6 @@ function onOpenThread(): void {
 <template>
   <div
     class="turn-view"
-    :class="{ 'turn-view--panel': fullThread }"
     :data-turn-id="block.turn_id"
     :data-type="channel ? undefined : type"
     :data-channel="channel ?? undefined"
@@ -417,19 +416,6 @@ function onOpenThread(): void {
 // The running-subtasks ring stands at the row's right edge.
 .msg-row--subtasks {
   justify-content: flex-end;
-}
-
-// The live plan stays in view under the fixed 56px top bar while the work runs
-// — or at the top of the thread panel, which scrolls its own body. It opens
-// Chalie's side.
-.msg-row--plan {
-  position: sticky;
-  top: 56px;
-  z-index: 3;
-}
-
-.turn-view--panel .msg-row--plan {
-  top: 0;
 }
 
 // A settled turn that failed with no reply, or a stopped subagent — a muted,

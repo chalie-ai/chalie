@@ -955,7 +955,7 @@ function taskStatuses(wrapper: VueWrapper): string[] {
   return wrapper.findAll('.plan-task').map((t) => t.classes().find((c) => c.startsWith('plan-task--'))!.slice(11));
 }
 
-// A request's plan stands sticky under the message it plans while the
+// A request's plan stands under the message it plans while the
 // exchange works, ticking as the agent marks its tasks; once the exchange
 // settles the plan is gone — neither in the column nor on the footer.
 describe('the plan — live under its message, gone once it settles', () => {
@@ -1044,7 +1044,7 @@ describe('the plan — live under its message, gone once it settles', () => {
     expect(footerOf(wrapper).text()).not.toContain('plan');
   });
 
-  it('drops an earlier exchange\'s plan once it settles while the working one\'s plan stands live — and the thread panel pins it to the panel\'s top, never the spine for a forked turn', () => {
+  it('drops an earlier exchange\'s plan once it settles while the working one\'s plan stands live — in the thread panel, never the spine for a forked turn', () => {
     const turnId = 507;
     const messages = [
       row('5070', 'user', 'what is the weather', turnId, { plan: planOf('done', 'done') }),
@@ -1059,12 +1059,42 @@ describe('the plan — live under its message, gone once it settles', () => {
     // and no live card: the thread pill carries the live state.
     expect(layout(spine)).toEqual(['user:what is the weather', 'bubble:Sunny, 24°.', 'footer']);
     expect(footerOf(spine).text()).not.toContain('plan');
-    expect(spine.classes()).not.toContain('turn-view--panel');
 
     expect(layout(panel)).toEqual([
       'user:what is the weather', 'bubble:Sunny, 24°.', 'footer', 'user:and tomorrow', 'plan', 'live',
     ]);
     expect(panel.find('.msg-row--plan .plan-task').classes()).toContain('plan-task--in_progress');
-    expect(panel.classes()).toContain('turn-view--panel');
+  });
+
+  // The card is part of its turn: scrolling past the turn takes the card with
+  // it. Nothing between the card and the turn may pin it to the screen, in the
+  // feed or in the thread panel. Read through the component's own stylesheet,
+  // which the suite applies (vitest.config.ts `css`).
+  it('scrolls away with its turn — nothing pins the card on screen, in the feed or in the thread panel', () => {
+    const turnId = 508;
+    const messages = [
+      row('5080', 'user', 'check the pools', turnId, { plan: planOf('done', 'in_progress', 'todo') }),
+      row('5081', 'assistant', '', turnId, { tool_calls: calls('web_search') }),
+    ];
+
+    for (const [where, fullThread] of [['feed', false], ['thread panel', true]] as const) {
+      // Attached: happy-dom resolves stylesheet rules only for a connected element.
+      const wrapper = mount(TurnView, {
+        props: { block: block(turnId, messages), type: ConfigType.USER, fullThread },
+        attachTo: document.body,
+      });
+      const rowDisplay = getComputedStyle(wrapper.find('.msg-row--plan').element).display;
+      const pinned: string[] = [];
+      for (let el: Element | null = wrapper.find('.plan-card').element; el; el = el.parentElement) {
+        const { position } = getComputedStyle(el);
+        if (position === 'sticky' || position === 'fixed') pinned.push(`${el.className}: ${position}`);
+        if (el === wrapper.element) break;
+      }
+      wrapper.unmount();
+
+      // The stylesheet reached the DOM: the plan row is laid out as every row is.
+      expect(rowDisplay, where).toBe('flex');
+      expect(pinned, where).toEqual([]);
+    }
   });
 });
