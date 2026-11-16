@@ -28,6 +28,8 @@ const boolValues = reactive<Record<string, boolean>>({});
 const formError = ref<string | null>(null);
 // While a setup is still being confirmed in the background: what it waits for.
 const waitingNote = ref<string | null>(null);
+// The code that setup waits for the user to send, shown large on its own.
+const waitingCode = ref<string | null>(null);
 
 // How often the form asks whether a setup still being confirmed has ended.
 const STATUS_POLL_MS = 3000;
@@ -37,6 +39,7 @@ function stopWaiting(): void {
   if (statusTimer) clearTimeout(statusTimer);
   statusTimer = null;
   waitingNote.value = null;
+  waitingCode.value = null;
 }
 
 onUnmounted(stopWaiting);
@@ -135,6 +138,7 @@ async function followSetup(cap: Capability): Promise<void> {
     s = await capabilities.status(cap.id);
   } catch (e) {
     waitingNote.value = null;
+    waitingCode.value = null;
     formError.value = apiErrorMessage(e, 'Could not read the setup status');
     return;
   }
@@ -142,10 +146,12 @@ async function followSetup(cap: Capability): Promise<void> {
   if (formCap.value !== cap || viewMode.value !== 'form') return;
   if (s.pending) {
     waitingNote.value = s.status_note ?? 'Waiting for the setup to be confirmed…';
+    waitingCode.value = s.setup_code ?? null;
     statusTimer = setTimeout(() => void followSetup(cap), STATUS_POLL_MS);
     return;
   }
   waitingNote.value = null;
+  waitingCode.value = null;
   if (s.connected) {
     showToast(formConnected.value ? 'Settings saved' : 'Capability connected', 'success');
     viewMode.value = 'list';
@@ -195,6 +201,7 @@ async function disconnect(c: Capability): Promise<void> {
       </div>
       <template v-if="waitingNote">
         <p class="wizard-hint">{{ waitingNote }}</p>
+        <p v-if="waitingCode" class="setup-code">{{ waitingCode }}</p>
         <p class="wizard-hint">Waiting…</p>
         <div class="form-actions">
           <button type="button" class="btn" @click="cancelSetup(formCap)">Cancel</button>
@@ -286,6 +293,7 @@ async function disconnect(c: Capability): Promise<void> {
       <div class="cap-meta">{{ c.platform || '' }}</div>
       <div v-if="c.version" class="cap-version">{{ c.version }}</div>
       <div v-if="c.status_note" class="cap-meta">{{ c.status_note }}</div>
+      <div v-if="c.setup_code" class="setup-code setup-code--card">{{ c.setup_code }}</div>
       <div class="cap-actions">
         <template v-if="isConnected(c)">
           <button class="btn btn-sm" @click="openForm(c)">Edit</button>

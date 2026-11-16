@@ -119,7 +119,7 @@ class TelegramCapability(AbstractCapability):
 
     def configure(self, credentials: dict[str, object]) -> None:
         """Start a setup attempt: check the token with Telegram, then wait in
-        the background for the code :meth:`status_note` shows. Every attempt
+        the background for the code :meth:`setup_code` shows. Every attempt
         starts afresh, so the old connection and any attempt still waiting end
         first. A failure raises ``ValueError``, whose text reaches the log, so
         it never holds the token."""
@@ -141,6 +141,10 @@ class TelegramCapability(AbstractCapability):
     def setup_pending(self) -> bool:
         return self._attempt is not None
 
+    def setup_code(self) -> str | None:
+        attempt = self._attempt
+        return attempt.code if attempt is not None else None
+
     def connect(self) -> bool:
         """Connected exactly when a bot token and its chat are stored. No call
         to Telegram, so a restart never depends on reaching it. A locked vault
@@ -159,13 +163,13 @@ class TelegramCapability(AbstractCapability):
         logger.info("[telegram] Disconnected and credentials removed.")
 
     def status_note(self) -> str | None:
-        """The code to send while an attempt waits, why the last attempt
-        failed, or whose chat messages go to."""
+        """Where to send the code while an attempt waits, why the last
+        attempt failed, or whose chat messages go to."""
         attempt = self._attempt
         if attempt is not None:
             return (
-                f"Open https://t.me/{attempt.username}, press Start, then send the bot this code: "
-                f"{attempt.code}. Chalie waits up to {_VERIFY_SECONDS // 60} minutes."
+                f"Open https://t.me/{attempt.username}, press Start, then send the bot "
+                f"this code within {_VERIFY_SECONDS // 60} minutes:"
             )
         if self._failure:
             return self._failure

@@ -288,9 +288,9 @@ def _code(client: FlaskClient) -> str:
     """The code the waiting setup asks the user to send the bot."""
     status = _status(client)
     assert status["pending"] is True, status
-    found = _CODE.search(str(status["status_note"]))
-    assert found is not None, status
-    return found.group()
+    code = str(status["setup_code"])
+    assert _CODE.fullmatch(code), status
+    return code
 
 
 def _settled(client: FlaskClient) -> dict[str, object]:
@@ -299,6 +299,7 @@ def _settled(client: FlaskClient) -> dict[str, object]:
     while (status := _status(client))["pending"]:
         assert time.monotonic() < deadline, f"the setup attempt was still waiting after {_SETUP_LIMIT_SECONDS:.0f}s"
         time.sleep(0.05)
+    assert status["setup_code"] is None, "an attempt that ended shows no code"
     return status
 
 
@@ -350,12 +351,17 @@ def _sent_to(telegram: _Telegram) -> list[object]:
     return [p["chat_id"] for p in telegram.calls("sendMessage")]
 
 
-def _note(client: FlaskClient) -> str:
-    """The note the Telegram card shows under its name."""
+def _card(client: FlaskClient) -> dict[str, object]:
+    """The Telegram card's row in the capability list."""
     resp = client.get("/api/capabilities/all?limit=100")
     assert resp.status_code == 200
     rows = {item["id"]: item for item in cast("dict[str, list[dict[str, object]]]", resp.get_json())["result"]}
-    return str(rows["telegram"]["status_note"])
+    return rows["telegram"]
+
+
+def _note(client: FlaskClient) -> str:
+    """The note the Telegram card shows under its name."""
+    return str(_card(client)["status_note"])
 
 
 # ── Tests ──────────────────────────────────────────────────────────────────────
@@ -389,8 +395,10 @@ def test_sending_the_code_shown_on_the_card_connects_that_chat_and_confirms_it_t
 
     assert _save_token(client, _TOKEN) == 204
     code = _code(client)
-    note = _note(client)
-    assert f"https://t.me/{_USERNAME}" in note and code in note, note
+    card = _card(client)
+    note = str(card["status_note"])
+    assert f"https://t.me/{_USERNAME}" in note and code not in note, note
+    assert card["setup_code"] == code, "the card shows the code on its own"
     assert _stored_rows(db) == 0, "nothing is kept until the code arrives"
     assert _connected(client) is False
     assert "code=not-connected" in _head(_send("Too early"))

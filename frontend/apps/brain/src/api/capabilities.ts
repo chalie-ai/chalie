@@ -37,6 +37,7 @@ export interface Capability {
   description?: string | null;
   connected?: boolean;
   status_note?: string | null;
+  setup_code?: string | null;
   status?: string | null;
   platform?: string | null;
   last_sync_at?: string | null;
@@ -50,6 +51,7 @@ export interface CapabilityStatus {
   connected: boolean;
   pending: boolean;
   status_note?: string | null;
+  setup_code?: string | null;
   last_sync_at?: string | null;
 }
 

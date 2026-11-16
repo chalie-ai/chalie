@@ -207,6 +207,12 @@ class AbstractCapability(ABC):
         so the capability is neither connected nor failed yet."""
         return False
 
+    def setup_code(self) -> str | None:
+        """The code the user must send to finish a setup still being
+        confirmed, shown on its own beside :meth:`status_note`. ``None`` when
+        no setup waits for one."""
+        return None
+
     def is_connected(self) -> bool:
         """Return the current in-memory connection state.
 

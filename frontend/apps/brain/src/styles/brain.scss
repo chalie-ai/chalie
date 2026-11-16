@@ -999,6 +999,19 @@ input[type='checkbox'] {
 .provider-wizard { width: 100%; }
 .wizard-hint { font-size: var(--fs-body); color: var(--muted); margin: 0 0 18px; line-height: 1.5; }
 .wizard-error { color: var(--deny-text); }
+// A code the user must type into another app: a display number, read at a glance.
+.setup-code {
+  display: inline-block;
+  margin: 0 0 18px;
+  padding: 12px 20px;
+  background: var(--surface-2);
+  color: var(--pink-text);
+  font: 600 32px/1 var(--font-mono);
+  letter-spacing: 0.2em;
+  font-variant-numeric: tabular-nums;
+  user-select: all;
+}
+.setup-code--card { margin: 0; padding: 8px 12px; font-size: var(--fs-title); }
 
 .provider-grid {
   display: grid;

@@ -48,5 +48,6 @@ class CapabilitiesStatus(Action):
             connected=cap.is_connected(),
             pending=cap.setup_pending(),
             status_note=cap.status_note(),
+            setup_code=cap.setup_code(),
             last_sync_at=_get_last_sync_at(cap_id),
         ).single()
