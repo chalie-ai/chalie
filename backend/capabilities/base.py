@@ -197,6 +197,12 @@ class AbstractCapability(ABC):
                 exc_info=True,
             )
 
+    def unavailable_reason(self) -> str | None:
+        """Why this capability cannot work where Chalie runs, shown on its
+        card in place of setup; setup is refused while there is one. ``None``
+        when it is available."""
+        return None
+
     def status_note(self) -> str | None:
         """One plain line about this capability's state, shown on its card in
         the Brain dashboard. ``None`` when there is nothing to add."""

@@ -26,6 +26,7 @@ These run against the REAL production stack:
 No mocks, no stub configs — the configs under test are the ones production runs.
 """
 
+import sys
 from typing import Mapping, Sequence, cast
 
 import pytest
@@ -203,7 +204,9 @@ _EXPECTED_NON_DISCOVERABLE = frozenset({
     "contacts",                # personal info — pim delegate only
     "run_script",               # code-agent-delegate-exclusive — CodeAgentConfig only
     "plan",                    # a turn's own plan — pinned on every planning config
-})
+}) | (frozenset() if sys.platform == "darwin" else frozenset({
+    "imessage",                # Apple-only — offered only where Chalie runs on a Mac
+}))
 
 
 def test_non_discoverable_set_is_exactly_the_expected_set() -> None:

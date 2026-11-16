@@ -1193,6 +1193,36 @@ input[type='checkbox'] {
 
 .cap-card { flex-direction: column; align-items: flex-start; gap: 8px; padding: 16px; }
 
+.cap-body { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; width: 100%; }
+
+// The reason sits over the dimmed, blurred card body in one grid cell, so the
+// card grows to whichever of the two is taller.
+.cap-card.unavailable {
+  display: grid;
+  align-items: center;
+
+  &:hover { background: var(--surface); }
+
+  > .cap-body,
+  > .cap-unavailable { grid-area: 1 / 1; }
+
+  > .cap-body {
+    opacity: 0.3;
+    filter: blur(2px);
+    user-select: none;
+    pointer-events: none;
+  }
+}
+
+.cap-unavailable {
+  margin: 0;
+  font-size: var(--fs-body);
+  font-weight: 500;
+  line-height: 1.5;
+  color: var(--text);
+  text-align: center;
+}
+
 .cap-header { display: flex; align-items: center; justify-content: space-between; width: 100%; }
 .cap-name { font-weight: 500; font-size: var(--fs-body); }
 .cap-meta { font-size: var(--fs-body); color: var(--muted); overflow-wrap: anywhere; }

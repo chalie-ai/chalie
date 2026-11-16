@@ -1,8 +1,9 @@
 """``CapabilityAbility`` — the shared base for capability-backed tools.
 
-``home``, ``ubiquiti``, ``email``, ``calendar`` and ``telegram`` all do the same thing: load
-a named capability, refuse if it is not connected, map the model's ``action``
-onto a capability handler, dispatch it, and wrap the result. That block was
+``home``, ``ubiquiti``, ``email``, ``calendar``, ``telegram`` and ``imessage``
+all do the same thing: load a named capability, refuse if it is not
+connected, map the model's ``action`` onto a capability handler, dispatch it,
+and wrap the result. That block was
 copy-pasted per tool and had already drifted (different error wording, an
 unused rich-media path in two of them).
 

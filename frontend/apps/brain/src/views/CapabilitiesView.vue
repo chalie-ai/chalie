@@ -48,6 +48,11 @@ function isConnected(c: Capability): boolean {
   return !!(c.connected || c.status === 'connected');
 }
 
+// A capability that cannot work where Chalie runs shows its reason in place of setup.
+function isAvailable(c: Capability): boolean {
+  return c.available !== false;
+}
+
 const formFields = computed<CapabilityField[]>(() => formCap.value?.fields ?? []);
 
 function isVisible(f: CapabilityField): boolean {
@@ -285,24 +290,32 @@ async function disconnect(c: Capability): Promise<void> {
   </div>
 
   <div v-else class="caps-grid">
-    <div v-for="c in caps" :key="c.id" class="cap-card" :class="{ connected: isConnected(c) }">
-      <div class="cap-header">
-        <div class="cap-name">{{ c.name }}</div>
-        <span class="status-dot" :class="{ active: isConnected(c) }"></span>
+    <div
+      v-for="c in caps"
+      :key="c.id"
+      class="cap-card"
+      :class="{ connected: isConnected(c), unavailable: !isAvailable(c) }"
+    >
+      <div class="cap-body">
+        <div class="cap-header">
+          <div class="cap-name">{{ c.name }}</div>
+          <span class="status-dot" :class="{ active: isConnected(c) }"></span>
+        </div>
+        <div class="cap-meta">{{ c.platform || '' }}</div>
+        <div v-if="c.version" class="cap-version">{{ c.version }}</div>
+        <div v-if="c.status_note" class="cap-meta">{{ c.status_note }}</div>
+        <div v-if="c.setup_code" class="setup-code setup-code--card">{{ c.setup_code }}</div>
+        <div v-if="isAvailable(c)" class="cap-actions">
+          <template v-if="isConnected(c)">
+            <button class="btn btn-sm" @click="openForm(c)">Edit</button>
+            <button class="btn btn-sm btn-danger" @click="disconnect(c)">Disconnect</button>
+          </template>
+          <template v-else>
+            <button class="btn btn-sm" @click="openForm(c)">Setup</button>
+          </template>
+        </div>
       </div>
-      <div class="cap-meta">{{ c.platform || '' }}</div>
-      <div v-if="c.version" class="cap-version">{{ c.version }}</div>
-      <div v-if="c.status_note" class="cap-meta">{{ c.status_note }}</div>
-      <div v-if="c.setup_code" class="setup-code setup-code--card">{{ c.setup_code }}</div>
-      <div class="cap-actions">
-        <template v-if="isConnected(c)">
-          <button class="btn btn-sm" @click="openForm(c)">Edit</button>
-          <button class="btn btn-sm btn-danger" @click="disconnect(c)">Disconnect</button>
-        </template>
-        <template v-else>
-          <button class="btn btn-sm" @click="openForm(c)">Setup</button>
-        </template>
-      </div>
+      <p v-if="!isAvailable(c)" class="cap-unavailable">{{ c.unavailable_reason }}</p>
     </div>
   </div>
 </template>

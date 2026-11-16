@@ -14,6 +14,7 @@ nothing stored. Past setup, only a send that waits for the user's reply
 from __future__ import annotations
 
 import logging
+import os
 import re
 import secrets
 import threading
@@ -72,6 +73,16 @@ def _split(text: str) -> list[str]:
         units += width
     pieces.append(text[start:])
     return pieces
+
+
+def _how_much_was_sent(sent: int, texts: int, voice: bool) -> str:
+    """What reached the user when a send failed after *sent* messages, of
+    *texts* text messages and a voice note when *voice*."""
+    if not sent:
+        return "Nothing was sent."
+    if voice and sent == texts:
+        return "The text was sent, but not the voice note."
+    return f"Only {sent} of {texts + voice} messages were sent."
 
 
 def _display_name(chat: dict[str, object]) -> str:
@@ -237,21 +248,26 @@ class TelegramCapability(AbstractCapability):
     def _chat_name(self) -> str:
         return self.load_credential(_K_CHAT_NAME) or _UNNAMED
 
-    def send(self, message: str, should_stop: Callable[[], bool] | None = None) -> dict[str, object]:
+    def send(
+        self, message: str, should_stop: Callable[[], bool] | None = None, audio: str | None = None,
+    ) -> dict[str, object]:
         """Send *message* to the user's chat, split into several messages
-        when too long. A success names who it went to in ``to``.
+        when too long, then the audio file at *audio*, when given, as a voice
+        note. A success names who it went to in ``to``.
 
         With *should_stop*, the updates already waiting are dropped first, and
-        after the last piece the call waits, with no time limit, for the user's
-        reply: the result carries ``reply``, or ``stopped`` when *should_stop*
-        said the turn was stopped first. A failure is an ``error`` text that
-        says how much was sent."""
+        after the last message the call waits, with no time limit, for the
+        user's reply: the result carries ``reply``, or ``stopped`` when
+        *should_stop* said the turn was stopped first. A failure is an
+        ``error`` text that says how much was sent."""
         token = self.load_credential(_K_TOKEN)
         chat_id = self.load_credential(_K_CHAT_ID)
         if not (token and chat_id):
             return {"error": "Telegram is not connected. Set it up under Capabilities in the Brain dashboard."}
+        if audio and not os.path.isfile(audio):
+            return {"error": f"There is no audio file at {audio}. Nothing was sent."}
         to = self._chat_name()
-        pieces = _split(message)
+        pieces = _split(message) if message.strip() else []
         sent = 0
         offset: int | None = None
         try:
@@ -260,9 +276,11 @@ class TelegramCapability(AbstractCapability):
             for piece in pieces:
                 call(token, "sendMessage", {"chat_id": int(chat_id), "text": piece})
                 sent += 1
+            if audio:
+                call(token, "sendVoice", {"chat_id": int(chat_id)}, upload=("voice", audio))
+                sent += 1
         except TelegramApiError as exc:
-            outcome = f"Only {sent} of {len(pieces)} messages were sent." if sent else "Nothing was sent."
-            return {"error": f"{exc} {outcome}"}
+            return {"error": f"{exc} {_how_much_was_sent(sent, len(pieces), bool(audio))}"}
         if should_stop is None:
             return {"sent": True, "messages": sent, "to": to}
 
@@ -280,11 +298,17 @@ class TelegramCapability(AbstractCapability):
     # ── Tool handlers ────────────────────────────────────────────────
 
     def _th_send(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
-        return self.send(str(params.get("message") or ""))
+        return self.send(str(params.get("message") or ""), audio=str(params.get("audio") or "") or None)
 
     def get_tools(self) -> list[dict[str, object]]:
         return [
             {"name": "send", "handler": self._th_send, "timeout": 60,
-             "description": "Send the user a plain-text Telegram message, split into several when too long.",
-             "parameters": {"message": {"type": "string", "description": "The text to send."}}},
+             "description": (
+                 "Send the user a plain-text Telegram message, split into several when too long, "
+                 "and an audio file as a voice note."
+             ),
+             "parameters": {
+                 "message": {"type": "string", "description": "The text to send."},
+                 "audio": {"type": "string", "description": "The full path of an audio file to send as a voice note."},
+             }},
         ]

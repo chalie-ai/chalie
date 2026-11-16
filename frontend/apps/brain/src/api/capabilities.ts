@@ -35,6 +35,8 @@ export interface Capability {
   name: string;
   version?: string | null;
   description?: string | null;
+  available?: boolean;
+  unavailable_reason?: string | null;
   connected?: boolean;
   status_note?: string | null;
   setup_code?: string | null;
@@ -48,6 +50,8 @@ export interface Capability {
 
 export interface CapabilityStatus {
   id: string;
+  available: boolean;
+  unavailable_reason?: string | null;
   connected: boolean;
   pending: boolean;
   status_note?: string | null;

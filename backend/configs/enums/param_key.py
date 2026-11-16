@@ -57,6 +57,7 @@ class Keys(StrEnum):
     area = "area"
     args = "args"
     attachments = "attachments"
+    audio = "audio"
     automation_id = "automation_id"
     body = "body"
     buffer_minutes = "buffer_minutes"

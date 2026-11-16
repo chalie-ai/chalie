@@ -1,8 +1,9 @@
 """TelegramAbility — message the user on Telegram through their own bot.
 
 Delegates to ``TelegramCapability`` via :class:`CapabilityAbility`. The one
-action, ``send``, goes to the one chat the capability recorded. There is no
-recipient parameter, so this tool cannot message anyone else.
+action, ``send``, goes to the one chat the capability recorded: a text, a
+voice note made from an audio file, or both. There is no recipient parameter,
+so this tool cannot message anyone else.
 
 With ``wait_for_reply`` the call goes on after sending until the user replies
 or the turn is stopped, and the reply is the result. The capability gets no
@@ -37,10 +38,8 @@ class TelegramAbility(CapabilityAbility):
     )
 
     # "" covers the omitted action, which DEFAULT_ACTION turns into send.
-    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
-        "": (Keys.message,),
-        "send": (Keys.message,),
-    }
+    # Neither field is required on its own; run() asks for one of the two.
+    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (), "send": ()}
 
     def classify_action(self, params: dict[str, object]) -> str:
         """Every call that passes the pre-gate sends, so the permission is
@@ -54,7 +53,10 @@ class TelegramAbility(CapabilityAbility):
             "asks to be told something on Telegram, now or from a scheduled task. "
             "Plain text; long messages are split into several. When you need the "
             "user's answer to carry on, set wait_for_reply: the call then waits "
-            "until they reply, with no time limit, and returns their reply."
+            "until they reply, with no time limit, and returns their reply. "
+            "You can also send a voice note: make one with text_to_speech and pass "
+            "its path as audio. Use text where it reads better; a voice note keeps "
+            "a back-and-forth flowing."
         )
 
     def get_examples(self) -> list[str]:
@@ -86,6 +88,14 @@ class TelegramAbility(CapabilityAbility):
                 "type": "string",
                 "description": "The text to send the user, as plain text.",
             },
+            Keys.audio: {
+                "type": "string",
+                "description": (
+                    "The full path of an audio file to send as a voice note, such "
+                    "as the path text_to_speech returned. Sent after the text, "
+                    "when both are given."
+                ),
+            },
             Keys.wait_for_reply: {
                 "type": "boolean",
                 "default": False,
@@ -96,10 +106,22 @@ class TelegramAbility(CapabilityAbility):
                 ),
             },
         },
-        "required": [Keys.message],
+        "required": [],
     }
 
     def run(self, params: CapabilityParamsBag) -> ToolResult:
+        message = ParamBag.opt_str(params.extra, Keys.message)
+        if isinstance(message, ToolResult):
+            return message
+        audio = ParamBag.opt_str(params.extra, Keys.audio)
+        if isinstance(audio, ToolResult):
+            return audio
+        if not ((message and message.strip()) or (audio and audio.strip())):
+            return ToolResult.err(
+                f"Pass '{Keys.message}', '{Keys.audio}', or both.",
+                code="missing-params",
+                hint=f"'{Keys.message}' is the text to send; '{Keys.audio}' is the path of an audio file.",
+            )
         wait = ParamBag.bool_default(params.extra, Keys.wait_for_reply, default=False)
         if isinstance(wait, ToolResult):
             return wait
@@ -111,7 +133,7 @@ class TelegramAbility(CapabilityAbility):
         if self.mp is None:
             raise RuntimeError("the telegram ability needs a bound MessageProcessor to wait for a reply")
 
-        result = cap.send(str(params.extra.get(Keys.message) or ""), self.mp.turn_execution_service.should_stop)
+        result = cap.send(message or "", self.mp.turn_execution_service.should_stop, audio=audio or None)
         if "error" in result:
             return ToolResult.err(str(result["error"]), code="capability-error", action=self.DEFAULT_ACTION)
         to = result["to"]

@@ -6,6 +6,7 @@ it. No text leaves :func:`post` with the token in it.
 
 from __future__ import annotations
 
+import os
 from typing import NamedTuple
 
 import requests
@@ -27,12 +28,24 @@ class Outcome(NamedTuple):
 
 def post(
     token: str, method: str, payload: dict[str, str | int] | None = None, timeout: int = TIMEOUT,
+    upload: tuple[str, str] | None = None,
 ) -> Outcome:
     """Call one Bot API *method*. A ``requests`` error is reduced to its type
     name, because its message holds the URL; Telegram's own description has
-    the token cut out."""
+    the token cut out.
+
+    With *upload*, a ``(field, path)`` pair, the file at *path* goes up as
+    that field of a multipart request, with *payload* as its other fields."""
+    url = f"{_API_BASE}/bot{token}/{method}"
     try:
-        resp = requests.post(f"{_API_BASE}/bot{token}/{method}", json=payload or {}, timeout=timeout)
+        if upload is None:
+            resp = requests.post(url, json=payload or {}, timeout=timeout)
+        else:
+            field, path = upload
+            with open(path, "rb") as file:
+                resp = requests.post(
+                    url, data=payload or {}, files={field: (os.path.basename(path), file)}, timeout=timeout,
+                )
     except requests.RequestException as exc:
         return Outcome(None, 0, f"Could not reach Telegram ({type(exc).__name__}).")
     try:
@@ -51,10 +64,12 @@ def post(
     return Outcome(body.get("result"), resp.status_code, "")
 
 
-def call(token: str, method: str, payload: dict[str, str | int] | None = None) -> object:
+def call(
+    token: str, method: str, payload: dict[str, str | int] | None = None, upload: tuple[str, str] | None = None,
+) -> object:
     """Call one Bot API *method* and return its ``result``. Raises
     :class:`TelegramApiError` when the call fails."""
-    outcome = post(token, method, payload)
+    outcome = post(token, method, payload, upload=upload)
     if outcome.error:
         raise TelegramApiError(outcome.error)
     return outcome.result

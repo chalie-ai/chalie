@@ -19,6 +19,7 @@ import logging
 import sqlite3
 import threading
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 from flask.testing import FlaskClient
@@ -37,11 +38,13 @@ from tests.test_telegram_ability import (
     _USER_HANDLE,
     _USER_LAST,
     _bot_api,
+    _clip,
     _connect,
     _head,
     _open_vault_and_own_registry,
     _sent_to,
     _Telegram,
+    _voice_notes,
 )
 
 pytestmark = pytest.mark.unit
@@ -249,3 +252,19 @@ def test_neither_the_reply_nor_the_token_reaches_the_logs(
         assert reply not in message, f"{record.name} logged the user's reply"
     assert secret not in caplog.text
     assert reply not in caplog.text
+
+
+def test_a_voice_note_that_asks_for_a_reply_waits_for_it(
+    client: FlaskClient, telegram: _Telegram, tmp_path: Path,
+) -> None:
+    _connect(client, telegram)
+    path, data = _clip(tmp_path)
+    telegram.arrive_while_waiting = [(_USER_CHAT, {"text": "Sounds good, go ahead"})]
+
+    result = _Turn({"audio": str(path), "wait_for_reply": True}).outcome(telegram)
+
+    assert "status=success" in _head(result), result
+    assert "Sounds good, go ahead" in result
+    assert _names_the_user(result), result
+    assert telegram.calls("sendMessage") == []
+    assert _voice_notes(telegram) == [(_USER_CHAT, data)]

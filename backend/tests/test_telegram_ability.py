@@ -8,8 +8,8 @@ to that chat.
 
 Telegram is a real HTTP server on loopback that answers the Bot API methods the
 capability uses the way Telegram does (an unknown token is refused, confirmed
-updates are dropped, a text over 4096 characters is refused) and records every
-request it receives. The capability's API base URL is the one thing redirected,
+updates are dropped, a text over 4096 characters is refused, a voice note
+arrives as a multipart file upload) and records every request it receives. The capability's API base URL is the one thing redirected,
 so every request in these tests reaches that server and none reaches Telegram.
 The vault, database, setup and status endpoints, dispatcher and policy rows are
 the real ones.
@@ -17,6 +17,8 @@ the real ones.
 
 from __future__ import annotations
 
+import email.parser
+import email.policy
 import json
 import logging
 import re
@@ -95,6 +97,7 @@ class _Telegram:
         self.pending: dict[str, list[dict[str, object]]] = {}
         self.requests: list[tuple[str, str, dict[str, object]]] = []
         self.refuse_sends = False
+        self.refuse_voice = False
         self.webhook = False
         self.waiting = threading.Event()
         self.arrive_while_waiting: list[tuple[int, dict[str, object]]] = []
@@ -154,7 +157,27 @@ class _Telegram:
                     "message_id": len(self.requests), "chat": {"id": payload.get("chat_id"), "type": "private"},
                     "text": text,
                 }}
+            if method == "sendVoice":
+                return self._voice(token, payload)
             return 404, {"ok": False, "error_code": 404, "description": "Not Found"}
+
+    def _voice(self, token: str, payload: dict[str, object]) -> tuple[int, dict[str, object]]:
+        """``sendVoice``, called with the lock held. The file is the upload's
+        ``voice`` part, as ``(filename, bytes)``."""
+        upload = payload.get("voice")
+        if not isinstance(upload, tuple):
+            return 400, {"ok": False, "error_code": 400, "description": "Bad Request: there is no voice in the request"}
+        if self.refuse_voice:
+            # The refusal Telegram gives when the user does not accept voice
+            # messages; it echoes the token so the test proves it is cut out.
+            return 400, {"ok": False, "error_code": 400,
+                         "description": f"Bad Request: VOICE_MESSAGES_FORBIDDEN for bot{token}"}
+        data = cast("bytes", upload[1])
+        return 200, {"ok": True, "result": {
+            "message_id": len(self.requests), "chat": {"id": int(str(payload.get("chat_id"))), "type": "private"},
+            "voice": {"duration": 3, "mime_type": "audio/mpeg", "file_id": "AwACAgQAAxkBAAIC",
+                      "file_unique_id": "AgADb", "file_size": len(data)},
+        }}
 
     def _updates(self, token: str, payload: dict[str, object]) -> tuple[int, dict[str, object]]:
         """``getUpdates``, called with the lock held."""
@@ -199,10 +222,29 @@ class _BotApiServer(ThreadingHTTPServer):
     telegram: _Telegram
 
 
+def _form_fields(content_type: str, body: bytes) -> dict[str, object]:
+    """A ``multipart/form-data`` body as its fields: text for a plain field,
+    ``(filename, bytes)`` for a file."""
+    message = email.parser.BytesParser(policy=email.policy.HTTP).parsebytes(
+        f"Content-Type: {content_type}\r\n\r\n".encode() + body,
+    )
+    fields: dict[str, object] = {}
+    for part in message.iter_parts():
+        name = str(part.get_param("name", header="content-disposition"))
+        data = cast("bytes", part.get_payload(decode=True))
+        filename = part.get_filename()
+        fields[name] = (filename, data) if filename is not None else data.decode()
+    return fields
+
+
 class _BotApiHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802 — BaseHTTPRequestHandler's contract
         body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
-        payload = cast("dict[str, object]", json.loads(body or b"{}"))
+        content_type = self.headers.get("Content-Type") or ""
+        if content_type.startswith("multipart/form-data"):
+            payload = _form_fields(content_type, body)
+        else:
+            payload = cast("dict[str, object]", json.loads(body or b"{}"))
         bot, _, method = self.path.lstrip("/").partition("/")
         status, reply = cast(_BotApiServer, self.server).telegram.answer(bot.removeprefix("bot"), method, payload)
         data = json.dumps(reply).encode()
@@ -319,8 +361,13 @@ def _send(text: str, config: ProcessorConfig | None = None) -> str:
     """One telegram call through the real dispatcher and policy gate, as a turn
     on *config*'s channel (a chat turn by default) makes it. Returns the result
     the model reads."""
+    return _call({"message": text}, config)
+
+
+def _call(params: dict[str, object], config: ProcessorConfig | None = None) -> str:
+    """:func:`_send` with the call's params as given."""
     mp = MessageProcessor(config or UserConfig(), raw_input="tell me on Telegram")
-    return mp.dispatch_service.dispatch("telegram", {"message": text})
+    return mp.dispatch_service.dispatch("telegram", params)
 
 
 def _head(result: str) -> str:
@@ -349,6 +396,21 @@ def _connect(
 
 def _sent_to(telegram: _Telegram) -> list[object]:
     return [p["chat_id"] for p in telegram.calls("sendMessage")]
+
+
+def _voice_notes(telegram: _Telegram) -> list[tuple[int, bytes]]:
+    """Each voice note sent: the chat it went to and the file's bytes."""
+    return [
+        (int(str(p["chat_id"])), cast("tuple[str, bytes]", p["voice"])[1]) for p in telegram.calls("sendVoice")
+    ]
+
+
+def _clip(tmp_path: Path) -> tuple[Path, bytes]:
+    """An audio file on disk, as text_to_speech leaves one, and its bytes."""
+    data = b"ID3\x04\x00" + bytes(range(256)) * 40
+    path = tmp_path / "chalie_tts_0f3a.mp3"
+    path.write_bytes(data)
+    return path, data
 
 
 def _card(client: FlaskClient) -> dict[str, object]:
@@ -622,3 +684,93 @@ def test_sending_without_telegram_set_up_or_after_disconnecting_says_so_with_the
         assert f"hint: {TelegramAbility.NOT_CONNECTED_HINT}" in result
     assert telegram.calls("sendMessage") == []
     assert _stored_rows(db) == 0
+
+
+def test_an_audio_path_arrives_as_one_voice_note_holding_that_exact_file(
+    client: FlaskClient, telegram: _Telegram, tmp_path: Path,
+) -> None:
+    _connect(client, telegram)
+    path, data = _clip(tmp_path)
+
+    result = _call({"audio": str(path)})
+
+    assert "status=success" in _head(result), result
+    assert f"{_USER_FIRST} {_USER_LAST}" in result and f"@{_USER_HANDLE}" in result, result
+    assert telegram.calls("sendMessage") == []
+    assert _voice_notes(telegram) == [(_USER_CHAT, data)]
+    assert path.read_bytes() == data, "the clip is left where it was"
+
+
+def test_a_text_with_an_audio_path_arrives_as_the_text_then_the_voice_note(
+    client: FlaskClient, telegram: _Telegram, tmp_path: Path,
+) -> None:
+    _connect(client, telegram)
+    path, data = _clip(tmp_path)
+
+    result = _call({"message": "Here is your morning summary.", "audio": str(path)})
+
+    assert "status=success" in _head(result), result
+    assert [method for _, method, _ in telegram.requests] == ["sendMessage", "sendVoice"]
+    assert [p["text"] for p in telegram.calls("sendMessage")] == ["Here is your morning summary."]
+    assert _sent_to(telegram) == [_USER_CHAT]
+    assert _voice_notes(telegram) == [(_USER_CHAT, data)]
+
+
+def test_an_audio_path_with_no_file_there_sends_nothing_not_even_the_text(
+    client: FlaskClient, telegram: _Telegram, tmp_path: Path,
+) -> None:
+    _connect(client, telegram)
+    missing = tmp_path / "chalie_tts_gone.mp3"
+
+    result = _call({"message": "Here is your summary.", "audio": str(missing)})
+
+    assert "status=error" in _head(result) and "code=capability-error" in _head(result), result
+    assert f"There is no audio file at {missing}. Nothing was sent." in result, result
+    assert telegram.requests == []
+
+
+@pytest.mark.parametrize("params", [{}, {"message": ""}, {"message": "   "}, {"audio": ""}])
+def test_a_call_with_neither_text_nor_audio_is_refused_and_sends_nothing(
+    client: FlaskClient, telegram: _Telegram, params: dict[str, object],
+) -> None:
+    _connect(client, telegram)
+
+    result = _call(params)
+
+    assert "status=error" in _head(result) and "code=missing-params" in _head(result), result
+    assert "Pass 'message', 'audio', or both." in result, result
+    assert telegram.requests == []
+
+
+def test_an_audio_path_that_is_not_text_is_refused_and_sends_nothing(
+    client: FlaskClient, telegram: _Telegram,
+) -> None:
+    _connect(client, telegram)
+
+    result = _call({"message": "Here is your summary.", "audio": ["a.mp3"]})
+
+    assert "status=error" in _head(result) and "code=invalid-param" in _head(result), result
+    assert "'audio' must be text." in result, result
+    assert telegram.requests == []
+
+
+def test_a_voice_note_telegram_refuses_after_the_text_says_only_the_text_arrived_and_never_shows_the_token(
+    client: FlaskClient, telegram: _Telegram, tmp_path: Path,
+) -> None:
+    _connect(client, telegram)
+    path, _ = _clip(tmp_path)
+    telegram.refuse_voice = True
+
+    with_text = _call({"message": "Here is your summary.", "audio": str(path)})
+    voice_only = _call({"audio": str(path)})
+
+    assert "status=error" in _head(with_text), with_text
+    assert "The text was sent, but not the voice note." in with_text, with_text
+    assert "status=error" in _head(voice_only), voice_only
+    assert "Nothing was sent." in voice_only, voice_only
+    secret = _TOKEN.split(":", 1)[1]
+    for result in (with_text, voice_only):
+        assert "VOICE_MESSAGES_FORBIDDEN" in result, result
+        assert secret not in result
+    assert _sent_to(telegram) == [_USER_CHAT]
+    assert len(telegram.calls("sendVoice")) == 2

@@ -35,6 +35,7 @@ if TYPE_CHECKING:
     class _Capability(Protocol):
         def get_manifest(self) -> dict[str, object]: ...
         def is_connected(self) -> bool: ...
+        def unavailable_reason(self) -> str | None: ...
         def status_note(self) -> str | None: ...
         def setup_pending(self) -> bool: ...
         def setup_code(self) -> str | None: ...
@@ -85,11 +86,14 @@ def _manifest(cap: "_Capability", cap_id: str) -> dict[str, object]:
 def _summary_dto(cap_id: str, cap: "_Capability") -> CapabilitySummaryResponse:
     """Build a :class:`CapabilitySummaryResponse` from a registry entry."""
     manifest = _manifest(cap, cap_id)
+    unavailable_reason = cap.unavailable_reason()
     return CapabilitySummaryResponse(
         id=cap_id,
         name=cast(str, manifest["name"]),
         version=cast(str, manifest["version"]),
         description=cast("str | None", manifest.get("description")),
+        available=unavailable_reason is None,
+        unavailable_reason=unavailable_reason,
         connected=cap.is_connected(),
         status_note=cap.status_note(),
         setup_code=cap.setup_code(),
