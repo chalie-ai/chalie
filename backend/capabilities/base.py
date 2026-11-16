@@ -202,6 +202,11 @@ class AbstractCapability(ABC):
         the Brain dashboard. ``None`` when there is nothing to add."""
         return None
 
+    def setup_pending(self) -> bool:
+        """Whether a setup attempt is still being confirmed in the background,
+        so the capability is neither connected nor failed yet."""
+        return False
+
     def is_connected(self) -> bool:
         """Return the current in-memory connection state.
 

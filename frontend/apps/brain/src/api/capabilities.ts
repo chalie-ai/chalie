@@ -5,7 +5,10 @@
  *
  *   GET  /api/capabilities/all                paginated listing (fetchAllPages).
  *   GET  /api/capabilities/<id>                → result DTO (detail, config non-secret only).
- *   POST /api/capabilities/setup/<id>          configure a capability → 204 empty body.
+ *   GET  /api/capabilities/status/<id>         → result CapabilityStatus (pending while setup is
+ *                                                still being confirmed in the background).
+ *   POST /api/capabilities/setup/<id>          configure a capability → 204 empty body, also
+ *                                                while its setup is still being confirmed.
  *   POST /api/capabilities/disconnect/<id>     disconnect a capability → 204 empty body.
  */
 import { api } from '@chalie/shared';
@@ -42,6 +45,14 @@ export interface Capability {
   [key: string]: unknown;
 }
 
+export interface CapabilityStatus {
+  id: string;
+  connected: boolean;
+  pending: boolean;
+  status_note?: string | null;
+  last_sync_at?: string | null;
+}
+
 interface SingleEnvelope<T> {
   success: true;
   result: T;
@@ -54,6 +65,11 @@ export const capabilities = {
 
   async get(id: string): Promise<Capability> {
     const res = await api.get<SingleEnvelope<Capability>>(`/api/capabilities/${id}`);
+    return res.result;
+  },
+
+  async status(id: string): Promise<CapabilityStatus> {
+    const res = await api.get<SingleEnvelope<CapabilityStatus>>(`/api/capabilities/status/${id}`);
     return res.result;
   },
 

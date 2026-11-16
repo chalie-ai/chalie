@@ -46,5 +46,7 @@ class CapabilitiesStatus(Action):
         return CapabilityStatusResponse(
             id=cap_id,
             connected=cap.is_connected(),
+            pending=cap.setup_pending(),
+            status_note=cap.status_note(),
             last_sync_at=_get_last_sync_at(cap_id),
         ).single()

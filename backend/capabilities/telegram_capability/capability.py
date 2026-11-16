@@ -1,25 +1,30 @@
 """Telegram capability — the user's own bot, used to message that one user.
 
-The user creates a bot with @BotFather and pastes its token into setup, then
-says hi to the bot. The first private chat the bot receives is recorded as the
-one chat Chalie may message, with the name Telegram gives for it, so the user
-can see whose chat it is. It is looked for at setup, whenever the Telegram card
-is shown and at a send, until one is recorded; it is never replaced by another
-chat's message: only a disconnect or a new token resets it. Past that, only a
-send that waits for the user's reply (:mod:`reply_wait`) reads from the bot.
-Every request goes through :mod:`bot_api`.
+The user creates a bot with @BotFather and pastes its token into setup. Chalie
+then shows a 6-digit code for the user to send the bot, and reads the bot in
+the background for up to five minutes (:func:`reply_wait.await_code`). The
+private chat that sends the code becomes the one chat Chalie may message, with
+the name Telegram gives for it, and a confirmation is sent there. Anything else
+— the wrong text, no code in time, Telegram refusing — ends the attempt with
+nothing stored. Past setup, only a send that waits for the user's reply
+(:mod:`reply_wait`) reads from the bot. Every request goes through
+:mod:`bot_api`.
 """
 
 from __future__ import annotations
 
 import logging
 import re
+import secrets
+import threading
 from collections.abc import Callable
+from dataclasses import dataclass
+from typing import cast
 
 from capabilities.base import AbstractCapability
 from capabilities.telegram_capability.bot_api import call
-from capabilities.telegram_capability.reply_wait import await_reply, drain, next_offset
-from exceptions import TelegramApiError
+from capabilities.telegram_capability.reply_wait import await_code, await_reply, drain
+from exceptions import TelegramApiError, VaultLockedError
 from services.file_mapper_service import FileMapperService
 
 logger = logging.getLogger(__name__)
@@ -32,10 +37,24 @@ _MAX_MESSAGE_LENGTH = 4096
 _TOKEN_SHAPE = re.compile(r"\d+:[A-Za-z0-9_-]+")
 _UNNAMED = "a Telegram user with no name"
 
+# How long a setup attempt waits for the user to send the bot its code.
+_VERIFY_SECONDS = 300
+_FAILED = "Could not connect Telegram, please try again."
+_CONFIRMATION = "Chalie is connected. Its messages will come to this chat."
+
 _K_TOKEN = "telegram:bot_token"
-_K_USERNAME = "telegram:bot_username"
 _K_CHAT_ID = "telegram:chat_id"
 _K_CHAT_NAME = "telegram:chat_name"
+
+
+@dataclass(frozen=True)
+class _Attempt:
+    """A setup attempt waiting for its code. The token stays here, unstored,
+    until the code arrives."""
+
+    token: str
+    username: str
+    code: str
 
 
 def _split(text: str) -> list[str]:
@@ -55,14 +74,6 @@ def _split(text: str) -> list[str]:
     return pieces
 
 
-def _private_chat(update: object) -> dict[str, object] | None:
-    message = update.get("message") if isinstance(update, dict) else None
-    chat = message.get("chat") if isinstance(message, dict) else None
-    if isinstance(chat, dict) and chat.get("type") == "private" and isinstance(chat.get("id"), int):
-        return chat
-    return None
-
-
 def _display_name(chat: dict[str, object]) -> str:
     """The person's first and last name, then their @username when they
     have one."""
@@ -73,10 +84,33 @@ def _display_name(chat: dict[str, object]) -> str:
     return name or _UNNAMED
 
 
+def _check_token(token: str) -> tuple[str, int | None]:
+    """The bot's username, and the offset past every update already waiting,
+    so nothing sent to the bot before this attempt counts. Raises
+    ``ValueError`` saying why the token cannot be used, never holding it."""
+    if not _TOKEN_SHAPE.fullmatch(token):
+        raise ValueError("This is not a Telegram bot token; paste the whole token @BotFather sent.")
+    try:
+        me = call(token, "getMe")
+    except TelegramApiError as exc:
+        raise ValueError(f"Could not check the bot token. {exc}") from None
+    username = me.get("username") if isinstance(me, dict) else None
+    if not isinstance(username, str) or not username:
+        raise ValueError("Telegram named no username for this bot.")
+    try:
+        return username, drain(token)
+    except TelegramApiError as exc:
+        raise ValueError(str(exc)) from None
+
+
 class TelegramCapability(AbstractCapability):
 
     def __init__(self) -> None:
         super().__init__(_MANIFEST_PATH)
+        # Guards the attempt against a disconnect landing while it connects.
+        self._lock = threading.Lock()
+        self._attempt: _Attempt | None = None
+        self._failure: str | None = None
 
     def get_id(self) -> str:
         return "telegram"
@@ -84,61 +118,102 @@ class TelegramCapability(AbstractCapability):
     # ── Lifecycle ────────────────────────────────────────────────────
 
     def configure(self, credentials: dict[str, object]) -> None:
-        """Check the token with Telegram, store it, then look for the user's
-        hello. The ``ValueError`` text reaches the log, so it never holds the
-        token."""
+        """Start a setup attempt: check the token with Telegram, then wait in
+        the background for the code :meth:`status_note` shows. Every attempt
+        starts afresh, so the old connection and any attempt still waiting end
+        first. A failure raises ``ValueError``, whose text reaches the log, so
+        it never holds the token."""
+        self.disconnect()
         token = str(credentials.get("bot_token") or "").strip()
-        if not _TOKEN_SHAPE.fullmatch(token):
-            raise ValueError("This is not a Telegram bot token; paste the whole token @BotFather sent.")
         try:
-            me = call(token, "getMe")
-        except TelegramApiError as exc:
-            raise ValueError(f"Could not check the bot token. {exc}") from None
-        username = me.get("username") if isinstance(me, dict) else None
-        if not isinstance(username, str) or not username:
-            raise ValueError("Telegram named no username for this bot.")
+            username, offset = _check_token(token)
+        except ValueError as exc:
+            self._failure = f"{_FAILED} {exc}"
+            raise
+        attempt = _Attempt(token, username, f"{secrets.randbelow(1_000_000):06d}")
+        with self._lock:
+            self._attempt = attempt
+        threading.Thread(
+            target=self._verify, args=(attempt, offset), name="telegram-setup", daemon=True,
+        ).start()
+        logger.info("[telegram] Waiting for the setup code to reach bot @%s.", username)
 
-        if self.load_credential(_K_TOKEN) != token:
-            self.store_credential(_K_CHAT_ID, "")
-            self.store_credential(_K_CHAT_NAME, "")
-        self.store_credential(_K_TOKEN, token)
-        self.store_credential(_K_USERNAME, username)
-        self._connected = True
-        logger.info("[telegram] Connected bot @%s.", username)
-
-        try:
-            self._record_chat(token)
-        except TelegramApiError:
-            logger.warning("[telegram] Could not look for the user's hello yet; the card and the first send look again.")
+    def setup_pending(self) -> bool:
+        return self._attempt is not None
 
     def connect(self) -> bool:
-        """Connected exactly when a bot token is stored. No call to Telegram, so
-        a restart never depends on reaching it. A locked vault raises
-        ``VaultLockedError``, as for every capability."""
-        self._connected = bool(self.load_credential(_K_TOKEN))
+        """Connected exactly when a bot token and its chat are stored. No call
+        to Telegram, so a restart never depends on reaching it. A locked vault
+        raises ``VaultLockedError``, as for every capability."""
+        self._connected = bool(self.load_credential(_K_TOKEN) and self.load_credential(_K_CHAT_ID))
         return self._connected
 
     def disconnect(self) -> None:
-        self._connected = False
-        self.delete_credentials()
+        """End the connection, or the attempt still waiting for its code, and
+        remove everything stored."""
+        with self._lock:
+            self._attempt = None
+            self._failure = None
+            self._connected = False
+            self.delete_credentials()
         logger.info("[telegram] Disconnected and credentials removed.")
 
     def status_note(self) -> str | None:
-        """Whose chat messages go to, or how to give Chalie one, so a stranger
-        who messaged the bot first is plain to see. Until a chat is recorded,
-        each look checks for the user's hello, so pressing Start after setup
-        shows here without waiting for a send."""
-        token = self.load_credential(_K_TOKEN) if self.is_connected() else None
-        if not token:
-            return None
+        """The code to send while an attempt waits, why the last attempt
+        failed, or whose chat messages go to."""
+        attempt = self._attempt
+        if attempt is not None:
+            return (
+                f"Open https://t.me/{attempt.username}, press Start, then send the bot this code: "
+                f"{attempt.code}. Chalie waits up to {_VERIFY_SECONDS // 60} minutes."
+            )
+        if self._failure:
+            return self._failure
+        if self.is_connected():
+            return f"Messages go to {self._chat_name()}."
+        return None
+
+    # ── Setup attempt ────────────────────────────────────────────────
+
+    def _verify(self, attempt: _Attempt, offset: int | None) -> None:
+        """Wait for *attempt*'s code, then connect or fail. Runs on its own
+        thread; an unexpected error still ends the attempt, then propagates."""
         try:
-            chat_id = self._record_chat(token)
-        except TelegramApiError as exc:
-            logger.warning("[telegram] Could not look for the user's hello: %s", exc)
-            chat_id = None
-        if chat_id:
-            return f"Messages go to {self._chat_name()}. Not you? Disconnect Telegram and set it up again."
-        return f"Open {self._bot_link()} and press Start so Chalie knows where to send messages."
+            chat = await_code(attempt.token, attempt.code, offset, _VERIFY_SECONDS, lambda: self._attempt is not attempt)
+            if chat is not None:
+                self._connect_chat(attempt, chat)
+        except (TelegramApiError, TimeoutError, ValueError, VaultLockedError) as exc:
+            self._fail(attempt, str(exc))
+        except Exception:
+            self._fail(attempt, "Something went wrong on Chalie's side.")
+            raise
+
+    def _connect_chat(self, attempt: _Attempt, chat: dict[str, object]) -> None:
+        """Store the connection, then send the confirmation to *chat*, unless
+        a newer attempt or a disconnect ended *attempt* first. A confirmation
+        Telegram refuses fails the attempt, which removes what was stored."""
+        chat_id = cast(int, chat["id"])
+        with self._lock:
+            if self._attempt is not attempt:
+                return
+            self.store_credential(_K_TOKEN, attempt.token)
+            self.store_credential(_K_CHAT_ID, str(chat_id))
+            self.store_credential(_K_CHAT_NAME, _display_name(chat))
+            call(attempt.token, "sendMessage", {"chat_id": chat_id, "text": _CONFIRMATION})
+            self._attempt = None
+            self._connected = True
+        logger.info("[telegram] Connected bot @%s.", attempt.username)
+
+    def _fail(self, attempt: _Attempt, reason: str) -> None:
+        """End *attempt* with *reason* on the card and nothing stored, unless
+        it was already over."""
+        with self._lock:
+            if self._attempt is not attempt:
+                return
+            self._attempt = None
+            self._failure = f"{_FAILED} {reason}"
+            self.delete_credentials()
+        logger.warning("[telegram] Could not connect: %s", reason)
 
     # ── Cognitive pipeline ───────────────────────────────────────────
 
@@ -150,45 +225,16 @@ class TelegramCapability(AbstractCapability):
         return items
 
     def _do_monitor(self) -> None:
-        """Nothing to poll: the bot only sends, and its one chat is recorded at
-        setup, when the card is shown or at the first send."""
+        """Nothing to poll: the bot only sends, and setup reads its own code."""
         return
 
-    # ── The one chat ─────────────────────────────────────────────────
-
-    def _record_chat(self, token: str) -> str | None:
-        """Return the recorded chat id, first recording it if there is none.
-
-        The chat is the first private chat among the bot's pending updates,
-        stored with the person's name. Every update read is confirmed, so
-        Telegram drops it. Raises :class:`TelegramApiError` when Telegram
-        cannot be read."""
-        recorded = self.load_credential(_K_CHAT_ID)
-        if recorded:
-            return recorded
-        updates = call(token, "getUpdates", {"timeout": 0})
-        if not isinstance(updates, list):
-            return None
-        chat = next((c for c in map(_private_chat, updates) if c is not None), None)
-        chat_id: str | None = None
-        if chat is not None:
-            chat_id = str(chat["id"])
-            self.store_credential(_K_CHAT_NAME, _display_name(chat))
-            self.store_credential(_K_CHAT_ID, chat_id)
-            logger.info("[telegram] Recorded the chat to message.")
-        offset = next_offset(updates, None)
-        if offset is not None:
-            call(token, "getUpdates", {"offset": offset, "timeout": 0})
-        return chat_id
+    # ── Sending ──────────────────────────────────────────────────────
 
     def _chat_name(self) -> str:
         return self.load_credential(_K_CHAT_NAME) or _UNNAMED
 
-    def _bot_link(self) -> str:
-        return f"https://t.me/{self.load_credential(_K_USERNAME)}"
-
     def send(self, message: str, should_stop: Callable[[], bool] | None = None) -> dict[str, object]:
-        """Send *message* to the recorded chat, split into several messages
+        """Send *message* to the user's chat, split into several messages
         when too long. A success names who it went to in ``to``.
 
         With *should_stop*, the updates already waiting are dropped first, and
@@ -197,19 +243,14 @@ class TelegramCapability(AbstractCapability):
         said the turn was stopped first. A failure is an ``error`` text that
         says how much was sent."""
         token = self.load_credential(_K_TOKEN)
-        if not token:
+        chat_id = self.load_credential(_K_CHAT_ID)
+        if not (token and chat_id):
             return {"error": "Telegram is not connected. Set it up under Capabilities in the Brain dashboard."}
+        to = self._chat_name()
         pieces = _split(message)
         sent = 0
         offset: int | None = None
         try:
-            chat_id = self._record_chat(token)
-            if chat_id is None:
-                return {"error": (
-                    "Nothing was sent: no one has said hi to the bot yet, so there is no chat to "
-                    f"message. Ask the user to open {self._bot_link()} and press Start, then try again."
-                )}
-            to = self._chat_name()
             if should_stop is not None:
                 offset = drain(token)
             for piece in pieces:

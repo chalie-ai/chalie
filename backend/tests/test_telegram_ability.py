@@ -1,25 +1,29 @@
 """Feature tests: the Telegram tool messages the user, and only the user.
 
-The real setup endpoint checks a bot token with Telegram and records the chat
-of the first private hello; the real dispatcher and policy gate then decide
-whether a turn may send, and the real capability sends to that chat.
+The real setup endpoint checks a bot token with Telegram and starts the setup
+attempt; the user sends the bot the code the card shows, and the private chat
+that sends it becomes the one chat Chalie may message. The real dispatcher and
+policy gate then decide whether a turn may send, and the real capability sends
+to that chat.
 
 Telegram is a real HTTP server on loopback that answers the Bot API methods the
 capability uses the way Telegram does (an unknown token is refused, confirmed
 updates are dropped, a text over 4096 characters is refused) and records every
 request it receives. The capability's API base URL is the one thing redirected,
 so every request in these tests reaches that server and none reaches Telegram.
-The vault, database, setup endpoint, dispatcher and policy rows are the real
-ones.
+The vault, database, setup and status endpoints, dispatcher and policy rows are
+the real ones.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import re
 import socket
 import sqlite3
 import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -31,6 +35,7 @@ from flask.testing import FlaskClient
 
 import capabilities
 import capabilities.telegram_capability.bot_api as bot_api
+import capabilities.telegram_capability.capability as capability_module
 import services.vault_service as vault_module
 from abilities.telegram import TelegramAbility
 from configs.channels.external_agent import EAMPConfig
@@ -61,6 +66,10 @@ _PEOPLE: dict[int, dict[str, object]] = {
 _VAULT_PASSWORD = "test-password"
 # How long the stand-in holds open a read that waits for updates.
 _HELD_READ_SECONDS = 0.2
+# How long a test lets a setup attempt run before failing.
+_SETUP_LIMIT_SECONDS = 5.0
+_FAILED = "Could not connect Telegram, please try again."
+_CODE = re.compile(r"\b\d{6}\b")
 
 # Every first-party package: its loggers are the app's loggers.
 _APP_PACKAGES = sorted(
@@ -112,6 +121,10 @@ class _Telegram:
             self.webhook = self.webhook_while_waiting = False
             self.conflicts_while_waiting = 0
             self._add(token, chat_id, "private", {"text": text})
+
+    def forget_requests(self) -> None:
+        with self._cond:
+            self.requests = []
 
     def calls(self, method: str, token: str | None = None) -> list[dict[str, object]]:
         with self._cond:
@@ -261,11 +274,40 @@ def _save_token(client: FlaskClient, token: str) -> int:
     return client.post("/api/capabilities/setup/telegram", json={"bot_token": token}).status_code
 
 
-def _connected(client: FlaskClient) -> bool:
+def _status(client: FlaskClient) -> dict[str, object]:
     resp = client.get("/api/capabilities/status/telegram")
     assert resp.status_code == 200
-    body = cast("dict[str, dict[str, object]]", resp.get_json())
-    return body["result"]["connected"] is True
+    return cast("dict[str, dict[str, object]]", resp.get_json())["result"]
+
+
+def _connected(client: FlaskClient) -> bool:
+    return _status(client)["connected"] is True
+
+
+def _code(client: FlaskClient) -> str:
+    """The code the waiting setup asks the user to send the bot."""
+    status = _status(client)
+    assert status["pending"] is True, status
+    found = _CODE.search(str(status["status_note"]))
+    assert found is not None, status
+    return found.group()
+
+
+def _settled(client: FlaskClient) -> dict[str, object]:
+    """The status once the setup attempt has ended."""
+    deadline = time.monotonic() + _SETUP_LIMIT_SECONDS
+    while (status := _status(client))["pending"]:
+        assert time.monotonic() < deadline, f"the setup attempt was still waiting after {_SETUP_LIMIT_SECONDS:.0f}s"
+        time.sleep(0.05)
+    return status
+
+
+def _setup_thread_ended() -> None:
+    """Wait for the setup attempt's background reads to finish."""
+    for thread in threading.enumerate():
+        if thread.name == "telegram-setup":
+            thread.join(_SETUP_LIMIT_SECONDS)
+            assert not thread.is_alive(), "the setup attempt kept reading after it ended"
 
 
 def _stored_rows(db: sqlite3.Connection) -> int:
@@ -284,11 +326,24 @@ def _head(result: str) -> str:
     return result.split("\n", 1)[0]
 
 
-def _connect_with_hello(client: FlaskClient, telegram: _Telegram) -> None:
-    """The user's bot is set up after they said hi to it."""
-    telegram.add_bot(_TOKEN, _USERNAME)
-    telegram.message(_TOKEN, _USER_CHAT)
-    assert _save_token(client, _TOKEN) == 204
+def _connect(
+    client: FlaskClient, telegram: _Telegram, token: str = _TOKEN, username: str = _USERNAME, chat: int = _USER_CHAT,
+) -> None:
+    """The user sets up their bot: saves its token, presses Start in it and
+    sends it the code. Then the requests setup made are forgotten, so a test
+    counts only its own."""
+    if token not in telegram.usernames:
+        telegram.add_bot(token, username)
+    assert _save_token(client, token) == 204
+    code = _code(client)
+    telegram.message(token, chat, text="/start")
+    telegram.message(token, chat, text=code)
+    assert _settled(client)["connected"] is True
+    assert [(p["chat_id"], p["text"]) for p in telegram.calls("sendMessage")] == [
+        (chat, capability_module._CONFIRMATION),
+    ]
+    telegram.waiting.clear()
+    telegram.forget_requests()
 
 
 def _sent_to(telegram: _Telegram) -> list[object]:
@@ -312,41 +367,131 @@ def test_a_revoked_token_or_a_pasted_bot_link_is_refused_and_nothing_is_kept(
     assert _save_token(client, _REVOKED_TOKEN) == 422
     assert telegram.calls("getMe", _REVOKED_TOKEN), "the token must have been checked with Telegram"
     assert _stored_rows(db) == 0
-    assert _connected(client) is False
+    status = _status(client)
+    assert status["connected"] is False and status["pending"] is False
+    assert str(status["status_note"]).startswith(_FAILED), status
+    assert _REVOKED_TOKEN.split(":", 1)[1] not in str(status["status_note"])
 
     requests_before = len(telegram.requests)
     assert _save_token(client, f"https://t.me/{_USERNAME}") == 422
     assert len(telegram.requests) == requests_before, "a text that is not a token must never be sent anywhere"
     assert _stored_rows(db) == 0
     assert _connected(client) is False
+    assert _note(client).startswith(_FAILED)
 
 
-def test_saving_the_token_after_the_user_said_hi_records_their_private_chat_and_confirms_every_update(
-    client: FlaskClient, telegram: _Telegram,
+def test_sending_the_code_shown_on_the_card_connects_that_chat_and_confirms_it_there(
+    client: FlaskClient, db: sqlite3.Connection, telegram: _Telegram,
 ) -> None:
     telegram.add_bot(_TOKEN, _USERNAME)
-    telegram.message(_TOKEN, _GROUP_CHAT, chat_type="group", text="hello everyone")
-    telegram.message(_TOKEN, _USER_CHAT, text="hi")
-    telegram.message(_TOKEN, _USER_CHAT, text="are you there?")
-    last_update_id = cast(int, telegram.pending[_TOKEN][-1]["update_id"])
+    # Sent before setup began: never read as the code.
+    telegram.message(_TOKEN, _STRANGER_CHAT, text="hi")
 
     assert _save_token(client, _TOKEN) == 204
-    assert _connected(client) is True
-    offsets = [p["offset"] for p in telegram.calls("getUpdates") if "offset" in p]
-    assert offsets == [last_update_id + 1]
-    assert telegram.pending[_TOKEN] == [], "every update read at setup must be confirmed"
+    code = _code(client)
+    note = _note(client)
+    assert f"https://t.me/{_USERNAME}" in note and code in note, note
+    assert _stored_rows(db) == 0, "nothing is kept until the code arrives"
+    assert _connected(client) is False
+    assert "code=not-connected" in _head(_send("Too early"))
+
+    telegram.message(_TOKEN, _GROUP_CHAT, chat_type="group", text=code)
+    telegram.message(_TOKEN, _USER_CHAT, text="/start")
+    telegram.message(_TOKEN, _USER_CHAT, text=f" {code[:3]} {code[3:]} ")
+    status = _settled(client)
+
+    assert status["connected"] is True, status
+    assert [(p["chat_id"], p["text"]) for p in telegram.calls("sendMessage")] == [
+        (_USER_CHAT, capability_module._CONFIRMATION),
+    ]
     note = _note(client)
     assert f"{_USER_FIRST} {_USER_LAST}" in note and f"@{_USER_HANDLE}" in note, note
+    assert _stored_rows(db) == 3
 
-    # Nothing is pending any more, so the chat reached now is the one setup recorded.
+    telegram.forget_requests()
     assert "status=success" in _head(_send("Setup worked"))
     assert _sent_to(telegram) == [_USER_CHAT]
+
+
+def _assert_failed_with_nothing_kept(client: FlaskClient, db: sqlite3.Connection, telegram: _Telegram) -> str:
+    """The attempt ended without connecting: the card says so, nothing is
+    stored, no confirmation went out and a send says Telegram is not set up.
+    Returns the card's note."""
+    status = _settled(client)
+    assert status["connected"] is False, status
+    note = str(status["status_note"])
+    assert note.startswith(_FAILED), note
+    assert _note(client) == note
+    assert _stored_rows(db) == 0
+    assert telegram.calls("sendMessage") == []
+    assert "code=not-connected" in _head(_send("Is it set up?"))
+    return note
+
+
+def test_a_wrong_code_ends_the_setup_with_nothing_kept(
+    client: FlaskClient, db: sqlite3.Connection, telegram: _Telegram,
+) -> None:
+    telegram.add_bot(_TOKEN, _USERNAME)
+    assert _save_token(client, _TOKEN) == 204
+    wrong = f"{(int(_code(client)) + 1) % 1_000_000:06d}"
+
+    telegram.message(_TOKEN, _USER_CHAT, text=wrong)
+
+    _assert_failed_with_nothing_kept(client, db, telegram)
+
+
+def test_no_code_in_time_ends_the_setup_with_nothing_kept(
+    client: FlaskClient, db: sqlite3.Connection, telegram: _Telegram, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(capability_module, "_VERIFY_SECONDS", 2)
+    telegram.add_bot(_TOKEN, _USERNAME)
+    assert _save_token(client, _TOKEN) == 204
+    assert _status(client)["pending"] is True
+
+    note = _assert_failed_with_nothing_kept(client, db, telegram)
+
+    assert "No code arrived in time" in note, note
+
+
+def test_a_confirmation_telegram_refuses_ends_the_setup_with_nothing_kept_and_no_token_shown(
+    client: FlaskClient, db: sqlite3.Connection, telegram: _Telegram,
+) -> None:
+    telegram.add_bot(_TOKEN, _USERNAME)
+    assert _save_token(client, _TOKEN) == 204
+    telegram.refuse_sends = True
+
+    telegram.message(_TOKEN, _USER_CHAT, text=_code(client))
+    status = _settled(client)
+
+    assert status["connected"] is False, status
+    note = str(status["status_note"])
+    assert note.startswith(_FAILED), note
+    assert _TOKEN.split(":", 1)[1] not in note
+    assert telegram.calls("sendMessage"), "the confirmation must have reached Telegram"
+    assert _stored_rows(db) == 0
+
+
+def test_cancelling_while_the_setup_waits_stops_it_and_a_late_code_connects_nothing(
+    client: FlaskClient, db: sqlite3.Connection, telegram: _Telegram,
+) -> None:
+    telegram.add_bot(_TOKEN, _USERNAME)
+    assert _save_token(client, _TOKEN) == 204
+    code = _code(client)
+
+    assert client.post("/api/capabilities/disconnect/telegram").status_code == 204
+    telegram.message(_TOKEN, _USER_CHAT, text=code)
+    _setup_thread_ended()
+
+    status = _status(client)
+    assert status["connected"] is False and status["pending"] is False, status
+    assert telegram.calls("sendMessage") == []
+    assert _stored_rows(db) == 0
 
 
 def test_a_chat_turn_sends_the_exact_text_to_the_user_without_asking(
     client: FlaskClient, db: sqlite3.Connection, telegram: _Telegram,
 ) -> None:
-    _connect_with_hello(client, telegram)
+    _connect(client, telegram)
     text = "Your backup finished at 03:00 ✅ — 2 files skipped:\n- a.txt\n- b.txt"
 
     result = _send(text)
@@ -364,7 +509,7 @@ def test_a_chat_turn_sends_the_exact_text_to_the_user_without_asking(
 def test_a_5000_character_message_arrives_as_two_messages_that_join_back_exactly(
     client: FlaskClient, telegram: _Telegram,
 ) -> None:
-    _connect_with_hello(client, telegram)
+    _connect(client, telegram)
     text = "".join(f"{i:04d}," for i in range(1000))
     assert len(text) == 5000
 
@@ -377,34 +522,10 @@ def test_a_5000_character_message_arrives_as_two_messages_that_join_back_exactly
     assert _sent_to(telegram) == [_USER_CHAT, _USER_CHAT]
 
 
-def test_before_a_hi_the_card_and_a_send_name_the_bot_link_and_a_later_hi_shows_on_the_card_before_any_send(
-    client: FlaskClient, telegram: _Telegram,
-) -> None:
-    telegram.add_bot(_TOKEN, _USERNAME)
-    assert _save_token(client, _TOKEN) == 204
-    assert f"https://t.me/{_USERNAME}" in _note(client)
-
-    result = _send("Are you there?")
-
-    assert "status=error" in _head(result), result
-    assert f"https://t.me/{_USERNAME}" in result
-    assert telegram.calls("sendMessage") == []
-
-    # The user presses Start after setup: the card names them with no send.
-    telegram.message(_TOKEN, _USER_CHAT)
-    assert f"{_USER_FIRST} {_USER_LAST}" in _note(client)
-    assert telegram.calls("sendMessage") == []
-    assert telegram.pending[_TOKEN] == [], "the hello read for the card must be confirmed"
-
-    assert "status=success" in _head(_send("Now you are"))
-    assert _sent_to(telegram) == [_USER_CHAT]
-    assert f"{_USER_FIRST} {_USER_LAST}" in _note(client)
-
-
 def test_a_stranger_messaging_the_bot_later_does_not_take_over_the_chat(
     client: FlaskClient, telegram: _Telegram,
 ) -> None:
-    _connect_with_hello(client, telegram)
+    _connect(client, telegram)
     telegram.message(_TOKEN, _STRANGER_CHAT, text="hi, who is this?")
 
     assert "status=success" in _head(_send("Your report is ready"))
@@ -415,7 +536,7 @@ def test_a_stranger_messaging_the_bot_later_does_not_take_over_the_chat(
 def test_an_outside_agent_or_a_background_process_cannot_send(
     client: FlaskClient, db: sqlite3.Connection, telegram: _Telegram,
 ) -> None:
-    _connect_with_hello(client, telegram)
+    _connect(client, telegram)
     assert _connected(client) is True
 
     for config in (EAMPConfig("reviewer", "sample-project", False), SkillSuggestionConfig()):
@@ -430,25 +551,25 @@ def test_an_outside_agent_or_a_background_process_cannot_send(
     ]
 
 
-def test_a_new_token_forgets_the_old_chat_but_saving_the_same_token_keeps_it(
-    client: FlaskClient, telegram: _Telegram,
+def test_setting_up_again_forgets_the_old_chat_at_once_and_connects_whoever_sends_the_new_code(
+    client: FlaskClient, db: sqlite3.Connection, telegram: _Telegram,
 ) -> None:
-    _connect_with_hello(client, telegram)
+    _connect(client, telegram)
 
-    # Saving the same token again, with a stranger's message waiting, keeps the user's chat.
-    telegram.message(_TOKEN, _STRANGER_CHAT)
-    assert _save_token(client, _TOKEN) == 204
-    assert "status=success" in _head(_send("Still you"))
-    assert _sent_to(telegram) == [_USER_CHAT]
-
-    # A different bot has never been said hi to: nothing goes to the old bot's chat.
     telegram.add_bot(_NEW_TOKEN, _NEW_USERNAME)
     assert _save_token(client, _NEW_TOKEN) == 204
-    result = _send("Through the new bot")
+    code = _code(client)
+    assert _stored_rows(db) == 0, "the old connection is removed as the new attempt starts"
+    assert "code=not-connected" in _head(_send("Between bots"))
 
-    assert "status=error" in _head(result), result
-    assert f"https://t.me/{_NEW_USERNAME}" in result
-    assert telegram.calls("sendMessage", _NEW_TOKEN) == []
+    telegram.message(_NEW_TOKEN, _STRANGER_CHAT, text=code)
+    assert _settled(client)["connected"] is True
+    telegram.forget_requests()
+
+    assert "status=success" in _head(_send("Through the new bot"))
+    assert telegram.calls("sendMessage", _TOKEN) == []
+    assert [p["chat_id"] for p in telegram.calls("sendMessage", _NEW_TOKEN)] == [_STRANGER_CHAT]
+    assert "Mallory" in _note(client)
 
 
 def test_a_refused_or_unreachable_send_never_shows_the_token(
@@ -458,7 +579,7 @@ def test_a_refused_or_unreachable_send_never_shows_the_token(
     for package in _APP_PACKAGES:
         caplog.set_level(logging.DEBUG, logger=package)
     secret = _TOKEN.split(":", 1)[1]
-    _connect_with_hello(client, telegram)
+    _connect(client, telegram)
 
     telegram.refuse_sends = True
     refused = _send("Telegram will refuse this one")
@@ -484,7 +605,7 @@ def test_sending_without_telegram_set_up_or_after_disconnecting_says_so_with_the
 ) -> None:
     never_set_up = _send("Is anyone there?")
 
-    _connect_with_hello(client, telegram)
+    _connect(client, telegram)
     assert client.post("/api/capabilities/disconnect/telegram").status_code == 204
     after_disconnect = _send("Is anyone still there?")
 

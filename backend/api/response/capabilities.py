@@ -43,8 +43,11 @@ class CapabilityDetailResponse(Response):
 
 
 class CapabilityStatusResponse(Response):
-    """Connectivity status for a capability."""
+    """Connectivity status for a capability; ``pending`` while its setup is
+    still being confirmed, with ``status_note`` saying what it waits for."""
 
     id: str
     connected: bool
+    pending: bool
+    status_note: str | None
     last_sync_at: str | None

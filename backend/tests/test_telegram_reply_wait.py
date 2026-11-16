@@ -37,7 +37,7 @@ from tests.test_telegram_ability import (
     _USER_HANDLE,
     _USER_LAST,
     _bot_api,
-    _connect_with_hello,
+    _connect,
     _head,
     _open_vault_and_own_registry,
     _sent_to,
@@ -115,7 +115,7 @@ def _names_the_user(result: str) -> bool:
 def test_a_message_that_does_not_ask_for_a_reply_never_reads_what_comes_back(
     client: FlaskClient, telegram: _Telegram,
 ) -> None:
-    _connect_with_hello(client, telegram)
+    _connect(client, telegram)
 
     plain_sends: list[dict[str, object]] = [
         {"message": "Your backup finished"},
@@ -135,7 +135,7 @@ def test_a_message_that_does_not_ask_for_a_reply_never_reads_what_comes_back(
 def test_the_reply_is_the_users_next_message_never_an_earlier_one_or_a_strangers(
     client: FlaskClient, telegram: _Telegram,
 ) -> None:
-    _connect_with_hello(client, telegram)
+    _connect(client, telegram)
     telegram.message(_TOKEN, _USER_CHAT, text="Remind me about the dentist")
     telegram.arrive_while_waiting = [
         (_STRANGER_CHAT, {"text": "Who is this?"}),
@@ -155,7 +155,7 @@ def test_the_reply_is_the_users_next_message_never_an_earlier_one_or_a_strangers
 def test_a_photo_reply_without_a_caption_is_named_and_a_caption_is_the_reply(
     client: FlaskClient, telegram: _Telegram,
 ) -> None:
-    _connect_with_hello(client, telegram)
+    _connect(client, telegram)
 
     telegram.arrive_while_waiting = [(_USER_CHAT, {"photo": [_PHOTO]})]
     bare = _Turn(_ask("Send me a picture of the meter")).outcome(telegram)
@@ -172,7 +172,7 @@ def test_a_photo_reply_without_a_caption_is_named_and_a_caption_is_the_reply(
 def test_stopping_the_turn_ends_the_wait_without_a_reply(
     client: FlaskClient, telegram: _Telegram,
 ) -> None:
-    _connect_with_hello(client, telegram)
+    _connect(client, telegram)
 
     turn = _Turn(_ask("Are you home yet?"))
     assert telegram.waiting.wait(_WAIT_LIMIT_SECONDS), "the call never started waiting for the reply"
@@ -191,7 +191,7 @@ def test_stopping_the_turn_ends_the_wait_without_a_reply(
 def test_another_program_reading_the_bot_is_waited_out_and_the_reply_still_arrives(
     client: FlaskClient, telegram: _Telegram,
 ) -> None:
-    _connect_with_hello(client, telegram)
+    _connect(client, telegram)
     telegram.conflicts_while_waiting = 1
     telegram.arrive_while_waiting = [(_USER_CHAT, {"text": "Tuesday works"})]
 
@@ -206,7 +206,7 @@ def test_another_program_reading_the_bot_is_waited_out_and_the_reply_still_arriv
 def test_a_webhook_ends_the_wait_naming_who_was_messaged_and_stops_the_next_ask_before_it_sends(
     client: FlaskClient, telegram: _Telegram,
 ) -> None:
-    _connect_with_hello(client, telegram)
+    _connect(client, telegram)
     telegram.webhook_while_waiting = True
 
     mid_wait = _Turn(_ask("Which day suits you?")).outcome(telegram)
@@ -235,7 +235,7 @@ def test_neither_the_reply_nor_the_token_reaches_the_logs(
         caplog.set_level(logging.DEBUG, logger=package)
     secret = _TOKEN.split(":", 1)[1]
     reply = "The spare key is under the blue flowerpot"
-    _connect_with_hello(client, telegram)
+    _connect(client, telegram)
     telegram.conflicts_while_waiting = 1
     telegram.arrive_while_waiting = [(_USER_CHAT, {"text": reply})]
 

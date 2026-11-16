@@ -1,4 +1,5 @@
-"""Waiting for the user's reply on Telegram, after a send that asks for one.
+"""Waiting for what the user sends the bot on Telegram: the code that connects
+it at setup, and the reply to a send that asks for one.
 
 The bot's updates are read with ``getUpdates`` and confirmed by offset, so
 Telegram drops each one once read. Only a message in the recorded chat counts
@@ -10,6 +11,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
+from typing import cast
 
 from capabilities.telegram_capability.bot_api import TIMEOUT, Outcome, post
 from exceptions import TelegramApiError
@@ -19,6 +21,9 @@ logger = logging.getLogger(__name__)
 # While waiting for a reply, Telegram holds each read open this long when
 # nothing has arrived, so a stopped turn is seen within one read.
 _POLL_SECONDS = 10
+# While waiting for the setup code, each read is held open at most this long,
+# so the code is seen as soon as it arrives and the time limit is checked often.
+_CHECK_SECONDS = 15
 # Pauses before reading again after a read failed: another program reading
 # this bot's updates, or Telegram being unreachable or failing on its side.
 _CONFLICT_PAUSE = 1
@@ -69,6 +74,15 @@ def _reply_text(update: object, chat_id: int) -> str | None:
             return said
     kind = next((name for key, name in _MESSAGE_KINDS if key in message), "a message")
     return f"[{kind}, with no text]"
+
+
+def _private_message(update: object) -> dict[str, object] | None:
+    """The message in *update* when it came from a private chat."""
+    message = update.get("message") if isinstance(update, dict) else None
+    chat = message.get("chat") if isinstance(message, dict) else None
+    if isinstance(chat, dict) and chat.get("type") == "private" and isinstance(chat.get("id"), int):
+        return cast("dict[str, object]", message)
+    return None
 
 
 def _updates_payload(offset: int | None, hold: int) -> dict[str, str | int]:
@@ -145,5 +159,41 @@ def await_reply(token: str, chat_id: int, offset: int | None, should_stop: Calla
             reply = _reply_text(update, chat_id)
             if reply is not None:
                 return reply
+        offset = next_offset(updates, offset)
+    return None
+
+
+def await_code(
+    token: str, code: str, offset: int | None, seconds: int, ended: Callable[[], bool],
+) -> dict[str, object] | None:
+    """Read the bot's updates from *offset* until a private chat sends *code*,
+    within *seconds*, and return that chat. The bare ``/start`` the bot's Start
+    button sends and anything outside a private chat are skipped; spaces in
+    the code are ignored. ``None`` once *ended* says the setup attempt is over,
+    which is checked before every read.
+
+    Raises :class:`TimeoutError` when no code arrived in time,
+    :class:`ValueError` when a private chat sent anything else first, and
+    :class:`TelegramApiError` when the updates cannot be read."""
+    deadline = time.monotonic() + seconds
+    while not ended():
+        hold = min(_CHECK_SECONDS, int(deadline - time.monotonic()))
+        if hold <= 0:
+            raise TimeoutError("No code arrived in time.")
+        outcome = post(token, "getUpdates", _updates_payload(offset, hold), timeout=TIMEOUT + hold)
+        if outcome.error:
+            raise TelegramApiError(_WEBHOOK_SET if _webhook_set(outcome) else outcome.error)
+        updates = outcome.result if isinstance(outcome.result, list) else []
+        for update in updates:
+            message = _private_message(update)
+            if message is None:
+                continue
+            text = message.get("text")
+            said = "".join(text.split()) if isinstance(text, str) else ""
+            if said == "/start":
+                continue
+            if said != code:
+                raise ValueError("The bot was sent something other than the code.")
+            return cast("dict[str, object]", message["chat"])
         offset = next_offset(updates, offset)
     return None

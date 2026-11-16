@@ -998,6 +998,7 @@ input[type='checkbox'] {
 
 .provider-wizard { width: 100%; }
 .wizard-hint { font-size: var(--fs-body); color: var(--muted); margin: 0 0 18px; line-height: 1.5; }
+.wizard-error { color: var(--deny-text); }
 
 .provider-grid {
   display: grid;
