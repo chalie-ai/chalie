@@ -31,7 +31,9 @@ export interface Capability {
   id: string;
   name: string;
   version?: string | null;
+  description?: string | null;
   connected?: boolean;
+  status_note?: string | null;
   status?: string | null;
   platform?: string | null;
   last_sync_at?: string | null;

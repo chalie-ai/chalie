@@ -274,6 +274,18 @@ class NewsFetchError(ChalieException):
     """
 
 
+# ── Telegram layer ────────────────────────────────────────────────────────────
+
+
+class TelegramApiError(ChalieException):
+    """A Telegram Bot API call failed: unreachable, an unreadable reply, or a
+    refusal.
+
+    The bot token is part of every Bot API URL, so the message is built to
+    never contain it — this exception logs itself on construction.
+    """
+
+
 # ── Vault layer ───────────────────────────────────────────────────────────────
 
 

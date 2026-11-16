@@ -161,6 +161,7 @@ class Keys(StrEnum):
     url = "url"
     use_for = "use_for"
     value_ = "value"  # trailing underscore: bare ``value`` is reserved by Enum
+    wait_for_reply = "wait_for_reply"
     weekday = "weekday"
     wlan_id = "wlan_id"
 

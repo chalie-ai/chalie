@@ -1,5 +1,5 @@
 """CapabilityParamsBag — the shared input bag of the ``CapabilityAbility``
-family (``calendar``, ``email``, ``home``, ``ubiquiti``).
+family (``calendar``, ``email``, ``home``, ``telegram``, ``ubiquiti``).
 
 A capability tool's own typed input is just ``action``; every other parameter
 belongs to the connected capability's handler, whose per-action schema is owned

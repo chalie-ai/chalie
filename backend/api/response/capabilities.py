@@ -23,7 +23,9 @@ class CapabilitySummaryResponse(Response):
     id: str
     name: str
     version: str
+    description: str | None
     connected: bool
+    status_note: str | None
     last_sync_at: str | None
     providers: list[str]
     fields: list[dict[str, object]] | None

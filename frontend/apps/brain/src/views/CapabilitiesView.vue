@@ -110,6 +110,7 @@ async function disconnect(c: Capability): Promise<void> {
         </button>
         <h3>{{ formCap.name }} {{ formConnected ? 'Settings' : 'Setup' }}</h3>
       </div>
+      <p v-if="formCap.description" class="wizard-hint">{{ formCap.description }}</p>
       <form @submit.prevent="submit">
         <template v-for="f in formFields" :key="f.name">
           <div v-if="f.type === 'checkbox'" class="form-group">
@@ -191,6 +192,7 @@ async function disconnect(c: Capability): Promise<void> {
       </div>
       <div class="cap-meta">{{ c.platform || '' }}</div>
       <div v-if="c.version" class="cap-version">{{ c.version }}</div>
+      <div v-if="c.status_note" class="cap-meta">{{ c.status_note }}</div>
       <div class="cap-actions">
         <template v-if="isConnected(c)">
           <button class="btn btn-sm" @click="openForm(c)">Edit</button>

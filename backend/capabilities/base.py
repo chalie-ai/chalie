@@ -197,6 +197,11 @@ class AbstractCapability(ABC):
                 exc_info=True,
             )
 
+    def status_note(self) -> str | None:
+        """One plain line about this capability's state, shown on its card in
+        the Brain dashboard. ``None`` when there is nothing to add."""
+        return None
+
     def is_connected(self) -> bool:
         """Return the current in-memory connection state.
 

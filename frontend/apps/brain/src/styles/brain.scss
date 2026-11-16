@@ -1181,7 +1181,7 @@ input[type='checkbox'] {
 
 .cap-header { display: flex; align-items: center; justify-content: space-between; width: 100%; }
 .cap-name { font-weight: 500; font-size: var(--fs-body); }
-.cap-meta { font-size: var(--fs-body); color: var(--muted); }
+.cap-meta { font-size: var(--fs-body); color: var(--muted); overflow-wrap: anywhere; }
 .cap-version { font-size: var(--fs-body); color: var(--muted); }
 .cap-actions { margin-top: 8px; }
 
