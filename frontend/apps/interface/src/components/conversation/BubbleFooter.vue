@@ -11,7 +11,7 @@ import { Copy, Reply, Volume2 } from '@lucide/vue';
 const props = withDefaults(defineProps<{
   message: ConversationMessage;
   canReply?: boolean;
-  threadPill?: { status: 'working' | 'done' | 'thread' | 'idle'; label: string } | null;
+  threadPill?: { status: 'thread' | 'idle'; label: string } | null;
   /** The exchange's wall-clock duration in ms, read next to the timestamp. */
   durationMs?: number | null;
 }>(), {

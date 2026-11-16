@@ -73,6 +73,9 @@ function block(turnId: number, messages: ConversationMessage[], working: boolean
 
 /** A stored step of turn 41: no text, only its calls. */
 const step = (id: number, calls: ToolCallChip[]) => row(TURN, id, 'assistant', '', { tool_calls: calls });
+/** A step that said a line, so it keeps a block of its own: steps that said
+ *  nothing, one after another, read as one block. */
+const saidStep = (id: number, calls: ToolCallChip[]) => row(TURN, id, 'assistant', `<p>Step ${id}.</p>`, { tool_calls: calls });
 
 let mounted: VueWrapper[] = [];
 
@@ -125,45 +128,45 @@ describe('a step reads as what it said, then what its calls did', () => {
   it('names each step\'s calls by kind, counting the distinct things each kind acted on, or its calls when a kind names none', () => {
     const wrapper = mountTurn(block(TURN, [
       row(TURN, 409, 'user', 'Sort out the project notes and the shopping list'),
-      step(410, [
+      saidStep(410, [
         chip(4100, 'write_file', { path: 'notes/a.md' }, 'Writing notes/a.md'),
         chip(4101, 'write_file', { path: 'notes/b.md' }, 'Writing notes/b.md'),
         chip(4102, 'read', { source: 'notes/c.md' }, 'Reading notes/c.md'),
       ]),
-      step(411, [
+      saidStep(411, [
         chip(4110, 'write_file', { path: 'todo.md' }, 'Writing todo.md'),
         chip(4111, 'write_file', { path: 'todo.md' }, 'Fixing a typo in todo.md'),
       ]),
-      step(412, [
+      saidStep(412, [
         chip(4120, 'bash', { command: 'ls notes' }, 'Listing notes'),
         chip(4121, 'bash', { command: 'ls notes' }, 'Listing notes again'),
         chip(4122, 'bash', { command: 'ls notes' }, 'Listing notes once more'),
       ]),
-      step(413, [
+      saidStep(413, [
         chip(4130, 'browser', { action: 'open', url: 'https://shop.example/a' }, 'Opening the shop'),
         chip(4131, 'browser', { action: 'open', url: 'https://shop.example/b' }, 'Opening the basket'),
         chip(4132, 'browser', { action: 'click', target: '#checkout' }, 'Clicking checkout'),
       ]),
-      step(414, [
+      saidStep(414, [
         chip(4140, 'list', { action: 'add', list: 'groceries', items: ['milk', 'eggs'] }, 'Adding milk and eggs'),
         chip(4141, 'list', { action: 'add', list: 'groceries', items: ['eggs', 'bread'] }, 'Adding eggs and bread'),
       ]),
-      step(415, [
+      saidStep(415, [
         chip(4150, 'bash', { command: 'make' }, 'Building'),
         chip(4151, 'write_file', { path: 'out.txt' }, 'Writing out.txt'),
         chip(4152, 'read', { source: 'in.txt' }, 'Reading in.txt'),
       ]),
-      step(416, [
+      saidStep(416, [
         chip(4160, 'bash', { command: 'make test' }, 'Testing'),
         chip(4161, 'write_file', { path: 'report.txt' }, 'Writing report.txt'),
         chip(4162, 'read', { source: 'report.txt' }, 'Reading report.txt'),
         chip(4163, 'web_fetch', { url: 'https://docs.example' }, 'Fetching the docs'),
       ]),
-      step(417, [
+      saidStep(417, [
         chip(4170, '_mcp_github_search_issues', { query: 'crash' }, 'Searching issues'),
         chip(4171, '_mcp_notion_get_page', { page: 'Roadmap' }, 'Reading the roadmap page'),
       ]),
-      step(418, [chip(4180, 'frobnicate', {}, '')]),
+      saidStep(418, [chip(4180, 'frobnicate', {}, '')]),
       row(TURN, 4190, 'assistant', 'All sorted.', { settled: true }),
     ], false));
 
@@ -184,11 +187,11 @@ describe('a step reads as what it said, then what its calls did', () => {
   it('counts a failed call on the folded head, where it reads without opening the list; a step with none says nothing of failure', () => {
     const wrapper = mountTurn(block(TURN, [
       row(TURN, 419, 'user', 'Compare the two leases'),
-      step(420, [
+      saidStep(420, [
         chip(4200, 'read', { source: 'lease-2025.pdf' }, 'Reading the 2025 lease'),
         chip(4201, 'read', { source: 'lease-2026.pdf' }, 'Reading the 2026 lease', 'error'),
       ]),
-      step(421, [chip(4210, 'read', { source: 'lease-2024.pdf' }, 'Reading the 2024 lease')]),
+      saidStep(421, [chip(4210, 'read', { source: 'lease-2024.pdf' }, 'Reading the 2024 lease')]),
       row(TURN, 422, 'assistant', 'The 2026 lease would not open.', { settled: true }),
     ], false));
 
@@ -386,8 +389,9 @@ describe('the running step, fed by live frames', () => {
     expect(callsBody(live()).hasAttribute('inert')).toBe(false);
     expect(callRows(live())).toEqual(['Reading the lease', 'Fetching the deposit rules']);
 
-    // Both finish, and the refetch returns the row that made them: the calls
-    // leave the running block for that row's own block, a new one.
+    // Both finish, and the refetch returns the row that made them. That row
+    // said nothing, so while the turn works it stands in the running block:
+    // the same calls, the list still open, and no second block.
     await w.send(toolFrame(9201, 'read', 'done', 'Reading the lease', { source: 'lease.pdf' }));
     await w.send(toolFrame(9202, 'web_fetch', 'done', 'Fetching the deposit rules', { url: 'https://rules.example/deposit' }));
     const stepRow = row(LIVE_TURN, 91, 'assistant', '', {
@@ -399,21 +403,23 @@ describe('the running step, fed by live frames', () => {
     backend.user = block(LIVE_TURN, [QUESTION, stepRow], true);
     await w.send({ status: 'updated', turn_id: LIVE_TURN, type: 'user' });
 
-    expect(live().querySelector('.step__summary')).toBeNull();
-    const stored = () => w.el.querySelector('.step:not(.activity)')!;
-    expect(summaryToggle(stored()).getAttribute('aria-expanded')).toBe('true');
-    expect(callsBody(stored()).hasAttribute('inert')).toBe(false);
-    expect(callRows(stored())).toEqual(['Reading the lease', 'Fetching the deposit rules']);
+    expect(w.el.querySelector('.step:not(.activity)')).toBeNull();
+    expect(summaryToggle(live()).getAttribute('aria-expanded')).toBe('true');
+    expect(callsBody(live()).hasAttribute('inert')).toBe(false);
+    expect(callRows(live())).toEqual(['Reading the lease', 'Fetching the deposit rules']);
 
-    // The turn settles with its answer; the step's list is still open.
+    // The turn settles with its answer: the row's own block stands in place
+    // of the running one, its list still open.
     backend.user = block(LIVE_TURN, [
       QUESTION, stepRow, row(LIVE_TURN, 92, 'assistant', 'The deposit clause is within the rules.', { settled: true }),
     ], false);
     await w.send({ state: 'completed', turn_id: LIVE_TURN, started_at: STARTED_AT, type: 'user' });
 
+    const stored = () => w.el.querySelector('.step:not(.activity)')!;
     expect(w.el.querySelector('.activity')).toBeNull();
     expect(w.el.textContent).toContain('The deposit clause is within the rules.');
     expect(summaryToggle(stored()).getAttribute('aria-expanded')).toBe('true');
     expect(callsBody(stored()).hasAttribute('inert')).toBe(false);
+    expect(callRows(stored())).toEqual(['Reading the lease', 'Fetching the deposit rules']);
   });
 });

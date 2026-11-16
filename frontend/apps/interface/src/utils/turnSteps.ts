@@ -1,7 +1,8 @@
 /**
  * turnSteps — what a step's work says. A step is one row under what it said:
  * its thinking, folded to "Thought for 9s", then what its tool calls did,
- * "Wrote 2 files and read 1 file", folded over one row per call.
+ * "Wrote 2 files and read 1 file", folded over one row per call. A run of
+ * steps that said nothing reads as one such row (see `mergeWork`).
  */
 import { reactive } from 'vue';
 import type { ConversationMessage, ToolCallChip } from '../api/conversation';
@@ -44,6 +45,21 @@ export function visibleCalls(calls: readonly StepCall[] | null | undefined): Ste
  *  the catalog does not hide. A step that only updated the plan has none. */
 export function showsWork(work: StepWork): boolean {
   return Boolean(thought(work.thinking) || visibleCalls(work.tool_calls).length);
+}
+
+/** Steps that said nothing, as one step's work: the time they spent thinking,
+ *  summed, with what they thought left out, and every call they made, in the
+ *  order they ran. */
+export function mergeWork<C extends StepCall>(
+  steps: readonly { thinking?: StepWork['thinking']; tool_calls?: readonly C[] | null }[],
+): { thinking: StepWork['thinking']; tool_calls: C[] } {
+  const thoughts = steps.flatMap((s) => (s.thinking ? [s.thinking] : []));
+  const sum = (pick: (t: NonNullable<StepWork['thinking']>) => number): number =>
+    thoughts.reduce((total, t) => total + pick(t), 0);
+  return {
+    thinking: thoughts.length ? { traces: [], duration_ms: sum((t) => t.duration_ms), tokens: sum((t) => t.tokens) } : null,
+    tool_calls: steps.flatMap((s) => s.tool_calls ?? []),
+  };
 }
 
 export interface CallsSummary {

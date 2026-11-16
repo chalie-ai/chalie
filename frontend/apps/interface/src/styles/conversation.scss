@@ -718,17 +718,6 @@
   flex-shrink: 0;
 }
 
-// Working and done match the thread-activity dots: working pulses pink, done is
-// a steady marker.
-.thread-pill--working .thread-pill__dot {
-  background: var(--pink);
-  animation: working 1.4s ease-in-out infinite;
-}
-
-.thread-pill--done .thread-pill__dot {
-  background: var(--text);
-}
-
 .thread-pill--thread .thread-pill__dot {
   background: var(--pink);
 }
@@ -736,4 +725,19 @@
 .thread-pill--idle .thread-pill__dot {
   background: transparent;
   border: 1.5px solid var(--control);
+}
+
+// Working and done come from the turn's own root, which turnDom stamps and
+// toggles in place, so a settled turn needs no listener to follow them. They
+// match the thread-activity dots: done is a steady marker, working pulses pink
+// and wins over done.
+.turn-view[data-done] .thread-pill__dot {
+  background: var(--text);
+  border: 0;
+}
+
+.turn-view[data-working] .thread-pill__dot {
+  background: var(--pink);
+  border: 0;
+  animation: working 1.4s ease-in-out infinite;
 }

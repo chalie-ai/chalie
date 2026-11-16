@@ -4,7 +4,8 @@
  *
  * Opening the chat loads the 10 most recent turns, lands at the bottom, and
  * reaching the top loads the next 10 older ones, keeping the reader's place,
- * until none are left.
+ * until none are left. A turn on the page stays on it: new turns are added
+ * and turns refresh, but none is ever taken off, however many there are.
  *
  * Real throughout: ConversationFeed, the SpineTurn it registers as its
  * surface, the turnDom surface registry, the real Pinia session store, the
@@ -21,8 +22,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount } from '@vue/test-utils';
 import type { VueWrapper } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
+import { ConfigType } from '@chalie/shared';
 import ConversationFeed from './ConversationFeed.vue';
 import type { ConversationTurnBlock } from '../../api/conversation';
+import { upsertTurnToSurfaces } from '../../utils/turnDom';
 
 const VIEWPORT = 800;
 /** Height above the first turn (history spinner / end-of-history pill). */
@@ -238,6 +241,28 @@ describe('reaching the top', () => {
     await readerReachesTop();
 
     expect(lists).toHaveLength(3);
+  });
+
+  it('keeps every turn it has loaded on the page when the reader goes back down and a new turn arrives', async () => {
+    total = 60;
+    const feed = await openChat();
+    while (!feed.text().includes('End of thread history')) await readerReachesTop();
+    expect(renderedTurns()).toHaveLength(60);
+
+    // Each turn sits where the modelled page puts it, so the turns the reader
+    // left behind are off the top of the screen once they are back at the bottom.
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const hosts = [...document.querySelectorAll('.conversation-spine__turns > [data-version]')];
+      const top = HEAD_PX + Math.max(0, hosts.indexOf(this)) * turnPx - scrollY;
+      return { top, bottom: top + turnPx, left: 0, right: 0, width: 0, height: turnPx, x: 0, y: top, toJSON: () => ({}) } as DOMRect;
+    });
+    moveTo(maxScroll());
+    await settle();
+    upsertTurnToSurfaces(block(61), ConfigType.USER);
+    await settle();
+
+    expect(renderedTurns()).toEqual(Array.from({ length: 61 }, (_, i) => i + 1));
+    expect(feed.text()).toContain('End of thread history');
   });
 
   it('does not load anything while the reader is away from the top', async () => {

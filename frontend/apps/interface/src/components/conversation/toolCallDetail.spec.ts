@@ -410,7 +410,7 @@ describe('opening and reading a call', () => {
     expect(backend.reads).toEqual([6501, 6502]);
   });
 
-  it('a running call opened while it runs keeps what it read on screen while its settled read loads, even when its step settles into its stored row meanwhile, and stays open there; the settled call is read once more, and no more, and shows when that read lands', async () => {
+  it('a running call opened while it runs keeps what it read on screen while its settled read loads, even when the refetch returns the row that made it meanwhile, and stays open; the settled call is read once more, and no more, and shows when that read lands', async () => {
     const w = await makeWorld();
     await w.working();
     const params = { action: 'open', url: 'https://ferries.example/gozo' };
@@ -440,13 +440,14 @@ describe('opening and reading a call', () => {
     expect(heading(settling)).toBe('open');
     expect(fields(settling)).toEqual([['Url', 'https://ferries.example/gozo']]);
 
-    // Before that read lands, the refetch returns the row that made the call:
-    // the call leaves the running block for that row's own block, still open,
-    // still showing what it read, and waits on the same read.
+    // Before that read lands, the refetch returns the row that made the call.
+    // That row said nothing, so while the turn works its call stays in the
+    // running block: still open, still showing what it read, and waiting on
+    // the same read.
     backend.thread = block([QUESTION, row(611, 'assistant', '', { tool_calls: serve(done) })], true);
     await w.send({ status: 'updated', turn_id: TURN, type: 'user' });
-    expect(w.el.querySelector('.activity .call')).toBeNull();
-    const stored = rowNamed(w.el.querySelector('.step:not(.activity)')!, 'Opening the timetable');
+    expect(w.el.querySelector('.step:not(.activity)')).toBeNull();
+    const stored = rowNamed(w.el.querySelector('.activity')!, 'Opening the timetable');
     expect(stored.getAttribute('aria-expanded')).toBe('true');
     const moved = detailOf(stored);
     expect(moved.textContent).not.toContain('Loading…');
