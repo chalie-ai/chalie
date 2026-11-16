@@ -9,9 +9,7 @@ Messages is driven through ``osascript``. A stand-in ``osascript`` sits first
 on PATH: it records the arguments and the script it is given, then answers the
 way the test sets it up (the script's result line, an error on stderr, an exit
 code, or a delay). The real ``osascript`` never runs, so no message is sent.
-The folder voice notes are copied into for Messages is redirected into
-pytest's ``tmp_path``, so no test writes into the real Messages folder. The
-vault, database, setup, status and disconnect endpoints, dispatcher and policy
+The vault, database, setup, status and disconnect endpoints, dispatcher and policy
 rows are the real ones.
 """
 
@@ -19,7 +17,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
 import sqlite3
 import sys
@@ -64,11 +61,6 @@ _NOT_AUTHORIZED = "CHALIE_IMESSAGE\tfailed\tbefore_send\t-1743\tNot authorized t
 _NO_BUDDY = 'CHALIE_IMESSAGE\tfailed\tbefore_send\t-1728\tMessages got an error: Can’t get buddy id "x".\n'
 _SEND_BROKE = "CHALIE_IMESSAGE\tfailed\tafter_send\t-1708\tMessages got an error: The connection was lost.\n"
 _VOICE_NOTE_BROKE = "CHALIE_IMESSAGE\tfailed\tafter_text\t-1708\tMessages got an error: The connection was lost.\n"
-_FULL_DISK_ACCESS = (
-    "Chalie cannot put the voice note where Messages can read it. Allow the app that runs "
-    "Chalie (Terminal, or the Chalie app) Full Disk Access in System Settings → Privacy & "
-    "Security → Full Disk Access. Nothing was sent."
-)
 _CLIP_BYTES = b"ID3\x04\x00 a spoken clip"
 
 _STAND_IN = """\
@@ -126,15 +118,6 @@ def osascript(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Osascript:
     monkeypatch.setenv("PATH", f"{folder}{os.pathsep}{os.environ.get('PATH', '')}")
     assert shutil.which("osascript") == str(stand_in), "the stand-in must be the osascript that runs"
     return _Osascript(folder)
-
-
-@pytest.fixture(autouse=True)
-def staging(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """The folder voice notes are copied into for Messages, redirected so no
-    test writes into the real Messages folder."""
-    root = tmp_path / "Messages" / "Attachments" / "Chalie"
-    monkeypatch.setattr(capability_module, "_STAGING_ROOT", root)
-    return root
 
 
 @pytest.fixture()
@@ -413,8 +396,8 @@ def test_an_outside_agent_or_a_background_process_cannot_send(
 
 
 @_on_a_mac
-def test_a_voice_note_is_copied_where_messages_can_read_it_and_sent_after_the_text(
-    client: FlaskClient, osascript: _Osascript, staging: Path, clip: Path,
+def test_a_voice_note_is_handed_to_messages_at_its_own_path_after_the_text(
+    client: FlaskClient, osascript: _Osascript, clip: Path,
 ) -> None:
     _connect(client, osascript)
 
@@ -429,14 +412,7 @@ def test_a_voice_note_is_copied_where_messages_can_read_it_and_sent_after_the_te
     assert [_argv(c)[:5] for c in calls] == [["-l", "AppleScript", "-", _HANDLE, text] for text in (
         "Here is the summary.", "", "",
     )], "a voice note alone, or with a blank text, sends no text"
-    copies = [Path(_argv(c)[5]) for c in calls]
-    for copy in copies:
-        assert copy.parent.parent == staging, copy
-        assert re.fullmatch(r"[0-9a-f]{32}", copy.parent.name), copy
-        assert copy.name == clip.name
-        assert copy.read_bytes() == _CLIP_BYTES, "Messages is handed a copy of the clip, byte for byte"
-    assert len({c.parent for c in copies}) == 3, "every send gets a folder of its own"
-    assert clip.read_bytes() == _CLIP_BYTES, "the clip itself is left where it was"
+    assert [_argv(c)[5] for c in calls] == [str(clip)] * 3, "Messages is handed the clip where it is"
     script = str(calls[0]["stdin"])
     assert str(clip) not in script and "POSIX file theFilePath as alias" in script
     assert script.index("send theMessage to targetBuddy") < script.index("send theFile to targetBuddy")
@@ -444,7 +420,7 @@ def test_a_voice_note_is_copied_where_messages_can_read_it_and_sent_after_the_te
 
 @_on_a_mac
 def test_a_missing_clip_or_nothing_to_send_is_refused_and_messages_gets_nothing(
-    client: FlaskClient, osascript: _Osascript, staging: Path, tmp_path: Path,
+    client: FlaskClient, osascript: _Osascript, tmp_path: Path,
 ) -> None:
     _connect(client, osascript)
     gone = tmp_path / "temp" / "chalie_tts_gone.mp3"
@@ -461,32 +437,11 @@ def test_a_missing_clip_or_nothing_to_send_is_refused_and_messages_gets_nothing(
         assert "Pass 'message', 'audio', or both." in result
     assert "code=invalid-param" in _head(not_text), not_text
     assert osascript.calls() == []
-    assert not staging.exists(), "nothing is copied for a send that is refused"
-
-
-@_on_a_mac
-def test_without_full_disk_access_a_voice_note_is_refused_and_nothing_is_sent(
-    client: FlaskClient, osascript: _Osascript, staging: Path, clip: Path,
-) -> None:
-    _connect(client, osascript)
-    attachments = staging.parent
-    attachments.mkdir(parents=True)
-    attachments.chmod(0o500)
-    try:
-        assert not os.access(attachments, os.W_OK), "the folder must refuse writes for this test to mean anything"
-        result = _send("Here is the summary.", audio=str(clip))
-    finally:
-        attachments.chmod(0o700)
-
-    assert "status=error" in _head(result), result
-    assert _FULL_DISK_ACCESS in result
-    assert osascript.calls() == [], "the text is not sent without its voice note"
-    assert not staging.exists()
 
 
 @_on_a_mac
 def test_a_voice_note_that_fails_after_the_text_says_the_text_was_sent(
-    client: FlaskClient, osascript: _Osascript, staging: Path, clip: Path,
+    client: FlaskClient, osascript: _Osascript, clip: Path,
 ) -> None:
     _connect(client, osascript)
     osascript.answer(stdout=_VOICE_NOTE_BROKE)
@@ -499,8 +454,6 @@ def test_a_voice_note_that_fails_after_the_text_says_the_text_was_sent(
         "Messages failed while sending the voice note: Messages got an error: The connection was lost. (-1708). "
         "The text was sent; the voice note may not have been."
     ) in result
-    copy = Path(_argv(osascript.calls()[0])[5])
-    assert copy.read_bytes() == _CLIP_BYTES, "the copy is kept: Messages may still read it"
 
 
 @_on_a_mac
