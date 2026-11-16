@@ -3,10 +3,11 @@
 The user creates a bot with @BotFather and pastes its token into setup, then
 says hi to the bot. The first private chat the bot receives is recorded as the
 one chat Chalie may message, with the name Telegram gives for it, so the user
-can see whose chat it is. It is never replaced by another chat's message: only
-a disconnect or a new token resets it. Outside a send that waits for the
-user's reply (:mod:`reply_wait`), nothing else is read from the bot. Every
-request goes through :mod:`bot_api`.
+can see whose chat it is. It is looked for at setup, whenever the Telegram card
+is shown and at a send, until one is recorded; it is never replaced by another
+chat's message: only a disconnect or a new token resets it. Past that, only a
+send that waits for the user's reply (:mod:`reply_wait`) reads from the bot.
+Every request goes through :mod:`bot_api`.
 """
 
 from __future__ import annotations
@@ -108,7 +109,7 @@ class TelegramCapability(AbstractCapability):
         try:
             self._record_chat(token)
         except TelegramApiError:
-            logger.warning("[telegram] Could not look for the user's hello yet; the first send looks again.")
+            logger.warning("[telegram] Could not look for the user's hello yet; the card and the first send look again.")
 
     def connect(self) -> bool:
         """Connected exactly when a bot token is stored. No call to Telegram, so
@@ -124,10 +125,18 @@ class TelegramCapability(AbstractCapability):
 
     def status_note(self) -> str | None:
         """Whose chat messages go to, or how to give Chalie one, so a stranger
-        who messaged the bot first is plain to see."""
-        if not self.is_connected():
+        who messaged the bot first is plain to see. Until a chat is recorded,
+        each look checks for the user's hello, so pressing Start after setup
+        shows here without waiting for a send."""
+        token = self.load_credential(_K_TOKEN) if self.is_connected() else None
+        if not token:
             return None
-        if self.load_credential(_K_CHAT_ID):
+        try:
+            chat_id = self._record_chat(token)
+        except TelegramApiError as exc:
+            logger.warning("[telegram] Could not look for the user's hello: %s", exc)
+            chat_id = None
+        if chat_id:
             return f"Messages go to {self._chat_name()}. Not you? Disconnect Telegram and set it up again."
         return f"Open {self._bot_link()} and press Start so Chalie knows where to send messages."
 
@@ -142,7 +151,7 @@ class TelegramCapability(AbstractCapability):
 
     def _do_monitor(self) -> None:
         """Nothing to poll: the bot only sends, and its one chat is recorded at
-        setup or at the first send."""
+        setup, when the card is shown or at the first send."""
         return
 
     # ── The one chat ─────────────────────────────────────────────────

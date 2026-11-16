@@ -377,7 +377,7 @@ def test_a_5000_character_message_arrives_as_two_messages_that_join_back_exactly
     assert _sent_to(telegram) == [_USER_CHAT, _USER_CHAT]
 
 
-def test_sending_before_anyone_said_hi_names_the_bot_link_and_the_next_send_after_a_hi_reaches_them(
+def test_before_a_hi_the_card_and_a_send_name_the_bot_link_and_a_later_hi_shows_on_the_card_before_any_send(
     client: FlaskClient, telegram: _Telegram,
 ) -> None:
     telegram.add_bot(_TOKEN, _USERNAME)
@@ -390,7 +390,12 @@ def test_sending_before_anyone_said_hi_names_the_bot_link_and_the_next_send_afte
     assert f"https://t.me/{_USERNAME}" in result
     assert telegram.calls("sendMessage") == []
 
+    # The user presses Start after setup: the card names them with no send.
     telegram.message(_TOKEN, _USER_CHAT)
+    assert f"{_USER_FIRST} {_USER_LAST}" in _note(client)
+    assert telegram.calls("sendMessage") == []
+    assert telegram.pending[_TOKEN] == [], "the hello read for the card must be confirmed"
+
     assert "status=success" in _head(_send("Now you are"))
     assert _sent_to(telegram) == [_USER_CHAT]
     assert f"{_USER_FIRST} {_USER_LAST}" in _note(client)
