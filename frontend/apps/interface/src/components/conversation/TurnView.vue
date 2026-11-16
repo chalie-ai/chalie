@@ -18,7 +18,7 @@ import type {
 import { usePermissionsStore } from '../../stores/permissions';
 import type { PermissionRequest } from '../../stores/permissions';
 import { delegateRunning, liveTrailsFor } from '../../utils/liveActTrail';
-import { didWork, showsWork } from '../../utils/turnSteps';
+import { didWork, mergeWork, showsWork } from '../../utils/turnSteps';
 import UserBubble from './UserBubble.vue';
 import ChalieBubble from './ChalieBubble.vue';
 import ActivityLine from './ActivityLine.vue';
@@ -36,7 +36,7 @@ const props = withDefaults(
     // pill (status + gist label) so it can ride INLINE on the settle0 footer's
     // meta line, next to the trace — no separate pill row. Null on the thread
     // panel (fullThread) and on non-forked turns.
-    threadPill?: { status: 'working' | 'done' | 'thread' | 'idle'; label: string } | null;
+    threadPill?: { status: 'thread' | 'idle'; label: string } | null;
   }>(),
   { canReply: true, type: ConfigType.USER, fullThread: false, threadPill: null },
 );
@@ -107,8 +107,9 @@ const runningSubtasks = computed(() => {
 
 /** The running step: the row a live call was dropped from, else — before a
  *  refetch returned that row — none yet, so its block is the live line alone,
- *  reading "Thinking…" until the first pill lands. Its key never changes, so the
- *  live line never remounts as the step moves. */
+ *  reading "Thinking…" until the first pill lands. While it has said nothing,
+ *  the steps that said nothing right before it are part of it. Its key never
+ *  changes, so the live line never remounts as the step moves. */
 interface ActivityRow {
   kind: 'activity';
   key: string;
@@ -132,9 +133,9 @@ interface FooterRow {
   durationMs: number | null;
 }
 
-/** The still-working exchange's plan, standing sticky under the message it
- *  plans and ticking as the agent works it. It is scaffolding for the work,
- *  so a settled exchange shows no plan at all. */
+/** The still-working exchange's plan, standing under the message it plans
+ *  and ticking as the agent works it; it scrolls with its turn. It is
+ *  scaffolding for the work, so a settled exchange shows no plan at all. */
 interface PlanRow {
   kind: 'plan';
   key: string;
@@ -169,7 +170,8 @@ const droppedOnCancel = computed<Set<string>>(() => {
 const displayRows = computed<DisplayRow[]>(() => {
   // Every row stands in order, by one rule: a user row as its bubble; an
   // assistant row as its step's block — its work, then its text — and, when it
-  // settled, the footer that closes its segment. An exchange opens at each
+  // settled, the footer that closes its segment. Steps in a row that said
+  // nothing stand as one block of their work. An exchange opens at each
   // user row — except one that joined the running turn, which stays in the
   // exchange it joined. One that ended with no settled row — cancelled or
   // crashed — closes on its last row with text, else its last row, its footer
@@ -200,6 +202,9 @@ const displayRows = computed<DisplayRow[]>(() => {
   let lastText: typeof last;
   let start = '';
   let worked = false;
+  // The open run of steps that said nothing: where its one row stands in the
+  // body, the row, and the steps in it.
+  let run: { at: number; row: MsgRow | ActivityRow; steps: ConversationMessage[] } | undefined;
 
   const flush = (open: boolean): void => {
     const closing = lastText ?? last;
@@ -215,6 +220,7 @@ const displayRows = computed<DisplayRow[]>(() => {
     start ||= message.created_at;
     // A user row's tool calls are the turn-zero memory seed, never a step.
     if (message.role === 'user') {
+      run = undefined;
       if (message.joined) {
         body.push(own);
       } else {
@@ -231,8 +237,26 @@ const displayRows = computed<DisplayRow[]>(() => {
     const live = !activity.message && kept.length < calls.length;
     const work = live || didWork(message);
     const text = message.content.trim();
-    if (live) activity.message = message;
-    if (live || showsWork(message) || text) body.push(live ? activity : own);
+    if (text) {
+      run = undefined;
+      if (live) activity.message = message;
+      body.push(live ? activity : own);
+    } else {
+      // A step that said nothing joins the steps that said nothing right
+      // before it, and they stand as one row: their thinking time summed,
+      // what they thought left out, their calls in the order they ran. A run
+      // with nothing left to show — reasoning never timed, no call shown —
+      // takes no row.
+      const steps = [...(run?.steps ?? []), message];
+      const merged = { ...steps[0], ...mergeWork(steps) };
+      if (live || showsWork(merged)) {
+        const row = live || run?.row === activity ? activity : (run?.row ?? own);
+        row.message = merged;
+        if (run) body[run.at] = row;
+        else body.push(row);
+        run = { at: run?.at ?? body.length - 1, row, steps };
+      }
+    }
     worked ||= work;
     // A segment shows its duration only when it did work; the footer drops a
     // NaN or negative one.
@@ -242,6 +266,7 @@ const displayRows = computed<DisplayRow[]>(() => {
     if (text) lastText = last;
     if (message.settled) {
       body.push(footer);
+      run = undefined;
       settled = true;
       worked = false;
       start = '';
@@ -249,10 +274,20 @@ const displayRows = computed<DisplayRow[]>(() => {
   }
 
   if (liveView.value && !settled && plan.length > 0) rows.push({ kind: 'plan', key: 'plan', tasks: plan });
+  // The running step no refetch returned yet ends the list — and has said
+  // nothing yet either, so the run of steps that said nothing before it, the
+  // last thing in the body, is part of it.
+  if (liveView.value && !activity.message) {
+    if (run) {
+      activity.message = run.row.message;
+      body[run.at] = activity;
+    } else {
+      body.push(activity);
+    }
+  }
   // Only a live view's last exchange is still open: a forked spine shows just
   // the opener, which the thread past it closed.
   flush(liveView.value);
-  if (liveView.value && !activity.message) rows.push(activity);
   return rows;
 });
 
@@ -321,7 +356,6 @@ function onOpenThread(): void {
 <template>
   <div
     class="turn-view"
-    :class="{ 'turn-view--panel': fullThread }"
     :data-turn-id="block.turn_id"
     :data-type="channel ? undefined : type"
     :data-channel="channel ?? undefined"
@@ -417,19 +451,6 @@ function onOpenThread(): void {
 // The running-subagents ring stands at the row's right edge.
 .msg-row--subtasks {
   justify-content: flex-end;
-}
-
-// The live plan stays in view under the fixed 56px top bar while the work runs
-// — or at the top of the thread panel, which scrolls its own body. It opens
-// Chalie's side.
-.msg-row--plan {
-  position: sticky;
-  top: 56px;
-  z-index: 3;
-}
-
-.turn-view--panel .msg-row--plan {
-  top: 0;
 }
 
 // A settled turn that failed with no reply, or a stopped subagent — a muted,

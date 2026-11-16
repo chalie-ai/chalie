@@ -374,17 +374,17 @@ describe('settled step blocks', () => {
   });
 });
 
-describe('settled calls on a working turn (its step blocks)', () => {
-  it('a step row that only called tools draws both its calls as row buttons in its block; only the delegate\'s opened detail opens its transcript', async () => {
+describe('settled calls on a working turn (its running block)', () => {
+  it('a step row that only called tools draws both its calls as row buttons in the running block; only the delegate\'s opened detail opens its transcript', async () => {
     serveStoredCalls();
-    // A working turn whose provider call asked for tools and said nothing: its
-    // block is that call's work alone, above the running block.
+    // A working turn whose provider call asked for tools and said nothing:
+    // while the turn works, that call's work stands in the running block.
     const turn = turnWith(true, [DELEGATE_CALL, PLAIN_CALL]);
     turn.messages[1] = { ...turn.messages[1]!, content: '' };
     const wrapper = track(mount(TurnView, { props: { block: turn, type: ConfigType.USER } }));
     const session = useSessionStore();
     expect(wrapper.find('[data-transcript-row-id="3011"] .speech-form__text').exists()).toBe(false);
-    const rows = [...(wrapper.element as Element).querySelectorAll<HTMLElement>('.step:not(.activity) .call')];
+    const rows = [...(wrapper.element as Element).querySelectorAll<HTMLElement>('.activity .call')];
     expect(rows).toHaveLength(2);
     for (const r of rows) expect(r.closest('[inert]')).not.toBeNull();
     await openCalls(wrapper);

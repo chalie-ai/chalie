@@ -57,9 +57,11 @@ class Keys(StrEnum):
     area = "area"
     args = "args"
     attachments = "attachments"
+    audio = "audio"
     automation_id = "automation_id"
     body = "body"
     buffer_minutes = "buffer_minutes"
+    calendar_name = "calendar_name"
     category = "category"
     cc = "cc"
     command = "command"
@@ -72,6 +74,7 @@ class Keys(StrEnum):
     date_time = "date_time"
     date_to = "date_to"
     day = "day"
+    description = "description"
     destination = "destination"
     destination_location = "destination_location"
     direction = "direction"
@@ -159,6 +162,7 @@ class Keys(StrEnum):
     url = "url"
     use_for = "use_for"
     value_ = "value"  # trailing underscore: bare ``value`` is reserved by Enum
+    wait_for_reply = "wait_for_reply"
     weekday = "weekday"
     wlan_id = "wlan_id"
 

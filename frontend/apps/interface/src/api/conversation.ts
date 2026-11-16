@@ -12,10 +12,10 @@ export interface ConversationAttachment {
 /** A rich-media or plain-text content segment inside an assistant turn. */
 export interface ConversationSegment {
   type: 'text' | 'rich';
-  content?: string;
-  tag?: string;
-  payload?: Record<string, unknown>;
-  synthesis?: string;
+  content?: string | null;
+  tag?: string | null;
+  payload?: Record<string, unknown> | null;
+  synthesis?: string | null;
   /**
    * Rich segments only: the tool call's wall-clock moment, ISO-8601 UTC (null
    * when the row carried no usable timestamp). Generic card metadata — a card
@@ -72,9 +72,9 @@ export interface ConversationMessage {
    */
   turn_id: number | null;
   /** Present on user turns when attachments were uploaded. */
-  attachments?: ConversationAttachment[];
+  attachments?: ConversationAttachment[] | null;
   /** Present on assistant turns — one or more content segments. */
-  segments?: ConversationSegment[];
+  segments?: ConversationSegment[] | null;
   /**
    * The chips THIS row anchors — present on WHATEVER row drove the tools: a
    * provider call's own assistant row (empty when that call only asked for
@@ -84,24 +84,24 @@ export interface ConversationMessage {
    * refetched error stays a red pill instead of downgrading to a neutral chip.
    * The refresh path renders them as this row's own tool-call card.
    */
-  tool_calls?: ToolCallChip[];
+  tool_calls?: ToolCallChip[] | null;
   /**
    * Set (true) on every row PAST this turn's settle0 — the reply continuation.
    * The main spine drops these (it renders only through settle0); a turn that
    * has any of them is a thread, so the feed shows its opener.
    */
-  thread_message?: boolean;
+  thread_message?: boolean | null;
   /**
    * True on the ONE assistant row that closes a turn_execution — the final
    * reply. Only that row is spoken, so it is the only one that carries a
    * speaker button.
    */
-  settled?: boolean;
+  settled?: boolean | null;
   /**
    * True on a user row sent into the turn while it was working — it joined the
    * running exchange instead of opening one. A cancel keeps such a row.
    */
-  joined?: boolean;
+  joined?: boolean | null;
   /**
    * Who wrote this row, when it is not the user — a subtask transcript's own
    * input row carries 'Task from Chalie' or 'Message from Chalie' (on the
@@ -125,7 +125,7 @@ export interface ConversationMessage {
    * row order; ``duration_ms`` and ``tokens`` are the sums across all traces
    * anchored to the row.
    */
-  thinking?: { traces: string[]; duration_ms: number; tokens: number };
+  thinking?: { traces: string[]; duration_ms: number; tokens: number } | null;
   /**
    * The plan the agent keeps while it works this message, as of this fetch.
    * Present only on a user row that opens a request (never a joined one — its

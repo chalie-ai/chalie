@@ -1,0 +1,19 @@
+id: imessage
+name: iMessage
+version: 1.0.0
+entry_class: ImessageCapability
+description: >-
+  Lets Chalie text you on iMessage through the Messages app on this Mac. Enter
+  the phone number or Apple ID email you use for iMessage and press Connect:
+  Chalie sends one message there to check the setup works. The first time, macOS
+  asks whether the app that runs Chalie may control Messages; allow it. To
+  send voice notes, also give that app Full Disk Access in System Settings →
+  Privacy & Security. Chalie will message only you.
+providers:
+  - apple
+fields:
+  - name: handle
+    label: Your phone number or Apple ID email
+    type: text
+    placeholder: "+15551234567 or you@icloud.com"
+    required: true

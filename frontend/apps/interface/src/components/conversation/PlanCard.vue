@@ -2,8 +2,9 @@
      a rounded card with a soft neon ground, each with a mark that moves with
      the task — a dashed circle to do, a spinning arc in progress, a
      check-circle drawn in when done, a slashed circle (the title struck
-     through) when cancelled. It stands sticky under the message it plans
-     while that message is worked; a settled message shows no plan. -->
+     through) when cancelled. It stands under the message it plans while that
+     message is worked, and scrolls with its turn; a settled message shows no
+     plan. -->
 <script setup lang="ts">
 import { CircleDashed } from '@lucide/vue';
 import type { PlanTask } from '../../api/conversation';
@@ -68,8 +69,7 @@ const STATUS_TEXT: Record<PlanTask['status'], string> = {
 </template>
 
 <style scoped lang="scss">
-// Soft neon ground, opaque so the sticky card hides the thread scrolling
-// under it.
+// Soft neon ground.
 .plan-card {
   width: 100%;
   margin: 0;

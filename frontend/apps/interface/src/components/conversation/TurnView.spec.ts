@@ -260,15 +260,14 @@ describe('live act-trail visibility — working turn on the spine', () => {
     expect(pillNames()).toEqual(['web_search']);
     expect(chipNames()).toEqual(['ran read']);
 
-    // The refetch lands the finished chip and drops the resolved pill: now the
-    // stored step shows the call, once, and the live line moves on below it.
+    // The refetch lands the finished chip and drops the resolved pill. The row
+    // that made the call said nothing, so while the turn works it stands in
+    // the live line: the call still shows once, now as its stored chip.
     clearLiveTurnsForToolCallsResolved(ConfigType.USER, turnId, true);
     await wrapper.setProps({ block: block(turnId, rows(chip(77, 'web_search', 'done'))) });
-    expect(pillNames()).toEqual([]);
-    expect(chipNames()).toEqual(['ran read', 'ran web_search']);
-    expect(layout(wrapper)).toEqual([
-      'user:find the museum hours', 'step:ran read | let me look', 'step:ran web_search', 'live',
-    ]);
+    expect(pillNames()).toEqual(['ran web_search']);
+    expect(chipNames()).toEqual(['ran read']);
+    expect(layout(wrapper)).toEqual(['user:find the museum hours', 'step:ran read | let me look', 'live']);
   });
 });
 
@@ -381,9 +380,10 @@ describe('tool-call placement — a block per row of work, the answer\'s too, th
     expect(stepCalls(wrapper)).toEqual([['ran web_search'], ['ran read'], ['ran memory_recall']]);
     expect(wrapper.findAll('.speech-form--chalie')).toHaveLength(3);
     const steps = wrapper.findAll('.step');
-    // The reasoning folds behind the row that reasoned, and no row's prose
-    // hides inside a fold: every text is on the page, outside any step block.
-    expect(steps.map((s) => s.text().includes('which file has it?'))).toEqual([false, true, false]);
+    // The row that said nothing keeps its thinking time but not what it
+    // thought, and no row's prose hides inside a fold: every text is on the
+    // page, outside any step block.
+    expect(wrapper.text()).not.toContain('which file has it?');
     expect(steps.some((s) => /interim|final/.test(s.text()))).toBe(false);
     const texts = wrapper.findAll('.speech-form__text').map((b) => b.element);
     expect(texts).toHaveLength(2);
@@ -545,7 +545,7 @@ describe('tool-call placement — a block per row of work, the answer\'s too, th
     ]);
 
     const wrapper = mount(TurnView, {
-      props: { block: b, type: ConfigType.USER, fullThread: false, threadPill: { status: 'working', label: 'museum hours' } },
+      props: { block: b, type: ConfigType.USER, fullThread: false, threadPill: { status: 'thread', label: 'museum hours' } },
     });
 
     expect(layout(wrapper)).toEqual(['user:opener question', 'bubble:opener', 'footer', 'step:ran read']);
@@ -573,7 +573,7 @@ describe('tool-call placement — a block per row of work, the answer\'s too, th
         block: forkedUnsettledOpener(220),
         type: ConfigType.USER,
         fullThread: false,
-        threadPill: { status: 'done', label: 'museum hours' },
+        threadPill: { status: 'idle', label: 'museum hours' },
       },
     });
 
@@ -610,16 +610,16 @@ describe('tool-call placement — a block per row of work, the answer\'s too, th
 
     const wrapper = mount(TurnView, { props: { block: b, type: ConfigType.USER, fullThread: false } });
 
-    // Each row's step block stands above the closing footer; the crash note is
-    // a row after it.
-    expect(layout(wrapper)).toEqual(['user:dig into it', 'step:ran web_search', 'step:ran read', 'footer', 'other']);
+    // Neither row said anything, so their calls stand as one step block above
+    // the closing footer; the crash note is a row after it.
+    expect(layout(wrapper)).toEqual(['user:dig into it', 'step:ran web_search, ran read', 'footer', 'other']);
     const closing = footerOf(wrapper);
     expect(closing.find(COPY).exists()).toBe(true);
     expect(closing.find(REPLY).exists()).toBe(true);
     expect(wrapper.find('.turn-crashed').exists()).toBe(true);
   });
 
-  it('a still-working exchange of tool-only rows stays open: a step block each, no timestamp or actions on any row yet', () => {
+  it('a still-working exchange of tool-only rows stays open: their calls in the live line, no timestamp or actions on any row yet', () => {
     const turnId = 223;
     const b = block(turnId, [
       row('2230', 'user', 'dig into it', turnId),
@@ -629,7 +629,8 @@ describe('tool-call placement — a block per row of work, the answer\'s too, th
 
     const wrapper = mount(TurnView, { props: { block: b, type: ConfigType.USER, fullThread: false } });
 
-    expect(layout(wrapper)).toEqual(['user:dig into it', 'step:ran web_search', 'step:ran read', 'live']);
+    expect(layout(wrapper)).toEqual(['user:dig into it', 'live']);
+    expect(wrapper.findAll('.activity .call__summary').map((c) => c.text())).toEqual(['ran web_search', 'ran read']);
     expect(wrapper.findAll('.speech-form__timestamp')).toHaveLength(0);
     expect(wrapper.findAll(COPY)).toHaveLength(0);
     expect(wrapper.findAll(REPLY)).toHaveLength(0);
@@ -955,7 +956,7 @@ function taskStatuses(wrapper: VueWrapper): string[] {
   return wrapper.findAll('.plan-task').map((t) => t.classes().find((c) => c.startsWith('plan-task--'))!.slice(11));
 }
 
-// A request's plan stands sticky under the message it plans while the
+// A request's plan stands under the message it plans while the
 // exchange works, ticking as the agent marks its tasks; once the exchange
 // settles the plan is gone — neither in the column nor on the footer.
 describe('the plan — live under its message, gone once it settles', () => {
@@ -971,14 +972,14 @@ describe('the plan — live under its message, gone once it settles', () => {
       },
     });
 
-    // The plan call is the card's: the step shows the search alone, in its rows
-    // and in what its head says it did.
-    expect(layout(wrapper)).toEqual(['user:what is the weather', 'plan', 'step:ran web_search', 'live']);
-    expect(wrapper.find('.step:not(.activity) .step__summary').text()).toBe('Delegated 1 web search');
+    // The plan call is the card's: the row said nothing, so the live line
+    // shows its search alone, in its rows and in what its head says it did.
+    expect(layout(wrapper)).toEqual(['user:what is the weather', 'plan', 'live']);
+    expect(wrapper.find('.activity .step__summary').text()).toBe('Delegated 1 web search');
+    expect(wrapper.findAll('.activity .call__summary').map((c) => c.text())).toEqual(['ran web_search']);
     const rows = wrapper.findAll('.msg-row');
     expect(rows[1]!.classes()).toEqual(expect.arrayContaining(['msg-row--chalie', 'msg-row--lead']));
     expect(rows[2]!.classes()).toContain('msg-row--cont');
-    expect(rows[3]!.classes()).toContain('msg-row--cont');
     expect(rows[1]!.findAll('.plan-task__title').map((t) => t.text())).toEqual(['task 1', 'task 2', 'task 3']);
     expect(taskStatuses(wrapper)).toEqual(['done', 'in_progress', 'todo']);
     // Nothing has settled, so there is no footer yet.
@@ -1044,7 +1045,7 @@ describe('the plan — live under its message, gone once it settles', () => {
     expect(footerOf(wrapper).text()).not.toContain('plan');
   });
 
-  it('drops an earlier exchange\'s plan once it settles while the working one\'s plan stands live — and the thread panel pins it to the panel\'s top, never the spine for a forked turn', () => {
+  it('drops an earlier exchange\'s plan once it settles while the working one\'s plan stands live — in the thread panel, never the spine for a forked turn', () => {
     const turnId = 507;
     const messages = [
       row('5070', 'user', 'what is the weather', turnId, { plan: planOf('done', 'done') }),
@@ -1059,12 +1060,42 @@ describe('the plan — live under its message, gone once it settles', () => {
     // and no live card: the thread pill carries the live state.
     expect(layout(spine)).toEqual(['user:what is the weather', 'bubble:Sunny, 24°.', 'footer']);
     expect(footerOf(spine).text()).not.toContain('plan');
-    expect(spine.classes()).not.toContain('turn-view--panel');
 
     expect(layout(panel)).toEqual([
       'user:what is the weather', 'bubble:Sunny, 24°.', 'footer', 'user:and tomorrow', 'plan', 'live',
     ]);
     expect(panel.find('.msg-row--plan .plan-task').classes()).toContain('plan-task--in_progress');
-    expect(panel.classes()).toContain('turn-view--panel');
+  });
+
+  // The card is part of its turn: scrolling past the turn takes the card with
+  // it. Nothing between the card and the turn may pin it to the screen, in the
+  // feed or in the thread panel. Read through the component's own stylesheet,
+  // which the suite applies (vitest.config.ts `css`).
+  it('scrolls away with its turn — nothing pins the card on screen, in the feed or in the thread panel', () => {
+    const turnId = 508;
+    const messages = [
+      row('5080', 'user', 'check the pools', turnId, { plan: planOf('done', 'in_progress', 'todo') }),
+      row('5081', 'assistant', '', turnId, { tool_calls: calls('web_search') }),
+    ];
+
+    for (const [where, fullThread] of [['feed', false], ['thread panel', true]] as const) {
+      // Attached: happy-dom resolves stylesheet rules only for a connected element.
+      const wrapper = mount(TurnView, {
+        props: { block: block(turnId, messages), type: ConfigType.USER, fullThread },
+        attachTo: document.body,
+      });
+      const rowDisplay = getComputedStyle(wrapper.find('.msg-row--plan').element).display;
+      const pinned: string[] = [];
+      for (let el: Element | null = wrapper.find('.plan-card').element; el; el = el.parentElement) {
+        const { position } = getComputedStyle(el);
+        if (position === 'sticky' || position === 'fixed') pinned.push(`${el.className}: ${position}`);
+        if (el === wrapper.element) break;
+      }
+      wrapper.unmount();
+
+      // The stylesheet reached the DOM: the plan row is laid out as every row is.
+      expect(rowDisplay, where).toBe('flex');
+      expect(pinned, where).toEqual([]);
+    }
   });
 });

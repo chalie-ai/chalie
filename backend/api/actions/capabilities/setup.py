@@ -6,7 +6,10 @@ Covers:
 URL reshaped from the legacy ``/api/capabilities/<id>/setup`` — the same
 contract reshape as every other migrated verb. Mirrors the legacy handler's
 semantics exactly: invalid credentials during ``configure()`` and a
-still-disconnected capability afterward both fail with 422; a locked vault
+capability neither connected nor still confirming its setup afterward both
+fail with 422 — a setup still confirming reports through the status action
+how it ends. A capability that cannot work where Chalie runs is refused with
+422 and its reason before ``configure()`` is called; a locked vault
 fails with 403 (raised by ``_load_caps``/``configure``/``is_connected``,
 caught around the whole handler body, matching the legacy module). On
 success an initial sync runs on a daemon thread — the response returns
@@ -47,7 +50,7 @@ class CapabilitiesSetup(Action):
             extras=(
                 (403, _ERR_VAULT),
                 (404, "Capability not found"),
-                (422, "Invalid capability configuration or connection failed"),
+                (422, "Invalid capability configuration, connection failed, or the capability is unavailable here"),
             ),
         ),
     }
@@ -59,9 +62,10 @@ class CapabilitiesSetup(Action):
             NotFoundError: capability id not found.
 
         Returns:
-            "", 204 on success; 422 on invalid configuration or a
-            still-disconnected capability after ``configure()``; 403 if the
-            vault is locked.
+            "", 204 on success or while the setup is still being confirmed;
+            422 on a capability unavailable where Chalie runs, on invalid
+            configuration, or on a capability neither connected nor confirming
+            after ``configure()``; 403 if the vault is locked.
         """
         cap_id = cast(str, id)
         dto = cast(CapabilitySetupRequest, data)
@@ -71,13 +75,17 @@ class CapabilitiesSetup(Action):
                 raise NotFoundError(f"Capability not found: {cap_id}")
 
             cap = cast("_Capability", caps[cap_id])
+            unavailable_reason = cap.unavailable_reason()
+            if unavailable_reason is not None:
+                logger.warning("[capabilities] setup '%s' refused: %s", cap_id, unavailable_reason)
+                return Response.failure(unavailable_reason), 422
             try:
                 cap.configure(dto.model_dump(exclude_none=True))
             except ValueError as exc:
                 logger.warning("[capabilities] setup '%s' configure failed: %s", cap_id, exc)
                 return Response.failure("Invalid capability configuration"), 422
 
-            if not cap.is_connected():
+            if not cap.is_connected() and not cap.setup_pending():
                 return Response.failure(_ERR_CONNECTION), 422
         except VaultLockedError:
             logger.warning("[capabilities] setup '%s' failed: vault is locked", cap_id)

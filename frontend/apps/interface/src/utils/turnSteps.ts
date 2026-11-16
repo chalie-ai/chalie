@@ -1,7 +1,8 @@
 /**
  * turnSteps — what a step's work says. A step is one row under what it said:
  * its thinking, folded to "Thought for 9s", then what its tool calls did,
- * "Wrote 2 files and read 1 file", folded over one row per call.
+ * "Wrote 2 files and read 1 file", folded over one row per call. A run of
+ * steps that said nothing reads as one such row (see `mergeWork`).
  */
 import { reactive } from 'vue';
 import type { ConversationMessage, ToolCallChip } from '../api/conversation';
@@ -10,10 +11,11 @@ import { formatElapsed } from './time';
 
 export type StepCall = Pick<ToolCallChip, 'id' | 'tool_name' | 'params' | 'summary' | 'state' | 'delegate'>;
 
-/** One step's work — a stored row's, or the calls running now. */
+/** One step's work — a stored row's, or the calls running now. A stored row
+ *  that made no calls carries `null`, as the server sends it. */
 export interface StepWork {
   thinking?: ConversationMessage['thinking'];
-  tool_calls?: StepCall[];
+  tool_calls?: StepCall[] | null;
 }
 
 /** A call's one-line label: the summary the backend wrote, else the tool's name. */
@@ -35,14 +37,29 @@ export function didWork(work: StepWork): boolean {
 }
 
 /** The calls a step shows — all but the kinds the catalog hides. */
-export function visibleCalls(calls: readonly StepCall[] = []): StepCall[] {
-  return calls.filter((c) => !callKind(c).hidden);
+export function visibleCalls(calls: readonly StepCall[] | null | undefined): StepCall[] {
+  return (calls ?? []).filter((c) => !callKind(c).hidden);
 }
 
 /** Whether the step has work the person can see: it thought, or made a call
  *  the catalog does not hide. A step that only updated the plan has none. */
 export function showsWork(work: StepWork): boolean {
   return Boolean(thought(work.thinking) || visibleCalls(work.tool_calls).length);
+}
+
+/** Steps that said nothing, as one step's work: the time they spent thinking,
+ *  summed, with what they thought left out, and every call they made, in the
+ *  order they ran. */
+export function mergeWork<C extends StepCall>(
+  steps: readonly { thinking?: StepWork['thinking']; tool_calls?: readonly C[] | null }[],
+): { thinking: StepWork['thinking']; tool_calls: C[] } {
+  const thoughts = steps.flatMap((s) => (s.thinking ? [s.thinking] : []));
+  const sum = (pick: (t: NonNullable<StepWork['thinking']>) => number): number =>
+    thoughts.reduce((total, t) => total + pick(t), 0);
+  return {
+    thinking: thoughts.length ? { traces: [], duration_ms: sum((t) => t.duration_ms), tokens: sum((t) => t.tokens) } : null,
+    tool_calls: steps.flatMap((s) => s.tool_calls ?? []),
+  };
 }
 
 export interface CallsSummary {

@@ -4,5 +4,7 @@
 <dict>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Chalie uses the microphone when you press its microphone button, and sends what it records to your Chalie server to be turned into text.</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Chalie uses this to send your iMessages through Messages.</string>
 </dict>
 </plist>

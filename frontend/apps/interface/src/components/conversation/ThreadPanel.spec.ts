@@ -22,7 +22,7 @@ import { createPinia, setActivePinia } from 'pinia';
 import ThreadPanel from './ThreadPanel.vue';
 import { useSessionStore } from '../../stores/session';
 import { upsertDelegateTurn } from '../../utils/turnDom';
-import type { ConversationMessage, ConversationTurnBlock, DelegateTurnBlock } from '../../api/conversation';
+import type { ConversationMessage, ConversationTurnBlock, DelegateTurnBlock, ToolCallChip } from '../../api/conversation';
 
 const SEARCH = { channel: 'delegate:web_search', turn_id: 12 };
 const AGENT = { channel: 'delegate:code_agent', turn_id: 12 };
@@ -340,5 +340,45 @@ describe('moving between transcripts', () => {
     await flushPromises();
     expect(panel.find('textarea').exists()).toBe(false);
     expect(panel.findAll('aside [role="alert"]').map((a) => a.text())).toEqual(['Provider quota exceeded']);
+  });
+});
+
+describe('a scheduled run, as the server sends it', () => {
+  /** A stored row with every field the server's message shape carries; the
+   *  ones a row does not use arrive as `null`, never absent. */
+  function stored(id: string, role: ConversationMessage['role'], content: string, rest: Partial<ConversationMessage>): ConversationMessage {
+    return {
+      ...msg(id, role, content, 5), attachments: null, tool_calls: null, segments: null, thread_message: null,
+      settled: null, joined: null, speaker: null, voice_state: null, thinking: null, plan: null, ...rest,
+    };
+  }
+
+  function call(id: number, tool_name: string, params: Record<string, unknown>): ToolCallChip {
+    return { id, tool_name, params, summary: '', state: 'done', ended_at: '2026-01-01T00:00:01Z', delegate: null };
+  }
+
+  const PROMPT = stored('50', 'user', 'Check the backups', {
+    joined: false, tool_calls: [call(1, 'recall', { query: 'Check the backups', _auto: true })],
+  });
+  const STEP = stored('51', 'assistant', '', { segments: [], settled: false, tool_calls: [call(2, 'read', { source: '/backups/log.txt' })] });
+  // The reply made no calls of its own, so the server sends `tool_calls: null`.
+  const REPLY = stored('52', 'assistant', 'All backups finished.', {
+    settled: true, segments: [{ type: 'text', content: 'All backups finished.', tag: null, synthesis: null, payload: null, created_at: null }],
+  });
+
+  it('opens with its prompt, the calls its step made and its reply, and reports no load failure', async () => {
+    serve = () => ({ ...userThread(5, [PROMPT, STEP, REPLY]), gist: 'Backup check', type: 'scheduled', channel: null });
+    const { panel, session } = openPanel();
+
+    session.openThreadPanel(5, 'scheduled');
+    await flushPromises();
+
+    expect(reads).toEqual([{ turnId: 5, channel: null, type: 'scheduled' }]);
+    expect(session.errorMessage).toBeFalsy();
+    expect(panel.find('header').text()).toContain('Backup check');
+    expect(panel.text()).toContain('Check the backups');
+    expect(panel.text()).toContain('All backups finished.');
+    expect(panel.text()).toContain('Read 1 file');
+    expect(panel.element.querySelectorAll('.turn-view')).toHaveLength(1);
   });
 });
