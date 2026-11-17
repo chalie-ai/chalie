@@ -18,18 +18,19 @@
  * Exchanges reach the page as they do in the app: a settled exchange through
  * the real surface registry, a running one through live frames into the real
  * dispatcher and act-trail, all onto the real TurnView, with the real session
- * store behind "Open transcript". Every module is fresh per test, so no
- * opened row or read call outlives it. Only the network boundary is stood in
- * for: `fetch`, answering the thread read and each call's own read
- * (GET /api/tool-calls/<id>), able to hold a read until the test releases it
- * or to fail it; plus the session hooks `session.init()` would register, as
- * in the sibling dispatcher specs.
+ * store and slide-over panel behind "Open transcript". Every module is fresh
+ * per test, so no opened row or read call outlives it. Only the network
+ * boundary is stood in for: `fetch`, answering the thread read, a subagent's
+ * transcript read and each call's own read (GET /api/tool-calls/<id>), able
+ * to hold a call read until the test releases it or to fail it; plus the
+ * session hooks `session.init()` would register, as in the sibling
+ * dispatcher specs.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { nextTick } from 'vue';
-import { flushPromises } from '@vue/test-utils';
+import { flushPromises, mount } from '@vue/test-utils';
 import type { WsPushEvent } from '@chalie/shared';
-import type { ConversationMessage, ConversationTurnBlock, ToolCallChip, ToolCallDetail } from '../../api/conversation';
+import type { ConversationMessage, ConversationTurnBlock, DelegateTurnBlock, ToolCallChip, ToolCallDetail } from '../../api/conversation';
 
 const TURN = 61;
 const STARTED_AT = '2026-01-01T09:00:00Z';
@@ -69,8 +70,23 @@ async function fakeBackend(input: RequestInfo | URL): Promise<Response> {
     if (!backend.holding) return answer;
     return new Promise((resolve) => backend.held.push({ id, release: () => resolve(answer) }));
   }
+  const channel = url.searchParams.get('channel');
+  const transcriptRead = /^\/api\/threads\/(\d+)$/.exec(url.pathname);
+  if (transcriptRead && channel !== null) return json({ success: true, result: transcript(Number(transcriptRead[1]), channel) });
   if (url.pathname === `/api/threads/${TURN}` && backend.thread) return json({ success: true, result: backend.thread });
   return json({ error: 'unrouted' }, 404);
+}
+
+/** A subagent's transcript as its read returns it: the task it was given. */
+function transcript(turnId: number, channel: string): DelegateTurnBlock {
+  return {
+    turn_id: turnId, gist: null, preview: 'The task', last_activity_at: null,
+    working: false, duration_ms: 0, type: null, channel,
+    messages: [{
+      id: `${turnId}0`, role: 'user', content: 'The task', timestamp: '2026-01-01 09:00:00',
+      day: '2026-01-01', created_at: STARTED_AT, turn_id: turnId,
+    }],
+  };
 }
 
 function releaseHeld(): void {
@@ -360,6 +376,35 @@ describe('what an opened call shows, by its kind', () => {
       buttons[0]!.click();
       expect(w.session.panelDelegate).toEqual(ref);
     }
+  });
+
+  it('the transcript "Open transcript" opens is headed by its call\'s summary, and by its subagent\'s name when the call has none', async () => {
+    const w = await makeWorld();
+    const { default: ThreadPanel } = await import('./ThreadPanel.vue');
+    const panel = mount(ThreadPanel, { attachTo: document.body });
+    const closeWorld = teardown;
+    teardown = () => {
+      panel.unmount();
+      closeWorld?.();
+    };
+    const searching = { channel: 'delegate:web_search', turn_id: 24 };
+    const browsing = { channel: 'delegate:web_browse', turn_id: 25 };
+    await w.settled(
+      call(6311, 'web_search', 'Searching for ferry strikes', { instructions: 'Search for Gozo ferry strikes this week' }, { delegate: searching }),
+      call(6312, 'web_browse', '', { instructions: 'Find the cheapest Gozo crossing' }, { delegate: browsing }),
+    );
+    const panelHeading = () => document.querySelector('.thread-panel__title')?.textContent ?? null;
+
+    transcriptButtons(await open(rowNamed(w.el, 'Searching for ferry strikes')))[0]!.click();
+    await flushPromises();
+    expect(w.session.panelDelegate).toEqual(searching);
+    expect(panelHeading()).toBe('Searching for ferry strikes');
+
+    // A call with no summary is labelled by its tool, which names its subagent.
+    transcriptButtons(await open(rowNamed(w.el, 'web_browse')))[0]!.click();
+    await flushPromises();
+    expect(w.session.panelDelegate).toEqual(browsing);
+    expect(panelHeading()).toBe('web_browse');
   });
 
   it('an email call is headed by its action and lists what it was given in a fixed order, skipping the empty; any other call is headed by its action and shows every other argument, a nested one as JSON', async () => {

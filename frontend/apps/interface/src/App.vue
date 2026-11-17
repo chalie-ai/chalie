@@ -14,6 +14,7 @@ import InputDock from './components/layout/InputDock.vue';
 import LoadingOverlay from './components/layout/LoadingOverlay.vue';
 import TaskDrawer from './components/overlays/TaskDrawer.vue';
 import SchedulerDock from './components/overlays/SchedulerDock.vue';
+import SubagentDock from './components/overlays/SubagentDock.vue';
 import VoicePlayerDialog from './components/voice/VoicePlayerDialog.vue';
 
 const { init: initTheme } = useTheme();
@@ -101,8 +102,9 @@ onBeforeUnmount(() => {
   <div id="overlayRoot"></div>
 
   <!-- TaskDrawer, SchedulerDock and VoicePlayerDialog self-render and
-       self-subscribe to bus events. -->
+       self-subscribe to bus events; SubagentDock reads the running list. -->
   <TaskDrawer />
   <SchedulerDock />
+  <SubagentDock />
   <VoicePlayerDialog />
 </template>

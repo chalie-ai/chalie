@@ -18,16 +18,18 @@
  * addressed by the subagent's channel alone, must undo nothing, and must leave
  * a chat turn with the same number running.
  *
- * A chat turn's running-subtasks ring rides the same lost frames. Whether a
- * subtask runs comes from its own frames once seen, else from the turn's last
- * read; the drop throws the frames' word away, and a settled turn has no lane
- * for the reconnect to reconcile. So every turn that showed the ring when the
- * socket dropped is read again on reconnect, and the ring follows that read,
+ * Which subagents a chat turn still has running rides the same lost frames.
+ * Whether a subtask runs comes from its own frames once seen, else from the
+ * turn's last read; the drop throws the frames' word away, and a settled turn
+ * has no lane for the reconnect to reconcile. So every turn that had a
+ * subagent running when the socket dropped is read again on reconnect, and the
+ * Subagents dock and the header's pink Subagents button follow that read,
  * whichever way it went while the socket was down.
  *
  * Real throughout: the session store (its real `init()` wiring), the real
  * drift dispatcher, ThreadPanel, the TurnView it registers as its surface, the
- * turnDom surface registry, the REST wrappers and the shared ApiClient. Two
+ * header and its Subagents dock, the turnDom surface registry, the REST
+ * wrappers and the shared ApiClient. Two
  * boundaries are faked: `fetch` (the backend, answering thread reads and
  * stops) and the WebSocket singleton (so the connect, disconnect and push
  * callbacks the store registers can be fired the way a real socket would fire
@@ -99,8 +101,8 @@ function json(body: unknown, status = 200): Response {
 }
 
 /** The backend at the network boundary: thread reads, stops, the dock's
- *  thinking-level read, and the pending-permission listing the store re-reads
- *  on every connect. */
+ *  thinking-level read, and the pending-permission listing the store and the
+ *  header's open browser tabs that the browser store re-read on every connect. */
 async function fakeBackend(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const url = new URL(String(input), 'http://chalie.test');
   if (init?.method === 'DELETE') {
@@ -112,6 +114,9 @@ async function fakeBackend(input: RequestInfo | URL, init?: RequestInit): Promis
   }
   if (url.pathname === '/api/policies/pending') {
     return json({ success: true, result: [], pagination: { page: 1, limit: 50, total: 0 } });
+  }
+  if (url.pathname === '/api/browser/tabs') {
+    return json({ success: true, result: { tabs: [] } });
   }
   const match = /^\/api\/threads\/(\d+)$/.exec(url.pathname);
   if (!match) return json({ error: 'unrouted' }, 404);
@@ -572,7 +577,7 @@ describe('stopping a running subagent from its open transcript', () => {
   });
 });
 
-describe('a chat turn\'s subtask ring across a dropped connection', () => {
+describe('a chat turn\'s running subtask in the Subagents dock across a dropped connection', () => {
   const SUBTASK = { channel: 'delegate:subtask', turn_id: 4 };
   const PLAN_TURN = 901;
 
@@ -610,71 +615,90 @@ describe('a chat turn\'s subtask ring across a dropped connection', () => {
       cancel_requested: false, state, stop_reason: null,
     }) as unknown as WsPushEvent;
 
-  /** A fresh app with the chat showing the planning turn as the backend first
-   *  read it, the subtask's working frame already in. */
+  /** A fresh app — the header, its Subagents dock, and the chat showing the
+   *  planning turn as the backend first read it — the subtask's working frame
+   *  already in. */
   async function chatWithRunningSubtask(asRead: SubtaskAsRead): Promise<HTMLElement> {
     vi.resetModules();
     setActivePinia(createPinia());
     const { useSessionStore } = await import('./session');
     const turnDom = await import('../utils/turnDom');
     const { default: TurnView } = await import('../components/conversation/TurnView.vue');
+    const { default: PresenceBar } = await import('../components/layout/PresenceBar.vue');
+    const { default: SubagentDock } = await import('../components/overlays/SubagentDock.vue');
     useSessionStore().init();
+    const header = mount(PresenceBar, { attachTo: document.body });
+    const dock = mount(SubagentDock, { attachTo: document.body });
     const chat = document.body.appendChild(document.createElement('div'));
     turnDom.registerSurface({ id: 'spine', type: 'user', container: chat, component: TurnView });
-    cleanups.push(() => turnDom.clearSurfaceContainer(chat));
+    cleanups.push(() => {
+      turnDom.clearSurfaceContainer(chat);
+      dock.unmount();
+      header.unmount();
+    });
     turnDom.upsertTurnToSurfaces(planTurn(asRead), 'user');
     wsCallbacks.onDrift(subtaskFrame('working'));
     await flushPromises();
     return chat;
   }
 
-  /** The ring's running count, or null when the turn shows no ring. */
-  const ringCount = (chat: HTMLElement): string | null =>
-    chat.querySelector('.subtask-ring .subtask-ring__count')?.textContent ?? null;
+  /** The titles the Subagents dock lists, in order. */
+  const listed = (): string[] =>
+    [...document.querySelectorAll('aside[aria-label="Subagents"] .drawer-row__label')].map((el) => el.textContent!.trim());
+
+  /** Whether the header's Subagents button shows its pink running cue. */
+  const headerIsPink = (): boolean =>
+    document.querySelector('#subagentDockBtn')!.classList.contains('has-activity');
 
   /** What the status mark on the call that started subtask #4 reads. */
   const callMark = (chat: HTMLElement): string | null =>
     chat.querySelector('.calls .call .call__mark')?.getAttribute('aria-label') ?? null;
 
-  it('drops the ring on reconnect when the subtask finished while the socket was down', async () => {
+  it('drops the subtask from the dock and the header\'s pink on reconnect when it finished while the socket was down', async () => {
     const chat = await chatWithRunningSubtask('working');
-    expect(ringCount(chat)).toBe('1');
+    expect(listed()).toEqual(['compare museum hours']);
+    expect(headerIsPink()).toBe(true);
 
     // Its terminal frame died with the socket; the backend now reads it done.
     serve = serveChatTurn('completed');
     await dropAndRestoreSocket();
 
-    expect(chat.querySelector('.subtask-ring')).toBeNull();
+    expect(listed()).toEqual([]);
+    expect(headerIsPink()).toBe(false);
     expect(chat.textContent).toContain('I started a subtask for that.');
   });
 
-  it('brings the ring back on reconnect when the subtask still runs though the turn\'s last read had it done', async () => {
+  it('lists the subtask again on reconnect when it still runs though the turn\'s last read had it done', async () => {
     // The read is older than the subtask's own working frame, which wins.
     const chat = await chatWithRunningSubtask('completed');
-    expect(ringCount(chat)).toBe('1');
+    expect(listed()).toEqual(['compare museum hours']);
 
     serve = serveChatTurn('working');
     await dropAndRestoreSocket();
 
-    expect(ringCount(chat)).toBe('1');
+    expect(listed()).toEqual(['compare museum hours']);
+    expect(headerIsPink()).toBe(true);
     expect(callMark(chat)).toBe('running');
   });
 
   it('reads the turn again on the next reconnect when the backend failed the first re-read', async () => {
-    const chat = await chatWithRunningSubtask('completed');
-    expect(ringCount(chat)).toBe('1');
+    await chatWithRunningSubtask('completed');
+    expect(listed()).toEqual(['compare museum hours']);
 
     serve = () => {
       throw new Error('backend down');
     };
     await dropAndRestoreSocket();
 
-    // The ring the first drop hid is not on screen for the second drop to
-    // find; only the turn kept from the failed read brings it back.
+    // The drop threw the working frame away and the read failed, so nothing
+    // on screen says the subtask runs for the second drop to find; only the
+    // turn kept from the failed read brings it back.
+    expect(listed()).toEqual([]);
     serve = serveChatTurn('working');
     await dropAndRestoreSocket();
 
-    expect(ringCount(chat)).toBe('1');
+    expect(listed()).toEqual(['compare museum hours']);
+    expect(headerIsPink()).toBe(true);
   });
 
   it.each([
@@ -690,6 +714,7 @@ describe('a chat turn\'s subtask ring across a dropped connection', () => {
 
     expect(callMark(chat)).toBe(mark);
     expect(chat.querySelector('.step__failed')?.textContent ?? null).toBe(failedCount);
-    expect(chat.querySelector('.subtask-ring')).toBeNull();
+    expect(listed()).toEqual([]);
+    expect(headerIsPink()).toBe(false);
   });
 });

@@ -112,7 +112,7 @@ function isOpenDelegate(target: DelegateRef): boolean {
  *  never by a type — and fetch it. */
 async function _openDelegate(target: DelegateRef): Promise<void> {
   _teardownSurface();
-  heading.value = delegateName(target.channel);
+  heading.value = session.panelDelegateTitle.trim() || delegateName(target.channel);
   await nextTick(); // let `v-if="open"` mount <aside> so turnsRef exists.
   if (!turnsRef.value || !isOpenDelegate(target)) return;
   backRef.value?.focus();

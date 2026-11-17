@@ -6,7 +6,7 @@
  * delegate's pills can't land on a same-id user turn. Visual-only; no turn
  * data. Reactive so Vue components re-render off it.
  */
-import { reactive } from 'vue';
+import { reactive, shallowReactive } from 'vue';
 import type { DelegateRef, TurnExecutionState } from '@chalie/shared';
 import { isDelegateChannel } from './delegateChannel';
 
@@ -144,7 +144,7 @@ export function setDelegateState(channel: string, turnId: number, state: TurnExe
 }
 
 /** How the delegate turn `delegate` names stands — the one status the
- *  running-subagents ring and a call's mark both read: its own execution
+ *  Subagents dock and a call's mark both read: its own execution
  *  frames once one was seen, else the REST read its ref came from. A live
  *  frame's ref carries no run state; its subagent has just started. */
 export function delegateState(delegate: DelegateRef): TurnExecutionState {
@@ -167,4 +167,45 @@ export function clearDelegateFeeds(): void {
   for (const [key, state] of _delegateStates) {
     if (state === 'working') _delegateStates.delete(key);
   }
+}
+
+// ── Running subagents, across every turn on screen ──────────────────────────
+
+/** A subagent still running, with the one-line summary of the call that started it. */
+export interface RunningSubagent {
+  delegate: DelegateRef;
+  summary: string;
+}
+
+/**
+ * Every running subagent some mounted turn view showed, keyed
+ * `${channel}#${turnId}` in first-seen order, with the views that showed it —
+ * so a turn drawn twice keeps its entry while one copy is still mounted.
+ */
+const _running = shallowReactive(new Map<string, { subagent: RunningSubagent; views: Set<symbol> }>());
+
+/** Set the running subagents `view` shows, replacing what it showed before. */
+export function publishRunningSubagents(view: symbol, running: readonly RunningSubagent[]): void {
+  const keys = new Set(running.map((s) => `${s.delegate.channel}#${s.delegate.turn_id}`));
+  for (const [key, held] of _running) {
+    if (keys.has(key)) continue;
+    held.views.delete(view);
+    if (held.views.size === 0) _running.delete(key);
+  }
+  for (const subagent of running) {
+    const key = `${subagent.delegate.channel}#${subagent.delegate.turn_id}`;
+    const held = _running.get(key);
+    if (held) held.views.add(view);
+    else _running.set(key, { subagent, views: new Set([view]) });
+  }
+}
+
+/** Drop everything `view` showed — called as its turn view unmounts. */
+export function withdrawRunningSubagents(view: symbol): void {
+  publishRunningSubagents(view, []);
+}
+
+/** Every running subagent on screen, once each, in the order first seen. */
+export function runningSubagents(): RunningSubagent[] {
+  return [..._running.values()].map((held) => held.subagent);
 }

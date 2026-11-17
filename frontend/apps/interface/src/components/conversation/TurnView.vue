@@ -6,7 +6,7 @@
      feed (inline turns) and the thread panel so both keep identical row
      rhythm. -->
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, onBeforeUnmount, watch } from 'vue';
 import { ConfigType } from '@chalie/shared';
 import type { DelegateRef } from '@chalie/shared';
 import type {
@@ -17,14 +17,19 @@ import type {
 } from '../../api/conversation';
 import { usePermissionsStore } from '../../stores/permissions';
 import type { PermissionRequest } from '../../stores/permissions';
-import { delegateState, liveTrailsFor } from '../../utils/liveActTrail';
+import {
+  delegateState,
+  liveTrailsFor,
+  publishRunningSubagents,
+  withdrawRunningSubagents,
+  type RunningSubagent,
+} from '../../utils/liveActTrail';
 import { didWork, mergeWork, showsWork } from '../../utils/turnSteps';
 import UserBubble from './UserBubble.vue';
 import ChalieBubble from './ChalieBubble.vue';
 import ActivityLine from './ActivityLine.vue';
 import BubbleFooter from './BubbleFooter.vue';
 import PlanCard from './PlanCard.vue';
-import SubtaskRing from './SubtaskRing.vue';
 
 const props = withDefaults(
   defineProps<{
@@ -85,14 +90,14 @@ const liveLine = computed(() => ({
   repliesLate: repliesLate.value,
 }));
 
-/** This turn's subagents that are still running — the ring's menu, in
- *  first-seen order. On the chat a subagent outlives the call that started
- *  it, so whether it runs is `delegateState`'s, the status its call's mark
- *  reads too. Deduped by channel and turn — turn numbers are counted per
- *  subagent, and a follow-up "message" call points at the same subtask, the
- *  first summary winning. */
+/** This turn's subagents that are still running, in first-seen order — what
+ *  it adds to the Subagents dock. On the chat a subagent outlives the call
+ *  that started it, so whether it runs is `delegateState`'s, the status its
+ *  call's mark reads too. Deduped by channel and turn — turn numbers are
+ *  counted per subagent, and a follow-up "message" call points at the same
+ *  subtask, the first summary winning. */
 const runningSubtasks = computed(() => {
-  const found = new Map<string, { delegate: DelegateRef; summary: string }>();
+  const found = new Map<string, RunningSubagent>();
   const consider = (delegate: DelegateRef, summary: string | undefined): void => {
     const key = `${delegate.channel}#${delegate.turn_id}`;
     if (delegateState(delegate) !== 'working' || found.has(key)) return;
@@ -108,6 +113,12 @@ const runningSubtasks = computed(() => {
   }
   return [...found.values()];
 });
+
+// The dock lists every running subagent of every turn on screen: this view
+// keeps its share current and takes it back as it unmounts.
+const view = Symbol('turn-view');
+watch(runningSubtasks, (running) => publishRunningSubagents(view, running), { immediate: true });
+onBeforeUnmount(() => withdrawRunningSubagents(view));
 
 /** The running step: the row a live call was dropped from, else — before a
  *  refetch returned that row — none yet, so its block is the live line alone,
@@ -146,13 +157,7 @@ interface PlanRow {
   tasks: PlanTask[];
 }
 
-/** The running-subagents ring, standing just above the turn's last footer. */
-interface SubtasksRow {
-  kind: 'subtasks';
-  key: 'subtasks';
-}
-
-type DisplayRow = MsgRow | ActivityRow | FooterRow | PlanRow | SubtasksRow;
+type DisplayRow = MsgRow | ActivityRow | FooterRow | PlanRow;
 
 /** Ids of the user rows a cancel of this working turn would remove: the
  *  trailing run of user rows nothing has answered yet, stopping at a row that
@@ -295,17 +300,6 @@ const displayRows = computed<DisplayRow[]>(() => {
   return rows;
 });
 
-/** The rows as drawn: `displayRows` plus, while any of this turn's subagents
- *  still runs, the ring at the bottom — right above the footer that closes the
- *  list, or last when the list ends on anything else (an exchange still
- *  running, whatever exchange an earlier footer closed). */
-const shownRows = computed<DisplayRow[]>(() => {
-  const rows = displayRows.value;
-  if (runningSubtasks.value.length === 0) return rows;
-  const ring: SubtasksRow = { kind: 'subtasks', key: 'subtasks' };
-  return rows.at(-1)?.kind === 'footer' ? [...rows.slice(0, -1), ring, rows[rows.length - 1]] : [...rows, ring];
-});
-
 // Speaker-role grouping for the row rhythm.
 type RowRole = 'user' | 'chalie';
 
@@ -317,10 +311,10 @@ interface RowEntry {
 
 const rowEntries = computed<RowEntry[]>(() => {
   let prevRole: RowRole | null = null;
-  return shownRows.value.map((row) => {
-    // The running step, footers, plans and the subtasks ring have no user
-    // branch to match, so they fall into 'chalie' — keeping them grouped with
-    // the chalie rows so speaker-change spacing stays correct.
+  return displayRows.value.map((row) => {
+    // The running step, footers and plans have no user branch to match, so
+    // they fall into 'chalie' — keeping them grouped with the chalie rows so
+    // speaker-change spacing stays correct.
     const role: RowRole = row.kind === 'msg' && row.message.role === 'user' ? 'user' : 'chalie';
     const isLead = role !== prevRole;
     prevRole = role;
@@ -375,9 +369,7 @@ function onOpenThread(): void {
       class="msg-row"
       :class="[`msg-row--${ar.role}`, ar.isLead ? 'msg-row--lead' : 'msg-row--cont', `msg-row--${ar.row.kind}`]"
     >
-      <SubtaskRing v-if="ar.row.kind === 'subtasks'" :subtasks="runningSubtasks" />
-
-      <PlanCard v-else-if="ar.row.kind === 'plan'" :tasks="(ar.row as PlanRow).tasks" />
+      <PlanCard v-if="ar.row.kind === 'plan'" :tasks="(ar.row as PlanRow).tasks" />
 
       <!-- The segment's footer: timestamp, duration and actions — and (on the
            last footer of a forked turn) the collapsed thread pill. -->
@@ -446,15 +438,9 @@ function onOpenThread(): void {
 }
 
 // Each step is a message of its own, spaced from the one before it like one;
-// a footer, and the subtasks ring above it, stay close under the step they
-// close.
-.msg-row--chalie.msg-row--cont:not(.msg-row--footer):not(.msg-row--subtasks) {
+// a footer stays close under the step it closes.
+.msg-row--chalie.msg-row--cont:not(.msg-row--footer) {
   margin-top: var(--space-lg);
-}
-
-// The running-subagents ring stands at the row's right edge.
-.msg-row--subtasks {
-  justify-content: flex-end;
 }
 
 // A settled turn that failed with no reply, or a stopped subagent — a muted,

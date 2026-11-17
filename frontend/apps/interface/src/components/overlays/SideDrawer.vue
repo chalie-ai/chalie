@@ -2,10 +2,10 @@
 /**
  * Slide-out side drawer shell — the scrim, right-anchored panel, header
  * (title + close), and scrollable list region shared by every right-side
- * overlay (the Activity drawer, the Scheduler dock). Consumers pass a title
- * and their list rows via the default slot; this component owns the open/close
- * transition choreography and Escape-to-close, so the rows are all a consumer
- * has to think about.
+ * overlay (the Activity drawer, the Scheduler dock, the Subagents dock).
+ * Consumers pass a title and their list rows via the default slot; this
+ * component owns the open/close transition choreography and Escape-to-close,
+ * so the rows are all a consumer has to think about.
  *
  * Controlled: `open` drives the slide; a close request (scrim, close button, or
  * Escape) is reported via `close` — the parent flips its own state, which flows

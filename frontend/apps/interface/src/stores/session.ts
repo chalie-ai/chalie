@@ -92,7 +92,7 @@ export const useSessionStore = defineStore('session', {
      *  silently die). */
     _offlineWorking: new Set<string>(),
 
-    /** `type:turnId` keys of turns showing a running-subagents ring when the WS
+    /** `type:turnId` keys of turns showing a running subagent when the WS
      *  dropped. The drop clears the subagents' live run state, and a subagent
      *  that ends behind the dead socket sends no frame anyone receives, so
      *  these turns are re-read on reconnect for their chips' `working` to
@@ -120,12 +120,19 @@ export const useSessionStore = defineStore('session', {
      *  Exclusive with `panelThreadId`: the panel shows one or the other. */
     panelDelegate: null as DelegateRef | null,
 
+    /** The panel's heading for `panelDelegate`: the one-line summary of the
+     *  call that started it, or empty to name it by its subagent. */
+    panelDelegateTitle: '',
+
     /** True while the thread-search overlay is open (Cmd/Ctrl-K or the top-bar
      *  search button). The overlay self-fetches; this is pure open/close state. */
     searchOpen: false,
 
     /** True while the scheduler dock is open. */
     schedulerDockOpen: false,
+
+    /** True while the Subagents dock is open. */
+    subagentDockOpen: false,
 
     /** Registered auth-failure callback (set by App bootstrap). */
     _onAuthFailure: null as (() => void) | null,
@@ -163,7 +170,7 @@ export const useSessionStore = defineStore('session', {
       ws.onConnect(() => {
         conn.setConnected(true);
         void this._reconcileWorking();
-        void this._refreshSubtaskRings();
+        void this._refreshRunningSubagents();
         // Pending permission gates outlive the socket (the backend thread keeps
         // waiting; the WS frame was only the visual trigger) — re-read them on
         // every connect, first load and reconnect alike, so a reload or a drop
@@ -205,8 +212,8 @@ export const useSessionStore = defineStore('session', {
         }
         // A delegate's terminal frame is lost the same way — drop its pills
         // and timers now; reconnect re-reads the delegate panel, if open, and
-        // every turn whose ring the clear below leaves to a stale read. Read
-        // BEFORE the clear, which can hide a ring whose subagent still runs.
+        // every turn whose running subagents the clear below leaves to a stale
+        // read. Read BEFORE the clear, which can hide a subagent that still runs.
         for (const el of Array.from(document.querySelectorAll<HTMLElement>('[data-subtasks-running][data-turn-id][data-type]'))) {
           this._offlineSubtaskTurns.add(`${el.getAttribute('data-type')}:${el.getAttribute('data-turn-id')}`);
         }
@@ -285,14 +292,14 @@ export const useSessionStore = defineStore('session', {
     },
 
     /**
-     * Re-read every turn that showed a running-subagents ring when the WS
-     * dropped (the `_offlineSubtaskTurns` snapshot). The drop cleared the
-     * subagents' live run state, so each ring now answers from the chips of the
-     * turn's last read — and a subagent that ended during the outage would read
-     * as running until a page reload. A fresh read's chips decide again; any
-     * later frame still wins over them.
+     * Re-read every turn that showed a running subagent when the WS dropped
+     * (the `_offlineSubtaskTurns` snapshot). The drop cleared the subagents'
+     * live run state, so each turn now answers from the chips of its last read
+     * — and a subagent that ended during the outage would stay in the
+     * Subagents dock until a page reload. A fresh read's chips decide again;
+     * any later frame still wins over them.
      */
-    async _refreshSubtaskRings(): Promise<void> {
+    async _refreshRunningSubagents(): Promise<void> {
       for (const key of Array.from(this._offlineSubtaskTurns)) {
         const idx = key.indexOf(':');
         const type = key.slice(0, idx);
@@ -302,7 +309,7 @@ export const useSessionStore = defineStore('session', {
         try {
           block = await convoApi.thread(turnId, type);
         } catch (err) {
-          console.warn('[Session] Subtask ring re-read failed for', key, '— retried on the next reconnect:', err);
+          console.warn('[Session] Running-subagent re-read failed for', key, '— retried on the next reconnect:', err);
           continue;
         }
         this._offlineSubtaskTurns.delete(key);
@@ -647,6 +654,7 @@ export const useSessionStore = defineStore('session', {
      */
     openThreadPanel(turnId: number, type: string): void {
       this.panelDelegate = null;
+      this.panelDelegateTitle = '';
       this.panelThreadId = turnId;
       this.panelType = type;
       setTurnDone(turnId, type, false);
@@ -656,10 +664,12 @@ export const useSessionStore = defineStore('session', {
      * Open a delegate (subagent) turn in the slide-over panel to watch (and,
      * while it runs, stop), replacing whatever it showed. ThreadPanel.vue
      * watches panelDelegate and owns the fetch; a delegate turn has no type
-     * and no done marker.
+     * and no done marker. `title` heads the panel — the one-line summary of
+     * the call that started the subagent, when the caller holds it.
      */
-    openDelegatePanel(ref: DelegateRef): void {
+    openDelegatePanel(ref: DelegateRef, title = ''): void {
       this.panelThreadId = null;
+      this.panelDelegateTitle = title;
       this.panelDelegate = { channel: ref.channel, turn_id: ref.turn_id };
     },
 
@@ -667,6 +677,7 @@ export const useSessionStore = defineStore('session', {
     closeThreadPanel(): void {
       this.panelThreadId = null;
       this.panelDelegate = null;
+      this.panelDelegateTitle = '';
     },
 
     /** Open / close the thread-search overlay. */
@@ -683,6 +694,14 @@ export const useSessionStore = defineStore('session', {
     },
     closeSchedulerDock(): void {
       this.schedulerDockOpen = false;
+    },
+
+    /** Open / close the Subagents dock. */
+    openSubagentDock(): void {
+      this.subagentDockOpen = true;
+    },
+    closeSubagentDock(): void {
+      this.subagentDockOpen = false;
     },
 
     /** Fire a background notification when the tab is not focused. */

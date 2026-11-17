@@ -229,8 +229,9 @@ body {
 .loading-overlay__skip:hover { color: var(--text); }
 
 // Thread activity marker (blinker) — one definition shared by the user activity
-// dock (TaskDrawer) and the scheduler dock. Working (pink) pulses while the reply
-// streams; done is a steady standing marker until the user opens the thread.
+// dock (TaskDrawer), the scheduler dock and the Subagents dock. Working (pink)
+// pulses while the reply streams; done is a steady standing marker until the
+// user opens the thread.
 .thread-activity-dot {
   flex-shrink: 0;
   width: 8px;
@@ -244,6 +245,59 @@ body {
   &.done {
     background: var(--text);
   }
+}
+
+// A side drawer's list row, shared by the scheduler dock and the Subagents
+// dock: a bold one-line label (with its activity dot), a muted line under it.
+.drawer-empty {
+  font-size: var(--fs-body);
+  color: var(--muted);
+  padding: 10px 16px;
+  font-style: italic;
+  margin: 0;
+}
+
+.drawer-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  padding: 10px 16px;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-1) var(--ease-out),
+    translate var(--dur-1) var(--ease-out);
+
+  &:hover {
+    background: var(--cell);
+  }
+}
+
+.drawer-row__top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.drawer-row__label {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-body);
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.drawer-row__sub {
+  font-size: var(--fs-mono);
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 // Base layer (feed + footer dock) recedes behind an open thread panel — the
@@ -275,7 +329,8 @@ body {
 .thinking-select__item:active,
 .loading-overlay__skip:active,
 .chalie-toast__undo:active,
-.dock-error__close:active {
+.dock-error__close:active,
+.drawer-row:active {
   translate: 0 1px;
 }
 

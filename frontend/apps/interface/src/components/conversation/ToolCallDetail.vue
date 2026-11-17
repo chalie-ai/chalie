@@ -18,8 +18,8 @@ const detail = shallowRef(lastDetail(props.call.id));
 const failed = shallowRef(false);
 const view = computed(() => (detail.value ? toolDetailView(detail.value) : null));
 const delegate = computed(() => detail.value?.delegate ?? props.call.delegate);
-/** Whether the subagent this call started still runs, as the running-subagents
- *  ring and the call's mark read it (`delegateState`): from the call as the
+/** Whether the subagent this call started still runs, as the Subagents dock
+ *  and the call's mark read it (`delegateState`): from the call as the
  *  turn was last drawn — which a reconnect re-reads after a dropped socket
  *  loses the frames — else from this call's own newest read. */
 const subagentRunning = computed(() => {
@@ -77,6 +77,6 @@ watch(
         </li>
       </ol>
     </template>
-    <button v-if="delegate" v-bind="delegatePillAttrs(delegate)">Open transcript</button>
+    <button v-if="delegate" v-bind="delegatePillAttrs(delegate, call.summary)">Open transcript</button>
   </div>
 </template>

@@ -95,16 +95,16 @@ function cadence(turn: SchedulerTurn): string {
     title="Schedules"
     @close="session.closeSchedulerDock()"
   >
-    <p v-if="!turns.length" class="sched-dock__empty">No active schedules.</p>
+    <p v-if="!turns.length" class="drawer-empty">No active schedules.</p>
 
     <button
       v-for="turn in turns"
       :key="turn.turn_id"
-      class="sched-dock__row"
+      class="drawer-row"
       @click="openTurn(turn)"
     >
-      <span class="sched-dock__row-top">
-        <span class="sched-dock__row-label">{{ turn.gist || turn.preview }}</span>
+      <span class="drawer-row__top">
+        <span class="drawer-row__label">{{ turn.gist || turn.preview }}</span>
         <span
           v-if="phase(turn)"
           class="thread-activity-dot"
@@ -112,68 +112,7 @@ function cadence(turn: SchedulerTurn): string {
           aria-hidden="true"
         />
       </span>
-      <span class="sched-dock__row-sub">{{ cadence(turn) }}</span>
+      <span class="drawer-row__sub">{{ cadence(turn) }}</span>
     </button>
   </SideDrawer>
 </template>
-
-<style scoped lang="scss">
-// ── Empty state ───────────────────────────────────────────────────────────────
-
-.sched-dock__empty {
-  font-size: var(--fs-body);
-  color: var(--muted);
-  padding: 10px 16px;
-  font-style: italic;
-  margin: 0;
-}
-
-// ── Row ───────────────────────────────────────────────────────────────────────
-
-.sched-dock__row {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  width: 100%;
-  text-align: left;
-  background: transparent;
-  padding: 10px 16px;
-  cursor: pointer;
-  transition:
-    background-color var(--dur-1) var(--ease-out),
-    translate var(--dur-1) var(--ease-out);
-
-  &:hover {
-    background: var(--cell);
-  }
-
-  &:active {
-    translate: 0 1px;
-  }
-}
-
-.sched-dock__row-top {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.sched-dock__row-label {
-  flex: 1;
-  min-width: 0;
-  font-size: var(--fs-body);
-  font-weight: 600;
-  color: var(--text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.sched-dock__row-sub {
-  font-size: var(--fs-mono);
-  color: var(--muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-</style>

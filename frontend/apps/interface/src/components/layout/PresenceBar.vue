@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { Brain, CalendarClock, Clock, Globe, Moon, Search, Sun } from '@lucide/vue';
+import { Bot, Brain, CalendarClock, Clock, Globe, Moon, Search, Sun } from '@lucide/vue';
 import { useSessionStore } from '../../stores/session';
 import { useTasksStore } from '../../stores/tasks';
 import { useBrowserStore } from '../../stores/browser';
@@ -8,6 +8,7 @@ import { ChalieMark, ConfigType, webPlatformAdapter, useTheme } from '@chalie/sh
 import { emit } from '../../composables/useEventBus';
 import { useDockBusy } from '../../composables/useDockBusy';
 import { useThreadActivity } from '../../utils/threadActivity';
+import { runningSubagents } from '../../utils/liveActTrail';
 import { hasDoneScheduled } from '../../utils/turnDom';
 
 // Scheduler-dock activity cue: pink icon when any scheduled turn is
@@ -18,6 +19,9 @@ function onTurnStateChanged(): void {
   hasSchedulerActivity.value = hasDoneScheduled();
 }
 const session = useSessionStore();
+
+// Subagents-dock activity cue: pink icon while any subagent on screen runs.
+const hasSubagentActivity = computed(() => runningSubagents().length > 0);
 
 // Replaces the retired `session.isSending` store getter — the mark's dot
 // pulses while the main spine (no stable turn_id) has anything working.
@@ -79,6 +83,16 @@ onBeforeUnmount(() => {
         <CalendarClock :size="16" aria-hidden="true" />
       </button>
       <button
+        id="subagentDockBtn"
+        class="btn-icon"
+        :class="{ 'has-activity': hasSubagentActivity }"
+        aria-label="Subagents"
+        title="Subagents"
+        @click="session.openSubagentDock()"
+      >
+        <Bot :size="16" aria-hidden="true" />
+      </button>
+      <button
         id="taskDrawerBtn"
         class="btn-icon task-drawer-trigger"
         :class="{ 'has-activity': totalCount > 0 }"
@@ -124,9 +138,10 @@ onBeforeUnmount(() => {
   justify-content: center;
 }
 
-// Pink cue on the scheduler dock button when any scheduled turn is
-// "done" (settled unseen). The CalendarClock SVG inherits this via
-// currentColor, so setting it on the button cascades to the icon.
+// Pink cue on a dock button: the scheduler dock's when any scheduled turn is
+// "done" (settled unseen), the Subagents dock's while a subagent runs. The
+// icon SVG inherits this via currentColor, so setting it on the button
+// cascades to the icon.
 .has-activity {
   color: var(--pink-text);
 }
