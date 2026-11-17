@@ -26,7 +26,9 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, cast
 
+from abilities.message_parent import waiting_on
 from configs.channels import config_for
+from configs.enums.channels import Channel
 from models.tool_call import ToolCall
 from models.transcript import Transcript
 from models.turn_execution import TurnExecution
@@ -46,7 +48,8 @@ logger = logging.getLogger(__name__)
 #: never got to close.
 STOP_REASON_PROCESS_DEATH = "process death"
 #: Stamped as ``stop_reason`` on a delegate's turn stopped by its caller's own
-#: stop, or by the chat's ``stop_subagent`` call naming it.
+#: stop, by the stop of the chat turn its waiting message is in, or by the
+#: chat's ``stop_subagent`` call naming it.
 STOP_REASON_PARENT_STOPPED = "parent stopped"
 
 
@@ -140,8 +143,10 @@ class TurnExecutionService:
         caller is blocked waiting on — each cancelled in turn from here with
         :data:`STOP_REASON_PARENT_STOPPED`, the same reason ``stop_subagent``
         stamps when the chat stops one child by name; an already-ended child
-        simply returns ``None``. A subagent's turn closes its ``agents`` row
-        ``cancelled`` in the same transaction."""
+        simply returns ``None``. It also stops every subagent whose message
+        the turn holds and that still waits on it for a reply. A subagent's
+        turn closes its ``agents`` row ``cancelled`` in the same
+        transaction."""
         from controllers.message_processor import MessageProcessor  # noqa: PLC0415 — the MP imports this module
 
         try:
@@ -173,6 +178,12 @@ class TurnExecutionService:
             cls.cancel_turn(
                 cast("str", entry["channel"]), cast("int", entry["turn_id"]),
                 stop_reason=STOP_REASON_PARENT_STOPPED,
+            )
+        # A subagent whose message this turn holds waits on it for the reply,
+        # which this stop means will never come.
+        for agent in waiting_on(channel, turn_id):
+            cls.cancel_turn(
+                Channel.for_delegate(agent.type), agent.turn_id, stop_reason=STOP_REASON_PARENT_STOPPED,
             )
         return execution
 

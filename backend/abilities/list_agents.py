@@ -10,8 +10,8 @@
 
 Each entry is drawn the way the interface's agent list draws it
 (:meth:`AgentService.view`): its number, its type, the one-line summary of the
-call that spawned it, and its status. Any caller other than the chat gets an
-empty list (:meth:`AgentAbility.mine`).
+call that spawned it, and its status. With none running — always so for any
+caller other than the chat (:meth:`AgentAbility.mine`) — it says so in words.
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ from models.agent import Agent
 from services.agent_service import AgentService
 
 _FIELDS = ("agent_id", "type", "summary", "status")
+_NONE_RUNNING = "No agents are currently running"
 
 
 class ListAgentsAbility(AgentAbility[ListAgentsParams]):
@@ -56,4 +57,6 @@ class ListAgentsAbility(AgentAbility[ListAgentsParams]):
 
     def run(self, params: ListAgentsParams) -> ToolResult:
         running = [AgentService.view(agent) for agent in Agent.running() if self.mine(agent)]
+        if not running:
+            return ToolResult.ok(_NONE_RUNNING)
         return ToolResult.ok([{key: view[key] for key in _FIELDS} for view in running])

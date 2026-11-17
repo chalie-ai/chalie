@@ -25,6 +25,10 @@ message and waits for its reply.
   person's stop — ends the wait without a reply and ends the subagent
   cancelled; the nudge is gone from the chat's next read. The chat's own stop
   sends nothing back; the person's stop tells the chat it was stopped.
+* The person's stop of the chat turn the message opened stops the subagent
+  waiting on it: the wait ends without a reply, the subagent ends cancelled
+  with its caller, and nothing is sent back. Once the chat has replied, that
+  stop leaves the subagent working.
 * A ``web_search`` or a subtask a scheduled task or an outside agent spawned
   is waited for, so it holds no ``message_parent``: it reads that it should finish, is not offered
   the tool, and a call to it is refused as an unknown tool and posts nothing.
@@ -578,6 +582,96 @@ def test_the_persons_stop_ends_the_wait_and_tells_the_chat(
     chat_read = provider.read("chat")
     assert f"Message from {_WEB} #{n}: {_QUESTION}\n{PARENT_NUDGE}" in chat_read[2]
     assert notice in chat_read[3] and PARENT_NUDGE not in chat_read[3]
+
+
+def test_the_persons_stop_of_the_chat_turn_a_message_opened_stops_the_subagent_waiting_on_it(
+    authed_client: tuple[FlaskClient, sqlite3.Connection, object],
+) -> None:
+    """The chat's turn has ended when the search asks, so its message opens a
+    chat turn of its own. While that turn works, the person stops it. The stop
+    reaches the search waiting on it: the wait ends with no reply, the search
+    ends cancelled with its caller, and nothing is sent back."""
+    client, db, _store = authed_client
+    asking = Held(_ask())
+    reading = Held(text("Let me check."))
+    provider = ChannelProvider(
+        chat=[_spawn(), text("Started."), reading],
+        web_search=[asking],
+    )
+
+    with listening(), patched(provider):
+        chat = begin(UserConfig(), "find the bridge news")
+        chat.result()
+        asking.gate.set()
+        wait(reading.entered, "the chat's turn the message opened")
+        [asked] = calls_of(db, MessageParentAbility.NAME)
+        [message] = replies(db, cast("int", asked["id"]))
+        opened = cast("int", message["turn_id"])
+        stop = client.delete(f"/api/threads/{opened}")
+        assert stop.status_code == 200 and (stop.get_json() or {})["result"]["cancelled"] is True
+        cast("threading.Thread", asking.thread).join(timeout=WAIT_S)
+        reading.gate.set()
+        cast("threading.Thread", reading.thread).join(timeout=WAIT_S)
+
+    assert asking.opened and reading.opened and provider.unused() == {}
+    assert opened != chat.turn_id
+    assert execution(_USER, opened).state == TurnExecution.CANCELLED
+    [spawn] = calls_of(db, _WEB)
+    turn = child_turn(db, _WEB_CHANNEL, cast("int", spawn["id"]))
+    n = agent_number(_WEB, turn)
+    [asked] = calls_of(db, MessageParentAbility.NAME)
+    assert _answer(asked) == ("success", None, _WAIT_STOPPED)
+    assert len(provider.read(_WEB)) == 1
+    assert cast("Agent", Agent.by_id(n)).status == Agent.CANCELLED
+    ended = execution(_WEB_CHANNEL, turn)
+    assert (ended.state, ended.stop_reason) == (TurnExecution.CANCELLED, STOP_REASON_PARENT_STOPPED)
+    assert replies(db, cast("int", spawn["id"])) == []
+    assert f"Message from {_WEB} #{n}: {_QUESTION}\n{PARENT_NUDGE}" in provider.read("chat")[2]
+
+
+def test_the_persons_stop_of_the_chat_turn_after_it_replied_leaves_the_subagent_working(
+    authed_client: tuple[FlaskClient, sqlite3.Connection, object],
+) -> None:
+    """The search's message opens a chat turn, and the chat replies in it.
+    While that turn and the search are both still working, the person stops
+    the chat turn. The search no longer waits on it, so it works on, finishes
+    with the reply it read, and its answer comes back."""
+    client, db, _store = authed_client
+    asking = Held(_ask())
+    noting = Held(text("Noted."))
+    finishing = Held(text(_ANSWER))
+    seen: dict[str, int] = {}
+    provider = ChannelProvider(
+        chat=[_spawn(), text("Started."), lambda: _reply_to_it(seen), noting, text("Noted.")],
+        web_search=[asking, finishing],
+    )
+
+    with listening(), patched(provider):
+        chat = begin(UserConfig(), "find the bridge news")
+        chat.result()
+        asking.gate.set()
+        wait(noting.entered, "the chat's turn after its reply")
+        wait(finishing.entered, "the search's step after the reply")
+        [asked] = calls_of(db, MessageParentAbility.NAME)
+        [message] = replies(db, cast("int", asked["id"]))
+        opened = cast("int", message["turn_id"])
+        stop = client.delete(f"/api/threads/{opened}")
+        assert stop.status_code == 200 and (stop.get_json() or {})["result"]["cancelled"] is True
+        n = seen["n"]
+        assert cast("Agent", Agent.by_id(n)).status == Agent.RUNNING
+        noting.gate.set()
+        finishing.gate.set()
+        cast("threading.Thread", finishing.thread).join(timeout=WAIT_S)
+
+    assert asking.opened and noting.opened and finishing.opened and provider.unused() == {}
+    assert execution(_USER, opened).state == TurnExecution.CANCELLED
+    [spawn] = calls_of(db, _WEB)
+    turn = child_turn(db, _WEB_CHANNEL, cast("int", spawn["id"]))
+    assert agent_number(_WEB, turn) == n
+    assert cast("str", asked["result"]).split("\n")[1:-1] == [_REPLY, SUBAGENT_NUDGE]
+    assert cast("Agent", Agent.by_id(n)).status == Agent.DONE
+    assert execution(_WEB_CHANNEL, turn).state == TurnExecution.COMPLETED
+    assert [r["content"] for r in replies(db, cast("int", spawn["id"]))] == [_ANSWER]
 
 
 @pytest.mark.parametrize(

@@ -20,7 +20,8 @@ two are told apart. The call then waits for the next message to join the
 subagent's turn — the chat's ``message_subagent`` — and returns it as its
 result with :data:`SUBAGENT_NUDGE`. A message taken here is never filed for
 the act trail, so it reaches the model once. A stop ends the wait with no
-reply.
+reply — and stopping the chat turn the message opened or joined stops the
+subagent waiting on it (:func:`waiting_on`).
 """
 
 from __future__ import annotations
@@ -152,16 +153,31 @@ def sender(call: ToolCall) -> Agent:
     return agent
 
 
-def waiting(row: Transcript, call: ToolCall) -> bool:
-    """Whether the subagent whose ``message_parent`` ``call`` posted chat
-    ``row`` still waits for a reply: the call is still running, so is its
-    subagent, and no message has joined the subagent's turn since ``row``."""
-    if call.state != ToolCall.STARTED:
-        return False
+def waiting(row: Transcript) -> Agent | None:
+    """The subagent whose ``message_parent`` call posted chat ``row``, while
+    it still waits for a reply: the call is still running, so is its
+    subagent, and no message has joined the subagent's turn since ``row``.
+    ``None`` for any other row."""
+    link = row.tool_call_id
+    if link is None or not link.isdecimal():
+        return None
+    call = ToolCall.get(int(link))
+    if call is None or call.tool_name != MessageParentAbility.NAME or call.state != ToolCall.STARTED:
+        return None
     agent = sender(call)
     if agent.status != Agent.RUNNING:
-        return False
-    return not Transcript.joined_since(Channel.for_delegate(agent.type), agent.turn_id, cast("int", row.id))
+        return None
+    if Transcript.joined_since(Channel.for_delegate(agent.type), agent.turn_id, cast("int", row.id)):
+        return None
+    return agent
+
+
+def waiting_on(channel: str, turn_id: int) -> list[Agent]:
+    """Every subagent whose message sits in turn ``(channel, turn_id)`` —
+    the chat turn it opened or joined — and still waits for a reply
+    (:func:`waiting`): the turn it waits on, so stopped with it."""
+    rows = Transcript.filter("channel", channel).filter("turn_id", turn_id).get()
+    return [agent for row in rows if (agent := waiting(row)) is not None]
 
 
 def parent_nudge(row: Transcript) -> str:
@@ -169,13 +185,7 @@ def parent_nudge(row: Transcript) -> str:
     :data:`PARENT_NUDGE` while ``row`` is a subagent's message and that
     subagent still waits for a reply (:func:`waiting`), else ``''``. Derived
     on every read, never stored."""
-    link = row.tool_call_id
-    if link is None or not link.isdecimal():
-        return ""
-    call = ToolCall.get(int(link))
-    if call is None or call.tool_name != MessageParentAbility.NAME or not waiting(row, call):
-        return ""
-    return f"\n{PARENT_NUDGE}"
+    return f"\n{PARENT_NUDGE}" if waiting(row) is not None else ""
 
 
 def joined_nudge(row: Transcript) -> str:

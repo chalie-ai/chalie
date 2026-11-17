@@ -119,6 +119,7 @@ _MESSAGE = "only this year"
 _ANSWER = "This year: the bridge reopened in March."
 _FOLLOW_UP = "and the year before"
 _NOTHING_REACHED = "No subagent has that number."
+_NONE_RUNNING = "No agents are currently running"
 _SPAWN_AGAIN = "If you need to perform follow-ups you can spawn a new agent"
 _STOPPED = f"This agent was stopped before it finished. {_SPAWN_AGAIN}"
 
@@ -256,7 +257,7 @@ def test_the_chat_lists_checks_and_messages_its_working_subagent_then_reads_how_
     assert json.loads(body) == [{"agent_id": n, "type": _WEB, "summary": _SUMMARY, "status": Agent.RUNNING}]
     # Done, it drops out of the same chat's list.
     assert _answer(listed_done)[:2] == ("success", None)
-    assert json.loads(_answer(listed_done)[2]) == []
+    assert _answer(listed_done)[2] == _NONE_RUNNING
 
     working, done = calls_of(db, AgentStatusAbility.NAME)
     assert _answer(working)[:2] == ("success", None)
@@ -474,7 +475,7 @@ def test_the_chat_cannot_see_or_reach_a_subagent_a_scheduled_task_spawned(db: sq
 
     [listed] = calls_of(db, ListAgentsAbility.NAME)
     assert _answer(listed)[:2] == ("success", None)
-    assert json.loads(_answer(listed)[2]) == []
+    assert _answer(listed)[2] == _NONE_RUNNING
     for tool_name in (AgentStatusAbility.NAME, MessageSubagentAbility.NAME, StopSubagentAbility.NAME):
         [call] = calls_of(db, tool_name)
         assert _answer(call) == _not_found(n)
@@ -523,7 +524,7 @@ def test_a_scheduled_task_manages_no_subagent_not_even_its_own(db: sqlite3.Conne
     n = agent_number(_WEB, child_turn(db, _WEB_CHANNEL, cast("int", search["id"])))
 
     [listed] = calls_of(db, ListAgentsAbility.NAME)
-    assert json.loads(_answer(listed)[2]) == []
+    assert _answer(listed)[2] == _NONE_RUNNING
     for tool_name in (AgentStatusAbility.NAME, MessageSubagentAbility.NAME, StopSubagentAbility.NAME):
         [call] = calls_of(db, tool_name)
         assert _answer(call) == _not_found(n)
@@ -593,7 +594,7 @@ def test_no_caller_but_the_chat_reaches_the_chats_working_subagent_even_by_its_r
 
     [listed] = calls_of(db, ListAgentsAbility.NAME)
     assert _answer(listed)[:2] == ("success", None)
-    assert json.loads(_answer(listed)[2]) == []
+    assert _answer(listed)[2] == _NONE_RUNNING
     for tool_name in (AgentStatusAbility.NAME, MessageSubagentAbility.NAME, StopSubagentAbility.NAME):
         [call] = calls_of(db, tool_name)
         assert _answer(call) == _not_found(n)
