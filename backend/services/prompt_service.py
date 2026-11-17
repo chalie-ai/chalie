@@ -37,7 +37,7 @@ from abilities._delegate import replies_late, reply_follow_up
 from abilities._registry import AbilityRegistry
 from abilities.code_agent import CodeAgentAbility
 from abilities.find_tools import FindToolsAbility
-from abilities.message_parent import joined_nudge, parent_nudge, spawn_message
+from abilities.message_parent import joined_nudge, parent_nudge, spawn_message, waiting_notice
 from abilities.pim import PimAbility
 from abilities.plan import PlanAbility, plans
 from abilities.recall import Recall
@@ -423,8 +423,9 @@ class PromptService:
         a compaction still renders — the compaction folds earlier turns, never
         this exchange — and one not yet taken in does not. A joined delegate
         reply carrying an answer is followed by its tool's follow-up block
-        (:func:`reply_follow_up`). With nothing joined the trail is
-        unchanged."""
+        (:func:`reply_follow_up`), and one the person sent by the line naming
+        every subagent still waiting for a reply (:func:`waiting_notice`).
+        With nothing joined the trail is unchanged."""
         calls = self.mp.tool_call_service.by_exchange()
         last_compaction = max(
             (cast("int", call.id) for call in calls if call.tool_name == "chat_history_compactor"),
@@ -464,11 +465,13 @@ class PromptService:
 
         def joined_after(tid: int) -> None:
             lead_in(tid)
-            parts.extend(
-                f"[{self._format_ts(row.created_at)}] {speaker(row) or 'user'}: "
-                f"{row.content}{reply_follow_up(row)}{parent_nudge(row)}{joined_nudge(row)}"
-                for row in joins[tid]
-            )
+            for row in joins[tid]:
+                said = speaker(row)
+                waiting = waiting_notice(self.mp.channel) if said is None else ""
+                parts.append(
+                    f"[{self._format_ts(row.created_at)}] {said or 'user'}: "
+                    f"{row.content}{reply_follow_up(row)}{parent_nudge(row)}{joined_nudge(row)}{waiting}"
+                )
 
         # Traces anchored to rows that never got a call (an empty-completion
         # steer at the exchange input row) precede every call-bearing anchor
@@ -597,7 +600,9 @@ class PromptService:
         input line carries the turn's stamp (the model's only time source);
         the heartbeat never rides the user message — its locale line sits at
         the bottom of the system prompt. A delegate reply carrying an answer
-        is followed by its tool's follow-up block (:func:`reply_follow_up`)."""
+        is followed by its tool's follow-up block (:func:`reply_follow_up`);
+        a message the person sent, by the line naming every subagent still
+        waiting for a reply (:func:`waiting_notice`)."""
         parts: list[str] = []
 
         user_def = self.user_definition()
@@ -618,6 +623,8 @@ class PromptService:
         label, follow_up = (
             (speaker(anchor), reply_follow_up(anchor) + parent_nudge(anchor)) if anchor is not None else (None, "")
         )
+        if label is None:
+            follow_up += waiting_notice(self.mp.channel)
         parts.append(f"[{self._input_stamp(anchor)}] {label or 'user'}: {self._task()}{follow_up}")
 
         trail = self._trail()

@@ -21,7 +21,9 @@ subagent's turn — the chat's ``message_subagent`` — and returns it as its
 result with :data:`SUBAGENT_NUDGE`. A message taken here is never filed for
 the act trail, so it reaches the model once. A stop ends the wait with no
 reply — and stopping the chat turn the message opened or joined stops the
-subagent waiting on it (:func:`waiting_on`).
+subagent waiting on it (:func:`waiting_on`). While any subagent waits, every
+message the person sends the chat reads, for the chat's model, followed by a
+line naming each one (:func:`waiting_notice`).
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ import time
 from typing import ClassVar, cast
 
 from abilities._ability import UNKNOWN_TOOL, Ability
+from abilities._agents import label
 from abilities._delegate import late_caller, post_to_caller
 from abilities._result import ToolResult
 from abilities.message_subagent import MessageSubagentAbility
@@ -102,6 +105,11 @@ class MessageParentAbility(Ability[MessageParentParams]):
 PARENT_NUDGE = (
     "This subagent is waiting for your reply. "
     f"Reply with `{MessageSubagentAbility.NAME}` so it can continue."
+)
+
+WAITING_NOTICE = (
+    "Subagents waiting for your reply: {agents}. "
+    f"Reply with `{MessageSubagentAbility.NAME}` so they can continue."
 )
 
 SUBAGENT_NUDGE = (
@@ -178,6 +186,35 @@ def waiting_on(channel: str, turn_id: int) -> list[Agent]:
     (:func:`waiting`): the turn it waits on, so stopped with it."""
     rows = Transcript.filter("channel", channel).filter("turn_id", turn_id).get()
     return [agent for row in rows if (agent := waiting(row)) is not None]
+
+
+def waiting_for(channel: str) -> list[Agent]:
+    """Every subagent ``channel`` spawned whose message still waits for a
+    reply (:func:`waiting`), oldest first — only the chat's ever do
+    (:func:`holds`)."""
+    found: list[Agent] = []
+    for agent in Agent.running():
+        if agent.spawned_by_channel != channel:
+            continue
+        for call in ToolCall.by_turn(Channel.for_delegate(agent.type), agent.turn_id):
+            if call.tool_name != MessageParentAbility.NAME or call.state != ToolCall.STARTED:
+                continue
+            row = Transcript.filter("channel", channel).filter("tool_call_id", str(call.id)).first()
+            if row is not None and waiting(row) is not None:
+                found.append(agent)
+                break
+    return found
+
+
+def waiting_notice(channel: str) -> str:
+    """What follows a message the person sent ``channel``, in the model's
+    prompt: a newline and :data:`WAITING_NOTICE` naming every subagent still
+    waiting for a reply (:func:`waiting_for`), else ``''``. Derived on every
+    read, never stored, so the message keeps the person's own text."""
+    agents = waiting_for(channel)
+    if not agents:
+        return ""
+    return "\n" + WAITING_NOTICE.format(agents=", ".join(label(agent) for agent in agents))
 
 
 def parent_nudge(row: Transcript) -> str:

@@ -56,7 +56,7 @@ from flask.testing import FlaskClient
 
 from abilities.code_agent import CodeAgentAbility
 from abilities.find_tools import FindToolsAbility
-from abilities.message_parent import PARENT_NUDGE, SUBAGENT_NUDGE, MessageParentAbility
+from abilities.message_parent import PARENT_NUDGE, SUBAGENT_NUDGE, WAITING_NOTICE, MessageParentAbility
 from abilities.message_subagent import MessageSubagentAbility
 from abilities.stop_subagent import StopSubagentAbility
 from abilities.subtask import SubtaskAbility
@@ -540,6 +540,126 @@ def test_stopping_a_subagent_that_waits_for_a_reply_ends_its_wait_and_sends_noth
     ended = execution(_WEB_CHANNEL, turn)
     assert (ended.state, ended.stop_reason) == (TurnExecution.CANCELLED, STOP_REASON_PARENT_STOPPED)
     assert replies(db, cast("int", spawn["id"])) == []
+
+
+def test_a_message_the_person_sends_while_a_subagent_waits_is_followed_by_the_waiting_line(
+    authed_client: tuple[FlaskClient, sqlite3.Connection, object], real_memory_step: None,
+) -> None:
+    """The search asks and the chat's turn its message opened ends without a
+    reply, so the search still waits. The person then says "Hi", and adds a
+    message that joins that turn while it works: the chat's model reads each
+    followed by the line naming the waiting search, while the stored rows, the
+    thread read over HTTP, every websocket frame and what the memory step
+    reads keep only the person's own text. Before the search asked, and once
+    it is stopped, the person's message reads with no line."""
+    client, db, _store = authed_client
+    asking = Held(_ask())
+    unanswered = Held(text("Let me think about that."))
+    unanswered.gate.set()
+    greeting = Held(text("Hello!"))
+    seen: dict[str, int] = {}
+
+    def stop_it() -> ProviderResponse:
+        [agent] = Agent.running()
+        seen["n"] = agent.agent_id
+        return calls(tool(StopSubagentAbility.NAME, agent_id=agent.agent_id))
+
+    provider = ChannelProvider(
+        chat=[
+            _spawn(),
+            text("Started."),
+            unanswered,
+            greeting,
+            text("Hello! Noted."),
+            calls(tool(FindToolsAbility.NAME, query=[StopSubagentAbility.NAME])),
+            stop_it,
+            text("Stopped it."),
+            text("Hi there."),
+        ],
+        web_search=[asking],
+    )
+
+    with listening() as listener, patched(provider):
+        begin(UserConfig(), "find the bridge news").result()
+        asking.gate.set()
+        wait(unanswered.entered, "the chat's turn the message opened")
+        cast("threading.Thread", unanswered.thread).join(timeout=WAIT_S)
+        hi = begin(UserConfig(), "Hi")
+        wait(greeting.entered, "the chat's turn the person said Hi in")
+        joined = client.post(f"/api/threads/{hi.turn_id}", data={"text": "one more thing"})
+        assert joined.status_code == 200, joined.get_data(as_text=True)
+        greeting.gate.set()
+        hi.result()
+        begin(UserConfig(), "stop the search").result()
+        begin(UserConfig(), "Hi again").result()
+        drain()
+
+    assert asking.opened and provider.unused() == {}
+    n = seen["n"]
+    line = WAITING_NOTICE.format(agents=f"{_WEB} #{n}")
+    chat_read = provider.read("chat")
+    # Nobody waited yet when the person asked for the news.
+    assert "Subagents waiting" not in chat_read[0]
+    # "Hi" reads followed by the line, ending the person's message; only the
+    # turn's own blocks, such as recalled memory, come after it. The message
+    # that joined the turn reads followed by it too, on the turn's next step.
+    said_hi, read_joined = [i for i, r in enumerate(chat_read) if f"user: Hi\n{line}\n" in r]
+    assert chat_read[said_hi].count(line) == 1
+    assert _the_one(chat_read, f"user: one more thing\n{line}") == read_joined
+    assert chat_read[read_joined].count(line) == 2
+    # Every read of the stop turn's message carries it until the stop lands,
+    # and none after; the person's next message reads with no line.
+    stopped = _the_one(chat_read, f"Subagent {_WEB} #{n} stopped.")
+    waited = [i for i, r in enumerate(chat_read) if "Subagents waiting" in r]
+    assert waited == list(range(said_hi, stopped))
+    assert chat_read[stopped - 1].count(f"user: stop the search\n{line}\n") == 1
+    hi_again = _the_one(chat_read, "user: Hi again")
+    assert "Subagents waiting" not in chat_read[hi_again]
+
+    # What the person sees, and what the memory step stores, keep only "Hi".
+    assert [r["content"] for r in db.execute(
+        "SELECT content FROM transcript WHERE channel = ? AND turn_id = ? AND role = 'user' ORDER BY id",
+        (_USER, hi.turn_id),
+    )] == ["Hi", "one more thing"]
+    thread = messages(block(client, f"/api/threads/{hi.turn_id}"))
+    assert [m["content"] for m in thread if m["role"] == "user"] == ["Hi", "one more thing"]
+    assert "Subagents waiting" not in json.dumps(listener.frames)
+    assert all("Subagents waiting" not in r for r in provider.read("background"))
+    assert cast("Agent", Agent.by_id(n)).status == Agent.CANCELLED
+
+
+def test_the_waiting_line_is_gone_from_the_step_after_the_chat_replies(db: sqlite3.Connection) -> None:
+    """The search asks and still waits. The person tells the chat what to
+    answer: that message reads followed by the line, the chat replies with
+    ``message_subagent``, and its very next step reads no line — the reply has
+    landed, whether or not the search has taken it in yet. The search then
+    answers with the reply."""
+    asking = Held(_ask())
+    unanswered = Held(text("Let me think about that."))
+    unanswered.gate.set()
+    seen: dict[str, int] = {}
+    provider = ChannelProvider(
+        chat=[_spawn(), text("Started."), unanswered, lambda: _reply_to_it(seen), text("Told it."), text("Noted.")],
+        web_search=[asking, text(_ANSWER)],
+    )
+
+    with patched(provider):
+        begin(UserConfig(), "find the bridge news").result()
+        asking.gate.set()
+        wait(unanswered.entered, "the chat's turn the message opened")
+        cast("threading.Thread", unanswered.thread).join(timeout=WAIT_S)
+        begin(UserConfig(), "tell it the old stone bridge").result()
+        drain()
+
+    assert asking.opened and provider.unused() == {}
+    n = seen["n"]
+    chat_read = provider.read("chat")
+    told = _the_one(chat_read, f"user: tell it the old stone bridge\n{WAITING_NOTICE.format(agents=f'{_WEB} #{n}')}\n")
+    assert [i for i, r in enumerate(chat_read) if "Subagents waiting" in r] == [told]
+    assert f"Message sent to subagent {_WEB} #{n}." in chat_read[told + 1]
+    [spawn] = calls_of(db, _WEB)
+    assert [r["content"] for r in replies(db, cast("int", spawn["id"]))] == [_ANSWER]
+    assert cast("Agent", Agent.by_id(n)).status == Agent.DONE
 
 
 def test_the_persons_stop_ends_the_wait_and_tells_the_chat(
