@@ -47,6 +47,7 @@ import { laneKey, useQueueStore } from './queue';
 import { useNotificationsStore } from './notifications';
 import { usePermissionsStore } from './permissions';
 import { registerPanelView, useBrowserStore } from './browser';
+import { useAgentsStore } from './agents';
 import { useVoiceTranscriptsStore } from './voiceTranscripts';
 
 /** Guard: init() must be idempotent (HMR / Vue StrictMode). */
@@ -95,7 +96,7 @@ export const useSessionStore = defineStore('session', {
     /** `type:turnId` keys of turns showing a running subagent when the WS
      *  dropped. The drop clears the subagents' live run state, and a subagent
      *  that ends behind the dead socket sends no frame anyone receives, so
-     *  these turns are re-read on reconnect for their chips' `working` to
+     *  these turns are re-read on reconnect for their calls' `working` to
      *  decide again. Kept apart from `_offlineWorking`: such a turn may be
      *  settled, so it holds no lane and has nothing to settle. */
     _offlineSubtaskTurns: new Set<string>(),
@@ -179,6 +180,9 @@ export const useSessionStore = defineStore('session', {
         // Likewise the browser's tabs and their hand-offs: a reload or a drop
         // would otherwise miss the frames that announced them.
         void useBrowserStore().refresh();
+        // And the running subagents the Subagents dock lists: an agent that
+        // started or ended behind the dead socket sent a frame nobody got.
+        void useAgentsStore().refresh();
         // An open delegate panel froze with the socket and lost its live pills
         // on disconnect, and only a frame for its turn would re-read it.
         const delegate = this.panelDelegate;
@@ -295,8 +299,8 @@ export const useSessionStore = defineStore('session', {
      * Re-read every turn that showed a running subagent when the WS dropped
      * (the `_offlineSubtaskTurns` snapshot). The drop cleared the subagents'
      * live run state, so each turn now answers from the chips of its last read
-     * — and a subagent that ended during the outage would stay in the
-     * Subagents dock until a page reload. A fresh read's chips decide again;
+     * — and the call of a subagent that ended during the outage would still
+     * read as running until a page reload. A fresh read's chips decide again;
      * any later frame still wins over them.
      */
     async _refreshRunningSubagents(): Promise<void> {

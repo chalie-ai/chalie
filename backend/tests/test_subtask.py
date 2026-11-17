@@ -34,6 +34,7 @@ from typing import cast
 import pytest
 from flask.testing import FlaskClient
 
+from abilities.subtask import SubtaskAbility
 from configs.channels import config_for
 from configs.channels.scheduled import ScheduledConfig
 from configs.channels.subtask import UserSubtaskConfig
@@ -53,6 +54,7 @@ from tests._delegates import (
     ChannelProvider,
     Entry,
     Held,
+    agent_number,
     as_sent,
     begin,
     block,
@@ -74,7 +76,7 @@ from tests._delegates import (
     wait,
 )
 
-pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider", "earlier_agents")]
 
 _SUBTASK = Channel.DELEGATE_SUBTASK.value
 _USER = Channel.USER.value
@@ -145,19 +147,21 @@ def test_reply_after_the_caller_finished_opens_a_new_user_turn(
     call_id = _first_call(db)
     [reply] = replies(db, call_id)
     n = child_turn(db, _SUBTASK, call_id)
+    number = agent_number(SubtaskAbility.NAME, n)
+    assert number != n
     assert (reply["content"], reply["joined"]) == (_ANSWER, 0)
     assert reply["turn_id"] != parent.turn_id
     assert execution(_SUBTASK, n).state == TurnExecution.COMPLETED
     assert execution(_USER, reply["turn_id"]).state == TurnExecution.COMPLETED
-    assert f"Reply from subtask #{n}" in provider.texts("chat")[-1]
+    assert f"Reply from subtask #{number}" in provider.texts("chat")[-1]
     # The chat's call returned at once with the subtask's number and the label
     # its answer arrives under, written as that label writes them — never the
     # answer itself.
     started = cast("str", calls_of(db, "subtask")[0]["result"])
     assert started == (
         "[subtask(status=success)]\n"
-        f'Subagent subtask #{n} has been spawned. It will reply to you once it\'s done as '
-        f'"Reply from subtask #{n}". Acknowledge to the user that the agent has been spawned '
+        f'Subagent subtask #{number} has been spawned. It will reply to you once it\'s done as '
+        f'"Reply from subtask #{number}". Acknowledge to the user that the agent has been spawned '
         "and you'll be invoked automatically once it replies.\n"
         "[end:subtask]"
     )
@@ -202,7 +206,7 @@ def test_reply_joins_the_caller_turn_while_it_still_works(db: sqlite3.Connection
     [reply] = replies(db, call_id)
     n = child_turn(db, _SUBTASK, call_id)
     assert (reply["content"], reply["turn_id"], reply["joined"]) == (_ANSWER, parent.turn_id, 1)
-    assert f"Reply from subtask #{n}" in provider.texts("chat")[-1]
+    assert f"Reply from subtask #{agent_number(SubtaskAbility.NAME, n)}" in provider.texts("chat")[-1]
     assert execution(_USER, parent.turn_id).state == TurnExecution.COMPLETED
     count = db.execute(
         "SELECT COUNT(*) FROM turn_executions WHERE channel = ? AND turn_id = ?", (_USER, parent.turn_id),
@@ -265,7 +269,10 @@ def test_message_reaches_a_working_subtask_and_an_unknown_one_is_refused(
         started = TurnExecution.filter("channel", _SUBTASK).first()
         assert started is not None
         return calls(
-            tool("subtask", action="message", subtask=started.turn_id, message="also add 7"),
+            tool(
+                "subtask", action="message", subtask=agent_number(SubtaskAbility.NAME, started.turn_id),
+                message="also add 7",
+            ),
             tool("subtask", action="message", subtask=9999, message="hello"),
         )
 
@@ -283,9 +290,12 @@ def test_message_reaches_a_working_subtask_and_an_unknown_one_is_refused(
     assert provider.unused() == {}
     start, sent, refused = calls_of(db, "subtask")
     n = child_turn(db, _SUBTASK, cast("int", start["id"]))
+    number = agent_number(SubtaskAbility.NAME, n)
+    assert number != n
     assert sent["state"] == ToolCall.DONE
     assert (
-        f'Message sent to subtask #{n}. Its answer will arrive as a new message labelled "Reply from subtask #{n}". '
+        f"Message sent to subtask #{number}. Its answer will arrive as a new message labelled "
+        f'"Reply from subtask #{number}". '
         "Carry on — do not wait for it."
     ) in sent["result"]
     assert refused["state"] == ToolCall.ERROR
@@ -504,7 +514,7 @@ def test_a_scheduled_task_waits_for_its_subtask_and_ends_once(db: sqlite3.Connec
     def started() -> int:
         found = TurnExecution.filter("channel", _SUBTASK).first()
         assert found is not None
-        return found.turn_id
+        return agent_number(SubtaskAbility.NAME, found.turn_id)
 
     def user_message() -> ProviderResponse:
         return calls(tool("subtask", action="message", subtask=started(), message="also add 7"))

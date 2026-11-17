@@ -35,6 +35,8 @@ import {
 } from './turnDom';
 import { usePermissionsStore } from '../stores/permissions';
 import { useBrowserStore } from '../stores/browser';
+import { useAgentsStore } from '../stores/agents';
+import type { Agent } from '../api/agents';
 import { useContextUsageStore } from '../stores/contextUsage';
 import { useVoiceTranscriptsStore } from '../stores/voiceTranscripts';
 
@@ -476,6 +478,10 @@ function _dispatchSimpleEvent(data: WsPushEvent): boolean {
     }
     case 'browser_tabs_changed':
       void useBrowserStore().refresh();
+      return true;
+    case 'agent_changed':
+      // An agents row was just written: a subagent started, or ended.
+      useAgentsStore().apply((data as unknown as { agent: Agent }).agent);
       return true;
     default:
       return false;

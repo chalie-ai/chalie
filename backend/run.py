@@ -474,25 +474,29 @@ def main() -> None:
     # before this runs once, for the life of the process.
     Database().bind()
 
+    _run_startup_migrations()
+
     # Boot sweep: a turn_executions row still open (ended_at IS NULL) belonged
     # to a process that no longer exists — closing it as crashed keeps no
     # surface reading a stale "working" turn after a restart or a kill. Reads
     # through an inert MP (§7 G3: crash recovery has no live turn to construct
     # a real one for) so the sweep runs through the same
-    # TurnExecutionService.sweep_orphaned() every in-process turn would.
+    # TurnExecutionService.sweep_orphaned() every in-process turn would. After
+    # the migrations, because a swept subagent's turn also closes its agents
+    # row, and on a database that predates that table a migration creates it;
+    # before the services, so nothing starts against a stale "working" row.
     from controllers.message_processor import MessageProcessor
     _boot_mp = MessageProcessor(config_for(ConfigTypeEnum.USER))
     _swept = _boot_mp.turn_execution_service.sweep_orphaned()
     if _swept:
         logger.info("[Startup] Closed %d orphaned turn_executions row(s)", len(_swept))
 
-    _run_startup_migrations()
     _init_services()
 
-    # Only now, not at the sweep: each notice writes a row on the caller's
-    # thread and starts a turn whose own thread reads and writes the
-    # conversation tables, so it must run on the migrated schema, never
-    # alongside the transcript rebuild and backfills above.
+    # Only now, after the services, not at the sweep: each notice writes a row
+    # on the caller's thread and starts a turn whose own thread reads and
+    # writes the conversation tables, so it must run on the migrated schema,
+    # never alongside the transcript rebuild and backfills above.
     _reply_to_swept_delegates(_swept)
 
     _check_asset_caches()

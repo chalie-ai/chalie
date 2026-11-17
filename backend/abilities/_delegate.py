@@ -38,6 +38,7 @@ from abilities._ability import FOLLOW_UP_BLOCK, Ability, B
 from abilities._result import ToolResult
 from configs.enums.channels import WATCHABLE_DELEGATE_CHANNELS
 from configs.enums.config_type import ConfigTypeEnum
+from models.agent import Agent
 from models.tool_call import ToolCall
 from models.transcript import Transcript
 from models.turn_execution import TurnExecution
@@ -69,8 +70,9 @@ def replies_late(kind: "ConfigTypeEnum | str | None") -> bool:
 
 
 def reply_label(name: str, n: int) -> str:
-    """How a reply from ``name``'s child turn ``n`` is labelled on the caller's
-    channel — the label its started result promises and its speaker shows."""
+    """How a reply from ``name``'s subagent ``n`` (its ``agent_id``) is labelled
+    on the caller's channel — the label its started result promises and its
+    speaker shows."""
     return f"Reply from {name} #{n}"
 
 
@@ -89,7 +91,9 @@ class DelegateAbility(Ability[B], ABC):
         """Open ``instructions`` as a child turn on ``config`` and return it
         without waiting. The child's input row carries this call's
         ``tool_calls`` id, written in the same transaction that opens the turn,
-        so the parent's pill can be followed to the child's transcript. The
+        so the parent's pill can be followed to the child's transcript; its
+        ``agents`` row — the caller's channel and turn, and the plain task —
+        is written in that transaction too. The
         parent's frame is sent again once that row exists — the earlier
         ``started`` frame went out before there was a child turn to point at."""
         from controllers.message_processor import MessageProcessor  # noqa: PLC0415
@@ -103,7 +107,14 @@ class DelegateAbility(Ability[B], ABC):
         child = MessageProcessor.process(
             config,
             raw_input=instructions,
-            metadata={"origin": mp.origin, "tool_call_id": self.tool_call_id},
+            metadata={
+                "origin": mp.origin,
+                "tool_call_id": self.tool_call_id,
+                "agent": Agent(
+                    type=self.NAME, prompt=instructions,
+                    spawned_by_channel=mp.channel, spawned_in_turn=mp.turn_id,
+                ),
+            },
         )
         mp.tool_call_service.reemit(self.tool_call_id)
         return child
@@ -144,9 +155,12 @@ class DelegateAbility(Ability[B], ABC):
 
     def started(self, child: "MessageProcessor") -> ToolResult:
         """The result of a call whose child runs in the background: the
-        subagent and its number, written as :func:`reply_label` writes them,
-        and the label its answer will arrive under."""
-        n = child.turn_id
+        subagent and its number (its ``agent_id``), written as
+        :func:`reply_label` writes them, and the label its answer will arrive
+        under."""
+        if child.agent is None:
+            raise RuntimeError(f"{self.NAME}'s child turn {child.turn_id} opened without its agent row")
+        n = child.agent.agent_id
         return ToolResult.ok(
             f"Subagent {self.NAME} #{n} has been spawned. It will reply to you once it's done as "
             f"\"{reply_label(self.NAME, n)}\". Acknowledge to the user that the agent has been "

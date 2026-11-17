@@ -48,6 +48,7 @@ from tests._delegates import (
     ChannelProvider,
     Entry,
     Held,
+    agent_number,
     assistant_texts,
     begin,
     calls,
@@ -66,7 +67,7 @@ from tools.browser import tabs
 from tools.browser.tabs import Tab
 
 pytest_plugins = ("tests._browser_live",)
-pytestmark = [pytest.mark.e2e, pytest.mark.usefixtures("chat_provider")]
+pytestmark = [pytest.mark.e2e, pytest.mark.usefixtures("chat_provider", "earlier_agents")]
 
 _RUN_CHANNEL = delegate_channel(WebBrowseAbility.NAME)
 _SCHEDULE_ID = 7
@@ -163,8 +164,9 @@ def test_a_browsing_run_started_from_the_chat_answers_later_and_its_tab_closes_w
     assert held.opened and provider.unused() == {}
     [call] = calls_of(db, WebBrowseAbility.NAME)
     n = child_turn(db, _RUN_CHANNEL, call["id"])
+    number = agent_number(WebBrowseAbility.NAME, n)
     assert call["state"] == "done", call["result"]
-    assert f"Reply from web_browse #{n}" in call["result"]
+    assert f"Reply from {WebBrowseAbility.NAME} #{number}" in call["result"]
     assert _ANSWER not in call["result"]
     assert assistant_texts(db, USER, parent.turn_id)[-1] == _STARTED
 
@@ -173,7 +175,7 @@ def test_a_browsing_run_started_from_the_chat_answers_later_and_its_tab_closes_w
     assert reply["turn_id"] != parent.turn_id
     assert execution(USER, reply["turn_id"]).state == TurnExecution.COMPLETED
     assert assistant_texts(db, USER, reply["turn_id"]) == ["Page A is called Page A."]
-    assert f"Reply from web_browse #{n}" in provider.texts("chat")[-1]
+    assert f"Reply from {WebBrowseAbility.NAME} #{number}" in provider.texts("chat")[-1]
 
     _assert_closed(client, run.open())
 
@@ -225,7 +227,7 @@ def test_the_person_stops_a_browsing_run_waiting_on_them_from_its_panel_and_the_
     assert reply["content"] == "This web_browse was stopped before it finished."
     assert execution(USER, reply["turn_id"]).state == TurnExecution.COMPLETED
     assert assistant_texts(db, USER, reply["turn_id"]) == ["It was stopped before signing in."]
-    assert f"Reply from web_browse #{n}" in provider.texts("chat")[-1]
+    assert f"Reply from {WebBrowseAbility.NAME} #{agent_number(WebBrowseAbility.NAME, n)}" in provider.texts("chat")[-1]
 
 
 def test_stopping_a_scheduled_task_stops_the_browsing_run_it_waits_on_and_nobody_is_replied_to(

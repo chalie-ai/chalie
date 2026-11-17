@@ -65,8 +65,9 @@ import json
 import logging
 import re
 from collections import Counter
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
+from functools import partial
 from threading import Thread, get_ident
 from typing import TYPE_CHECKING, Protocol, cast
 
@@ -86,6 +87,7 @@ from exceptions import (
     ProviderRetriesExhaustedError,
     RunAwayLoop,
 )
+from models.agent import Agent
 from models.plan_task import PlanTask
 from models.provider_request import ProviderRequest
 from models.tool_call import ToolCall
@@ -203,6 +205,8 @@ class MessageProcessor:
         self.uid: int | None = None
         self.current_transcript_id: int | None = None
         self.execution: TurnExecution | None = None
+        # The ``agents`` row this turn runs as, when a spawn opened it.
+        self.agent: Agent | None = None
         self.active_tools: list[str] = []
         self.thinking_level: str = "low"
         self.thinking_override: str | None = None
@@ -249,9 +253,9 @@ class MessageProcessor:
         # there, in the order the model saw it rather than the order it arrived).
         self._consumed_through: int = 0
         self.consumed_joins: dict[int, list[Transcript]] = {}
-        # Frames pushed by one thread while it holds an ``_atomic`` block, sent
-        # only once that block commits.
-        self._held: tuple[int, list[JsonSerializable | None]] | None = None
+        # Sends of frames pushed by one thread while it holds an ``_atomic``
+        # block, made only once that block commits.
+        self._held: tuple[int, list[Callable[[], None]]] | None = None
 
         # Infrastructure handles.
         self.db = Database()
@@ -275,11 +279,22 @@ class MessageProcessor:
         config — the one pre-flight every spine service shares, so no emit site
         re-inlines it (see :meth:`broadcast_as`). Inside :meth:`_atomic` the
         frame is held until the writes it announces commit."""
+        self._send(partial(self.broadcast_as, instance, self.channel, self.config))
+
+    def announce(self, instance: "JsonSerializable") -> None:
+        """Emit ``instance`` to every surface, whatever this turn's channel — a
+        frame about state the whole app shows (an agent's row), not about this
+        turn. Held inside :meth:`_atomic` like :meth:`push_websocket`."""
+        self._send(partial(Websocket.broadcast, instance))
+
+    def _send(self, emit: "Callable[[], None]") -> None:
+        """Make ``emit`` now, or once the ``_atomic`` block this thread holds
+        commits."""
         held = self._held
         if held is not None and held[0] == get_ident():
-            held[1].append(instance)
+            held[1].append(emit)
             return
-        self.broadcast_as(instance, self.channel, self.config)
+        emit()
 
     @staticmethod
     def broadcast_as(
@@ -309,15 +324,15 @@ class MessageProcessor:
         after it commits: a surface told to refetch mid-transaction would read
         the state from before it. A rollback drops them with the writes they
         announced."""
-        frames: list[JsonSerializable | None] = []
-        self._held = (get_ident(), frames)
+        sends: list[Callable[[], None]] = []
+        self._held = (get_ident(), sends)
         try:
             with self.db.transaction():
                 yield
         finally:
             self._held = None
-        for frame in frames:
-            self.broadcast_as(frame, self.channel, self.config)
+        for emit in sends:
+            emit()
 
     # ── entrypoint ─────────────────────────────────────────────────────────────
 
@@ -401,7 +416,9 @@ class MessageProcessor:
     def begin(self) -> None:
         """Synchronous turn setup, then hand off to the drive thread. The
         turn-id allocation, fork guard and input row land in one single-writer
-        transaction (§6.8). Attachments land *after* that transaction commits
+        transaction — with, for a turn a spawn opened, its ``agents``
+        row (``metadata["agent"]``), so a subagent's number exists the moment
+        its turn does. Attachments land *after* that transaction commits
         and *before* the execution row opens: after, because copying a file of
         arbitrary size inside ``BEGIN IMMEDIATE`` would hold SQLite's write
         lock for the length of the copy; before, because the ``working`` frame
@@ -424,6 +441,10 @@ class MessageProcessor:
             self.current_transcript_id = self.uid
             if self.uid is not None:
                 self._consumed_through = self.uid
+            agent = self.metadata.get("agent")
+            if isinstance(agent, Agent):
+                agent.turn_id = self.turn_id
+                self.agent = agent.insert()
         self._land_attachments()
         self.turn_execution_service.open()
         self.metadata["turn_id"] = self.turn_id

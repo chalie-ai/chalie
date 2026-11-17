@@ -60,6 +60,7 @@ from .actions.voice.health import VoiceHealthAction
 from .actions.voice.transcribe import VoiceTranscribeAction
 from .actions.voice.transcript import VoiceTranscriptAction
 from .endpoint import Endpoint
+from .endpoints.agents import AgentsEndpoint
 from .endpoints.capabilities import CapabilitiesEndpoint
 from .endpoints.lists import Lists
 from .endpoints.mcp_clients import McpClients
@@ -73,6 +74,8 @@ from .endpoints.tool_calls import ToolCallsEndpoint
 from .endpoints.wrappers import WrappersEndpoint
 
 ROUTES: tuple[Endpoint, ...] = (
+    AgentsEndpoint("agents"),
+
     BrowserHandoffs("browser", "handoffs"),
     BrowserHistory("browser", "history"),
     BrowserNavigate("browser", "navigate"),

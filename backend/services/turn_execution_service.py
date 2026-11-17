@@ -15,6 +15,10 @@ handle: ``self.mp`` IS the per-turn handle, so there is nothing left to hold
 separately. Cross-instance cancel (§6.7) is addressed by (channel, turn_id)
 alone and derives its broadcast from the target turn's own row, since the
 canceller holds no MP for the turn it stops.
+
+A subagent's turn also closes its ``agents`` row, in the transaction that
+closes its execution row, on every way it ends; the row's frame goes out once
+that commits (:class:`~services.agent_service.AgentService`).
 """
 
 from __future__ import annotations
@@ -26,11 +30,14 @@ from configs.channels import config_for
 from models.tool_call import ToolCall
 from models.transcript import Transcript
 from models.turn_execution import TurnExecution
+from services.agent_service import AgentService
 from services.database import Database
 from services.time_utils import utc_now
+from services.websocket import Websocket
 
 if TYPE_CHECKING:
     from controllers.message_processor import MessageProcessor
+    from models.agent import Agent
     from services.processor_config import ProcessorConfig
 
 logger = logging.getLogger(__name__)
@@ -52,7 +59,10 @@ class TurnExecutionService:
         """Insert this turn's row (state=working), stash it on
         ``self.mp.execution``, and emit the lifecycle frame. ``None`` on a
         write failure (logged) — ``should_stop`` fails open when there is no
-        row to poll."""
+        row to poll. A turn a spawn opened first announces its ``agents`` row,
+        committed with its input row in ``begin()``."""
+        if self.mp.agent is not None:
+            self.mp.announce(AgentService.frame(self.mp.agent))
         try:
             execution = TurnExecution(
                 channel=self.mp.channel,
@@ -128,7 +138,9 @@ class TurnExecutionService:
         spawned — a subtask running in the background as much as a child the
         caller is blocked waiting on — each cancelled in turn from here with
         :data:`STOP_REASON_PARENT_STOPPED`, since nothing else passes the stop
-        down to a child; an already-ended child simply returns ``None``."""
+        down to a child; an already-ended child simply returns ``None``. A
+        subagent's turn closes its ``agents`` row ``cancelled`` in the same
+        transaction."""
         from controllers.message_processor import MessageProcessor  # noqa: PLC0415 — the MP imports this module
 
         try:
@@ -141,6 +153,7 @@ class TurnExecutionService:
                 execution.ended_at = utc_now().isoformat()
                 execution.stop_reason = stop_reason
                 execution.save()
+                agent = AgentService.end(execution.channel, execution.turn_id, execution.state)
         except Exception as exc:
             logger.warning(
                 "[TurnExecutionService] cancel failed for channel=%s turn_id=%s: %s",
@@ -148,6 +161,8 @@ class TurnExecutionService:
             )
             return None
         MessageProcessor.broadcast_as(execution, execution.channel, cls._row_config(execution))
+        if agent is not None:
+            Websocket.broadcast(AgentService.frame(agent))
         # Cascade to every delegate child the caller's tool calls spawned: a
         # child only reads its own row's flag, so it would otherwise run on
         # against a stopped conversation. An already-ended child returns None.
@@ -197,17 +212,37 @@ class TurnExecutionService:
         — or a racing finish() — won outright): that row is authoritative,
         re-read and returned as-is, no further write, no re-broadcast, never
         resurrecting or overwriting a cancelled turn with a synthesized
-        'completed'/'crashed' state."""
+        'completed'/'crashed' state.
+
+        A subagent's turn that this closes closes its ``agents`` row in the
+        same transaction — ``done`` with its final reply row, ``cancelled`` or
+        ``failed`` — and that row's frame follows the lifecycle frame. A turn
+        whose row :meth:`open` failed to write has no row to close, but its
+        agent still ends here, so it is never left running."""
         current: TurnExecution | None = self.mp.execution
+        response_id = self.mp.current_transcript_id if state == TurnExecution.COMPLETED else None
         if current is None or current.id is None:
+            self._end_agent_without_row(state, response_id)
             return None
-        ended_at = utc_now().isoformat()
+        execution = TurnExecution(
+            id=current.id,
+            channel=current.channel,
+            type=current.type,
+            turn_id=current.turn_id,
+            started_at=current.started_at,
+            ended_at=utc_now().isoformat(),
+            cancel_requested=current.cancel_requested,
+            state=state,
+            stop_reason=stop_reason,
+        )
         try:
-            closed = (
-                TurnExecution.filter("id", current.id)
-                .filter("ended_at", None, "IS")
-                .update(ended_at=ended_at, state=state, stop_reason=stop_reason)
-            )
+            with self.mp.db.transaction():
+                closed = (
+                    TurnExecution.filter("id", current.id)
+                    .filter("ended_at", None, "IS")
+                    .update(ended_at=execution.ended_at, state=state, stop_reason=stop_reason)
+                )
+                agent = AgentService.end(execution.channel, execution.turn_id, state, response_id) if closed else None
         except Exception as exc:
             logger.warning("[TurnExecutionService] finish failed for id=%s: %s", current.id, exc)
             return None
@@ -220,20 +255,28 @@ class TurnExecutionService:
             if row is not None:
                 self.mp.execution = row
             return row
-        execution = TurnExecution(
-            id=current.id,
-            channel=current.channel,
-            type=current.type,
-            turn_id=current.turn_id,
-            started_at=current.started_at,
-            ended_at=ended_at,
-            cancel_requested=current.cancel_requested,
-            state=state,
-            stop_reason=stop_reason,
-        )
         self.mp.execution = execution
         self.mp.push_websocket(execution)
+        if agent is not None:
+            self.mp.announce(AgentService.frame(agent))
         return execution
+
+    def _end_agent_without_row(self, state: str, response_id: int | None) -> None:
+        """End the agent this turn's spawn recorded when the turn has no
+        execution row to close it with — logged, never raised, as for the
+        row itself."""
+        if self.mp.agent is None:
+            return
+        try:
+            with self.mp.db.transaction():
+                agent = AgentService.end(self.mp.channel, self.mp.turn_id, state, response_id)
+        except Exception as exc:
+            logger.warning(
+                "[TurnExecutionService] ending agent #%s failed: %s", self.mp.agent.agent_id, exc,
+            )
+            return
+        if agent is not None:
+            self.mp.announce(AgentService.frame(agent))
 
     def sweep_orphaned(self) -> list[TurnExecution]:
         """Boot-time reconciliation: every row a killed process left open
@@ -243,8 +286,12 @@ class TurnExecutionService:
         (I6) so a mid-loop write failure rolls back every row it already
         touched rather than stranding a partially-swept boot; returns the
         rows it closed — so boot can reply to each swept delegate's caller — or
-        an empty list if the sweep did not commit."""
+        an empty list if the sweep did not commit. Every ``agents`` row still
+        running ends ``failed`` in that transaction — a swept subagent's turn,
+        and one whose turn never got a row to sweep — and each row's frame goes
+        out once it commits."""
         swept: list[TurnExecution] = []
+        agents: list[Agent] = []
         try:
             with self.mp.db.transaction():
                 for execution in TurnExecution.open_rows():
@@ -253,9 +300,12 @@ class TurnExecutionService:
                     execution.ended_at = utc_now().isoformat()
                     execution.save()
                     swept.append(execution)
+                agents = AgentService.fail_running()
         except Exception as exc:
             logger.warning("[TurnExecutionService] sweep_orphaned failed: %s", exc)
             return []
+        for agent in agents:
+            Websocket.broadcast(AgentService.frame(agent))
         return swept
 
     def latest_for_turn(self) -> TurnExecution | None:

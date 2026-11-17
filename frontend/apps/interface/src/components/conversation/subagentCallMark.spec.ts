@@ -20,8 +20,7 @@
  *
  * Real components throughout (TurnView and its step's call list), the real
  * Pinia session store and the real live act-trail, no mocks. Every turn view
- * mounted here adds to the module-level list of running subagents, so each is
- * unmounted after its test and the list is checked empty once they are.
+ * mounted here is unmounted after its test.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mount } from '@vue/test-utils';
@@ -33,7 +32,7 @@ import type { DelegateRef, TurnExecutionState, WsPushEvent } from '@chalie/share
 import TurnView from './TurnView.vue';
 import { dispatchDrift } from '../../utils/driftDispatcher';
 import {
-  clearAll, clearDelegateFeeds, finishLiveTool, runningSubagents, setDelegateState, setLiveToolDelegate, startLiveTool,
+  clearAll, clearDelegateFeeds, finishLiveTool, setDelegateState, setLiveToolDelegate, startLiveTool,
 } from '../../utils/liveActTrail';
 import type { ConversationMessage, ConversationTurnBlock, DelegateTurnBlock, ToolCallChip } from '../../api/conversation';
 
@@ -57,8 +56,6 @@ beforeEach(() => {
 afterEach(() => {
   for (const w of mounted) w.unmount();
   mounted = [];
-  // Every turn view is gone, so none still shows a running subagent.
-  expect(runningSubagents()).toEqual([]);
   clearAll(ConfigType.USER);
   // An ended subagent's state survives `clearDelegateFeeds()`, which drops
   // only still-running entries — so mark every subagent this spec drives

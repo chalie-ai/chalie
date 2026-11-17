@@ -6,9 +6,8 @@
      feed (inline turns) and the thread panel so both keep identical row
      rhythm. -->
 <script setup lang="ts">
-import { computed, onBeforeUnmount, watch } from 'vue';
+import { computed } from 'vue';
 import { ConfigType } from '@chalie/shared';
-import type { DelegateRef } from '@chalie/shared';
 import type {
   ConversationMessage,
   ConversationTurnBlock,
@@ -17,13 +16,7 @@ import type {
 } from '../../api/conversation';
 import { usePermissionsStore } from '../../stores/permissions';
 import type { PermissionRequest } from '../../stores/permissions';
-import {
-  delegateState,
-  liveTrailsFor,
-  publishRunningSubagents,
-  withdrawRunningSubagents,
-  type RunningSubagent,
-} from '../../utils/liveActTrail';
+import { delegateState, liveTrailsFor } from '../../utils/liveActTrail';
 import { didWork, mergeWork, showsWork } from '../../utils/turnSteps';
 import UserBubble from './UserBubble.vue';
 import ChalieBubble from './ChalieBubble.vue';
@@ -90,35 +83,16 @@ const liveLine = computed(() => ({
   repliesLate: repliesLate.value,
 }));
 
-/** This turn's subagents that are still running, in first-seen order — what
- *  it adds to the Subagents dock. On the chat a subagent outlives the call
- *  that started it, so whether it runs is `delegateState`'s, the status its
- *  call's mark reads too. Deduped by channel and turn — turn numbers are
- *  counted per subagent, and a follow-up "message" call points at the same
- *  subtask, the first summary winning. */
-const runningSubtasks = computed(() => {
-  const found = new Map<string, RunningSubagent>();
-  const consider = (delegate: DelegateRef, summary: string | undefined): void => {
-    const key = `${delegate.channel}#${delegate.turn_id}`;
-    if (delegateState(delegate) !== 'working' || found.has(key)) return;
-    found.set(key, { delegate, summary: summary ?? '' });
-  };
-  for (const pill of liveLine.value.pills) {
-    if (pill.delegate) consider(pill.delegate, pill.summary);
-  }
-  for (const message of props.block.messages) {
-    for (const chip of message.tool_calls ?? []) {
-      if (chip.delegate) consider(chip.delegate, chip.summary);
-    }
-  }
-  return [...found.values()];
-});
-
-// The dock lists every running subagent of every turn on screen: this view
-// keeps its share current and takes it back as it unmounts.
-const view = Symbol('turn-view');
-watch(runningSubtasks, (running) => publishRunningSubagents(view, running), { immediate: true });
-onBeforeUnmount(() => withdrawRunningSubagents(view));
+/** Whether a subagent this turn started still runs — marked on the turn so a
+ *  dropped socket knows to re-read it (see the session store's disconnect).
+ *  On the chat a subagent outlives the call that started it, so whether it
+ *  runs is `delegateState`'s, the status its call's mark reads too. */
+const subtasksRunning = computed(() =>
+  [
+    ...liveLine.value.pills.map((pill) => pill.delegate),
+    ...props.block.messages.flatMap((message) => (message.tool_calls ?? []).map((chip) => chip.delegate)),
+  ].some((delegate) => delegate != null && delegateState(delegate) === 'working'),
+);
 
 /** The running step: the row a live call was dropped from, else — before a
  *  refetch returned that row — none yet, so its block is the live line alone,
@@ -361,7 +335,7 @@ function onOpenThread(): void {
     :data-gist="block.gist ?? undefined"
     :data-preview="block.preview"
     :data-last-activity="block.last_activity_at ?? undefined"
-    :data-subtasks-running="runningSubtasks.length > 0 || undefined"
+    :data-subtasks-running="subtasksRunning || undefined"
   >
     <div
       v-for="ar in rowEntries"

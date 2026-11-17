@@ -39,10 +39,20 @@ from configs.channels.user import UserConfig
 from models.provider_response import ProviderResponse
 from services.turn_serializer_service import TurnSerializerService
 from tests._browser_live import Site, signed_in
-from tests._delegates import ChannelProvider, Entry, Held, calls_of, child_turn, delegate_channel, replies, run_turn
+from tests._delegates import (
+    ChannelProvider,
+    Entry,
+    Held,
+    agent_number,
+    calls_of,
+    child_turn,
+    delegate_channel,
+    replies,
+    run_turn,
+)
 
 pytest_plugins = ("tests._browser_live",)
-pytestmark = [pytest.mark.e2e, pytest.mark.usefixtures("chat_provider")]
+pytestmark = [pytest.mark.e2e, pytest.mark.usefixtures("chat_provider", "earlier_agents")]
 
 _SERIALIZER_LOG = TurnSerializerService.__module__
 _RUN_CHANNEL = delegate_channel(WebBrowseAbility.NAME)
@@ -183,7 +193,7 @@ def test_a_browsing_run_lists_the_pages_it_went_through_in_order_while_it_runs_a
     n = child_turn(db, _RUN_CHANNEL, call["id"])
     # The chat's call ended at once: its result is the notice that the run
     # started, never the run's answer, which arrives as a reply of its own.
-    assert f"Reply from {WebBrowseAbility.NAME} #{n}" in call["result"]
+    assert f"Reply from {WebBrowseAbility.NAME} #{agent_number(WebBrowseAbility.NAME, n)}" in call["result"]
     assert "Visited every page." not in call["result"]
     [reply] = replies(db, call["id"])
     assert reply["content"] == "Visited every page."

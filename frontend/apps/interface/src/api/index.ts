@@ -11,6 +11,7 @@ export { scheduler } from './scheduler';
 export { system } from './system';
 export { policies } from './policies';
 export { browser } from './browser';
+export { agents } from './agents';
 export { toggleItem } from './lists';
 
 export { getHost } from '@chalie/shared';

@@ -4,11 +4,11 @@ import { Bot, Brain, CalendarClock, Clock, Globe, Moon, Search, Sun } from '@luc
 import { useSessionStore } from '../../stores/session';
 import { useTasksStore } from '../../stores/tasks';
 import { useBrowserStore } from '../../stores/browser';
+import { useAgentsStore } from '../../stores/agents';
 import { ChalieMark, ConfigType, webPlatformAdapter, useTheme } from '@chalie/shared';
 import { emit } from '../../composables/useEventBus';
 import { useDockBusy } from '../../composables/useDockBusy';
 import { useThreadActivity } from '../../utils/threadActivity';
-import { runningSubagents } from '../../utils/liveActTrail';
 import { hasDoneScheduled } from '../../utils/turnDom';
 
 // Scheduler-dock activity cue: pink icon when any scheduled turn is
@@ -20,8 +20,9 @@ function onTurnStateChanged(): void {
 }
 const session = useSessionStore();
 
-// Subagents-dock activity cue: pink icon while any subagent on screen runs.
-const hasSubagentActivity = computed(() => runningSubagents().length > 0);
+// Subagents-dock activity cue: pink icon while any subagent runs.
+const agents = useAgentsStore();
+const hasSubagentActivity = computed(() => agents.running.length > 0);
 
 // Replaces the retired `session.isSending` store getter — the mark's dot
 // pulses while the main spine (no stable turn_id) has anything working.

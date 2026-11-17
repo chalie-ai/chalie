@@ -1,30 +1,31 @@
 <script setup lang="ts">
 /**
- * Subagents dock — slide-out panel listing every subagent still running in a
- * turn on screen, in the order first seen. Each row is its subagent's type icon and the one-line
- * summary of the call that started it — the type's name when the call has
- * none, never the tool name or number — and opens its transcript in the
- * delegate panel under the same title.
+ * Subagents dock — slide-out panel listing every subagent still running,
+ * oldest first, from the agents store. Each row is its subagent's type icon
+ * and the one-line summary of the call that started it — the type's name when
+ * the call has none, never the tool name or number — and opens its transcript
+ * in the delegate panel under the same title.
  *
  * Open/close is driven by session.subagentDockOpen.
  */
 import { computed } from 'vue';
 import type { DelegateRef } from '@chalie/shared';
+import { useAgentsStore } from '../../stores/agents';
 import { useSessionStore } from '../../stores/session';
-import { delegateName, subagentKind } from '../../utils/delegateChannel';
-import { runningSubagents } from '../../utils/liveActTrail';
+import { subagentKind } from '../../utils/delegateChannel';
 import SideDrawer from './SideDrawer.vue';
 
 const session = useSessionStore();
+const agents = useAgentsStore();
 
 const rows = computed(() =>
-  runningSubagents().map(({ delegate, summary }) => {
-    const kind = subagentKind(delegateName(delegate.channel));
+  agents.running.map((agent) => {
+    const kind = subagentKind(agent.type);
     return {
-      delegate,
-      key: `${delegate.channel}#${delegate.turn_id}`,
+      delegate: { channel: agent.channel, turn_id: agent.turn_id },
+      key: agent.agent_id,
       icon: kind.icon,
-      title: summary.trim() || kind.name,
+      title: agent.summary.trim() || kind.name,
     };
   }),
 );

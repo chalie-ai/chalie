@@ -47,6 +47,7 @@ from configs.channels.web_search import WebSearchConfig
 from configs.enums.channels import Channel
 from configs.enums.policy_channel import PolicyChannel
 from controllers.message_processor import MessageProcessor
+from models.agent import Agent
 from models.provider_request import ProviderRequest
 from models.provider_response import ProviderResponse
 from models.turn_execution import TurnExecution
@@ -62,6 +63,11 @@ BUILD_CLIENT = "services.provider_service.build_client"
 
 USER = Channel.USER.value
 WAIT_S = 15.0
+
+#: How many ended subagents the ``earlier_agents`` fixture records before a
+#: test, so the first agent the test spawns is number ``EARLIER_AGENTS + 1``
+#: while its turn is number 1.
+EARLIER_AGENTS = 100
 
 # Each subagent's own config, keyed by the route its turns are answered from —
 # the subagent's tool name.
@@ -542,6 +548,15 @@ def child_turn(db: sqlite3.Connection, channel: str, call_id: int) -> int:
     ).fetchone()
     assert row is not None, f"no {channel} turn carries call {call_id}"
     return cast("int", row["turn_id"])
+
+
+def agent_number(tool_name: str, turn_id: int) -> int:
+    """The number the model knows the *tool_name* subagent by whose own turn
+    is *turn_id* — its row's ``agent_id``, which must exist. Read on the
+    calling thread's own connection, so a provider entry may call it."""
+    agent = Agent.by_turn(tool_name, turn_id)
+    assert agent is not None, f"no agents row for {tool_name} turn {turn_id}"
+    return agent.agent_id
 
 
 def replies(db: sqlite3.Connection, call_id: int, channel: str = USER) -> list[sqlite3.Row]:

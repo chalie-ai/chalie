@@ -54,6 +54,7 @@ from tests._delegates import (
     ChannelProvider,
     Entry,
     Held,
+    agent_number,
     assistant_texts,
     begin,
     block,
@@ -76,7 +77,7 @@ from tests._delegates import (
     wait,
 )
 
-pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider", "earlier_agents")]
 
 _QUESTION = "what is the capital of France?"
 _INSTRUCTIONS = "find the capital of France"
@@ -167,7 +168,7 @@ def test_a_subagent_called_from_the_chat_returns_at_once_and_its_answer_comes_ba
 
     assert held.opened and provider.unused() == {}
     [call] = calls_of(db, delegate)
-    n = child_turn(db, delegate_channel(delegate), call["id"])
+    n = agent_number(delegate, child_turn(db, delegate_channel(delegate), call["id"]))
     label = f"Reply from {delegate} #{n}"
     assert call["state"] == "done", call["result"]
     assert (
@@ -337,7 +338,7 @@ def test_two_subagents_that_answer_while_their_caller_works_are_each_answered_on
         [call] = calls_of(db, tool_name)
         [reply] = replies(db, call["id"])
         assert (reply["turn_id"], reply["joined"]) == (parent.turn_id, 1), tool_name
-        numbers[tool_name] = child_turn(db, delegate_channel(tool_name), call["id"])
+        numbers[tool_name] = agent_number(tool_name, child_turn(db, delegate_channel(tool_name), call["id"]))
     assert _user_turns(db) == [parent.turn_id]
     chat = provider.read("chat")
     assert len(chat) == 3

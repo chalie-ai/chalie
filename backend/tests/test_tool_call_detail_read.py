@@ -39,9 +39,9 @@ from models.provider_response import ProviderResponse
 from models.tool_call import ToolCall
 from services.turn_serializer_service import TurnSerializerService
 from tests._browser_live import bearer_header, signed_in, use_own_data_dir
-from tests._delegates import ChannelProvider, Held, child_turn, delegate_channel, replies, run_turn
+from tests._delegates import ChannelProvider, Held, agent_number, child_turn, delegate_channel, replies, run_turn
 
-pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider", "earlier_agents")]
 
 _SERIALIZER_LOG = TurnSerializerService.__module__
 _WEB_SEARCH_CHANNEL = delegate_channel(WebSearchAbility.NAME)
@@ -196,7 +196,7 @@ def test_a_subagent_call_from_the_chat_names_its_turn_while_it_works_and_after_a
     assert search.opened and provider.unused() == {}
     row = _row(db, WebSearchAbility.NAME)
     n = child_turn(db, _WEB_SEARCH_CHANNEL, row["id"])
-    assert f"Reply from {WebSearchAbility.NAME} #{n}" in row["result"]
+    assert f"Reply from {WebSearchAbility.NAME} #{agent_number(WebSearchAbility.NAME, n)}" in row["result"]
     assert _ANSWER not in row["result"]
     [(status, body)] = mid_run
     assert status == 200, body

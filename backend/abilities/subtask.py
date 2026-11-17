@@ -44,11 +44,11 @@ from contracts.params.subtask_params_bag import (
     SubtaskParamsBag,
     SubtaskStartParams,
 )
+from models.agent import Agent
 from models.tool_call import ToolCall
 from models.transcript import Transcript
 
 if TYPE_CHECKING:
-    from controllers.message_processor import MessageProcessor
     from services.processor_config import ProcessorConfig
 
 _DO_IT_YOURSELF = "Do the work yourself in this turn."
@@ -179,7 +179,10 @@ class SubtaskAbility(DelegateAbility[SubtaskParamsBag]):
             return self.started(child)
         if isinstance(params, SubtaskMessageParams):
             n = params.subtask
-            if not self._subtask_is_ours(mp, n):
+            # ``n`` is the agent number a start returned; it addresses only a
+            # subtask this channel spawned.
+            agent = Agent.by_id(n)
+            if agent is None or agent.type != self.NAME or agent.spawned_by_channel != mp.channel:
                 return ToolResult.err(
                     f"No subtask #{n} belongs to this conversation.",
                     code="subtask-not-found",
@@ -192,7 +195,7 @@ class SubtaskAbility(DelegateAbility[SubtaskParamsBag]):
                 config,
                 params.message,
                 metadata={"origin": mp.origin, "tool_call_id": self.tool_call_id},
-                turn_id=n,
+                turn_id=agent.turn_id,
             )
             mp.tool_call_service.reemit(self.tool_call_id)
             if result is None:
@@ -220,29 +223,6 @@ class SubtaskAbility(DelegateAbility[SubtaskParamsBag]):
             return ExternalAgentSubtaskConfig(caller._agent_name, caller._project)
         return None
 
-    @staticmethod
-    def _subtask_is_ours(mp: "MessageProcessor", n: int) -> bool:
-        """Whether subtask ``n`` belongs to this conversation — the ONE address
-        check action "message" runs before sending: the subtask's first input
-        row carries the caller's ``tool_calls`` id as decimal text, which walks
-        back to the caller's row; that row must sit on this channel. Only the
-        chat reaches action "message" (a caller that waits is never shown
-        it). Any miss (no rows, no link, no call, no caller, wrong owner) is
-        the same "not ours" answer."""
-        ids = Transcript.ids_for_turn(Channel.DELEGATE_SUBTASK.value, n)
-        if not ids:
-            return False
-        first = Transcript.get(ids[0])
-        if first is None or first.tool_call_id is None or not first.tool_call_id.isdecimal():
-            return False
-        call = ToolCall.get(int(first.tool_call_id))
-        if call is None:
-            return False
-        caller = Transcript.get(call.transcript_id)
-        if caller is None or caller.turn_id is None:
-            return False
-        return caller.channel == mp.channel
-
 
 def speaker(row: Transcript) -> str | None:
     """The speaker label for a transcript row linked to the tool call that
@@ -259,8 +239,9 @@ def speaker(row: Transcript) -> str | None:
     * ``"Message from Chalie"`` — a later input row on the subtask channel:
       a message Chalie sent to the working subtask.
     * ``"Reply from <tool> #N"`` — a delegate's late reply, ``<tool>`` being
-      the delegate the link's call ran and ``N`` the child turn it spawned —
-      rendered without the number when its child row no longer exists, and
+      the delegate the link's call ran and ``N`` the agent it spawned —
+      rendered without the number when its child row or its agent no longer
+      exists, and
       ``"Reply from a delegate"`` when the call itself no longer exists
       (purged). Replies land only on the user channel; the schedule channel
       is still read because an earlier build sent scheduled tasks' replies
@@ -292,9 +273,10 @@ def speaker(row: Transcript) -> str | None:
             {call_id: (call.created_at, call.ended_at)},
         ).get(call_id)
         child_turn_id = entry["turn_id"] if entry is not None else None
-        if child_turn_id is None:
+        agent = Agent.by_turn(call.tool_name, cast("int", child_turn_id)) if child_turn_id is not None else None
+        if agent is None:
             return f"Reply from {call.tool_name}"
-        return reply_label(call.tool_name, cast("int", child_turn_id))
+        return reply_label(call.tool_name, agent.agent_id)
     return None
 
 

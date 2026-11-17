@@ -46,6 +46,7 @@ from tests._browser_live import signed_in, use_own_data_dir
 from tests._delegates import (
     ChannelProvider,
     Held,
+    agent_number,
     begin,
     calls,
     calls_of,
@@ -61,7 +62,7 @@ from tests._delegates import (
 )
 from tests.test_policy_gate_origin import _gate_probe_asks, gate_probe
 
-pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider", "earlier_agents")]
 
 _SUBTASK = Channel.DELEGATE_SUBTASK.value
 _USER = Channel.USER.value
@@ -172,7 +173,7 @@ def _assert_the_subtask_answered_the_chat(db: sqlite3.Connection, run: _Answered
     [reply] = replies(db, call["id"])
     assert reply["content"] == _ANSWER
     assert reply["turn_id"] != run.chat_turn
-    assert f"Reply from {SubtaskAbility.NAME} #{n}" in run.provider.texts("chat")[-1]
+    assert f"Reply from {SubtaskAbility.NAME} #{agent_number(SubtaskAbility.NAME, n)}" in run.provider.texts("chat")[-1]
 
 
 def test_an_approved_prompt_runs_the_tool_and_the_subtask_still_answers_the_chat(
@@ -238,7 +239,7 @@ def test_a_prompt_raised_on_a_follow_up_is_listed_under_the_chat_turn_that_sent_
         [first_reply] = replies(db, started["id"])
         assert first_reply["content"] == _FIRST_ANSWER
         n = child_turn(db, _SUBTASK, started["id"])
-        number.append(n)
+        number.append(agent_number(SubtaskAbility.NAME, n))
         follow_up = begin(UserConfig(), "ask the subtask to probe the gate now")
         follow_up.result()
         assert execution(_USER, follow_up.turn_id).state == TurnExecution.COMPLETED
@@ -264,4 +265,5 @@ def test_a_prompt_raised_on_a_follow_up_is_listed_under_the_chat_turn_that_sent_
     [reply] = replies(db, sent["id"])
     assert reply["content"] == _ANSWER
     assert reply["turn_id"] not in (first.turn_id, follow_up.turn_id)
-    assert f"Reply from {SubtaskAbility.NAME} #{n}" in provider.texts("chat")[-1]
+    assert number[0] != n
+    assert f"Reply from {SubtaskAbility.NAME} #{number[0]}" in provider.texts("chat")[-1]
