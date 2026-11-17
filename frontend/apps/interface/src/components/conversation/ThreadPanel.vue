@@ -17,7 +17,7 @@ import {
   upsertDelegateTurn,
   upsertTurnToSurfaces,
 } from '../../utils/turnDom';
-import { delegateName } from '../../utils/delegateChannel';
+import { delegateName, subagentKind } from '../../utils/delegateChannel';
 import TurnView from './TurnView.vue';
 import InputDock from '../layout/InputDock.vue';
 import DockError from '../layout/DockError.vue';
@@ -112,7 +112,7 @@ function isOpenDelegate(target: DelegateRef): boolean {
  *  never by a type — and fetch it. */
 async function _openDelegate(target: DelegateRef): Promise<void> {
   _teardownSurface();
-  heading.value = session.panelDelegateTitle.trim() || delegateName(target.channel);
+  heading.value = session.panelDelegateTitle.trim() || subagentKind(delegateName(target.channel)).name;
   await nextTick(); // let `v-if="open"` mount <aside> so turnsRef exists.
   if (!turnsRef.value || !isOpenDelegate(target)) return;
   backRef.value?.focus();

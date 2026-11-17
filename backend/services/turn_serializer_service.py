@@ -26,7 +26,7 @@ from typing import cast
 
 from abilities._registry import AbilityRegistry
 from abilities.browser import BrowserAbility
-from abilities.subtask import speaker
+from abilities.subtask import reply_from, speaker
 from abilities.web_browse import WebBrowseAbility
 from services.database import Database
 from services.dispatch_service import DispatchService
@@ -146,9 +146,16 @@ def _apply_user_fields(msg: dict[str, object], r: dict[str, object], attachments
         msg["attachments"] = attachments
     # Who wrote a row a tool call caused — the same label the prompt shows
     # ("Task from Chalie", "Reply from subtask #N"); absent on ordinary input.
-    label = speaker(Transcript(**r))
+    row = Transcript(**r)
+    label = speaker(row)
     if label is not None:
         msg["speaker"] = label
+    # A late reply also names the subagent it came from — its tool and the
+    # summary of the call that started it — so the interface can say which
+    # subagent replied without showing the tool name or number.
+    origin = reply_from(row)
+    if origin is not None:
+        msg["reply_from"] = origin
 
 
 def _tool_call_chips(

@@ -8,10 +8,10 @@
  * often after the whole turn that started it settled. While any subagent of
  * any turn on screen still runs, the header's Subagents button turns pink.
  * Clicking it slides out the Subagents dock, which lists every running
- * subagent once: the one-line summary of the call that started it (the
- * subagent's name when the call has none) over that subagent's name. Picking a
- * row opens its transcript in the thread panel, headed by the row's title, and
- * closes the dock.
+ * subagent once: its type's icon and the one-line summary of the call that
+ * started it — its type's plain name when the call has none, never the tool
+ * name or a number. Picking a row opens its transcript in the thread panel,
+ * headed by the row's title, and closes the dock.
  *
  * Whether a subagent still runs is decided by its own execution frames once one
  * was seen, else by the REST read's `working` on its chip. The frames are
@@ -177,12 +177,17 @@ const dock = (): HTMLElement => document.querySelector<HTMLElement>('aside[aria-
 const dockScrim = (): HTMLElement => document.querySelector<HTMLElement>('.side-drawer__scrim')!;
 const rowButtons = (): HTMLButtonElement[] => [...dock().querySelectorAll<HTMLButtonElement>('.drawer-row')];
 
-/** Each dock row, in order, as [its title, the subagent's name under it]. */
-function dockRows(): string[][] {
-  return rowButtons().map((r) => [
-    r.querySelector('.drawer-row__label')!.textContent!.trim(),
-    r.querySelector('.drawer-row__sub')!.textContent!.trim(),
-  ]);
+/** The lucide icon an element draws, by its class (`lucide-search`). */
+const iconOf = (el: Element | null): string | undefined =>
+  el ? [...el.classList].find((k) => /^lucide-(?!icon$).*(?<!-icon)$/.test(k)) : undefined;
+
+/** Each dock row, in order, as [its title, its type's icon]. A row has no line
+ *  under its title. */
+function dockRows(): (string | undefined)[][] {
+  return rowButtons().map((r) => {
+    expect(r.querySelector('.drawer-row__sub')).toBeNull();
+    return [r.querySelector('.drawer-row__label')!.textContent!.trim(), iconOf(r.querySelector('.drawer-row__icon'))];
+  });
 }
 
 function rowTitled(title: string): HTMLButtonElement {
@@ -221,17 +226,19 @@ describe('the header\'s Subagents button', () => {
 });
 
 describe('the Subagents dock', () => {
-  it('lists each running subagent as its call\'s summary over the subagent\'s name, never a turn number; a call with no summary is titled by its subagent\'s name', async () => {
+  it('lists each running subagent as its type\'s icon and its call\'s summary, never a tool name or a turn number; a call with no summary is titled by its type\'s name', async () => {
     mountHeaderAndDock();
     mountTurn(settledBlock(TURN, [START_4, START_5, chip(94, 'web_search', '', ref(WEB_SEARCH, 6, true)), PLAIN]));
     await flushPromises();
 
     expect(dockRows()).toEqual([
-      ['compare museum hours', 'subtask'],
-      ['web_search', 'web_search'],
+      ['compare museum hours', 'lucide-bot'],
+      ['Web search', 'lucide-search'],
     ]);
-    // Subtask #4 and web_search #6 — neither number shows.
-    expect(dock().querySelector('.side-drawer__list')!.textContent).not.toMatch(/\d/);
+    // Subtask #4 and web_search #6 — neither tool name nor number shows.
+    const listed = dock().querySelector('.side-drawer__list')!.textContent!;
+    expect(listed).not.toMatch(/\d/);
+    expect(listed).not.toMatch(/subtask|web_search/);
   });
 
   it('a start and a follow-up message to the same subtask are one row, under the first call\'s summary', async () => {
@@ -240,10 +247,10 @@ describe('the Subagents dock', () => {
     mountTurn(settledBlock(TURN, [START_4, followUp, PLAIN]));
     await flushPromises();
 
-    expect(dockRows()).toEqual([['compare museum hours', 'subtask']]);
+    expect(dockRows()).toEqual([['compare museum hours', 'lucide-bot']]);
   });
 
-  it('a pick opens that subagent\'s transcript headed by the row\'s title — the call\'s summary, else the subagent\'s name — and closes the dock', async () => {
+  it('a pick opens that subagent\'s transcript headed by the row\'s title — the call\'s summary, else its type\'s name — and closes the dock', async () => {
     mountHeaderAndDock();
     track(mount(ThreadPanel, { attachTo: document.body }));
     mountTurn(settledBlock(TURN, [START_4, chip(94, 'web_search', '', ref(WEB_SEARCH, 6, true))]));
@@ -258,10 +265,10 @@ describe('the Subagents dock', () => {
     expect(dockScrim().classList.contains('hidden')).toBe(true);
 
     await openDock();
-    rowTitled('web_search').click();
+    rowTitled('Web search').click();
     await flushPromises();
     expect(session.panelDelegate).toEqual({ channel: WEB_SEARCH, turn_id: 6 });
-    expect(panelHeading()).toBe('web_search');
+    expect(panelHeading()).toBe('Web search');
     expect(session.subagentDockOpen).toBe(false);
   });
 
@@ -293,7 +300,7 @@ describe('the Subagents dock', () => {
 
     // #5's read said done, but its own frame says it runs — the frame wins.
     await send(executionFrame(SUBTASK, 5, 'working'));
-    expect(dockRows()).toEqual([['book a table', 'subtask']]);
+    expect(dockRows()).toEqual([['book a table', 'lucide-bot']]);
     expect(dock().querySelector('.drawer-empty')).toBeNull();
   });
 
@@ -311,11 +318,11 @@ describe('the Subagents dock', () => {
     const session = useSessionStore();
 
     expect(dockRows()).toEqual([
-      ['compare museum hours', 'subtask'],
-      ['search museum prices', 'web_search'],
-      ['read the museum site', 'web_browse'],
-      ['check my calendar', 'pim'],
-      ['fix the itinerary script', 'code_agent'],
+      ['compare museum hours', 'lucide-bot'],
+      ['search museum prices', 'lucide-search'],
+      ['read the museum site', 'lucide-globe'],
+      ['check my calendar', 'lucide-mail'],
+      ['fix the itinerary script', 'lucide-square-terminal'],
     ]);
 
     await openDock();
@@ -326,6 +333,28 @@ describe('the Subagents dock', () => {
     rowTitled('fix the itinerary script').click();
     await flushPromises();
     expect(session.panelDelegate).toEqual({ channel: CODE_AGENT, turn_id: 3 });
+  });
+
+  it('titles every kind of subagent whose call has no summary by its type\'s plain name under its type\'s icon', async () => {
+    mountHeaderAndDock();
+    mountTurn(settledBlock(TURN, [
+      chip(101, 'subtask', '', ref(SUBTASK, 3, true)),
+      chip(102, 'web_search', ' ', ref(WEB_SEARCH, 3, true)),
+      chip(103, 'web_browse', '', ref(WEB_BROWSE, 3, true)),
+      chip(104, 'pim', '', ref(PIM, 3, true)),
+      chip(105, 'code_agent', '', ref(CODE_AGENT, 3, true)),
+    ]));
+    await flushPromises();
+
+    expect(dockRows()).toEqual([
+      ['Subtask', 'lucide-bot'],
+      ['Web search', 'lucide-search'],
+      ['Web browsing', 'lucide-globe'],
+      ['Mail & calendar', 'lucide-mail'],
+      ['Coding', 'lucide-square-terminal'],
+    ]);
+    const listed = dock().querySelector('.side-drawer__list')!.textContent!;
+    expect(listed).not.toMatch(/\d|subtask|web_search|web_browse|pim|code_agent/);
   });
 
   it('lists a running step\'s call once it names its subagent, and drops it when that subagent crashes', async () => {
@@ -339,7 +368,7 @@ describe('the Subagents dock', () => {
 
     setLiveToolDelegate(ConfigType.USER, TURN, 81, { channel: WEB_SEARCH, turn_id: 7 });
     await flushPromises();
-    expect(dockRows()).toEqual([['museum hours', 'web_search']]);
+    expect(dockRows()).toEqual([['museum hours', 'lucide-search']]);
     expect(isPink()).toBe(true);
 
     await send(executionFrame(WEB_SEARCH, 7, 'crashed'));
@@ -354,11 +383,11 @@ describe('the Subagents dock', () => {
     const chatCopy = mountTurn(block);
     const panelCopy = mountTurn(block, true);
     await flushPromises();
-    expect(dockRows()).toEqual([['compare museum hours', 'subtask']]);
+    expect(dockRows()).toEqual([['compare museum hours', 'lucide-bot']]);
 
     unmountNow(chatCopy);
     await flushPromises();
-    expect(dockRows()).toEqual([['compare museum hours', 'subtask']]);
+    expect(dockRows()).toEqual([['compare museum hours', 'lucide-bot']]);
     expect(isPink()).toBe(true);
 
     unmountNow(panelCopy);

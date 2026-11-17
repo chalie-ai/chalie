@@ -28,7 +28,10 @@ class ProcessorConfig(ABC):
     fact with two consequences that must move together:
 
     * ``PromptService`` appends the response-format contract, so the model is
-      told to emit ``markup.PROMPT_TAGS`` instead of markdown;
+      told to emit ``markup.PROMPT_TAGS`` instead of markdown — except on a
+      subagent's own turn, which is told to reply in plain text, because its
+      answer reaches its caller as text — on the chat, a reply shown as
+      plain text;
     * ``MessageProcessor._format`` converts and sanitises the reply at persist
       time, so both the live send and the refresh read inherit the same markup.
 
@@ -40,7 +43,9 @@ class ProcessorConfig(ABC):
     Rich-media cards are a separate gate: see ``RENDERS_CARDS``.
 
     UserConfig, ScheduledConfig and the four watchable subagent channels
-    (WebSearchConfig, WebBrowseConfig, PimConfig, CodeAgentConfig) set it.
+    (WebSearchConfig, WebBrowseConfig, PimConfig, CodeAgentConfig) set it, the
+    subagent channels because the subagent panel renders their transcript as
+    HTML; a subtask inherits it from the chat or schedule it was started from.
     DiscoveryConfig deliberately does not: it inherits UserConfig's *thinking*,
     never its user-facing identity. VisionConfig does not either: its output is
     indexed text, never displayed."""

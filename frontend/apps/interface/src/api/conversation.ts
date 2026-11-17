@@ -111,6 +111,13 @@ export interface ConversationMessage {
    */
   speaker?: string | null;
   /**
+   * On a subagent's reply landing on the chat: the subagent's tool and the
+   * one-line summary of the call that started it (empty when the call carried
+   * none), so the reply can be named without the tool name or number. Absent
+   * on every other row, and on a reply whose call was purged.
+   */
+  reply_from?: { tool_name: string; summary: string } | null;
+  /**
    * Pre-synthesis outcome for a settled row, as of this fetch: 'ready' (audio
    * stored), 'failed' (gave up after its attempts), or absent/null for a row
    * with no attempt on record — history from before pre-synthesis, whose first

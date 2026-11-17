@@ -378,7 +378,7 @@ describe('what an opened call shows, by its kind', () => {
     }
   });
 
-  it('the transcript "Open transcript" opens is headed by its call\'s summary, and by its subagent\'s name when the call has none', async () => {
+  it('the transcript "Open transcript" opens is headed by its call\'s summary, and by its subagent\'s type when the call has none', async () => {
     const w = await makeWorld();
     const { default: ThreadPanel } = await import('./ThreadPanel.vue');
     const panel = mount(ThreadPanel, { attachTo: document.body });
@@ -400,11 +400,12 @@ describe('what an opened call shows, by its kind', () => {
     expect(w.session.panelDelegate).toEqual(searching);
     expect(panelHeading()).toBe('Searching for ferry strikes');
 
-    // A call with no summary is labelled by its tool, which names its subagent.
+    // A call with no summary is labelled by its tool; its transcript is
+    // headed by its subagent's type in words, never the tool name.
     transcriptButtons(await open(rowNamed(w.el, 'web_browse')))[0]!.click();
     await flushPromises();
     expect(w.session.panelDelegate).toEqual(browsing);
-    expect(panelHeading()).toBe('web_browse');
+    expect(panelHeading()).toBe('Web browsing');
   });
 
   it('an email call is headed by its action and lists what it was given in a fixed order, skipping the empty; any other call is headed by its action and shows every other argument, a nested one as JSON', async () => {

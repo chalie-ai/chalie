@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ChevronRight, FileText, Image as ImageIcon } from '@lucide/vue';
 import type { ConversationAttachment, ConversationMessage } from '../../api/conversation';
 import ImagePreviewModal from '../overlays/ImagePreviewModal.vue';
+import { subagentKind } from '../../utils/delegateChannel';
 
 const props = withDefaults(defineProps<{
   message: ConversationMessage;
@@ -17,6 +18,15 @@ const props = withDefaults(defineProps<{
 const showText = computed(
   () => !(props.message.content === '[File attached]' && props.message.attachments?.length),
 );
+
+// A subagent's reply reads "Reply from <b>{name}</b> agent": the name is the
+// summary of the call that started it, or its type when the call had none —
+// never its tool name or number.
+const replyName = computed(() => {
+  const origin = props.message.reply_from;
+  if (!origin) return null;
+  return origin.summary.trim() || subagentKind(origin.tool_name).name;
+});
 
 // A subagent's reply starts folded to its label; a click opens it, another folds it.
 const open = ref(false);
@@ -86,9 +96,13 @@ function openAttachment(att: ConversationAttachment): void {
       @click="open = !open"
     >
       <ChevronRight class="user-message__chevron" :size="14" />
-      {{ label }}
+      <span v-if="replyName">Reply from <b>{{ replyName }}</b> agent</span>
+      <template v-else>{{ label }}</template>
     </button>
-    <span v-else-if="label" class="user-message__label">{{ label }}</span>
+    <span v-else-if="label" class="user-message__label">
+      <template v-if="replyName">Reply from <b>{{ replyName }}</b> agent</template>
+      <template v-else>{{ label }}</template>
+    </span>
 
     <div
       v-if="showText"

@@ -130,7 +130,9 @@ def test_reply_after_the_caller_finished_opens_a_new_user_turn(
     opens with the task, labelled as Chalie's."""
     client, _db, _store = authed_client
     held = Held(text(_ANSWER))
-    provider = ChannelProvider(chat=[_START, text("Started it."), text("Got the reply.")], subtask=[held])
+    summary = "Listing the primes below 6"
+    start = calls(tool("subtask", action="start", instructions=_TASK, act_summary=summary))
+    provider = ChannelProvider(chat=[start, text("Started it."), text("Got the reply.")], subtask=[held])
 
     with patched(provider):
         parent = begin(UserConfig(), "find the primes below 6 in the background")
@@ -149,13 +151,22 @@ def test_reply_after_the_caller_finished_opens_a_new_user_turn(
     assert execution(_USER, reply["turn_id"]).state == TurnExecution.COMPLETED
     assert f"Reply from subtask #{n}" in provider.texts("chat")[-1]
     # The chat's call returned at once with the subtask's number and the label
-    # its answer arrives under — never the answer itself.
+    # its answer arrives under, written as that label writes them — never the
+    # answer itself.
     started = cast("str", calls_of(db, "subtask")[0]["result"])
-    assert f"Subtask #{n} started." in started and f'"Reply from subtask #{n}"' in started
-    assert _ANSWER not in started
+    assert started == (
+        "[subtask(status=success)]\n"
+        f'Subagent subtask #{n} has been spawned. It will reply to you once it\'s done as '
+        f'"Reply from subtask #{n}". Acknowledge to the user that the agent has been spawned '
+        "and you'll be invoked automatically once it replies.\n"
+        "[end:subtask]"
+    )
 
     opener = messages(block(client, f"/api/threads/{reply['turn_id']}"))[0]
     assert (opener["role"], opener["content"], opener["speaker"]) == ("user", _ANSWER, f"Reply from subtask #{n}")
+    # The reply also names the subagent it came from by the summary of the call
+    # that started it, for the person to read in place of the tool and number.
+    assert opener["reply_from"] == {"tool_name": "subtask", "summary": summary}
     parent_block = block(client, f"/api/threads/{parent.turn_id}")
     assert chip(parent_block, "subtask")["delegate"] == {
         "channel": _SUBTASK, "turn_id": n, "working": False, "crashed": False, "cancelled": False,

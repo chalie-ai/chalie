@@ -4,10 +4,13 @@
  *
  * A subtask is fire-and-forget: it outlives the call that started it, so its
  * answer lands later on the CALLER's channel as a user-role row carrying
- * `speaker: 'Reply from subtask #N'`. Such a reply on the user/schedule
- * channel (a typed block — `channel` null) must read as a collapsed chip:
- * folded to its speaker label, its text hidden until a click opens it, another
- * folds it back. It is the ONLY collapsible case: a subtask transcript's own
+ * `speaker: 'Reply from subtask #N'` and `reply_from`, the subagent's tool and
+ * the one-line summary of the call that started it. The person reads that
+ * reply as `Reply from <b>{summary}</b> agent` — the type's plain name in
+ * place of a missing summary — and never the tool name or the number. Such a
+ * reply on the user/schedule channel (a typed block — `channel` null) must
+ * read as a collapsed chip: folded to its label, its text hidden until a click
+ * opens it, another folds it back. It is the ONLY collapsible case: a subtask transcript's own
  * input rows (channel `delegate:subtask`, captioned 'Task from Chalie' /
  * 'Message from Chalie') and every other delegate transcript's rows keep the
  * plain caption and always show their text.
@@ -91,15 +94,25 @@ function delegateBlock(channel: string, turnId: number, messages: ConversationMe
   };
 }
 
+/** The reply chip's label: its whole text, and the text it puts in bold. */
+function replyLabel(wrapper: VueWrapper, speaker: string): { text: string; bold: string[] } {
+  const label = wrapper.find(`.user-message[data-speaker="${speaker}"] button.user-message__label--toggle`);
+  expect(label.exists()).toBe(true);
+  return { text: label.text(), bold: label.findAll('b').map((b) => b.text()) };
+}
+
 describe('a subtask reply landing on the user channel', () => {
-  it('is a collapsed chip — folded to its speaker label, a click opens it, another folds it', async () => {
+  it('is a collapsed chip — folded to "Reply from <b>{summary}</b> agent", a click opens it, another folds it', async () => {
     const wrapper = track(mount(TurnView, {
       props: {
         block: userBlock(TURN, [
           row('6010', 'user', 'look into the museum hours', TURN),
           // The subtask's answer arrives later, on the user's own channel: a
           // user-role row naming its subtask.
-          row('6011', 'user', 'The answer.', TURN, { speaker: 'Reply from subtask #4' }),
+          row('6011', 'user', 'The answer.', TURN, {
+            speaker: 'Reply from subtask #4',
+            reply_from: { tool_name: 'subtask', summary: 'compare museum hours' },
+          }),
         ]),
       },
       // Attach to the document: happy-dom only resolves an inline `display:
@@ -114,7 +127,10 @@ describe('a subtask reply landing on the user channel', () => {
     expect(label.exists()).toBe(true);
     expect(label.attributes('type')).toBe('button');
     expect(label.attributes('aria-expanded')).toBe('false');
-    expect(label.text()).toContain('Reply from subtask #4');
+    expect(label.text()).toBe('Reply from compare museum hours agent');
+    expect(label.findAll('b').map((b) => b.text())).toEqual(['compare museum hours']);
+    // Neither the tool name nor the subtask's number shows.
+    expect(label.text()).not.toMatch(/subtask|\d/);
     // Folded: the reply's text is not visible yet.
     const text = bubble.find('.user-text');
     expect(text.isVisible()).toBe(false);
@@ -129,6 +145,56 @@ describe('a subtask reply landing on the user channel', () => {
     await wrapper.vm.$nextTick();
     expect(label.attributes('aria-expanded')).toBe('false');
     expect(text.isVisible()).toBe(false);
+  });
+});
+
+describe('a reply whose call carries no summary', () => {
+  it('reads "Reply from <b>{type}</b> agent" — the plain type name, no tool name, no number — for every kind of subagent', () => {
+    const kinds: [string, string][] = [
+      ['subtask', 'Subtask'],
+      ['web_search', 'Web search'],
+      ['web_browse', 'Web browsing'],
+      ['pim', 'Mail & calendar'],
+      ['code_agent', 'Coding'],
+    ];
+    const wrapper = track(mount(TurnView, {
+      props: {
+        block: userBlock(TURN, [
+          row('6020', 'user', 'plan my museum day', TURN),
+          ...kinds.map(([tool], i) => row(`602${i + 1}`, 'user', 'The answer.', TURN, {
+            speaker: `Reply from ${tool} #${i + 7}`,
+            reply_from: { tool_name: tool, summary: i === 1 ? '  ' : '' },
+          })),
+        ]),
+      },
+      attachTo: document.body,
+    }));
+
+    kinds.forEach(([tool, name], i) => {
+      const { text, bold } = replyLabel(wrapper, `Reply from ${tool} #${i + 7}`);
+      expect(text).toBe(`Reply from ${name} agent`);
+      expect(bold).toEqual([name]);
+      expect(text).not.toMatch(/_|\d/);
+      expect(text).not.toContain(tool);
+    });
+  });
+});
+
+describe('a reply whose call no longer exists', () => {
+  it('still reads as its speaker label, folded', () => {
+    const wrapper = track(mount(TurnView, {
+      props: {
+        block: userBlock(TURN, [
+          row('6030', 'user', 'look into the museum hours', TURN),
+          row('6031', 'user', 'The answer.', TURN, { speaker: 'Reply from a delegate' }),
+        ]),
+      },
+      attachTo: document.body,
+    }));
+
+    const { text, bold } = replyLabel(wrapper, 'Reply from a delegate');
+    expect(text).toBe('Reply from a delegate');
+    expect(bold).toEqual([]);
   });
 });
 

@@ -248,7 +248,8 @@ body {
 }
 
 // A side drawer's list row, shared by the scheduler dock and the Subagents
-// dock: a bold one-line label (with its activity dot), a muted line under it.
+// dock: a bold one-line label (with its activity dot, and a subagent's type
+// icon), and on a schedule a muted line under it.
 .drawer-empty {
   font-size: var(--fs-body);
   color: var(--muted);
@@ -279,6 +280,11 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.drawer-row__icon {
+  flex-shrink: 0;
+  color: var(--muted);
 }
 
 .drawer-row__label {

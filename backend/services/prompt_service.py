@@ -46,7 +46,7 @@ from abilities.web_search import WebSearchAbility
 from configs.channels.external_agent import EAMPConfig
 from configs.channels.memory_step import PROMPT_CHANNEL as MEMORY_STEP_PROMPT_CHANNEL
 from configs.channels.user import UserConfig
-from configs.enums.channels import Channel
+from configs.enums.channels import WATCHABLE_DELEGATE_CHANNELS, Channel
 from exceptions import UnroutedPromptChannel
 from models.plan_task import PlanTask
 from models.tool_call import ToolCall
@@ -170,7 +170,8 @@ _KEEPING_THE_CHAT_MOVING = (
 _TAG_LIST = ", ".join(f"<{tag}>" for tag in PROMPT_TAGS)
 
 #: The single source of the HTML output contract, shared by every channel whose
-#: output is rendered to a human, and gated by ``ProcessorConfig.RENDERS_HTML``.
+#: output is rendered to a human but a subagent's own, and gated by
+#: ``ProcessorConfig.RENDERS_HTML``.
 _RESPONSE_FORMAT = (
     """
 
@@ -187,6 +188,13 @@ Avoid using table structures to represent data. If you do need to use tables, ou
 
 ────────────────────────────────"""
 )
+
+#: What a subagent is told in place of the HTML contract: its answer reaches its
+#: caller as text — on the chat, a reply shown as plain text, where markup would
+#: show as raw tags.
+#: Its stored rows are still sanitized (``RENDERS_HTML``), because the subagent
+#: panel renders them as HTML.
+_PLAIN_TEXT_REPLY = "\n\nReply with plain text, no markdown, formatting of any kind."
 
 
 
@@ -205,14 +213,16 @@ class PromptService:
         hand-off section on a turn whose subagent calls are answered later
         (``replies_late``: the person's chat, never a discovery pass or a
         subtask though they share its body), the shared response-format
-        contract on any channel that renders to a human (``RENDERS_HTML``),
-        then the user's locale line on every channel — the one place all
+        contract on any channel that renders to a human (``RENDERS_HTML``) —
+        a subagent's own turn is told to reply in plain text instead — then
+        the user's locale line on every channel — the one place all
         system-prompt assembly and placeholder substitution lands."""
         base = self._system_prompt_body()
         if replies_late(self.mp.config.type()):
             base += _KEEPING_THE_CHAT_MOVING
         if self.mp.config.RENDERS_HTML:
-            base += _RESPONSE_FORMAT
+            subagent = self.mp.config.channel in WATCHABLE_DELEGATE_CHANNELS
+            base += _PLAIN_TEXT_REPLY if subagent else _RESPONSE_FORMAT
         if locale := self.locale_line():
             base += f"\n\n{locale}"
         return self._substitute_content_field(base)

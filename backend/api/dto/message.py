@@ -32,6 +32,14 @@ class PlanTask(DTO):
     status: str
 
 
+class ReplyFrom(DTO):
+    """The subagent a late reply came from: its ``tool_name`` and the one-line
+    ``summary`` of the call that started it, empty when the call carried none."""
+
+    tool_name: str
+    summary: str
+
+
 class Message(DTO):
     """One transcript row.
 
@@ -66,7 +74,10 @@ class Message(DTO):
     ``speaker`` names who wrote an input row a tool call caused — ``Task from
     Chalie`` / ``Message from Chalie`` on a subtask's own rows, ``Reply from
     <tool> #N`` on a delegate's late reply to its caller; ``None`` on every
-    other row.
+    other row. ``reply_from`` names, on that late reply, the subagent it came
+    from by its tool and the summary of the call that started it, so the client
+    can name it without the tool name or number; ``None`` on every other row
+    and on a reply whose call was purged.
     """
 
     id: str
@@ -83,6 +94,7 @@ class Message(DTO):
     settled: bool | None = None
     joined: bool | None = None
     speaker: str | None = None
+    reply_from: ReplyFrom | None = None
     voice_state: str | None = None
     thinking: Thinking | None = None
     plan: list[PlanTask] | None = None

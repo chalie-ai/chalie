@@ -122,7 +122,7 @@ class DelegateAbility(Ability[B], ABC):
             raise RuntimeError(f"{self.NAME}.run() dispatched without a bound MessageProcessor")
         child = self.spawn(config(mp.config.policy_channel), instructions)
         if replies_late(mp.config.type()):
-            return self.started(child, self.NAME)
+            return self.started(child)
         return self.wait_for(child, hint=hint)
 
     def wait_for(self, child: "MessageProcessor", *, hint: str) -> ToolResult:
@@ -142,14 +142,15 @@ class DelegateAbility(Ability[B], ABC):
             )
         return delegate_result(answer, hint=hint)
 
-    def started(self, child: "MessageProcessor", lead: str) -> ToolResult:
-        """The result of a call whose child runs in the background: ``lead``
-        and the child's number, and the label its answer will arrive under."""
+    def started(self, child: "MessageProcessor") -> ToolResult:
+        """The result of a call whose child runs in the background: the
+        subagent and its number, written as :func:`reply_label` writes them,
+        and the label its answer will arrive under."""
         n = child.turn_id
         return ToolResult.ok(
-            f"{lead} #{n} started. It works in the background; its answer will "
-            f"arrive as a new message labelled \"{reply_label(self.NAME, n)}\". "
-            "Carry on — do not wait for it or start it again."
+            f"Subagent {self.NAME} #{n} has been spawned. It will reply to you once it's done as "
+            f"\"{reply_label(self.NAME, n)}\". Acknowledge to the user that the agent has been "
+            "spawned and you'll be invoked automatically once it replies."
         )
 
     def follow_up(self, tr: ToolResult, action: "str | None") -> str:

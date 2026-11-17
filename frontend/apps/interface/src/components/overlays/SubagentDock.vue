@@ -1,27 +1,32 @@
 <script setup lang="ts">
 /**
  * Subagents dock — slide-out panel listing every subagent still running in a
- * turn on screen, in the order first seen. Each row is the one-line summary of
- * the call that started it (its subagent's name when the call has none) over
- * that subagent's name, and opens its transcript in the delegate panel.
+ * turn on screen, in the order first seen. Each row is its subagent's type icon and the one-line
+ * summary of the call that started it — the type's name when the call has
+ * none, never the tool name or number — and opens its transcript in the
+ * delegate panel under the same title.
  *
  * Open/close is driven by session.subagentDockOpen.
  */
 import { computed } from 'vue';
 import type { DelegateRef } from '@chalie/shared';
 import { useSessionStore } from '../../stores/session';
-import { delegateName } from '../../utils/delegateChannel';
+import { delegateName, subagentKind } from '../../utils/delegateChannel';
 import { runningSubagents } from '../../utils/liveActTrail';
 import SideDrawer from './SideDrawer.vue';
 
 const session = useSessionStore();
 
 const rows = computed(() =>
-  runningSubagents().map(({ delegate, summary }) => ({
-    delegate,
-    key: `${delegate.channel}#${delegate.turn_id}`,
-    title: summary.trim() || delegateName(delegate.channel),
-  })),
+  runningSubagents().map(({ delegate, summary }) => {
+    const kind = subagentKind(delegateName(delegate.channel));
+    return {
+      delegate,
+      key: `${delegate.channel}#${delegate.turn_id}`,
+      icon: kind.icon,
+      title: summary.trim() || kind.name,
+    };
+  }),
 );
 
 function openSubagent(delegate: DelegateRef, title: string): void {
@@ -46,10 +51,10 @@ function openSubagent(delegate: DelegateRef, title: string): void {
       @click="openSubagent(row.delegate, row.title)"
     >
       <span class="drawer-row__top">
+        <component :is="row.icon" class="drawer-row__icon" :size="16" aria-hidden="true" />
         <span class="drawer-row__label">{{ row.title }}</span>
         <span class="thread-activity-dot working" aria-hidden="true" />
       </span>
-      <span class="drawer-row__sub">{{ delegateName(row.delegate.channel) }}</span>
     </button>
   </SideDrawer>
 </template>

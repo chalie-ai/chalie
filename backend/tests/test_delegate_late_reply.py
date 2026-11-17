@@ -134,8 +134,9 @@ def _block_opening(tail: str) -> str | None:
 def test_a_subagent_called_from_the_chat_returns_at_once_and_its_answer_comes_back_as_a_reply(
     authed_client: _Client, delegate: str,
 ) -> None:
-    """The call ends at once under the subagent's number and the label its
-    answer will arrive under, with no answer and no warning in it. Once the
+    """The call ends at once saying the subagent was spawned, under its number
+    and the label its answer will arrive under, with no answer and no warning
+    in it. Once the
     chat's turn has ended, the subagent finishes and its answer comes back as one
     reply that opens a turn of its own, holding exactly the answer — which is
     also all the person reads under that label. The model answering it reads
@@ -169,7 +170,11 @@ def test_a_subagent_called_from_the_chat_returns_at_once_and_its_answer_comes_ba
     n = child_turn(db, delegate_channel(delegate), call["id"])
     label = f"Reply from {delegate} #{n}"
     assert call["state"] == "done", call["result"]
-    assert label in call["result"]
+    assert (
+        f'Subagent {delegate} #{n} has been spawned. It will reply to you once it\'s done as "{label}". '
+        "Acknowledge to the user that the agent has been spawned and you'll be invoked automatically "
+        "once it replies."
+    ) in call["result"]
     assert _ANSWER not in call["result"] and _BLOCK_OPENER not in call["result"]
     assert assistant_texts(db, USER, parent.turn_id)[-1] == _STARTED
 
@@ -180,6 +185,8 @@ def test_a_subagent_called_from_the_chat_returns_at_once_and_its_answer_comes_ba
     assert assistant_texts(db, USER, reply["turn_id"]) == [_ANSWERED]
     opener = messages(block(client, f"/api/threads/{reply['turn_id']}"))[0]
     assert (opener["role"], opener["content"], opener["speaker"]) == ("user", _ANSWER, label)
+    # The call carried no summary: the reply names its subagent by tool alone.
+    assert opener["reply_from"] == {"tool_name": delegate, "summary": ""}
 
     opening, _second, answering, unrelated = provider.read("chat")
     follow_up = _block_opening(_after_reply(answering, label, _ANSWER))

@@ -176,7 +176,7 @@ class SubtaskAbility(DelegateAbility[SubtaskParamsBag]):
             child = self.spawn(config, params.instructions)
             if self._caller_waits():
                 return self.wait_for(child, hint=_DO_IT_YOURSELF)
-            return self.started(child, self.NAME.capitalize())
+            return self.started(child)
         if isinstance(params, SubtaskMessageParams):
             n = params.subtask
             if not self._subtask_is_ours(mp, n):
@@ -296,3 +296,21 @@ def speaker(row: Transcript) -> str | None:
             return f"Reply from {call.tool_name}"
         return reply_label(call.tool_name, cast("int", child_turn_id))
     return None
+
+
+def reply_from(row: Transcript) -> dict[str, str] | None:
+    """Which subagent a late reply row came from, so the interface can name it
+    by the one-line summary of the call that started it rather than by its
+    tool name and number: ``{"tool_name": …, "summary": …}``, the summary
+    empty when the call carried none.
+
+    ``None`` on every row :func:`speaker` does not label as a reply — and on a
+    reply whose call no longer exists (purged), which keeps its speaker label.
+    """
+    link = row.tool_call_id
+    if link is None or not link.isdecimal() or row.channel not in (Channel.USER, Channel.SCHEDULE):
+        return None
+    call = ToolCall.get(int(link))
+    if call is None:
+        return None
+    return {"tool_name": call.tool_name, "summary": call.summary or ""}

@@ -128,7 +128,7 @@ afterEach(() => {
 });
 
 describe('opening a delegate transcript', () => {
-  it('reads the transcript by its channel, headed by the subagent\'s name, with the task captioned and no reply box', async () => {
+  it('reads the transcript by its channel, headed by the subagent\'s type, with the task captioned and no reply box', async () => {
     serve = () => delegateBlock(SEARCH, [TASK, ANSWER]);
     const { panel, session } = openPanel();
 
@@ -136,7 +136,8 @@ describe('opening a delegate transcript', () => {
     await flushPromises();
 
     expect(reads).toEqual([{ turnId: 12, channel: 'delegate:web_search', type: null }]);
-    expect(panel.find('header').text()).toContain('web_search');
+    expect(panel.find('header').text()).toContain('Web search');
+    expect(panel.find('header').text()).not.toMatch(/web_search|\d/);
     expect(panel.text()).toContain('Task from Chalie');
     expect(panel.text()).toContain('Look up the museum opening hours');
     expect(panel.text()).toContain('The museum opens at nine.');
@@ -147,7 +148,7 @@ describe('opening a delegate transcript', () => {
     expect(panel.findAll('.msg-row--chalie').some((r) => r.text().includes('Task from Chalie'))).toBe(false);
   });
 
-  it('says "Transcript expired" for an empty block, still names the subagent, offers no reply box, and fills in when the subagent\'s rows arrive afterwards', async () => {
+  it('says "Transcript expired" for an empty block, still names the subagent\'s type, offers no reply box, and fills in when the subagent\'s rows arrive afterwards', async () => {
     serve = () => delegateBlock(SEARCH, []);
     const { panel, session } = openPanel();
 
@@ -155,7 +156,7 @@ describe('opening a delegate transcript', () => {
     await flushPromises();
 
     expect(panel.text()).toContain('Transcript expired');
-    expect(panel.find('header').text()).toContain('web_search');
+    expect(panel.find('header').text()).toContain('Web search');
     expect(panel.find('textarea').exists()).toBe(false);
     expect(panel.element.querySelector('[data-turn-id]')).toBeNull();
     // An expiry is a normal outcome, not a load failure.
@@ -263,13 +264,13 @@ describe('moving between transcripts', () => {
     // Nested click: a second subagent's pill replaces the first.
     session.openDelegatePanel(AGENT);
     await flushPromises();
-    expect(panel.find('header').text()).toContain('code_agent');
+    expect(panel.find('header').text()).toContain('Coding');
     expect(panel.text()).toContain('Refactor finished.');
 
     settleLate(slow);
     await flushPromises();
 
-    expect(panel.find('header').text()).toContain('code_agent');
+    expect(panel.find('header').text()).toContain('Coding');
     expect(panel.text()).toContain('Refactor finished.');
     expect(panel.text()).not.toContain('The museum opens at nine.');
     expect(panel.text()).not.toContain('Transcript expired');
@@ -312,7 +313,7 @@ describe('moving between transcripts', () => {
     await flushPromises();
     expect(reads[1]).toEqual({ turnId: 12, channel: 'delegate:web_search', type: null });
     expect(panel.find('textarea').exists()).toBe(false);
-    expect(panel.find('header').text()).toContain('web_search');
+    expect(panel.find('header').text()).toContain('Web search');
     expect(panel.text()).toContain('The museum opens at nine.');
     expect(panel.text()).not.toContain('Happy to help plan it.');
 
