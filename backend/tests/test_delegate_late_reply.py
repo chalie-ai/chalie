@@ -12,10 +12,9 @@ into some other turn that happens to be working.
 
 The reply holds exactly what the subagent said: its answer, or a one-line notice
 when it finished with nothing to say, was stopped, crashed, or was cut off by a
-restart. The warning that a subagent's answer is third-party content, and the
-next step the subagent suggests, reach the model only while it answers that
-reply — directly after the answer — never in what the person reads, never in a
-later exchange, and never on a notice. The chat is offered the subagent on
+restart. The next step a subagent suggests reaches the model only while it
+answers that reply — directly after the answer — never in what the person
+reads, never in a later exchange, and never on a notice. The chat is offered the subagent on
 every request; the turn that answers the reply is offered, besides, the tools
 the subagent's next step names. A subagent's own turn is never offered itself.
 
@@ -35,6 +34,7 @@ from typing import cast
 import pytest
 from flask.testing import FlaskClient
 
+from abilities._ability import FOLLOW_UP_BLOCK
 from abilities._delegate import DelegateAbility
 from abilities._registry import AbilityRegistry
 from abilities._result import ToolResult
@@ -136,21 +136,19 @@ def test_a_subagent_called_from_the_chat_returns_at_once_and_its_answer_comes_ba
     authed_client: _Client, delegate: str,
 ) -> None:
     """The call ends at once saying the subagent was spawned, under its number
-    and the label its answer will arrive under, with no answer and no warning
-    in it. Once the
-    chat's turn has ended, the subagent finishes and its answer comes back as one
+    and the label its answer will arrive under, with no answer in it. Once
+    the chat's turn has ended, the subagent finishes and its answer comes back as one
     reply that opens a turn of its own, holding exactly the answer — which is
     also all the person reads under that label. The model answering it reads
-    the label, then the answer, then — directly after it — the
-    third-party-content warning and suggested next step the subagent carries
-    (``code_agent`` carries none). The subagent is on offer on every chat
+    the label, then the answer, then — directly after it — the suggested
+    next step the subagent carries and nothing else (only ``web_browse``
+    carries one). The subagent is on offer on every chat
     request; the tools its next step names are on offer only while the chat
     answers the reply. A later, unrelated exchange still reads the label and
-    the answer in its history, with neither the warning nor the next step."""
+    the answer in its history, without the next step."""
     client, db, _store = authed_client
     ability = cast("DelegateAbility[DelegateParamsBag]", AbilityRegistry.get(delegate))
     follow_up_tools = set(ability.FOLLOW_UP_TOOLS)
-    steer = ability.UNTRUSTED_CONTENT.get("", "")
     nudge = ability.get_follow_up(ToolResult.ok(_ANSWER))
     held = Held(text(_ANSWER))
     script: list[Entry] = [held]
@@ -194,9 +192,8 @@ def test_a_subagent_called_from_the_chat_returns_at_once_and_its_answer_comes_ba
 
     opening, _second, answering, unrelated = provider.read("chat")
     follow_up = _block_opening(_after_reply(answering, label, _ANSWER))
-    if steer or nudge:
-        assert follow_up is not None, answering[-1500:]
-        assert steer in follow_up and nudge in follow_up
+    if nudge:
+        assert follow_up == f"\n{FOLLOW_UP_BLOCK.format(text=nudge)}", answering[-1500:]
         assert answering.count(_BLOCK_OPENER) == 1
     else:
         assert follow_up is None and _BLOCK_OPENER not in answering
@@ -207,8 +204,6 @@ def test_a_subagent_called_from_the_chat_returns_at_once_and_its_answer_comes_ba
 
     assert label in unrelated and _ANSWER in unrelated
     assert _BLOCK_OPENER not in unrelated
-    if steer:
-        assert steer[:60] not in unrelated
     assert _BLOCK_OPENER not in opening
 
 
@@ -272,8 +267,7 @@ def test_a_subagent_that_finishes_without_an_answer_says_so_in_its_reply(db: sql
     """A search that ends with nothing to say still replies, so the chat is
     not left waiting on a promise: the reply says the search finished without
     an answer, and the model answering it reads that notice with no
-    third-party-content warning and no suggested next step — there is no
-    third-party content — then answers it on its own turn."""
+    follow-up block, then answers it on its own turn."""
     held = Held(calls(tool("recall", query="capital of France")))
     provider = ChannelProvider(
         chat=[calls(tool("web_search", instructions=_INSTRUCTIONS)), text(_STARTED), text("It found nothing.")],
@@ -292,7 +286,6 @@ def test_a_subagent_that_finishes_without_an_answer_says_so_in_its_reply(db: sql
     answering = provider.read("chat")[-1]
     assert "This web_search finished without an answer." in answering
     assert _BLOCK_OPENER not in answering
-    assert AbilityRegistry.get("web_search").UNTRUSTED_CONTENT[""][:60] not in answering
 
 
 def test_two_subagents_that_answer_while_their_caller_works_are_each_answered_once(db: sqlite3.Connection) -> None:
@@ -300,8 +293,8 @@ def test_two_subagents_that_answer_while_their_caller_works_are_each_answered_on
     while that turn is still working. Both answers join the working turn —
     no turn of their own — and the turn reads them together on one more step,
     so each answer is answered exactly once. On that step the browse's answer
-    is followed directly by its third-party-content warning; ``code_agent``'s,
-    which carries none, is not. That step is offered both subagents and, as
+    is followed directly by its suggested next step and nothing else;
+    ``code_agent``'s, which carries none, is not. That step is offered both subagents and, as
     well, the tool the browse's next step names (``web_fetch``), which no
     earlier request of the turn was offered."""
     caller = Held(text("Both started."))
@@ -319,7 +312,7 @@ def test_two_subagents_that_answer_while_their_caller_works_are_each_answered_on
         web_browse=[browse],
         code_agent=[code],
     )
-    steer = AbilityRegistry.get(WebBrowseAbility.NAME).UNTRUSTED_CONTENT[""]
+    nudge = AbilityRegistry.get(WebBrowseAbility.NAME).get_follow_up(ToolResult.ok("Browse: Paris."))
 
     with patched(provider):
         parent = begin(UserConfig(), _QUESTION)
@@ -346,7 +339,7 @@ def test_two_subagents_that_answer_while_their_caller_works_are_each_answered_on
     browse_block = _block_opening(_after_reply(
         answering, f"Reply from {WebBrowseAbility.NAME} #{numbers[WebBrowseAbility.NAME]}", "Browse: Paris.",
     ))
-    assert browse_block is not None and steer in browse_block
+    assert browse_block == f"\n{FOLLOW_UP_BLOCK.format(text=nudge)}", answering[-1500:]
     code_tail = _after_reply(
         answering, f"Reply from {CodeAgentAbility.NAME} #{numbers[CodeAgentAbility.NAME]}",
         "Code: the script prints Paris.",
@@ -399,7 +392,7 @@ def test_a_subagent_the_person_stops_tells_the_chat_it_was_stopped(authed_client
     transcript panel while it is mid-call. The search ends cancelled with its
     late answer never stored, and the chat is told, in a reply that opens a
     turn of its own, that the search was stopped before it finished — with no
-    third-party-content warning — and answers it."""
+    follow-up block — and answers it."""
     client, db, _store = authed_client
     channel = delegate_channel("web_search")
     held = Held(text(_ANSWER))
@@ -435,8 +428,7 @@ def test_a_subagent_the_person_stops_tells_the_chat_it_was_stopped(authed_client
 def test_a_subagent_whose_provider_keeps_failing_tells_the_chat_why_it_crashed(db: sqlite3.Connection) -> None:
     """The search's provider fails on every attempt after the chat's turn has
     ended. The search crashes, and the chat is told why, in a reply that opens
-    a turn of its own — with no third-party-content warning — and answers
-    it."""
+    a turn of its own — with no follow-up block — and answers it."""
     boom = RuntimeError("boom")
     first = Held(boom)
     script: list[Entry] = [first, *(raises(boom) for _ in range(_MAX_PROVIDER_ATTEMPTS - 1))]
@@ -464,7 +456,7 @@ def test_boot_tells_the_chat_a_subagent_was_cut_off_by_a_restart(db: sqlite3.Con
     """The process dies while the search is mid-call, so nothing is sent back
     then. The next boot closes the search's turn as cut off by the restart and
     tells the chat so, once, in a reply that opens a turn of its own — with no
-    third-party-content warning — which the chat answers."""
+    follow-up block — which the chat answers."""
     channel = delegate_channel("web_search")
     script: list[Entry] = [dies]
     provider = ChannelProvider(

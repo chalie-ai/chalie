@@ -5,9 +5,8 @@ subagent that runs a turn of its own — a subtask's turn, a subagent's own turn
 scheduled task (including the person's reply inside its thread), discovery,
 an external agent — waits for the subagent to end and gets its answer as
 the call's result, read on its very next step; nothing is ever sent back to
-it, or to the person's chat, as a reply. The warning that the answer is
-third-party content, and the next step the subagent suggests, ride on that
-result. A subagent the person stopped comes back to a waiting scheduled task as
+it, or to the person's chat, as a reply. The next step the subagent
+suggests rides on that result. A subagent the person stopped comes back to a waiting scheduled task as
 stopped, without retry advice; a subagent that ends with nothing to say comes
 back as no answer, with the tool's retry advice.
 
@@ -157,8 +156,8 @@ def _run_waiting(provider: ChannelProvider, config: ProcessorConfig, turn_id: in
 def test_a_subtask_and_a_subagent_inside_it_wait_for_the_subagents_they_call(db: sqlite3.Connection) -> None:
     """A subtask the chat started searches the web, then hands a coding task
     to ``code_agent``, which searches the web itself. Each of those calls waits:
-    its result is the subagent's answer — a search's with its third-party-content
-    warning, ``code_agent``'s bare — and the caller reads it on its next step.
+    its result is the subagent's answer, bare, and the caller reads it on its
+    next step.
     None of them is answered by a reply; the one reply the chat gets is the
     subtask's own, which the chat answers."""
     provider = ChannelProvider(
@@ -175,8 +174,6 @@ def test_a_subtask_and_a_subagent_inside_it_wait_for_the_subagents_they_call(db:
         code_agent=[calls(tool("web_search", instructions="how to print in Python")), text("print('Paris')")],
         web_search=[text("Search one: Paris."), text("Search two: use print().")],
     )
-    steer = AbilityRegistry.get("web_search").UNTRUSTED_CONTENT[""]
-
     run_turn(provider, UserConfig(), "find the capital of France and write a script that prints it")
 
     assert provider.unused() == {}
@@ -184,7 +181,7 @@ def test_a_subtask_and_a_subagent_inside_it_wait_for_the_subagents_they_call(db:
     [coding] = calls_of(db, "code_agent")
     for call, answer in ((first, "Search one: Paris."), (second, "Search two: use print().")):
         assert call["state"] == "done", call["result"]
-        assert answer in call["result"] and steer in call["result"]
+        assert answer in call["result"] and _BLOCK_OPENER not in call["result"]
     assert coding["state"] == "done", coding["result"]
     assert "print('Paris')" in coding["result"] and _BLOCK_OPENER not in coding["result"]
     assert "Search one: Paris." in provider.texts("subtask")[1]
@@ -213,14 +210,13 @@ def test_a_scheduled_task_or_discovery_waits_for_its_subagent_and_reads_the_answ
     db: sqlite3.Connection, make_caller: Callable[[], ProcessorConfig], turn_id: int, delegate: str,
 ) -> None:
     """A scheduled task, or a discovery run, that calls a subagent waits for it:
-    the call's result is the subagent's answer, with the third-party-content
-    warning and suggested next step the subagent carries, and the caller's model
+    the call's result is the subagent's answer, with the suggested next step
+    the subagent carries, and the caller's model
     reads it on its next step. Nothing is sent back as a reply — not to the
     caller's own channel, not to the person's chat — and the caller's turn runs
     once and completes."""
     caller = make_caller()
     ability = cast("DelegateAbility[DelegateParamsBag]", AbilityRegistry.get(delegate))
-    steer = ability.UNTRUSTED_CONTENT.get("", "")
     nudge = ability.get_follow_up(ToolResult.ok(_ANSWER))
     answers: list[Entry] = [text(_ANSWER)]
     provider = ChannelProvider(chat=[calls(_delegate_call(delegate)), text("Noted.")], **{delegate: answers})
@@ -231,8 +227,8 @@ def test_a_scheduled_task_or_discovery_waits_for_its_subagent_and_reads_the_answ
     [call] = calls_of(db, delegate)
     assert call["state"] == "done", call["result"]
     assert _ANSWER in call["result"]
-    if steer or nudge:
-        assert steer in call["result"] and nudge in call["result"]
+    if nudge:
+        assert nudge in call["result"]
     else:
         assert _BLOCK_OPENER not in call["result"]
     assert _ANSWER in provider.texts("chat")[-1]
@@ -286,8 +282,7 @@ def test_an_external_agent_waits_for_its_subagent_and_reads_the_answer_in_the_ca
     """An external agent, through ``talk_to_chalie``, asks something Chalie
     hands to ``web_search`` or ``code_agent``, both of which a fresh install
     allows external agents — nothing is refused. The call waits for the
-    subagent: its result is the answer — a search's with its
-    third-party-content warning, ``code_agent``'s bare — Chalie's model reads
+    subagent: its result is the answer, bare — Chalie's model reads
     it on its next step, and what the agent gets back is Chalie's answer built
     on it. Nothing is sent back as a reply — not to the agent's channel, not
     to the person's chat."""
@@ -295,7 +290,6 @@ def test_an_external_agent_waits_for_its_subagent_and_reads_the_answer_in_the_ca
     channel = Channel.for_external_agent("reviewer")
     answers: list[Entry] = [text(_ANSWER)]
     provider = ChannelProvider(chat=[calls(_delegate_call(delegate)), text("Paris.")], **{delegate: answers})
-    steer = cast("DelegateAbility[DelegateParamsBag]", AbilityRegistry.get(delegate)).UNTRUSTED_CONTENT.get("", "")
 
     with patched(provider):
         result = asyncio.run(create_mcp_server().call_tool("talk_to_chalie", {
@@ -310,10 +304,7 @@ def test_an_external_agent_waits_for_its_subagent_and_reads_the_answer_in_the_ca
     assert _blocked(db) == []
     [call] = calls_of(db, delegate)
     assert call["state"] == "done", call["result"]
-    if steer:
-        assert _ANSWER in call["result"] and steer in call["result"]
-    else:
-        assert call["result"].split("\n")[1:-1] == [_ANSWER]
+    assert call["result"].split("\n")[1:-1] == [_ANSWER]
     assert _ANSWER in provider.texts("chat")[-1]
     assert replies(db, call["id"]) == []
     assert replies(db, call["id"], channel) == []

@@ -34,7 +34,7 @@ A web page, a file, an email, an image, or another agent's output can contain te
 
 An ability that brings outside content in declares `UNTRUSTED_CONTENT` (`abilities/_ability.py`) — a map from action to the steer that action needs. On a successful synchronous call the dispatcher looks up the resolved action and appends the matching steer to that result's follow-up block, inside the wire envelope and immediately after the payload.
 
-A subagent called from the person's chat returns before it has brought anything in, so that call's result carries no steer. Its answer arrives later as a reply, and the same steer follows that reply in the prompt of the exchange that answers it — only when the reply carries an answer, not a notice that the subagent stopped or failed. The steer is worked out each time that prompt is built and never stored with the reply, so later exchanges read the reply without it.
+A subagent (`web_search`, `web_browse`, `pim`, `code_agent`, `subtask`) declares no steer. The tools it calls that bring outside content in carry their own, on the results the subagent itself reads. Its caller receives only the subagent's final answer — as a reply on the person's chat, as the call's result for any other caller — never the tool results behind it, so no steer follows that answer.
 
 The steer is per action, not per tool, because the actions of one tool do not return the same thing. Reading an inbox message is a stranger's wording; sending one echoes back what Chalie itself composed. Every steer says what the content actually is, who controls it, and what an attack through that specific channel looks like — then the same standing rule: report what the content asks for, and let the user decide, because only the user can authorise an action.
 
