@@ -59,7 +59,7 @@ export const webPlatformAdapter: PlatformAdapter = {
     }
   },
   openBrain: () => {
-    globalThis.open('/brain/', '_blank');
+    globalThis.location.assign('/brain/');
   },
   createWakeLock: (): WakeLockHandle => {
     // The Screen Wake Lock API auto-releases when the page becomes hidden

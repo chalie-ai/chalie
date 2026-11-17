@@ -19,7 +19,7 @@ export interface PlatformAdapter {
   setItem(key: string, value: string): void;
   removeItem(key: string): void;
 
-  // opens the Brain dashboard (a new tab on the web adapter)
+  // opens the Brain dashboard (the current tab on the web adapter)
   openBrain(): void;
 
   // keeps the display on during voice record/playback
