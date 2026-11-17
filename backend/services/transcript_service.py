@@ -158,19 +158,6 @@ class TranscriptService:
             q = q.filter("id", self.mp.uid, ">")
         return q.get()
 
-    def joined_since(self, after_id: int) -> list[Transcript]:
-        """This turn's joined input rows written after ``after_id``, oldest-
-        first — the messages sent into the working turn that the running
-        exchange has not read yet."""
-        return (
-            Transcript.filter("channel", self.mp.channel)
-            .filter("turn_id", self.mp.turn_id)
-            .filter("joined", 1)
-            .filter("id", after_id, ">")
-            .order_by("id ASC")
-            .get()
-        )
-
     def anchor_row(self) -> Transcript | None:
         """This turn's anchoring input row, or ``None`` before it exists
         (``skip_input_row`` channels have no such row at all). The one lookup

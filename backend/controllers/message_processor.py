@@ -72,6 +72,7 @@ from threading import Thread, get_ident
 from typing import TYPE_CHECKING, Protocol, cast
 
 from abilities._delegate import replies_late, reply_to_caller, replying_tools
+from abilities.message_parent import MessageParentAbility, holds
 from abilities.plan import PlanAbility, plans
 from abilities.recall import Recall
 from configs.channels.user import UserConfig
@@ -649,7 +650,7 @@ class MessageProcessor:
         with self._atomic():
             if self.turn_execution_service.should_stop():
                 raise _TurnCancelled()
-            waiting = bool(self.transcript_service.joined_since(self._consumed_through))
+            waiting = bool(Transcript.joined_since(self.channel, self.turn_id, self._consumed_through))
             if not response.tool_calls:
                 formatted = self._store(response.text, settled=not waiting)
                 self._capture_thinking_trace(response)
@@ -674,7 +675,7 @@ class MessageProcessor:
         """Take in every message joined since the last boundary: file it under
         the assistant row the model just wrote, so the act trail shows it after
         that row's tool calls — the order the model sees it in."""
-        rows = self.transcript_service.joined_since(self._consumed_through)
+        rows = Transcript.joined_since(self.channel, self.turn_id, self._consumed_through)
         if not rows:
             return
         self._offer_replying_tools(rows)
@@ -683,6 +684,15 @@ class MessageProcessor:
             raise RuntimeError(f"turn {self.turn_id}: joined messages arrived with no row to file them under")
         self.consumed_joins.setdefault(anchor, []).extend(rows)
         self._consumed_through = cast("int", rows[-1].id)
+
+    def take_joined(self) -> list[Transcript]:
+        """Take every message joined since the last boundary as a tool's own
+        result — ``message_parent``'s reply. Taken, they are never filed for
+        the act trail, so each reaches the model once."""
+        rows = Transcript.joined_since(self.channel, self.turn_id, self._consumed_through)
+        if rows:
+            self._consumed_through = cast("int", rows[-1].id)
+        return rows
 
     def _offer_replying_tools(self, rows: Sequence[Transcript]) -> None:
         """Activate, on a turn whose message is a delegate's late reply, the
@@ -1018,10 +1028,14 @@ class MessageProcessor:
     # ── setup (on the drive thread, before the first send) ─────────────────────
 
     def _setup(self) -> None:
-        """Pre-loop setup: seed the always-available tools, gate thinking on the
+        """Pre-loop setup: seed the always-available tools — and
+        ``message_parent`` on the turn of a subagent the chat spawned, the one
+        kind that holds it, which no config can tell — gate thinking on the
         ``user`` channel, seed the turn-zero flashback + any attachments, ingest
         the reply's parent gist on a fork, then plan the message."""
         self.active_tools = list(self.config.always_available or [])
+        if holds(self.agent):
+            self.active_tools.append(MessageParentAbility.NAME)
         anchor = self.transcript_service.anchor_row()
         if anchor is not None:
             self._offer_replying_tools([anchor])

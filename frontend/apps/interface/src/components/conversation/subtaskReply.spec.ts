@@ -111,7 +111,7 @@ describe('a subtask reply landing on the user channel', () => {
           // The subtask's answer arrives later, on the user's own channel: a
           // user-role row naming which subagent it came from.
           row('6011', 'user', 'The answer.', TURN, {
-            reply_from: { tool_name: 'subtask', summary: 'compare museum hours' },
+            reply_from: { tool_name: 'subtask', summary: 'compare museum hours', kind: 'reply' },
           }),
         ]),
       },
@@ -162,7 +162,7 @@ describe('a reply whose call carries no summary', () => {
         block: userBlock(TURN, [
           row('6020', 'user', 'plan my museum day', TURN),
           ...kinds.map(([tool], i) => row(`602${i + 1}`, 'user', 'The answer.', TURN, {
-            reply_from: { tool_name: tool, summary: i === 1 ? '  ' : '' },
+            reply_from: { tool_name: tool, summary: i === 1 ? '  ' : '', kind: 'reply' },
           })),
         ]),
       },
@@ -185,7 +185,7 @@ describe('a reply whose call no longer exists', () => {
       props: {
         block: userBlock(TURN, [
           row('6030', 'user', 'look into the museum hours', TURN),
-          row('6031', 'user', 'The answer.', TURN, { reply_from: { tool_name: null, summary: null } }),
+          row('6031', 'user', 'The answer.', TURN, { reply_from: { tool_name: null, summary: null, kind: 'reply' } }),
         ]),
       },
       attachTo: document.body,
@@ -197,6 +197,36 @@ describe('a reply whose call no longer exists', () => {
   });
 });
 
+describe('a message a subagent sent the chat while still working', () => {
+  it('reads "Message from <b>{summary}</b> agent" — the plain type name without a summary — folded like a reply', async () => {
+    const wrapper = track(mount(TurnView, {
+      props: {
+        block: userBlock(TURN, [
+          row('6050', 'user', 'book the viewing', TURN),
+          row('6051', 'user', 'Which evening suits you?', TURN, {
+            reply_from: { tool_name: 'subtask', summary: 'book the viewing', kind: 'message' },
+          }),
+          row('6052', 'user', 'Tuesday or Wednesday?', TURN, {
+            reply_from: { tool_name: 'web_browse', summary: '', kind: 'message' },
+          }),
+        ]),
+      },
+      attachTo: document.body,
+    }));
+
+    expect(replyLabel(wrapper, '6051')).toEqual({ text: 'Message from book the viewing agent', bold: ['book the viewing'] });
+    expect(replyLabel(wrapper, '6052')).toEqual({ text: 'Message from Web browsing agent', bold: ['Web browsing'] });
+
+    const bubble = wrapper.find('.user-message[data-transcript-row-id="6051"]');
+    const text = bubble.find('.user-text');
+    expect(text.isVisible()).toBe(false);
+    await bubble.find('button.user-message__label--toggle').trigger('click');
+    await wrapper.vm.$nextTick();
+    expect(text.isVisible()).toBe(true);
+    expect(text.text()).toBe('Which evening suits you?');
+  });
+});
+
 describe("a plain-text reply's text", () => {
   it('shows exactly as the subagent wrote it — line breaks, & < > and markdown-like marks as typed, no markup', async () => {
     const answer = 'Opens at 9 & closes at 5.\nIf a < b and c > d, see <div> or *notes* and _hours_.\n\nSee you.';
@@ -204,7 +234,7 @@ describe("a plain-text reply's text", () => {
       props: {
         block: userBlock(TURN, [
           row('6040', 'user', 'look into the museum hours', TURN),
-          row('6041', 'user', answer, TURN, { reply_from: { tool_name: 'web_search', summary: 'museum hours' } }),
+          row('6041', 'user', answer, TURN, { reply_from: { tool_name: 'web_search', summary: 'museum hours', kind: 'reply' } }),
         ]),
       },
       attachTo: document.body,

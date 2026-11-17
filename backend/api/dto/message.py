@@ -33,12 +33,14 @@ class PlanTask(DTO):
 
 
 class ReplyFrom(DTO):
-    """The subagent a late reply came from: its ``tool_name`` and the one-line
-    ``summary`` of the call that started it, empty when the call carried none.
-    Both ``None`` when the call was purged."""
+    """The subagent a late reply or a mid-run message came from: its
+    ``tool_name`` and the one-line ``summary`` of the call that started it,
+    empty when the call carried none — both ``None`` once purged — and
+    ``kind``, ``"message"`` for a mid-run message, else ``"reply"``."""
 
     tool_name: str | None
     summary: str | None
+    kind: str
 
 
 class Message(DTO):

@@ -110,12 +110,13 @@ export interface ConversationMessage {
    */
   speaker?: string | null;
   /**
-   * On a subagent's reply landing on the chat: the subagent's tool and the
-   * one-line summary of the call that started it (empty when the call carried
-   * none) — plain data the interface words the reply's caption from. Both are
-   * null on a reply whose call was purged. Absent on every other row.
+   * On a subagent's reply landing on the chat, or a message it sent while
+   * still working (`kind` 'message', else 'reply'): the subagent's tool and
+   * the one-line summary of the call that started it (empty when the call
+   * carried none) — plain data the interface words the caption from. Both are
+   * null once the call was purged. Absent on every other row.
    */
-  reply_from?: { tool_name: string | null; summary: string | null } | null;
+  reply_from?: { tool_name: string | null; summary: string | null; kind: 'message' | 'reply' } | null;
   /**
    * Pre-synthesis outcome for a settled row, as of this fetch: 'ready' (audio
    * stored), 'failed' (gave up after its attempts), or absent/null for a row

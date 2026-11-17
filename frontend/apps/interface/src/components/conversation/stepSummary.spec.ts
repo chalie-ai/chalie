@@ -321,6 +321,24 @@ describe('a step reads as what it said, then what its calls did', () => {
     ]);
   });
 
+  it("names a subagent's messages to Chalie by what they did, under the message icon", () => {
+    const wrapper = mountTurn(block(TURN, [
+      row(TURN, 470, 'user', 'Book the viewing'),
+      saidStep(471, [chip(4710, 'message_parent', { message: 'Which evening suits you?' }, 'Asking which evening')]),
+      saidStep(472, [
+        chip(4720, 'message_parent', { message: 'Booked for Tuesday' }, 'Reporting the booking'),
+        chip(4721, 'message_parent', { message: 'Sent the email too' }, 'Reporting the email'),
+      ]),
+      row(TURN, 473, 'assistant', 'The viewing is booked.', { settled: true }),
+    ], false));
+
+    const steps = wrapper.findAll('.step');
+    expect(steps.map((s) => s.find('.step__summary').text())).toEqual(['Messaged Chalie', 'Messaged Chalie 2 times']);
+    expect(steps[0]!.findAll('.call .call__icon').map(({ element: i }) => [...i.classList].find((k) => /^lucide-(?!icon$).*(?<!-icon)$/.test(k)))).toEqual([
+      'lucide-message-square',
+    ]);
+  });
+
   it('never shows the tool or skill search, which only load tools and playbooks: a step that only searched for them, without thinking or text, takes no row and leaves the lead to the answer', () => {
     const wrapper = mountTurn(block(TURN, [
       row(TURN, 469, 'user', 'What is on my calendar tomorrow?'),

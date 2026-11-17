@@ -151,6 +151,20 @@ class Transcript(Model):
         return [int(r[0]) for r in rows]
 
     @classmethod
+    def joined_since(cls, channel: str, turn_id: int, after_id: int) -> list[Self]:
+        """The joined input rows of ``(channel, turn_id)`` written after
+        ``after_id``, oldest-first — the messages sent into the working turn
+        that its running exchange has not read yet."""
+        return (
+            cls.filter("channel", channel)
+            .filter("turn_id", turn_id)
+            .filter("joined", 1)
+            .filter("id", after_id, ">")
+            .order_by("id ASC")
+            .get()
+        )
+
+    @classmethod
     def latest_thinking_level(cls, channel: str, turn_id: int | None = None) -> str | None:
         """``thinking_level`` of the most recent row (highest id) for ``channel``
         that has a non-NULL ``thinking_level``. When ``turn_id`` is given, also

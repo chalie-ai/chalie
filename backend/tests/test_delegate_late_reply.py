@@ -187,7 +187,7 @@ def test_a_subagent_called_from_the_chat_returns_at_once_and_its_answer_comes_ba
     # The reply carries plain data for the interface to word — the subagent's
     # tool, and no summary since the call carried none — and never the label
     # the model reads.
-    assert opener["reply_from"] == {"tool_name": delegate, "summary": ""}
+    assert opener["reply_from"] == {"tool_name": delegate, "summary": "", "kind": "reply"}
     assert opener.get("speaker") is None
 
     opening, _second, answering, unrelated = provider.read("chat")

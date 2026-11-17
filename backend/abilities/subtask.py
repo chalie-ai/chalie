@@ -24,8 +24,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, ClassVar, cast
 
+from abilities._agents import label
 from abilities._delegate import DelegateAbility, replies_late, reply_label
 from abilities._result import ToolResult
+from abilities.message_parent import MessageParentAbility, sender
 from configs.channels import (
     EAMPConfig,
     ExternalAgentSubtaskConfig,
@@ -41,6 +43,7 @@ from contracts.params.param_bag import ParamBag
 from models.agent import Agent
 from models.tool_call import ToolCall
 from models.transcript import Transcript
+from services.agent_service import AgentService
 
 if TYPE_CHECKING:
     from services.processor_config import ProcessorConfig
@@ -172,6 +175,8 @@ def speaker(row: Transcript) -> str | None:
       (purged). Replies land only on the user channel; the schedule channel
       is still read because an earlier build sent scheduled tasks' replies
       there, and those stored rows keep their label.
+    * ``"Message from <tool> #N"`` — a message a running subagent sent the
+      chat with ``message_parent``, the link being that call's own id.
 
     Any other channel returns ``None``.
     """
@@ -187,6 +192,8 @@ def speaker(row: Transcript) -> str | None:
         call = ToolCall.get(int(link))
         if call is None:
             return "Reply from a delegate"
+        if call.tool_name == MessageParentAbility.NAME:
+            return f"Message from {label(sender(call))}"
         call_id = cast("int", call.id)
         entry = Transcript.delegate_turns(
             {call_id: (call.created_at, call.ended_at)},
@@ -200,17 +207,24 @@ def speaker(row: Transcript) -> str | None:
 
 
 def reply_from(row: Transcript) -> dict[str, str | None] | None:
-    """Which subagent a late reply row came from — plain data the interface
-    words for the person: ``{"tool_name": …, "summary": …}``, the one-line
-    summary of the call that started it, empty when the call carried none.
-    Both are ``None`` on a reply whose call no longer exists (purged).
+    """Which subagent a late reply or a mid-run message row came from — plain
+    data the interface words for the person: ``{"tool_name": …, "summary": …,
+    "kind": …}``. ``kind`` is ``"message"`` for a message the subagent sent
+    with ``message_parent``, else ``"reply"``; ``tool_name`` is the
+    subagent's kind and ``summary`` the one-line summary of the call that
+    spawned it, empty when that call carried none. Both are ``None`` once the
+    link's call no longer exists (purged), when a message reads as a reply.
 
-    ``None`` on every row :func:`speaker` does not label as a reply.
+    ``None`` on every row :func:`speaker` does not label as a reply or a
+    message.
     """
     link = row.tool_call_id
     if link is None or not link.isdecimal() or row.channel not in (Channel.USER, Channel.SCHEDULE):
         return None
     call = ToolCall.get(int(link))
     if call is None:
-        return {"tool_name": None, "summary": None}
-    return {"tool_name": call.tool_name, "summary": call.summary or ""}
+        return {"tool_name": None, "summary": None, "kind": "reply"}
+    if call.tool_name == MessageParentAbility.NAME:
+        agent = sender(call)
+        return {"tool_name": agent.type, "summary": AgentService.summary(agent), "kind": "message"}
+    return {"tool_name": call.tool_name, "summary": call.summary or "", "kind": "reply"}

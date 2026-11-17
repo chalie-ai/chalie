@@ -194,50 +194,37 @@ def replying_tools(tool_name: str) -> tuple[str, ...]:
     """The tools a turn answering a late reply from ``tool_name`` needs active
     beyond its pinned ones: those the delegate's follow-up instruction names.
     The delegate itself is already pinned on the chat, the only kind replied to
-    late. Empty for any other tool."""
+    late. A message a subagent sent with ``message_parent`` needs the tool
+    that replies to it. Empty for any other tool."""
     # Lazy: the registry imports this module.
     from abilities._registry import AbilityRegistry  # noqa: PLC0415
 
+    # Lazy: these abilities import this module.
+    from abilities.message_parent import MessageParentAbility  # noqa: PLC0415
+    from abilities.message_subagent import MessageSubagentAbility  # noqa: PLC0415
+
+    if tool_name == MessageParentAbility.NAME:
+        return (MessageSubagentAbility.NAME,)
     if not AbilityRegistry.is_watchable_delegate(tool_name):
         return ()
     return cast("DelegateAbility", AbilityRegistry.get(tool_name)).FOLLOW_UP_TOOLS
 
 
-def reply_to_caller(channel: str, turn_id: int, answer: str) -> None:
-    """Send the outcome of the delegate child turn ``(channel, turn_id)`` to the
-    turn whose tool call started it, when that caller did not wait for it.
+def late_caller(channel: str, turn_id: int) -> tuple[Transcript, ToolCall] | None:
+    """The row whose tool call spawned the subagent turn ``(channel, turn_id)``
+    and that call, when the caller did not wait for it — else ``None``.
 
-    Asked of every turn once it has ended — by the end-of-turn hook, and by the
-    boot sweep for a turn a restart cut off — so it first settles, from stored
-    rows alone, whether there is anyone to reply to: only a watchable delegate's
-    turn has a caller; the memory step's turn on a delegate channel (its first
-    row carries the ``memory`` role) has none; and a caller that waited
-    (:func:`replies_late`) got the answer as its call's result. So the caller
-    replied to is always the person's chat.
-
-    The outcome is read from the child's own execution row, never from a
-    MessageProcessor — a cancel lands on another thread, and the boot sweep has
-    no MP at all. The reply's text is exactly the child's answer, or a notice
-    of how it ended; the follow-up an answer carries reaches the model only
-    while the reply is being answered (:func:`reply_follow_up`). The reply
-    joins the caller's turn while it works; otherwise a reply to the main
-    exchange gets a new turn, and a thread reply is continued — always through
-    :meth:`MessageProcessor.send`, the one input function every channel uses.
+    Settled from stored rows alone: only a watchable delegate's turn has a
+    caller; the memory step's turn on a delegate channel (its first row
+    carries the ``memory`` role) has none; and a caller that waited
+    (:func:`replies_late`) gets the subagent's answer as its call's result. So
+    the caller returned is always the person's chat.
     """
-    # Lazy: the channel configs and the controller import this module (through
-    # the abilities they pin or load).
-    from configs.channels import UserConfig  # noqa: PLC0415
-    from controllers.message_processor import MessageProcessor  # noqa: PLC0415
-    from services.turn_execution_service import (  # noqa: PLC0415
-        STOP_REASON_PARENT_STOPPED,
-        STOP_REASON_PROCESS_DEATH,
-    )
-
     if channel not in WATCHABLE_DELEGATE_CHANNELS:
-        return
+        return None
     rows = Transcript.by_turn(channel, turn_id)
     if rows and rows[0]["role"] == "memory":
-        return
+        return None
 
     # The child's input row carries the tool_calls id of the call that spawned
     # it (DelegateAbility.spawn stamps it as the turn opens), and a message
@@ -262,7 +249,61 @@ def reply_to_caller(channel: str, turn_id: int, answer: str) -> None:
             "has no turn execution to reply into"
         )
     if not replies_late(caller_execution.type):
+        return None
+    return caller, call
+
+
+def post_to_caller(caller: Transcript, text: str, call_id: int) -> TurnExecution:
+    """Post ``text`` from a subagent to the chat turn of ``caller`` — the row
+    whose tool call spawned it — linked to the tool call ``call_id`` that
+    carries it. It joins the caller's turn while that works; otherwise a post
+    to the main exchange gets a new turn, and a thread post is continued —
+    always through :meth:`MessageProcessor.send`, the one input function every
+    channel uses. Returns the execution it landed in."""
+    # Lazy: the channel configs and the controller import this module (through
+    # the abilities they pin or load).
+    from configs.channels import UserConfig  # noqa: PLC0415
+    from controllers.message_processor import MessageProcessor  # noqa: PLC0415
+
+    turn_id = cast("int", caller.turn_id)
+    # The caller's row sits in the turn's main exchange (no settle yet, or at
+    # or before its first settled assistant row); a post there must land on
+    # the spine, never inside a running follow-up reply.
+    settle0 = Transcript.settle0(caller.channel, turn_id)
+    spine_only = settle0 is None or cast("int", caller.id) <= settle0
+    result = MessageProcessor.send(
+        UserConfig(), text, metadata={"tool_call_id": call_id}, turn_id=turn_id, spine_only=spine_only,
+    )
+    if result is None:
+        raise RuntimeError(f"tool call {call_id}: the post to {caller.channel} turn {turn_id} failed to open")
+    return result
+
+
+def reply_to_caller(channel: str, turn_id: int, answer: str) -> None:
+    """Send the outcome of the delegate child turn ``(channel, turn_id)`` to the
+    turn whose tool call started it, when that caller did not wait for it
+    (:func:`late_caller`) — so the caller replied to is always the person's
+    chat.
+
+    Asked of every turn once it has ended — by the end-of-turn hook, and by the
+    boot sweep for a turn a restart cut off. The outcome is read from the
+    child's own execution row, never from a MessageProcessor — a cancel lands
+    on another thread, and the boot sweep has no MP at all. The reply's text is
+    exactly the child's answer, or a notice of how it ended; the follow-up an
+    answer carries reaches the model only while the reply is being answered
+    (:func:`reply_follow_up`). It is posted through :func:`post_to_caller`.
+    """
+    # Lazy: the turn-execution service imports the channel configs, which
+    # import this module (through the abilities they pin or load).
+    from services.turn_execution_service import (  # noqa: PLC0415
+        STOP_REASON_PARENT_STOPPED,
+        STOP_REASON_PROCESS_DEATH,
+    )
+
+    resolved = late_caller(channel, turn_id)
+    if resolved is None:
         return
+    caller, call = resolved
 
     name = call.tool_name
     execution = TurnExecution.latest(channel, turn_id)
@@ -285,19 +326,7 @@ def reply_to_caller(channel: str, turn_id: int, answer: str) -> None:
     else:
         raise RuntimeError(f"{name} #{turn_id} ended in unexpected state {execution.state!r}")
 
-    # The caller's row sits in the turn's main exchange (no settle yet, or at
-    # or before its first settled assistant row); a reply there must land on
-    # the spine, never inside a running follow-up reply.
-    settle0 = Transcript.settle0(caller.channel, caller.turn_id)
-    spine_only = settle0 is None or cast("int", caller.id) <= settle0
-
-    result = MessageProcessor.send(
-        UserConfig(), text, metadata={"tool_call_id": call.id}, turn_id=caller.turn_id, spine_only=spine_only,
-    )
-    if result is None:
-        raise RuntimeError(
-            f"{name} #{turn_id}: the reply to {caller.channel} turn {caller.turn_id} failed to open"
-        )
+    result = post_to_caller(caller, text, cast("int", call.id))
     logger.info(
         "[DELEGATE] %s #%d: reply sent to %s turn %d (caller turn %d, execution %s)",
         name, turn_id, caller.channel, result.turn_id, caller.turn_id, result.id,

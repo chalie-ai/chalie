@@ -112,6 +112,7 @@ const KINDS: CallKind[] = [
   kind('agent_status', Bot, 'checked 1 subagent', 'checked {n} subagents', 'agent_id'),
   kind('stop_subagent', CircleStop, 'stopped 1 subagent', 'stopped {n} subagents', 'agent_id'),
   kind('message_subagent', MessageSquare, 'messaged 1 subagent', 'messaged {n} subagents', 'agent_id'),
+  times('message_parent', MessageSquare, 'messaged Chalie'),
   ...viewed('browser', [
     showing(kind('browser.open', Globe, 'opened 1 page', 'opened {n} pages', 'url'), 'url'),
     showing(kind('browser.read', FileText, 'read 1 page', 'read {n} pages'), 'section'),

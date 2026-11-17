@@ -1,7 +1,8 @@
 """The typed input contracts of the tools that manage the subagents a turn
 spawned: ``list_agents`` takes nothing, ``agent_status`` and ``stop_subagent``
 take the subagent's ``agent_id``, and ``message_subagent`` takes it with the
-message to send.
+message to send. ``message_parent``, held by a subagent the chat spawned,
+takes only the message to send back.
 
 ``agent_id`` is the number the spawn result and ``list_agents`` give — the N in
 "Subagent <type> #N". It must be sent as an integer of at least 1: strict, as
@@ -56,3 +57,16 @@ class AgentMessageParams(ParamBag):
         if isinstance(message := cls.require_str(params, Keys.message), ToolResult):
             return message
         return cls(agent_id=agent_id, message=message)
+
+
+@dataclass(frozen=True, slots=True)
+class MessageParentParams(ParamBag):
+    """``message`` — what a subagent sends the agent that spawned it."""
+
+    message: str
+
+    @classmethod
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
+        if isinstance(message := cls.require_str(params, Keys.message), ToolResult):
+            return message
+        return cls(message=message)

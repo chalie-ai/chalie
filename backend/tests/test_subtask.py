@@ -169,7 +169,7 @@ def test_reply_after_the_caller_finished_opens_a_new_user_turn(
     # The reply carries plain data for the interface to word — the subagent's
     # tool and the summary of the call that started it — and never the label
     # the model reads.
-    assert opener["reply_from"] == {"tool_name": "subtask", "summary": summary}
+    assert opener["reply_from"] == {"tool_name": "subtask", "summary": summary, "kind": "reply"}
     assert opener.get("speaker") is None
     parent_block = block(client, f"/api/threads/{parent.turn_id}")
     assert chip(parent_block, "subtask")["delegate"] == {

@@ -46,11 +46,17 @@ class AgentService:
         (the final reply row) when it answered. ``None`` when nothing changed:
         the turn is not a subagent's, or its agent already ended — a turn
         reopened after it answered never moves its agent again."""
-        name = delegate_name(channel)
-        agent = Agent.by_turn(name, turn_id) if name is not None else None
+        agent = cls.on_turn(channel, turn_id)
         if agent is None or not Agent.end(agent.agent_id, cls._STATUS[state], response_id):
             return None
         return Agent.by_id(agent.agent_id)
+
+    @staticmethod
+    def on_turn(channel: str, turn_id: int) -> Agent | None:
+        """The agent whose own turn is ``turn_id`` on ``channel``, or ``None``
+        when that turn is not a subagent's."""
+        name = delegate_name(channel)
+        return Agent.by_turn(name, turn_id) if name is not None else None
 
     @staticmethod
     def fail_running() -> list[Agent]:
@@ -71,13 +77,18 @@ class AgentService:
         return int(first.tool_call_id)
 
     @classmethod
-    def view(cls, agent: Agent) -> dict[str, object]:
-        """The row as plain data, plus the subagent's channel and the summary
-        the spawning call gave (empty when it gave none or its call is gone)."""
+    def summary(cls, agent: Agent) -> str:
+        """The summary the call that spawned ``agent`` gave — empty when it
+        gave none or its call is gone."""
         call_id = cls.spawn_call_id(agent)
         call = ToolCall.filter("id", call_id).first() if call_id is not None else None
-        summary = call.summary if call is not None else ""
-        return {**agent.to_dict(), "channel": Channel.for_delegate(agent.type), "summary": summary}
+        return call.summary if call is not None else ""
+
+    @classmethod
+    def view(cls, agent: Agent) -> dict[str, object]:
+        """The row as plain data, plus the subagent's channel and the summary
+        the spawning call gave (:meth:`summary`)."""
+        return {**agent.to_dict(), "channel": Channel.for_delegate(agent.type), "summary": cls.summary(agent)}
 
     @classmethod
     def frame(cls, agent: Agent) -> WsMessage:

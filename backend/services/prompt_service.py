@@ -37,6 +37,7 @@ from abilities._delegate import replies_late, reply_follow_up
 from abilities._registry import AbilityRegistry
 from abilities.code_agent import CodeAgentAbility
 from abilities.find_tools import FindToolsAbility
+from abilities.message_parent import joined_nudge, parent_nudge, spawn_message
 from abilities.pim import PimAbility
 from abilities.plan import PlanAbility, plans
 from abilities.recall import Recall
@@ -342,12 +343,15 @@ class PromptService:
 
     # ── shared assembly fragments ────────────────────────────────────────────
 
-    def previous_messages(self, drop_oldest: int = 0) -> str:
+    def previous_messages(self, drop_oldest: int = 0, *, nudges: bool = False) -> str:
         """The ``## Previous Messages`` block body (no header): this turn's
         history view (``self.mp.transcript_service.read()``), each row formatted
         ``[local-ts] Role: content``. ``drop_oldest`` lets a caller (e.g. the history compactor, shrinking its
         own input) drop the N oldest rows — a genuine external count, not
-        mp-reachable."""
+        mp-reachable. ``nudges`` follows a subagent's message that still waits
+        with the parent nudge (:func:`parent_nudge`): only the chat's own
+        prompt asks for it, since every other reader — the compactor, the
+        memory step, memory hygiene — writes what it reads into stored prose."""
         rows = self.mp.transcript_service.read()[drop_oldest:]
         if not rows:
             return ""
@@ -355,7 +359,8 @@ class PromptService:
         for row in rows:
             fields = row.to_dict()
             raw_role = cast("str", fields.get("role") or "unknown")
-            content = cast("str", fields.get("content") or "").replace("\n", " ").strip()
+            nudge = parent_nudge(row) if nudges else ""
+            content = (cast("str", fields.get("content") or "") + nudge).replace("\n", " ").strip()
             ts = self._format_ts(cast("str | None", fields.get("created_at")))
             role_label = speaker(row) or ("Assistant" if raw_role == "assistant" else raw_role)
             lines.append(f"[{ts}] {role_label}: {content}")
@@ -461,7 +466,7 @@ class PromptService:
             lead_in(tid)
             parts.extend(
                 f"[{self._format_ts(row.created_at)}] {speaker(row) or 'user'}: "
-                f"{row.content}{reply_follow_up(row)}"
+                f"{row.content}{reply_follow_up(row)}{parent_nudge(row)}{joined_nudge(row)}"
                 for row in joins[tid]
             )
 
@@ -537,11 +542,11 @@ class PromptService:
         ``channel`` when unset (§2.5 — the one declarative routing field)."""
         return self.mp.config.prompt_channel or self.mp.config.channel
 
-    def _prev(self) -> str:
+    def _prev(self, *, nudges: bool = False) -> str:
         """:meth:`previous_messages`, guarded — a history-render hiccup must
         never crash the turn (the pre-rewrite builders each wrapped this)."""
         try:
-            return self.previous_messages()
+            return self.previous_messages(nudges=nudges)
         except Exception as exc:  # noqa: BLE001 — a history-render hiccup must not crash the turn
             logger.debug("[PromptService] previous_messages failed: %s", exc)
             return ""
@@ -563,6 +568,14 @@ class PromptService:
         return _HANDOVER_FRAME.format(handover=self.mp.turn_handover)
 
     # ── UserConfig (channel="user") ──────────────────────────────────────────
+
+    def _task(self) -> str:
+        """This turn's input as the model reads it: on a subagent's turn, the
+        task inside who spawned it and how its answer gets back
+        (:func:`spawn_message`); on any other turn, the input itself. The
+        stored row keeps the bare task."""
+        agent = self.mp.agent
+        return spawn_message(agent, self.mp.raw_input) if agent is not None else self.mp.raw_input
 
     def _user_system_prompt(self) -> str:
         """``UserConfig``: the voice line (cache-warm prefix) over the config's
@@ -591,7 +604,7 @@ class PromptService:
         if user_def:
             parts.append(user_def)
 
-        prev = self._prev()
+        prev = self._prev(nudges=True)
         if prev:
             parts.append(f"## Previous Messages\n{prev}")
 
@@ -602,8 +615,10 @@ class PromptService:
             parts.append(handover)
 
         anchor = self.mp.transcript_service.anchor_row()
-        label, follow_up = (speaker(anchor), reply_follow_up(anchor)) if anchor is not None else (None, "")
-        parts.append(f"[{self._input_stamp(anchor)}] {label or 'user'}: {self.mp.raw_input}{follow_up}")
+        label, follow_up = (
+            (speaker(anchor), reply_follow_up(anchor) + parent_nudge(anchor)) if anchor is not None else (None, "")
+        )
+        parts.append(f"[{self._input_stamp(anchor)}] {label or 'user'}: {self._task()}{follow_up}")
 
         trail = self._trail()
         if trail:
@@ -639,7 +654,7 @@ class PromptService:
             parts.append(handover)
         anchor = self.mp.transcript_service.anchor_row()
         label = speaker(anchor) if anchor is not None else None
-        parts.append(f"[{self._input_stamp(anchor)}] {label or 'Scheduled task'}:\n{self.mp.raw_input}")
+        parts.append(f"[{self._input_stamp(anchor)}] {label or 'Scheduled task'}:\n{self._task()}")
         trail = self._trail()
         if trail:
             parts.append(trail)
@@ -740,7 +755,7 @@ class PromptService:
     def _web_browse_prompt(self) -> str:
         """``WebBrowseConfig.get_user_prompt``: the (stamped) browsing goal
         then this turn's act trail."""
-        parts = [f"[{self._input_stamp()}] Browsing goal:\n{self.mp.raw_input}"]
+        parts = [f"[{self._input_stamp()}] Browsing goal:\n{self._task()}"]
         trail = self._trail()
         if trail:
             parts.append(trail)
@@ -751,7 +766,7 @@ class PromptService:
     def _web_search_prompt(self) -> str:
         """``WebSearchConfig.get_user_prompt``: the (stamped) research query
         then this turn's act trail."""
-        parts = [f"[{self._input_stamp()}] Research query:\n{self.mp.raw_input}"]
+        parts = [f"[{self._input_stamp()}] Research query:\n{self._task()}"]
         trail = self._trail()
         if trail:
             parts.append(trail)
@@ -762,7 +777,7 @@ class PromptService:
     def _pim_prompt(self) -> str:
         """``PimConfig.get_user_prompt``: the (stamped) personal-information
         instruction then this turn's act trail."""
-        parts = [f"[{self._input_stamp()}] Instruction:\n{self.mp.raw_input}"]
+        parts = [f"[{self._input_stamp()}] Instruction:\n{self._task()}"]
         trail = self._trail()
         if trail:
             parts.append(trail)
@@ -784,7 +799,7 @@ class PromptService:
         user-identity synthesis and a post-compaction banner naming a tool this
         channel does not pin."""
         parts: list[str] = []
-        parts.append(f"[{self._input_stamp()}] Task:\n{self.mp.raw_input}")
+        parts.append(f"[{self._input_stamp()}] Task:\n{self._task()}")
         trail = self._trail()
         if trail:
             parts.append(trail)
@@ -835,7 +850,7 @@ class PromptService:
         if prev:
             parts.append(f"## Previous Messages\n{prev}")
         parts.append("")
-        parts.append(f"[{self._input_stamp()}] user: {self.mp.raw_input}")
+        parts.append(f"[{self._input_stamp()}] user: {self._task()}")
         trail = self._trail()
         if trail:
             parts.append(trail)
