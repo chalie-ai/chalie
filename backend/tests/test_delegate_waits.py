@@ -276,22 +276,23 @@ def test_a_subagent_the_person_stops_comes_back_to_the_scheduled_task_as_stopped
     assert assistant_texts(db, ScheduledConfig().channel, _SCHEDULE_ID)[-1] == "Done."
 
 
+@pytest.mark.parametrize("delegate", ["web_search", "code_agent"])
 def test_an_external_agent_waits_for_its_subagent_and_reads_the_answer_in_the_call_result(
-    authed_client: tuple[FlaskClient, sqlite3.Connection, object],
+    authed_client: tuple[FlaskClient, sqlite3.Connection, object], delegate: str,
 ) -> None:
     """An external agent, through ``talk_to_chalie``, asks something Chalie
-    answers with ``web_search``, which a fresh install allows external agents.
-    The call waits for the search: its result is the answer with the
-    third-party-content warning, Chalie's model reads it on its next step, and
-    what the agent gets back is Chalie's answer built on it. Nothing is sent
-    back as a reply — not to the agent's channel, not to the person's chat."""
+    hands to ``web_search`` or ``code_agent``, both of which a fresh install
+    allows external agents — nothing is refused. The call waits for the
+    subagent: its result is the answer — a search's with its
+    third-party-content warning, ``code_agent``'s bare — Chalie's model reads
+    it on its next step, and what the agent gets back is Chalie's answer built
+    on it. Nothing is sent back as a reply — not to the agent's channel, not
+    to the person's chat."""
     _client, db, _store = authed_client
     channel = Channel.for_external_agent("reviewer")
-    provider = ChannelProvider(
-        chat=[calls(_delegate_call("web_search")), text("Paris.")],
-        web_search=[text(_ANSWER)],
-    )
-    steer = AbilityRegistry.get("web_search").UNTRUSTED_CONTENT[""]
+    answers: list[Entry] = [text(_ANSWER)]
+    provider = ChannelProvider(chat=[calls(_delegate_call(delegate)), text("Paris.")], **{delegate: answers})
+    steer = cast("DelegateAbility[DelegateParamsBag]", AbilityRegistry.get(delegate)).UNTRUSTED_CONTENT.get("", "")
 
     with patched(provider):
         result = asyncio.run(create_mcp_server().call_tool("talk_to_chalie", {
@@ -303,9 +304,13 @@ def test_an_external_agent_waits_for_its_subagent_and_reads_the_answer_in_the_ca
     assert isinstance(result, CallToolResult) and not result.is_error
     said = [block.text for block in result.content if isinstance(block, TextContent)]
     assert said == ["Paris."]
-    [call] = calls_of(db, "web_search")
+    assert _blocked(db) == []
+    [call] = calls_of(db, delegate)
     assert call["state"] == "done", call["result"]
-    assert _ANSWER in call["result"] and steer in call["result"]
+    if steer:
+        assert _ANSWER in call["result"] and steer in call["result"]
+    else:
+        assert call["result"].split("\n")[1:-1] == [_ANSWER]
     assert _ANSWER in provider.texts("chat")[-1]
     assert replies(db, call["id"]) == []
     assert replies(db, call["id"], channel) == []
@@ -461,38 +466,35 @@ def test_an_outside_agents_subtask_runs_as_that_agent_with_a_clean_context_and_a
     assert replies(db, start["id"], Channel.for_external_agent(_AGENT)) == []
 
 
-def test_an_outside_agent_is_refused_pim_and_code_agent_and_its_web_search_cannot_start_a_subtask(
+def test_an_outside_agent_is_refused_pim_and_its_web_search_cannot_start_a_subtask(
     db: sqlite3.Connection,
 ) -> None:
     """On a fresh install an outside agent's turn asks ``pim`` to read the
-    person's mail and ``code_agent`` to write a script: the permission gate
-    refuses both, so neither turn opens and both land in the blocked log. It
-    then asks ``web_search``, which a fresh install allows; the search's own
-    turn tries to start a subtask and is refused, as every subagent's turn is,
-    so no subtask opens and the search still answers the call."""
+    person's mail: the permission gate refuses it, so its turn never opens and
+    the refusal lands in the blocked log. It then asks ``web_search``, which a
+    fresh install allows; the search's own turn tries to start a subtask and is
+    refused, as every subagent's turn is, so no subtask opens and the search
+    still answers the call."""
     provider = ChannelProvider(
         chat=[
             calls(tool("pim", instructions="read the latest email")),
-            calls(tool("code_agent", instructions="write a script that prints the capital of France")),
             calls(_delegate_call("web_search")),
             text("Done."),
         ],
-        code_agent=[text("print('Paris')")],
         web_search=[calls(tool("subtask", action="start", instructions="look it up")), text(_ANSWER)],
     )
 
     with patched(provider):
-        said = _talk("read the person's mail, script the capital of France, then look it up")
+        said = _talk("read the person's mail, then look up the capital of France")
         drain()
 
-    assert provider.unused() == {"code_agent": 1}
+    assert provider.unused() == {}
     assert said == ["Done."]
-    for refused in ("pim", "code_agent"):
-        [call] = calls_of(db, refused)
-        assert call["state"] == "error", call["result"]
-        assert provider.texts(refused) == []
-        assert _executions(db, delegate_channel(refused)) == 0
-    assert _blocked(db) == [("pim", "external_agent", "deny"), ("code_agent", "external_agent", "deny")]
+    [mail] = calls_of(db, "pim")
+    assert mail["state"] == "error", mail["result"]
+    assert provider.texts("pim") == []
+    assert _executions(db, delegate_channel("pim")) == 0
+    assert _blocked(db) == [("pim", "external_agent", "deny")]
 
     [search] = calls_of(db, "web_search")
     assert search["state"] == "done", search["result"]

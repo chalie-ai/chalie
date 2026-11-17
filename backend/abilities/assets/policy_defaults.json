@@ -82,7 +82,7 @@
   {"channel": "external_agent", "permission": "bash.read", "setting": "deny"},
   {"channel": "external_agent", "permission": "bash.remote_execution", "setting": "deny"},
   {"channel": "external_agent", "permission": "bash.web_fetch", "setting": "deny"},
-  {"channel": "external_agent", "permission": "code_agent", "setting": "deny"},
+  {"channel": "external_agent", "permission": "code_agent", "setting": "allow"},
   {"channel": "external_agent", "permission": "subtask.start", "setting": "allow"},
   {"channel": "external_agent", "permission": "subtask.message", "setting": "deny"},
   {"channel": "external_agent", "permission": "edit_file", "setting": "allow"},
