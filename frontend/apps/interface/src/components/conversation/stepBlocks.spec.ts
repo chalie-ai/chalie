@@ -12,10 +12,10 @@
  *
  *   - what a row said comes first, then its block: one muted head line —
  *     "Thought for Xs" only when the row thought, then what its calls did
- *     ("Spawned 3 agents") — over one row per call; the user row's
- *     turn-zero calls are its memory seed and draw no block; plan calls are the
- *     plan card's, never a block's; a thought with nothing to unfold has no
- *     chevron;
+ *     ("Spawned 3 agents", "Spawning" while it runs) — over one row per call;
+ *     the user row's turn-zero calls are its memory seed and draw no block;
+ *     plan calls are the plan card's, never a block's; a thought with nothing
+ *     to unfold has no chevron;
  *   - rows that said nothing, one after another, read as one block: their
  *     thinking time summed, what they thought left out, their calls in the
  *     order they ran — while the turn works, the running block is that block;
@@ -420,7 +420,7 @@ describe('one step block, live and settled', () => {
     // Nothing has been said yet, so the running block is those rows' block.
     expect(layout(wrapper)).toEqual(['user', 'live']);
     const live = wrapper.find('.activity');
-    expect(workText(live)).toBe(MERGED);
+    expect(workText(live)).toBe(MERGED.replace('spawned 5 agents', 'spawning 5 agents'));
     summaryToggle(live).click();
     await wrapper.vm.$nextTick();
 
@@ -456,7 +456,7 @@ describe('the running block', () => {
     vi.advanceTimersByTime(12_000);
     await wrapper.vm.$nextTick();
 
-    expect(workText(live)).toBe('Thinking… · Spawned 1 agent and read 1 file › Searching Albania winter rentals, Reading the cost page');
+    expect(workText(live)).toBe('Thinking… · Spawning 1 agent and read 1 file › Searching Albania winter rentals, Reading the cost page');
     expect(live.findAll('.call').map((c) => [c.find('.call__summary').text(), c.find('.call__mark').attributes('aria-label')])).toEqual([
       ['Searching Albania winter rentals', 'running'],
       ['Reading the cost page', 'succeeded'],
@@ -472,7 +472,7 @@ describe('the running block', () => {
     startLiveTool(ConfigType.USER, TURN, 59, 'web_search', 'Checking the exchange rate');
     const wrapper = mountTurn(askedTurn());
     const element = wrapper.find('.activity').element;
-    expect(workText(wrapper.find('.activity'))).toBe('Thinking… · Spawned 1 agent › Checking the exchange rate');
+    expect(workText(wrapper.find('.activity'))).toBe('Thinking… · Spawning 1 agent › Checking the exchange rate');
 
     // The refetch returns the running row: its reasoning, its calls still running.
     const running = stepRow(57, { traces: ['Table first.'], duration_ms: 2400, tokens: 60 }, [
@@ -483,7 +483,7 @@ describe('the running block', () => {
 
     expect(layout(wrapper)).toEqual(['user', 'live']);
     expect(wrapper.find('.activity').element).toBe(element);
-    expect(workText(wrapper.find('.activity'))).toBe('Thought for 2s · Spawned 1 agent › Checking the exchange rate');
+    expect(workText(wrapper.find('.activity'))).toBe('Thought for 2s · Spawning 1 agent › Checking the exchange rate');
     expect(wrapper.find('.activity').text()).not.toMatch(/Drafting the comparison|Table first/);
   });
 
@@ -494,14 +494,14 @@ describe('the running block', () => {
     const element = wrapper.find('.activity').element;
     expect(layout(wrapper)).toEqual(['user', 'live']);
     expect(workText(wrapper.find('.activity'))).toBe(
-      'Thought for 13s · Used load_tools and spawned 2 agents › Loading web search tools, Searching Malta winter rentals, Checking the exchange rate',
+      'Thought for 13s · Used load_tools and spawning 2 agents › Loading web search tools, Searching Malta winter rentals, Checking the exchange rate',
     );
 
     await wrapper.setProps({ block: turn([USER_ROW, ...before], true) });
 
     expect(layout(wrapper)).toEqual(['user', 'live']);
     expect(wrapper.find('.activity').element).toBe(element);
-    expect(workText(wrapper.find('.activity')).split(' › ')[0]).toBe('Thought for 34s · Used load_tools, spawned 6 agents and read 1 file');
+    expect(workText(wrapper.find('.activity')).split(' › ')[0]).toBe('Thought for 34s · Used load_tools, spawning 6 agents and read 1 file');
     expect(wrapper.findAll('.activity .call__summary').at(-1)!.text()).toBe('Checking the exchange rate');
   });
 

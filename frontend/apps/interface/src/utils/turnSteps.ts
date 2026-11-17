@@ -99,9 +99,10 @@ const LIST = new Intl.ListFormat('en-GB', { type: 'conjunction' });
 /** What a step's shown calls did: one phrase per group of kinds, in the order
  *  each group first ran. A kind with a target counts the distinct values it
  *  acted on; a call without one counts on its own. Past three groups, the rest
- *  are "n more". The failed count is the calls whose mark reads failed (see
+ *  are "n more". A running step (`live`) reads a kind's running phrases where
+ *  it has them. The failed count is the calls whose mark reads failed (see
  *  `callMark`). */
-export function summarizeCalls(shown: readonly StepCall[], repliesLate: boolean): CallsSummary {
+export function summarizeCalls(shown: readonly StepCall[], repliesLate: boolean, live: boolean): CallsSummary {
   const counts = new Map<string, KindCount>();
   for (const call of shown) {
     const kind = callKind(call);
@@ -112,7 +113,9 @@ export function summarizeCalls(shown: readonly StepCall[], repliesLate: boolean)
     targets.forEach((t) => count.targets.add(t));
     if (!targets.length) count.untargeted += 1;
   }
-  const phrases = [...counts.values()].map((c) => countPhrase(c.kind, c.targets.size + c.untargeted));
+  const phrases = [...counts.values()].map((c) =>
+    countPhrase((live && c.kind.running) || c.kind, c.targets.size + c.untargeted),
+  );
   const listed = phrases.length > 3 ? [...phrases.slice(0, 3), `${phrases.length - 3} more`] : phrases;
   const text = LIST.format(listed);
   const failed = shown.filter((c) => callMark(c, repliesLate) === 'error').length;
@@ -124,8 +127,8 @@ function targetsOf(kind: CallKind, call: StepCall): string[] {
   return [value].flat().filter((v) => v != null && v !== '').map((v) => JSON.stringify(v));
 }
 
-function countPhrase(kind: CallKind, n: number): string {
-  return n === 1 ? kind.one : kind.many.replace('{n}', String(n));
+function countPhrase(phrases: Pick<CallKind, 'one' | 'many'>, n: number): string {
+  return n === 1 ? phrases.one : phrases.many.replace('{n}', String(n));
 }
 
 /** The calls whose list the user unfolded, by id. Module state, so a list

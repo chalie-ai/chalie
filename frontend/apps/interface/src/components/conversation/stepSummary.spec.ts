@@ -12,7 +12,9 @@
  *   - what a row said stands before its block, the running row's too;
  *   - each step's phrase, counted per kind by distinct target (or by call when
  *     the kind has none), MCP tools as one kind, an unknown tool by its name,
- *     and every tool that starts a subagent as one count of agents spawned;
+ *     and every tool that starts a subagent as one count of agents spawned —
+ *     spawning while the step runs, spawned once the turn settles, on every
+ *     copy drawn after;
  *   - a failure is counted on the folded head;
  *   - plan calls are the plan card's: a step that only updated the plan and
  *     did not think draws no block and no row, while the card stands and the
@@ -228,7 +230,7 @@ describe('a step reads as what it said, then what its calls did', () => {
     expect(wrapper.find('.plan-card').exists()).toBe(true);
     expect(wrapper.findAll('.step:not(.activity)')).toHaveLength(0);
     const live = wrapper.find('.activity');
-    expect(live.find('.step__summary').text()).toBe('Spawned 1 agent');
+    expect(live.find('.step__summary').text()).toBe('Spawning 1 agent');
     expect(live.findAll('.call__summary').map((c) => c.text())).toEqual(['Searching ferry times']);
     expect(wrapper.text()).not.toMatch(/Setting up the plan|Starting the ferry check|Marking the ferry check/);
   });
@@ -415,13 +417,26 @@ async function makeWorld() {
   turnDom.registerSurface({ id: 'spine', type: 'user', container: el, component: View });
   turnDom.upsertTurnToSurfaces(block(LIVE_TURN, [QUESTION], true), 'user');
   turnDom.setTurnWorking(LIVE_TURN, 'user', true);
+  const panels: HTMLElement[] = [];
   teardown = () => {
-    turnDom.clearSurfaceContainer(el);
+    turnDom.unregisterSurface('panel');
+    [el, ...panels].forEach((c) => turnDom.clearSurfaceContainer(c));
     liveActTrail.clearAll('user');
   };
   return {
     el,
     liveActTrail,
+    /** Opens the thread panel on turn 9, registered as the app's panel is;
+     *  the next read draws the turn there too. */
+    openPanel: (): HTMLElement => {
+      const panel = document.body.appendChild(document.createElement('div'));
+      panels.push(panel);
+      turnDom.registerSurface({
+        id: 'panel', type: 'user', container: panel, component: View,
+        props: { canReply: false, fullThread: true }, accepts: (id) => id === LIVE_TURN,
+      });
+      return panel;
+    },
     send: async (data: WsPushEvent | Record<string, unknown>) => {
       dispatchDrift(data as WsPushEvent);
       await flushPromises();
@@ -503,16 +518,50 @@ describe('the running step, fed by live frames', () => {
     expect(callRows(stored())).toEqual(['Reading the lease', 'Fetching the deposit rules']);
   });
 
-  it('counts every subagent its frames started as one more agent spawned, whichever tool started it', async () => {
+  it('counts every subagent its frames started as one more agent, spawning while the turn works and spawned once it settles, on every copy drawn after', async () => {
     const w = await makeWorld();
+    const live = () => w.el.querySelector('.activity')!;
+    const summaries = (el: Element) => [...el.querySelectorAll('.step__summary')].map((s) => s.textContent);
+    const calls: [number, string, string, Params][] = [
+      [9301, 'web_search', 'Searching the deposit rules', { instructions: 'Malta deposit rules' }],
+      [9302, 'subtask', 'Checking the lease clauses', { action: 'start', instructions: 'Check each clause' }],
+      [9303, 'code_agent', 'Adding up the deposit', { instructions: 'Add up the deposit' }],
+    ];
 
-    await w.send(toolFrame(9301, 'web_search', 'started', 'Searching the deposit rules', { instructions: 'Malta deposit rules' }));
-    await w.send(toolFrame(9302, 'subtask', 'started', 'Checking the lease clauses', { action: 'start', instructions: 'Check each clause' }));
-    await w.send(toolFrame(9303, 'code_agent', 'started', 'Adding up the deposit', { instructions: 'Add up the deposit' }));
+    for (const [id, tool, summary, params] of calls) await w.send(toolFrame(id, tool, 'started', summary, params));
+    expect(summaries(live())).toEqual(['Spawning 3 agents']);
+    expect(callRows(live())).toEqual(['Searching the deposit rules', 'Checking the lease clauses', 'Adding up the deposit']);
 
-    const live = w.el.querySelector('.activity')!;
-    expect(live.querySelector('.step__summary')!.textContent).toBe('Spawned 3 agents');
-    expect(callRows(live)).toEqual(['Searching the deposit rules', 'Checking the lease clauses', 'Adding up the deposit']);
+    // The calls return, each leaving its subagent working, and the refetch
+    // hands back the row that made them. It said nothing, so while the turn
+    // works the running block keeps it: still spawning.
+    for (const [id, tool, summary, params] of calls) await w.send(toolFrame(id, tool, 'done', summary, params));
+    const stepRow = row(LIVE_TURN, 93, 'assistant', '', {
+      tool_calls: calls.map(([id, tool, summary, params]) => chip(id, tool, params, summary, 'done', {
+        channel: `delegate:${tool}`, turn_id: id, working: true, crashed: false, cancelled: false,
+      })),
+    });
+    backend.user = block(LIVE_TURN, [QUESTION, stepRow], true);
+    await w.send({ status: 'updated', turn_id: LIVE_TURN, type: 'user' });
+    expect(w.el.querySelector('.step:not(.activity)')).toBeNull();
+    expect(summaries(live())).toEqual(['Spawning 3 agents']);
+
+    // The turn settles with its answer: the stored block reads spawned, though
+    // on the chat its subagents still work and their rows say so.
+    backend.user = block(LIVE_TURN, [
+      QUESTION, stepRow, row(LIVE_TURN, 94, 'assistant', 'The deposit is within the rules.', { settled: true }),
+    ], false);
+    await w.send({ state: 'completed', turn_id: LIVE_TURN, started_at: STARTED_AT, type: 'user' });
+    expect(w.el.querySelector('.activity')).toBeNull();
+    expect(summaries(w.el)).toEqual(['Spawned 3 agents']);
+    expect([...w.el.querySelectorAll('.call__mark')].map((m) => m.getAttribute('aria-label'))).toEqual(['running', 'running', 'running']);
+
+    // Drawn again after it settled: the thread panel opens on the turn and a
+    // re-read, as a reconnect makes, repaints every copy. Each reads spawned.
+    const panel = w.openPanel();
+    await w.send({ status: 'updated', turn_id: LIVE_TURN, type: 'user' });
+    expect(summaries(w.el)).toEqual(['Spawned 3 agents']);
+    expect(summaries(panel)).toEqual(['Spawned 3 agents']);
   });
 
   it('never shows the tool or skill search while it runs: alone, the running step reads only "Thinking…"; beside another call, only that call', async () => {

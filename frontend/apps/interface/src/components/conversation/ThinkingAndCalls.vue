@@ -23,7 +23,7 @@ const expanded = ref(false);
 const traces = computed(() => props.work.thinking?.traces ?? []);
 const head = computed(() => props.label || thought(props.work.thinking) || (props.live ? 'Thinking…' : ''));
 const calls = computed(() => visibleCalls(props.work.tool_calls));
-const summary = computed(() => summarizeCalls(calls.value, props.repliesLate));
+const summary = computed(() => summarizeCalls(calls.value, props.repliesLate, props.live));
 const open = computed(() => callsOpen(calls.value));
 </script>
 

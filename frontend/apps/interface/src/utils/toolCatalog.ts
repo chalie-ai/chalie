@@ -5,9 +5,9 @@
  * and its `action` argument. `plan` is hidden — the plan card shows it — and
  * so are `find_tools` and `find_skills`, which only load tools and playbooks
  * and mean nothing to the person.
- * Every tool that starts a subagent counts in one group, as agents spawned,
- * whichever tool it is. A kind also names the view its row opens to; a kind
- * without one opens to its arguments.
+ * Every tool that starts a subagent counts in one group, as agents spawned —
+ * spawning while the step runs — whichever tool it is. A kind also names the
+ * view its row opens to; a kind without one opens to its arguments.
  */
 import {
   ArrowDownUp, ArrowLeft, BookmarkPlus, BookOpen, BookOpenText, Blocks, Bot, Brain, BrainCog,
@@ -33,6 +33,8 @@ export interface CallKind {
   /** The lower-case phrase for one, then for `{n}`. */
   one: string;
   many: string;
+  /** The same phrases while the step runs, where they read differently. */
+  running?: Pick<CallKind, 'one' | 'many'>;
   /** The argument naming what the call acts on; calls on one value count once. */
   target?: string;
   hidden?: boolean;
@@ -52,9 +54,11 @@ const viewed = (view: CallView, kinds: CallKind[]): CallKind[] => kinds.map((k) 
 
 const showing = (k: CallKind, ...fields: string[]): CallKind => ({ ...k, fields });
 
-/** A tool that starts a subagent: each call is one more agent spawned. */
+/** A tool that starts a subagent: each call is one more agent spawned, or
+ *  spawning while the step runs. */
 const agent = (key: string, view: CallView): CallKind => ({
   ...kind(key, Bot, 'spawned 1 agent', 'spawned {n} agents'), group: 'agent', view,
+  running: { one: 'spawning 1 agent', many: 'spawning {n} agents' },
 });
 
 const skillKinds = (tool: string): CallKind[] => [
