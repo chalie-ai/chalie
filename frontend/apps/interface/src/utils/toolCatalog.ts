@@ -3,7 +3,8 @@
  * its icon, its phrase for one and for {n}, and the argument naming what it
  * acts on, so calls on the same value count once. A kind is a tool, or a tool
  * and its `action` argument. `plan` is hidden — the plan card shows it — and
- * so is `find_tools`, which only loads tools and means nothing to the person.
+ * so are `find_tools` and `find_skills`, which only load tools and playbooks
+ * and mean nothing to the person.
  * Every tool that starts a subagent counts in one group, as agents spawned,
  * whichever tool it is. A kind also names the view its row opens to; a kind
  * without one opens to its arguments.
@@ -87,7 +88,7 @@ const KINDS: CallKind[] = [
   times('recall', Brain, 'checked memory'),
   times('review_tool_calls', History, 'reviewed earlier tool calls'),
   times('review_transcript', MessagesSquare, 'reviewed the conversation'),
-  times('find_skills', Sparkles, 'looked for a skill'),
+  { ...times('find_skills', Sparkles, 'looked for a skill'), hidden: true },
   { ...times('find_tools', PackageSearch, 'looked for tools'), hidden: true },
   times('weather', CloudSun, 'checked the weather'),
   times('user_device', MonitorSmartphone, 'checked your device'),

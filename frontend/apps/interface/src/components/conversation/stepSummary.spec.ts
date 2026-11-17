@@ -17,8 +17,9 @@
  *   - plan calls are the plan card's: a step that only updated the plan and
  *     did not think draws no block and no row, while the card stands and the
  *     exchange's duration still counts that step's time;
- *   - the tool search is never shown, stored or running: a step that only
- *     searched for tools and did not think draws no block and no row;
+ *   - the tool and skill searches are never shown, stored or running: a step
+ *     that only searched for tools or skills and did not think draws no block
+ *     and no row;
  *   - each row's icon is its kind's, every row is a button that opens it, and
  *     the status mark closes the row.
  *
@@ -278,10 +279,13 @@ describe('a step reads as what it said, then what its calls did', () => {
     expect(one!.find('.step__summary').text()).toBe('Spawned 1 agent');
   });
 
-  it('never shows the tool search, which only loads tools: a step that only searched for tools, without thinking or text, takes no row and leaves the lead to the answer', () => {
+  it('never shows the tool or skill search, which only load tools and playbooks: a step that only searched for them, without thinking or text, takes no row and leaves the lead to the answer', () => {
     const wrapper = mountTurn(block(TURN, [
       row(TURN, 469, 'user', 'What is on my calendar tomorrow?'),
-      step(470, [chip(4700, 'find_tools', { query: 'calendar' }, 'Finding calendar tools')]),
+      step(470, [
+        chip(4700, 'find_tools', { query: 'calendar' }, 'Finding calendar tools'),
+        chip(4701, 'find_skills', { query: ['plan the day'] }, 'Finding a day planning skill'),
+      ]),
       row(TURN, 471, 'assistant', 'Two meetings tomorrow.', { settled: true }),
     ], false));
 
@@ -291,20 +295,24 @@ describe('a step reads as what it said, then what its calls did', () => {
     ]);
     expect(rows[1]!.classes()).toContain('msg-row--lead');
     expect(wrapper.find('.step').exists()).toBe(false);
-    expect(wrapper.text()).not.toMatch(/Looked for tools|Finding calendar tools/);
+    expect(wrapper.text()).not.toMatch(/Looked for tools|Looked for a skill|Finding calendar tools|Finding a day planning skill/);
   });
 
-  it('leaves the tool search out of every step it ran in: beside other calls only they are counted and listed, and beside thinking only the thought shows', () => {
+  it('leaves the tool and skill searches out of every step they ran in: beside other calls only they are counted and listed, and beside thinking only the thought shows', () => {
     const wrapper = mountTurn(block(TURN, [
       row(TURN, 479, 'user', 'Read my lease and check tomorrow'),
       saidStep(480, [
         chip(4800, 'find_tools', { query: 'files' }, 'Finding file tools'),
         chip(4801, 'read', { source: 'lease.pdf' }, 'Reading the lease'),
-        chip(4802, 'find_tools', { query: 'calendar' }, 'Finding calendar tools'),
+        chip(4802, 'find_skills', { query: ['review a lease'] }, 'Finding a lease review skill'),
+        chip(4803, 'find_tools', { query: 'calendar' }, 'Finding calendar tools'),
       ]),
       row(TURN, 481, 'assistant', '<p>Step 481.</p>', {
         thinking: { traces: ['A calendar tool first.'], duration_ms: 4000, tokens: 12 },
-        tool_calls: [chip(4810, 'find_tools', { query: 'calendar events' }, 'Finding calendar tools again')],
+        tool_calls: [
+          chip(4810, 'find_tools', { query: 'calendar events' }, 'Finding calendar tools again'),
+          chip(4811, 'find_skills', { query: ['plan the day'] }, 'Finding a day planning skill'),
+        ],
       }),
       row(TURN, 482, 'assistant', 'The lease is fine and tomorrow is free.', { settled: true }),
     ], false));
@@ -315,7 +323,7 @@ describe('a step reads as what it said, then what its calls did', () => {
     expect(withThought!.find('.step__label').text()).toBe('Thought for 4s');
     expect(withThought!.find('.step__summary').exists()).toBe(false);
     expect(withThought!.find('.call').exists()).toBe(false);
-    expect(wrapper.text()).not.toMatch(/Looked for tools|Finding file tools|Finding calendar tools/);
+    expect(wrapper.text()).not.toMatch(/Looked for tools|Looked for a skill|Finding file tools|Finding calendar tools|Finding a lease review skill|Finding a day planning skill/);
   });
 
   it('opens each call row on its kind\'s icon and closes it on its outcome; every row, a delegate\'s too, is a button that opens it', () => {
@@ -507,19 +515,21 @@ describe('the running step, fed by live frames', () => {
     expect(callRows(live)).toEqual(['Searching the deposit rules', 'Checking the lease clauses', 'Adding up the deposit']);
   });
 
-  it('never shows the tool search while it runs: alone, the running step reads only "Thinking…"; beside another call, only that call', async () => {
+  it('never shows the tool or skill search while it runs: alone, the running step reads only "Thinking…"; beside another call, only that call', async () => {
     const w = await makeWorld();
     const live = () => w.el.querySelector('.activity')!;
 
     await w.send(toolFrame(9401, 'find_tools', 'started', 'Finding lease tools', { query: 'lease' }));
+    await w.send(toolFrame(9403, 'find_skills', 'started', 'Finding a lease review skill', { query: ['review a lease'] }));
     expect(live().querySelector('.step__label')!.textContent).toBe('Thinking…');
     expect(live().querySelector('.step__summary')).toBeNull();
     expect(live().querySelector('.call')).toBeNull();
 
     await w.send(toolFrame(9401, 'find_tools', 'done', 'Finding lease tools', { query: 'lease' }));
+    await w.send(toolFrame(9403, 'find_skills', 'done', 'Finding a lease review skill', { query: ['review a lease'] }));
     await w.send(toolFrame(9402, 'read', 'started', 'Reading the lease', { source: 'lease.pdf' }));
     expect(live().querySelector('.step__summary')!.textContent).toBe('Read 1 file');
     expect(callRows(live())).toEqual(['Reading the lease']);
-    expect(w.el.textContent).not.toMatch(/Looked for tools|Finding lease tools/);
+    expect(w.el.textContent).not.toMatch(/Looked for tools|Looked for a skill|Finding lease tools|Finding a lease review skill/);
   });
 });

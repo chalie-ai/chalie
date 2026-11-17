@@ -61,7 +61,7 @@ export function visibleCalls(calls: readonly StepCall[] | null | undefined): Ste
 
 /** Whether the step has work the person can see: it thought, or made a call
  *  the catalog does not hide. A step that only updated the plan, or only
- *  searched for tools, has none. */
+ *  searched for tools or skills, has none. */
 export function showsWork(work: StepWork): boolean {
   return Boolean(thought(work.thinking) || visibleCalls(work.tool_calls).length);
 }
