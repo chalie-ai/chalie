@@ -9,11 +9,6 @@ runs; denied, it does not run and the subtask reads that it was not allowed.
 Either way the subtask goes on to answer, and its answer reaches the chat as a
 reply.
 
-A later chat turn may send a subtask that has already answered a follow-up
-message. A prompt the subtask raises while working on that follow-up is listed
-under the chat turn that sent it, not the one that started the subtask, and
-answering it lets the subtask's next answer reach the chat as well.
-
 Drives real turns (construct inertly, ``begin()``, ``result()``) against the
 real, fully migrated SQLite DB, observed through the real socket registry and
 answered through the real Flask app with a real signed-in session. The only
@@ -51,7 +46,6 @@ from tests._delegates import (
     calls,
     calls_of,
     child_turn,
-    drain,
     execution,
     listening,
     patched,
@@ -70,8 +64,6 @@ _TASK = "probe the gate"
 _SUMMARY = "Probing the gate"
 _ANSWER = "The gate was probed."
 _RAN = "gate probe done"
-_FIRST_ANSWER = "Nothing to probe yet."
-_FOLLOW_UP = "probe the gate now"
 
 Ask = dict[str, object]
 
@@ -204,66 +196,3 @@ def test_a_denied_prompt_does_not_run_the_tool_the_subtask_is_told_and_still_ans
     assert refusal in read
     assert _RAN not in read
     _assert_the_subtask_answered_the_chat(db, run)
-
-
-def test_a_prompt_raised_on_a_follow_up_is_listed_under_the_chat_turn_that_sent_it(
-    app: Flask, db: sqlite3.Connection,
-) -> None:
-    """A chat turn starts a subtask, which answers; a later chat turn sends it
-    a follow-up and ends. Working on the follow-up, the subtask calls the probe,
-    whose permission asks: the prompt is listed under the chat turn that sent
-    the follow-up, and once approved the probe runs and the subtask's answer to
-    the follow-up reaches the chat as a reply opening a turn of its own."""
-    _gate_probe_asks()
-    client, _token = signed_in(app)
-    asked = threading.Event()
-    number: list[int] = []
-    held = Held(calls(tool(gate_probe.NAME, q="x", act_summary=_SUMMARY)))
-    provider = ChannelProvider(
-        chat=[
-            calls(tool(SubtaskAbility.NAME, action="start", instructions=_TASK)),
-            text("I have started a subtask."),
-            text("The subtask answered."),
-            lambda: calls(tool(SubtaskAbility.NAME, action="message", subtask=number[0], message=_FOLLOW_UP)),
-            text("I have sent the subtask a follow-up."),
-            text("The subtask answered the follow-up."),
-        ],
-        subtask=[text(_FIRST_ANSWER), held, text(_ANSWER)],
-    )
-
-    with listening(_noting_prompts(asked)), patched(provider):
-        first = begin(UserConfig(), "start a subtask on the gate")
-        first.result()
-        drain()  # the subtask's first answer, and the chat turn that read it
-        [started] = calls_of(db, SubtaskAbility.NAME)
-        [first_reply] = replies(db, started["id"])
-        assert first_reply["content"] == _FIRST_ANSWER
-        n = child_turn(db, _SUBTASK, started["id"])
-        number.append(agent_number(SubtaskAbility.NAME, n))
-        follow_up = begin(UserConfig(), "ask the subtask to probe the gate now")
-        follow_up.result()
-        assert execution(_USER, follow_up.turn_id).state == TurnExecution.COMPLETED
-        wait(held.entered, "the subtask's step on the follow-up")
-        held.gate.set()
-        listed = _answer_when_asked(client, asked, approved=True)
-    assert held.opened and provider.unused() == {}
-
-    [ask] = listed
-    assert (ask["action_id"], ask["summary"], ask["origin"]) == (
-        gate_probe.NAME, _SUMMARY, {"type": "user", "turn_id": follow_up.turn_id, "forked": False},
-    )
-    assert _pending(client) == []
-    [probe] = calls_of(db, gate_probe.NAME)
-    assert probe["state"] == ToolCall.DONE
-    assert _RAN in probe["result"]
-    assert _RAN in provider.read("subtask")[-1]
-    # The follow-up went to the same subtask, which finished working on it.
-    _start, sent = calls_of(db, SubtaskAbility.NAME)
-    assert sent["state"] == ToolCall.DONE
-    assert child_turn(db, _SUBTASK, sent["id"]) == n
-    assert execution(_SUBTASK, n).state == TurnExecution.COMPLETED
-    [reply] = replies(db, sent["id"])
-    assert reply["content"] == _ANSWER
-    assert reply["turn_id"] not in (first.turn_id, follow_up.turn_id)
-    assert number[0] != n
-    assert f"Reply from {SubtaskAbility.NAME} #{number[0]}" in provider.texts("chat")[-1]

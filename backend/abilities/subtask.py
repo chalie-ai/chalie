@@ -11,15 +11,13 @@
 A subtask is a turn one level deep: it runs on the caller's own settings (the
 user, scheduled or outside agent turn's config, re-routed onto the subtask
 channel) with its own thread and none of the caller's history. ``run()``
-opens the child through :meth:`DelegateAbility.spawn`; who waits for it is
+starts it through :meth:`DelegateAbility.delegate`, so who waits for it is
 settled by the caller's kind, as for every delegate: the person's chat gets
 the subtask's number at once and keeps working, the answer arriving later as
-a new message labelled "Reply from subtask #N", and can send it a follow-up;
-a scheduled task or an outside agent waits and gets the bare answer as the
-call's result, so the tool it is shown can only start one
-(:meth:`SubtaskAbility._caller_waits`). Only the chat, a scheduled task or an
-outside agent's own turn can start one, so neither a subtask nor any other
-subagent's turn can.
+a new message labelled "Reply from subtask #N"; a scheduled task or an outside
+agent waits and gets the bare answer as the call's result. Only the chat, a
+scheduled task or an outside agent's own turn can start one, so neither a
+subtask nor any other subagent's turn can.
 """
 
 from __future__ import annotations
@@ -35,15 +33,11 @@ from configs.channels import (
     UserSubtaskConfig,
 )
 from configs.enums.ability_category import AbilityCategory
-from configs.enums.channels import Channel
+from configs.enums.channels import WATCHABLE_DELEGATE_CHANNELS, Channel
 from configs.enums.config_type import ConfigTypeEnum
 from configs.enums.param_key import Keys
+from contracts.params.delegate_params_bag import DelegateParamsBag
 from contracts.params.param_bag import ParamBag
-from contracts.params.subtask_params_bag import (
-    SubtaskMessageParams,
-    SubtaskParamsBag,
-    SubtaskStartParams,
-)
 from models.agent import Agent
 from models.tool_call import ToolCall
 from models.transcript import Transcript
@@ -53,34 +47,19 @@ if TYPE_CHECKING:
 
 _DO_IT_YOURSELF = "Do the work yourself in this turn."
 
-_INSTRUCTIONS: dict[str, object] = {
-    "type": "string",
-    "description": (
-        "start: the whole task, written to stand alone — the subtask sees "
-        "none of this conversation, so include every input, file "
-        "path, constraint and expected output it needs."
-    ),
-}
 
-
-class SubtaskAbility(DelegateAbility[SubtaskParamsBag]):
-    # Multi-action router: the dispatcher's ACTION_REQUIRED pre-gate validates
-    # ``action`` and its params before run() — an unknown action is rejected
-    # with ``valid=('start', 'message')`` and a missing/blank ``instructions``
-    # or ``message`` with ``code=missing-params``, so run() only ever sees a
-    # populated leaf. A caller that waits is shown no ``subtask`` or
-    # ``message`` parameter, so the unknown-parameter check, which runs first,
-    # refuses its ``message`` call: only the chat reaches action "message".
-    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
-        "start": (Keys.instructions,),
-        "message": (Keys.subtask, Keys.message),
-    }
+class SubtaskAbility(DelegateAbility[DelegateParamsBag]):
+    # The dispatcher's ACTION_REQUIRED pre-gate validates ``action`` and its
+    # params before run() — an unknown action is rejected with
+    # ``valid=('start',)`` and a missing/blank ``instructions`` with
+    # ``code=missing-params``, so run() only ever sees a populated bag.
+    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"start": (Keys.instructions,)}
     NAME: ClassVar[str] = "subtask"
     CATEGORY: ClassVar[AbilityCategory] = AbilityCategory.DELEGATE
 
-    # The typed input contract: the dispatch seam builds the bag via
-    # SubtaskParamsBag.from_params before run() is called.
-    PARAMS: ClassVar[type[ParamBag] | None] = SubtaskParamsBag
+    # The typed input contract: the dispatch seam builds the shared delegate
+    # bag via DelegateParamsBag.from_params before run() is called.
+    PARAMS: ClassVar[type[ParamBag] | None] = DelegateParamsBag
 
     SEARCHABLE_AS: ClassVar[tuple[str, ...]] = (
         "subtask", "background task", "parallel work", "long task", "clean context",
@@ -89,40 +68,22 @@ class SubtaskAbility(DelegateAbility[SubtaskParamsBag]):
     _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
-            Keys.action: {"type": "string", "enum": ["start", "message"]},
-            Keys.instructions: _INSTRUCTIONS,
-            Keys.subtask: {
-                "type": "integer",
-                "minimum": 1,
-                "description": 'message: the subtask\'s number (the N in "Subtask #N").',
-            },
-            Keys.message: {
-                "type": "string",
-                "description": "message: what to tell the subtask.",
-            },
-        },
-        "required": [Keys.action],
-    }
-
-    _START_ONLY_PARAMETERS: ClassVar[dict[str, object]] = {
-        "type": "object",
-        "properties": {
             Keys.action: {"type": "string", "enum": ["start"]},
-            Keys.instructions: _INSTRUCTIONS,
+            Keys.instructions: {
+                "type": "string",
+                "description": (
+                    "start: the whole task, written to stand alone — the subtask sees "
+                    "none of this conversation, so include every input, file "
+                    "path, constraint and expected output it needs."
+                ),
+            },
         },
         "required": [Keys.action],
     }
-
-    def _caller_waits(self) -> bool:
-        """Whether this call's caller waits for the subtask's answer — the one
-        place the tool's text and parameters, and how a start returns, are
-        chosen. Settled by the caller's kind alone (:func:`replies_late`), so
-        it holds for the whole turn. The registry's unbound template (no
-        caller) reads as the chat."""
-        return self.mp is not None and not replies_late(self.mp.config.type())
 
     def get_summary(self) -> str:
-        if self._caller_waits():
+        # The registry's unbound template (no caller) reads as the chat.
+        if self.mp is not None and not replies_late(self.mp.config.type()):
             return (
                 "Start a subtask: a turn with your own tools, settings and "
                 "permissions but a clean context — it sees none of this "
@@ -136,8 +97,7 @@ class SubtaskAbility(DelegateAbility[SubtaskParamsBag]):
             "conversation, so give it the whole task. It returns at once with "
             "the subtask's number and you keep working; its answer arrives "
             'later as a new message labelled "Reply from subtask #N". Use it '
-            "for longer work to keep your context clean. You can send it a "
-            "follow-up with action 'message'."
+            "for longer work to keep your context clean."
         )
 
     def get_examples(self) -> list[str]:
@@ -156,64 +116,29 @@ class SubtaskAbility(DelegateAbility[SubtaskParamsBag]):
         return "Use this for longer work to keep your context clean"
 
     def get_parameters(self) -> dict[str, object]:
-        return self._START_ONLY_PARAMETERS if self._caller_waits() else self._PARAMETERS
+        return self._PARAMETERS
 
-    def run(self, params: SubtaskParamsBag) -> ToolResult:
+    def run(self, params: DelegateParamsBag) -> ToolResult:
         mp = self.mp
         if mp is None:
             raise RuntimeError(f"{self.NAME}.run() dispatched without a bound MessageProcessor")
-        # The caller gate holds for both actions: neither a subtask nor any
-        # other subagent's turn may start a subtask or message one.
-        config = self._subtask_config(mp.config)
-        if config is None:
+        if self.child_config(mp.config) is None:
             return ToolResult.err(
                 "Only the user's conversation or a scheduled task can start a subtask; "
                 "a subtask or a delegate cannot.",
                 code="subtask-nested",
                 hint=_DO_IT_YOURSELF,
             )
-        if isinstance(params, SubtaskStartParams):
-            child = self.spawn(config, params.instructions)
-            if self._caller_waits():
-                return self.wait_for(child, hint=_DO_IT_YOURSELF)
-            return self.started(child)
-        if isinstance(params, SubtaskMessageParams):
-            n = params.subtask
-            # ``n`` is the agent number a start returned; it addresses only a
-            # subtask this channel spawned.
-            agent = Agent.by_id(n)
-            if agent is None or agent.type != self.NAME or agent.spawned_by_channel != mp.channel:
-                return ToolResult.err(
-                    f"No subtask #{n} belongs to this conversation.",
-                    code="subtask-not-found",
-                    hint='Use the number from "Subtask #N started".',
-                )
-            # Lazy: the controller imports the ability registry, which imports this module.
-            from controllers.message_processor import MessageProcessor  # noqa: PLC0415
+        return self.delegate(params.instructions, hint=_DO_IT_YOURSELF)
 
-            result = MessageProcessor.send(
-                config,
-                params.message,
-                metadata={"origin": mp.origin, "tool_call_id": self.tool_call_id},
-                turn_id=agent.turn_id,
-            )
-            mp.tool_call_service.reemit(self.tool_call_id)
-            if result is None:
-                raise RuntimeError(f"{self.NAME}.run(): the message to subtask #{n} failed to land")
-            return ToolResult.ok(
-                f"Message sent to subtask #{n}. Its answer will arrive as a new message "
-                f'labelled "{reply_label(self.NAME, n)}". Carry on — do not wait for it.'
-            )
-        raise TypeError(f"{self.NAME}.run() got an unrouted bag: {type(params).__name__}")
-
-    @staticmethod
-    def _subtask_config(caller: "ProcessorConfig") -> "ProcessorConfig | None":
-        """The config a subtask of ``caller`` runs on: the caller's own config
-        re-routed onto the subtask channel — or ``None`` when ``caller`` may
-        not start one. The chat and a scheduled task are told by their routing
-        type; an outside agent's own turn has none, so it is told by its exact
-        class — its subtask's config subclasses it, and every other subagent's
-        turn runs on a config of its own."""
+    @classmethod
+    def child_config(cls, caller: "ProcessorConfig") -> "ProcessorConfig | None":
+        """The caller's own config re-routed onto the subtask channel — or
+        ``None`` when ``caller`` may not start one. The chat and a scheduled
+        task are told by their routing type; an outside agent's own turn has
+        none, so it is told by its exact class — its subtask's config
+        subclasses it, and every other subagent's turn runs on a config of its
+        own."""
         kind = caller.type()
         if kind == ConfigTypeEnum.USER:
             return UserSubtaskConfig()
@@ -234,10 +159,11 @@ def speaker(row: Transcript) -> str | None:
     label names who is speaking instead of the generic ``user`` /
     ``Scheduled task``:
 
-    * ``"Task from Chalie"`` — the subtask's own first input row, the task
-      its caller handed it (the first id of the subtask's turn).
-    * ``"Message from Chalie"`` — a later input row on the subtask channel:
-      a message Chalie sent to the working subtask.
+    * ``"Task from Chalie"`` — a subtask's own first input row, the task its
+      caller handed it (the first id of the subtask's turn). Every other
+      subagent's first row keeps its normal label.
+    * ``"Message from Chalie"`` — a later input row on any subagent's
+      channel: a message Chalie sent into the running subagent.
     * ``"Reply from <tool> #N"`` — a delegate's late reply, ``<tool>`` being
       the delegate the link's call ran and ``N`` the agent it spawned —
       rendered without the number when its child row or its agent no longer
@@ -247,23 +173,16 @@ def speaker(row: Transcript) -> str | None:
       is still read because an earlier build sent scheduled tasks' replies
       there, and those stored rows keep their label.
 
-    Any other channel returns ``None``: other delegates' input rows carry
-    call links too and keep their normal label.
+    Any other channel returns ``None``.
     """
     link = row.tool_call_id
     if link is None or not link.isdecimal():
         return None
-    if row.channel == Channel.DELEGATE_SUBTASK:
-        turn_id = row.turn_id
-        if turn_id is None:
-            return "Message from Chalie"
-        ids = Transcript.ids_for_turn(row.channel, turn_id)
-        first = ids[0] if ids else None
-        return (
-            "Task from Chalie"
-            if first is not None and cast("int", row.id) == first
-            else "Message from Chalie"
-        )
+    if row.channel in WATCHABLE_DELEGATE_CHANNELS:
+        ids = Transcript.ids_for_turn(row.channel, row.turn_id) if row.turn_id is not None else []
+        if ids and cast("int", row.id) == ids[0]:
+            return "Task from Chalie" if row.channel == Channel.DELEGATE_SUBTASK else None
+        return "Message from Chalie"
     if row.channel in (Channel.USER, Channel.SCHEDULE):
         call = ToolCall.get(int(link))
         if call is None:

@@ -8,13 +8,14 @@
 
 """CodeAgentAbility — delegate a coding task to a focused agent with a scratch workspace.
 
-Mirrors WebSearchAbility/PimAbility structure-for-structure: an ability that
-hands its OWN ``ProcessorConfig`` subclass (``CodeAgentConfig``) to
-``DelegateAbility.delegate()`` inside ``run()``. The delegate works in a
-scratch workspace (the conventional code_agent location — not a containment
-boundary) and can execute a written ``.ts`` file through ``run_script`` with
-full permissions — replacing the deleted ``code_eval`` one-shot stdin sandbox
-with a real, persistent, multi-step coding loop.
+Mirrors WebSearchAbility/PimAbility structure-for-structure: an ability whose
+``child_config()`` names its OWN ``ProcessorConfig`` subclass
+(``CodeAgentConfig``) and whose ``run()`` calls ``DelegateAbility.delegate()``.
+The delegate works in a scratch workspace (the conventional code_agent
+location — not a containment boundary) and can execute a written ``.ts`` file
+through ``run_script`` with full permissions — replacing the deleted
+``code_eval`` one-shot stdin sandbox with a real, persistent, multi-step coding
+loop.
 
 Toolset: read, search_files, write_file, make_dir, delete, set_permissions,
 move, edit_file, run_script.
@@ -27,7 +28,7 @@ result; ``run()`` passes it through unchanged.
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from abilities._delegate import DelegateAbility
 from abilities._result import ToolResult
@@ -37,6 +38,10 @@ from contracts.params.delegate_params_bag import DelegateParamsBag
 from contracts.params.param_bag import ParamBag
 from services.file_mapper_service import FileMapperService
 from configs.enums.ability_category import AbilityCategory
+
+
+if TYPE_CHECKING:
+    from services.processor_config import ProcessorConfig
 
 
 class CodeAgentAbility(DelegateAbility[DelegateParamsBag]):
@@ -99,12 +104,16 @@ class CodeAgentAbility(DelegateAbility[DelegateParamsBag]):
     def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
+    @classmethod
+    def child_config(cls, caller: "ProcessorConfig") -> CodeAgentConfig:
+        return CodeAgentConfig(caller.policy_channel)
+
     def run(self, params: DelegateParamsBag) -> ToolResult:
         # Ensure the scratch workspace exists before the delegate runs.
         FileMapperService.get_code_agent_workspace_path().mkdir(
             parents=True, exist_ok=True
         )
         return self.delegate(
-            CodeAgentConfig, params.instructions,
+            params.instructions,
             hint="Break the task into smaller steps or clarify the requirements, then retry.",
         )

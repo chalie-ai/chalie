@@ -11,10 +11,10 @@
  * or the number; its text shows exactly as the subagent wrote it. Such a
  * reply on the user/schedule channel (a typed block — `channel` null) must
  * read as a collapsed chip: folded to its caption, its text hidden until a
- * click opens it, another folds it back. It is the ONLY collapsible case: a subtask transcript's own
- * input rows (channel `delegate:subtask`, captioned 'Task from Chalie' /
- * 'Message from Chalie') and every other delegate transcript's rows keep the
- * plain caption and always show their text.
+ * click opens it, another folds it back. It is the ONLY collapsible case: a
+ * subagent transcript's own input rows (captioned 'Task from Chalie', and
+ * 'Message from Chalie' for a message sent in while it ran, on any subagent's
+ * channel) keep the plain caption and always show their text.
  *
  * Real component tree throughout (TurnView → UserBubble), real Pinia, no mocks
  * — the block is mounted straight in, exactly as it comes off the wire.
@@ -244,20 +244,21 @@ describe('a subtask transcript (channel delegate:subtask)', () => {
 });
 
 describe('a delegate transcript on another channel', () => {
-  it('still captions its speaker-less user row as a task from Chalie', () => {
+  it('still captions its speaker-less user row as a task from Chalie, and a message sent in while it ran by its speaker, both as plain labels', () => {
     const wrapper = track(mount(TurnView, {
       props: {
         block: delegateBlock('delegate:web_search', 801, [
           row('8010', 'user', 'look up the museum hours', 801),
+          row('8011', 'user', 'only this year', 801, { speaker: 'Message from Chalie' }),
         ]),
         fullThread: true,
       },
       attachTo: document.body,
     }));
 
-    const label = wrapper.find('.user-message__label');
-    expect(label.exists()).toBe(true);
-    expect(label.element.tagName).toBe('SPAN');
-    expect(label.text()).toBe('Task from Chalie');
+    const labels = wrapper.findAll('.user-message__label');
+    expect(labels.map((l) => l.text())).toEqual(['Task from Chalie', 'Message from Chalie']);
+    for (const label of labels) expect(label.element.tagName).toBe('SPAN');
+    expect(wrapper.findAll('.user-text').map((t) => t.isVisible())).toEqual([true, true]);
   });
 });

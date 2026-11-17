@@ -265,15 +265,15 @@ describe('a step reads as what it said, then what its calls did', () => {
         chip(4603, 'pim', { instructions: 'Find a free evening' }, 'Finding a free evening'),
         chip(4604, 'code_agent', { instructions: 'Compare the rents' }, 'Comparing the rents'),
         chip(4605, 'subtask', { action: 'start', instructions: 'Draft the email to the agent' }, 'Drafting the email'),
-        // Messaging a running subtask spawns nothing, so it keeps its own phrase.
-        chip(4606, 'subtask', { action: 'message', subtask: 1, message: 'Keep it short' }, 'Asking for a shorter email'),
+        // Messaging a running subagent spawns nothing, so it keeps its own phrase.
+        chip(4606, 'message_subagent', { agent_id: 1, message: 'Keep it short' }, 'Asking for a shorter email'),
       ]),
       saidStep(461, [chip(4610, 'subtask', { action: 'start', instructions: 'Book the viewing' }, 'Booking the viewing')]),
       row(TURN, 462, 'assistant', 'The viewing is booked.', { settled: true }),
     ], false));
 
     const [many, one] = wrapper.findAll('.step');
-    expect(many!.find('.step__summary').text()).toBe('Spawned 5 agents, read 1 file and messaged 1 subtask');
+    expect(many!.find('.step__summary').text()).toBe('Spawned 5 agents, read 1 file and messaged 1 subagent');
     // Counted together on the head, each call keeps its own row, under its
     // subagent type's icon.
     expect(callRows(many!.element)).toEqual([
@@ -281,9 +281,44 @@ describe('a step reads as what it said, then what its calls did', () => {
       'Comparing the rents', 'Drafting the email', 'Asking for a shorter email',
     ]);
     expect(many!.findAll('.call .call__icon').map(({ element: i }) => [...i.classList].find((k) => /^lucide-(?!icon$).*(?<!-icon)$/.test(k)))).toEqual([
-      'lucide-search', 'lucide-file-text', 'lucide-globe', 'lucide-mail', 'lucide-square-terminal', 'lucide-bot', 'lucide-bot',
+      'lucide-search', 'lucide-file-text', 'lucide-globe', 'lucide-mail', 'lucide-square-terminal', 'lucide-bot', 'lucide-message-square',
     ]);
     expect(one!.find('.step__summary').text()).toBe('Spawned 1 agent');
+  });
+
+  it('names the calls that manage running subagents by what they did, counting each subagent once, and never as agents spawned', () => {
+    const wrapper = mountTurn(block(TURN, [
+      row(TURN, 465, 'user', 'How are my agents doing? Stop the slow one.'),
+      saidStep(466, [
+        chip(4660, 'list_agents', {}, 'Listing the running agents'),
+        chip(4661, 'agent_status', { agent_id: 1 }, 'Checking the flat search'),
+        chip(4662, 'agent_status', { agent_id: 1 }, 'Checking the flat search again'),
+        chip(4663, 'agent_status', { agent_id: 2 }, 'Checking the email draft'),
+      ]),
+      saidStep(467, [
+        chip(4670, 'stop_subagent', { agent_id: 3 }, 'Stopping the slow search'),
+        chip(4671, 'message_subagent', { agent_id: 2, message: 'Keep it short' }, 'Asking for a shorter email'),
+        chip(4672, 'message_subagent', { agent_id: 2, message: 'Sign it from me' }, 'Asking it to sign the email'),
+      ]),
+      saidStep(468, [
+        chip(4680, 'list_agents', {}, 'Listing the running agents'),
+        chip(4681, 'list_agents', {}, 'Listing them again'),
+      ]),
+      row(TURN, 469, 'assistant', 'The slow one is stopped.', { settled: true }),
+    ], false));
+
+    const steps = wrapper.findAll('.step');
+    expect(steps.map((s) => s.find('.step__summary').text())).toEqual([
+      'Listed subagents and checked 2 subagents',
+      'Stopped 1 subagent and messaged 1 subagent',
+      'Listed subagents 2 times',
+    ]);
+    expect(callRows(steps[1]!.element)).toEqual([
+      'Stopping the slow search', 'Asking for a shorter email', 'Asking it to sign the email',
+    ]);
+    expect(steps[1]!.findAll('.call .call__icon').map(({ element: i }) => [...i.classList].find((k) => /^lucide-(?!icon$).*(?<!-icon)$/.test(k)))).toEqual([
+      'lucide-circle-stop', 'lucide-message-square', 'lucide-message-square',
+    ]);
   });
 
   it('never shows the tool or skill search, which only load tools and playbooks: a step that only searched for them, without thinking or text, takes no row and leaves the lead to the answer', () => {

@@ -40,7 +40,6 @@ from configs.enums.channels import Channel
 from configs.enums.config_type import ConfigTypeEnum
 from controllers.message_processor import _MAX_PROVIDER_ATTEMPTS, MessageProcessor
 from migrations.runner import run_all
-from models.tool_call import ToolCall
 from models.turn_execution import TurnExecution
 from models.agent import Agent
 from run import _reply_to_swept_delegates
@@ -457,44 +456,6 @@ def test_a_subagent_spawned_after_retention_purged_its_channel_is_a_new_agent_on
     assert f"Subagent {name} #{second_id} has been spawned." in call["result"]
     assert f"Reply from {name} #{second_id}" in second.read("chat")[-1]
     assert _listing(client) == _empty_listing()
-
-
-def test_a_subtask_message_naming_another_kind_of_agent_is_refused(db: sqlite3.Connection) -> None:
-    """The chat spawns a search, then messages a subtask by the search's
-    number. The number is one the chat spawned, but not a subtask's, so the
-    message is refused as not found and never reaches the search."""
-    held = Held(text(_ANSWER))
-    agent_id = EARLIER_AGENTS + 1
-    follow_up = "also find the capital of Spain"
-    provider = ChannelProvider(
-        chat=[
-            calls(_spawn(WebSearchAbility.NAME)),
-            calls(tool(SubtaskAbility.NAME, action="message", subtask=agent_id, message=follow_up)),
-            text(_STARTED),
-            text(_ANSWERED),
-        ],
-        web_search=[held],
-    )
-
-    with patched(provider):
-        begin(UserConfig(), _QUESTION).result()
-        wait(held.entered, "the search's model call")
-        held.gate.set()
-        drain()
-
-    assert held.opened and provider.unused() == {}
-    [search] = calls_of(db, WebSearchAbility.NAME)
-    turn = child_turn(db, delegate_channel(WebSearchAbility.NAME), search["id"])
-    assert _row(db, WebSearchAbility.NAME, turn)["agent_id"] == agent_id
-    [refused] = calls_of(db, SubtaskAbility.NAME)
-    assert refused["state"] == ToolCall.ERROR, refused["result"]
-    assert "code=subtask-not-found" in refused["result"]
-    assert f"No subtask #{agent_id} belongs to this conversation." in refused["result"]
-    assert all(follow_up not in sent for sent in provider.texts(WebSearchAbility.NAME))
-    reached = db.execute(
-        "SELECT COUNT(*) FROM transcript WHERE tool_call_id = ? AND channel != ?", (str(refused["id"]), USER),
-    ).fetchone()[0]
-    assert reached == 0
 
 
 def test_the_listing_pages_the_running_agents_oldest_first(authed_client: _Client) -> None:

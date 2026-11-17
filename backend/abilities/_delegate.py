@@ -31,7 +31,7 @@ exactly one whose child turn can be watched. Each ``run()`` still owns its pre-f
 from __future__ import annotations
 
 import logging
-from abc import ABC
+from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, ClassVar, cast
 
 from abilities._ability import FOLLOW_UP_BLOCK, Ability, B
@@ -44,9 +44,6 @@ from models.transcript import Transcript
 from models.turn_execution import TurnExecution
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
-    from configs.enums.policy_channel import PolicyChannel
     from controllers.message_processor import MessageProcessor
     from services.processor_config import ProcessorConfig
 
@@ -82,6 +79,14 @@ class DelegateAbility(Ability[B], ABC):
     #: the delegate itself, on the turn that answers its late reply.
     FOLLOW_UP_TOOLS: ClassVar[tuple[str, ...]] = ()
 
+    @classmethod
+    @abstractmethod
+    def child_config(cls, caller: "ProcessorConfig") -> "ProcessorConfig | None":
+        """The config this delegate's child turn runs on when ``caller``
+        starts it, or ``None`` when ``caller`` may not start one — the one
+        place it is chosen, read both when the child is spawned and when a
+        message is later sent into its running turn."""
+
     def spawn(self, config: "ProcessorConfig", instructions: str) -> "MessageProcessor":
         """Open ``instructions`` as a child turn on ``config`` and return it
         without waiting. The child's input row carries this call's
@@ -114,11 +119,9 @@ class DelegateAbility(Ability[B], ABC):
         mp.tool_call_service.reemit(self.tool_call_id)
         return child
 
-    def delegate(
-        self, config: "Callable[[PolicyChannel], ProcessorConfig]", instructions: str, *, hint: str,
-    ) -> ToolResult:
-        """Run ``instructions`` as a child turn on ``config`` (built for the
-        caller's policy channel) through :meth:`spawn`.
+    def delegate(self, instructions: str, *, hint: str) -> ToolResult:
+        """Run ``instructions`` as a child turn on :meth:`child_config` of
+        the caller's config, through :meth:`spawn`.
 
         A caller that is replied to late (:func:`replies_late`) gets the
         child's number at once (:meth:`started`); any other caller waits for
@@ -126,7 +129,10 @@ class DelegateAbility(Ability[B], ABC):
         mp = self.mp
         if mp is None:
             raise RuntimeError(f"{self.NAME}.run() dispatched without a bound MessageProcessor")
-        child = self.spawn(config(mp.config.policy_channel), instructions)
+        config = self.child_config(mp.config)
+        if config is None:
+            raise RuntimeError(f"{self.NAME}.run() reached delegate() for a caller that may not start one")
+        child = self.spawn(config, instructions)
         if replies_late(mp.config.type()):
             return self.started(child)
         return self.wait_for(child, hint=hint)
@@ -233,12 +239,11 @@ def reply_to_caller(channel: str, turn_id: int, answer: str) -> None:
     if rows and rows[0]["role"] == "memory":
         return
 
-    # The child's input rows carry the sender's tool_calls id (the stamp
-    # DelegateAbility.spawn writes when it opens the turn) — walk back from
-    # the LAST linked row to the row that asked for the call, then to the
-    # caller's turn; a follow-up message re-points the reply at the turn that
-    # sent it.
-    link = next((row for row in reversed(rows) if row["tool_call_id"] is not None), None)
+    # The child's input row carries the tool_calls id of the call that spawned
+    # it (DelegateAbility.spawn stamps it as the turn opens), and a message
+    # later sent into the running child carries that same id — walk back from
+    # it to the row that made the call, then to the caller's turn.
+    link = next((row for row in rows if row["tool_call_id"] is not None), None)
     if link is None:
         raise RuntimeError(f"{channel} turn {turn_id}: no row of its turn carries the caller's tool_call_id")
     call = ToolCall.get(int(cast("str", link["tool_call_id"])))

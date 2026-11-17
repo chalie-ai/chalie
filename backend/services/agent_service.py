@@ -61,15 +61,23 @@ class AgentService:
         return [a for a in ended if a is not None]
 
     @staticmethod
-    def view(agent: Agent) -> dict[str, object]:
-        """The row as plain data, plus the subagent's channel and the summary
-        the spawning call gave (empty when it gave none or its call is gone)."""
+    def spawn_call_id(agent: Agent) -> int | None:
+        """The ``tool_calls`` id of the call that spawned ``agent``, read off
+        its turn's first row — or ``None`` once that row is gone."""
         channel = Channel.for_delegate(agent.type)
         first = Transcript.filter("channel", channel).filter("turn_id", agent.turn_id).order_by("id ASC").first()
-        call = None
-        if first is not None and first.tool_call_id is not None:
-            call = ToolCall.filter("id", int(first.tool_call_id)).first()
-        return {**agent.to_dict(), "channel": channel, "summary": call.summary if call is not None else ""}
+        if first is None or first.tool_call_id is None:
+            return None
+        return int(first.tool_call_id)
+
+    @classmethod
+    def view(cls, agent: Agent) -> dict[str, object]:
+        """The row as plain data, plus the subagent's channel and the summary
+        the spawning call gave (empty when it gave none or its call is gone)."""
+        call_id = cls.spawn_call_id(agent)
+        call = ToolCall.filter("id", call_id).first() if call_id is not None else None
+        summary = call.summary if call is not None else ""
+        return {**agent.to_dict(), "channel": Channel.for_delegate(agent.type), "summary": summary}
 
     @classmethod
     def frame(cls, agent: Agent) -> WsMessage:

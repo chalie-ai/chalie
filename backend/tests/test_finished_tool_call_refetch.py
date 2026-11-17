@@ -32,8 +32,8 @@ from werkzeug.test import TestResponse
 
 from abilities.chalie_docs import ChalieDocsAbility
 from abilities.find_tools import FindToolsAbility
+from abilities.message_subagent import MessageSubagentAbility
 from abilities.recall import Recall
-from abilities.subtask import SubtaskAbility
 from abilities.web_search import WebSearchAbility
 from configs.channels.user import UserConfig
 from models.provider_response import ProviderResponse
@@ -105,7 +105,7 @@ def refetch_run(authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -
     """A user turn that runs an ordinary tool to ``done``, sends a call its tool
     rejects before running it, calls ``web_search`` — which returns at once,
     ``done``, while its child turn runs ``recall`` to ``done`` after the user
-    turn has ended — then messages a subtask this conversation never started,
+    turn has ended — then messages a subagent this conversation never started,
     which fails while running, and replies; the child's reply is answered in a
     turn of its own. Each call runs in its own model step, so no two calls on
     one surface are ever in flight together, and the step after each finished
@@ -117,7 +117,7 @@ def refetch_run(authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -
         "user": [
             _AfterRefetch(calls(tool(ChalieDocsAbility.NAME))),
             _AfterRefetch(calls(tool(WebSearchAbility.NAME, instructions="find the capital of France"))),
-            _AfterRefetch(calls(tool(SubtaskAbility.NAME, action="message", subtask=9999, message="any news?"))),
+            _AfterRefetch(calls(tool(MessageSubagentAbility.NAME, agent_id=9999, message="any news?"))),
             _AfterRefetch(text("I could not find it.")),
         ],
         _CHILD_CHANNEL: [_AfterRefetch(text(""))],
@@ -148,7 +148,7 @@ def refetch_run(authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -
 
     provider = ChannelProvider(
         chat=[
-            calls(tool(FindToolsAbility.NAME, query=["weather"])),
+            calls(tool(FindToolsAbility.NAME, query=[MessageSubagentAbility.NAME])),
             *waiting["user"],
             text("The search found nothing either."),
         ],
@@ -171,7 +171,7 @@ def test_every_finished_call_is_followed_by_updated_on_its_own_surface(refetch_r
         (_CHILD_CHANNEL, Recall.NAME, "done"),
         ("user", ChalieDocsAbility.NAME, "error"),
         ("user", FindToolsAbility.NAME, "done"),
-        ("user", SubtaskAbility.NAME, "error"),
+        ("user", MessageSubagentAbility.NAME, "error"),
         ("user", WebSearchAbility.NAME, "done"),
     ]
     for call in finished:
@@ -204,7 +204,7 @@ def test_a_running_call_sends_no_updated(refetch_run: _RefetchRun) -> None:
             windows[call["tool_name"]] = on_address[start:on_address.index(call)]
 
     assert sorted(cast("list[str]", list(windows))) == sorted(
-        [FindToolsAbility.NAME, Recall.NAME, SubtaskAbility.NAME, WebSearchAbility.NAME],
+        [FindToolsAbility.NAME, MessageSubagentAbility.NAME, Recall.NAME, WebSearchAbility.NAME],
     )
     assert [f["state"] for f in windows[WebSearchAbility.NAME] if f.get("tool_name") == WebSearchAbility.NAME] == [
         "started", "started",

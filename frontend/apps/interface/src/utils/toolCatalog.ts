@@ -12,12 +12,12 @@
  */
 import {
   ArrowDownUp, ArrowLeft, BookmarkPlus, BookOpen, BookOpenText, Blocks, Bot, Brain, BrainCog,
-  Calendar, CalendarClock, CalendarCog, CalendarPlus, CalendarSearch, CalendarX, Camera, CloudSun, Contact,
-  Eraser, Eye, FileCode, FileDown, FilePenLine, FilePlus, FileSearch, FileText, FolderInput, FolderPlus, Forward,
-  Globe, Hand, History, House, Image, Images, ListChecks, ListTodo, Lock, Mail, MailCheck, MailOpen, MessagesSquare,
-  MonitorSmartphone, MousePointerClick, Newspaper, NotebookPen, PackageSearch, Palette, Paperclip, Plug, Reply,
-  Router, Search, Send, Sparkles, SquarePen, SquareTerminal, TextCursorInput, TextSearch, Timer, Trash2,
-  Unplug, UserRoundPen, Wrench,
+  Calendar, CalendarClock, CalendarCog, CalendarPlus, CalendarSearch, CalendarX, Camera, CircleStop, CloudSun,
+  Contact, Eraser, Eye, FileCode, FileDown, FilePenLine, FilePlus, FileSearch, FileText, FolderInput, FolderPlus,
+  Forward, Globe, Hand, History, House, Image, Images, ListChecks, ListTodo, Lock, Mail, MailCheck, MailOpen,
+  MessageSquare, MessagesSquare, MonitorSmartphone, MousePointerClick, Newspaper, NotebookPen, PackageSearch, Palette,
+  Paperclip, Plug, Reply, Router, Search, Send, Sparkles, SquarePen, SquareTerminal, TextCursorInput, TextSearch, Timer,
+  Trash2, Unplug, UserRoundPen, Wrench,
 } from '@lucide/vue';
 import type { LucideIcon } from '@lucide/vue';
 import type { StepCall } from './turnSteps';
@@ -108,7 +108,10 @@ const KINDS: CallKind[] = [
   agent('pim', 'delegate'),
   agent('subtask.start', 'delegate'),
   agent('web_browse', 'browse'),
-  { ...kind('subtask.message', Bot, 'messaged 1 subtask', 'messaged {n} subtasks', 'subtask'), view: 'delegate' },
+  times('list_agents', Bot, 'listed subagents'),
+  kind('agent_status', Bot, 'checked 1 subagent', 'checked {n} subagents', 'agent_id'),
+  kind('stop_subagent', CircleStop, 'stopped 1 subagent', 'stopped {n} subagents', 'agent_id'),
+  kind('message_subagent', MessageSquare, 'messaged 1 subagent', 'messaged {n} subagents', 'agent_id'),
   ...viewed('browser', [
     showing(kind('browser.open', Globe, 'opened 1 page', 'opened {n} pages', 'url'), 'url'),
     showing(kind('browser.read', FileText, 'read 1 page', 'read {n} pages'), 'section'),

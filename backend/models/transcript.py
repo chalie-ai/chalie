@@ -128,6 +128,18 @@ class Transcript(Model):
         return cast("str | None", row[0]) if row else None
 
     @classmethod
+    def last_said(cls, channel: str, turn_id: int) -> str | None:
+        """Content of the turn's newest assistant row that says something —
+        settled or not, skipping the empty rows of calls that only ran tools —
+        or None for a turn whose model has written nothing yet."""
+        row = cls._bound_connection().execute(
+            "SELECT content FROM transcript WHERE channel = ? AND turn_id = ? AND role = 'assistant' "
+            "AND TRIM(content, char(32, 9, 10, 13)) != '' ORDER BY id DESC LIMIT 1",
+            (channel, turn_id),
+        ).fetchone()
+        return cast("str | None", row[0]) if row else None
+
+    @classmethod
     def ids_for_turn(cls, channel: str, turn_id: int) -> list[int]:
         """Every transcript row id for ``(channel, turn_id)``, ordered by
         ``id`` ascending — the act-trail anchor lookup. Empty list when the

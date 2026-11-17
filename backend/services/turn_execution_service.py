@@ -45,7 +45,8 @@ logger = logging.getLogger(__name__)
 #: Stamped as ``stop_reason`` when the boot sweep finds a row a killed process
 #: never got to close.
 STOP_REASON_PROCESS_DEATH = "process death"
-#: Stamped as ``stop_reason`` on a delegate's turn stopped by its caller's own stop.
+#: Stamped as ``stop_reason`` on a delegate's turn stopped by its caller's own
+#: stop, or by the chat's ``stop_subagent`` call naming it.
 STOP_REASON_PARENT_STOPPED = "parent stopped"
 
 
@@ -137,10 +138,10 @@ class TurnExecutionService:
         caller's turn also stops every delegate turn its own tool calls
         spawned — a subtask running in the background as much as a child the
         caller is blocked waiting on — each cancelled in turn from here with
-        :data:`STOP_REASON_PARENT_STOPPED`, since nothing else passes the stop
-        down to a child; an already-ended child simply returns ``None``. A
-        subagent's turn closes its ``agents`` row ``cancelled`` in the same
-        transaction."""
+        :data:`STOP_REASON_PARENT_STOPPED`, the same reason ``stop_subagent``
+        stamps when the chat stops one child by name; an already-ended child
+        simply returns ``None``. A subagent's turn closes its ``agents`` row
+        ``cancelled`` in the same transaction."""
         from controllers.message_processor import MessageProcessor  # noqa: PLC0415 — the MP imports this module
 
         try:

@@ -103,10 +103,10 @@ export interface ConversationMessage {
    */
   joined?: boolean | null;
   /**
-   * Who wrote this row, when it is not the user — a subtask transcript's own
-   * input row carries 'Task from Chalie' or 'Message from Chalie' (on the
-   * `delegate:subtask` channel). Absent/null on every other row, a subagent's
-   * reply included: that row carries `reply_from` instead.
+   * Who wrote this row, when it is not the user — a subtask's first input row
+   * carries 'Task from Chalie', and a message Chalie later sent into any
+   * running subagent carries 'Message from Chalie'. Absent/null on every other
+   * row, a subagent's reply included: that row carries `reply_from` instead.
    */
   speaker?: string | null;
   /**

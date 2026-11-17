@@ -11,8 +11,8 @@
 The foundational delegate-tool template.  A delegate
 tool is a standalone Ability that pairs with a typed ``ProcessorConfig``
 subclass (``WebSearchConfig``, in ``configs/channels/web_search.py`` with the
-other channel configs).  ``run()`` hands the subclass to
-``DelegateAbility.delegate()``, which runs it through
+other channel configs).  ``child_config()`` names the subclass and ``run()``
+calls ``DelegateAbility.delegate()``, which runs it through
 ``MessageProcessor.process()`` — there is no MessageProcessor subclass, no
 SUBAGENT_TYPES registry, and no make_subagent_config() factory.
 
@@ -35,7 +35,7 @@ checked.
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from abilities._delegate import DelegateAbility
 from configs.enums.param_key import Keys
@@ -44,6 +44,10 @@ from configs.channels.web_search import WebSearchConfig
 from contracts.params.param_bag import ParamBag
 from contracts.params.delegate_params_bag import DelegateParamsBag
 from configs.enums.ability_category import AbilityCategory
+
+
+if TYPE_CHECKING:
+    from services.processor_config import ProcessorConfig
 
 
 class WebSearchAbility(DelegateAbility[DelegateParamsBag]):
@@ -98,8 +102,12 @@ class WebSearchAbility(DelegateAbility[DelegateParamsBag]):
     def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
+    @classmethod
+    def child_config(cls, caller: "ProcessorConfig") -> WebSearchConfig:
+        return WebSearchConfig(caller.policy_channel)
+
     def run(self, params: DelegateParamsBag) -> ToolResult:
         return self.delegate(
-            WebSearchConfig, params.instructions,
+            params.instructions,
             hint="Narrow the query or split it into smaller searches, then retry.",
         )
