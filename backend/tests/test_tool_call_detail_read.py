@@ -33,8 +33,6 @@ from abilities.find_tools import FindToolsAbility
 from abilities.web_browse import WebBrowseAbility
 from abilities.web_search import WebSearchAbility
 from configs.channels.user import UserConfig
-from configs.enums.policy_channel import PolicyChannel
-from models.policy import Policy
 from models.provider_response import ProviderResponse
 from models.tool_call import ToolCall
 from services.turn_serializer_service import TurnSerializerService
@@ -286,13 +284,14 @@ def test_a_browser_result_that_cannot_be_read_lists_no_page_and_warns_once_namin
     assert str(call_id) in warning
 
 
-def test_a_web_browse_call_the_person_has_denied_starts_no_run_and_lists_no_pages(
+def test_a_web_browse_call_refused_before_it_starts_opens_no_run_and_lists_no_pages(
     db: sqlite3.Connection, person: FlaskClient,
 ) -> None:
-    Policy.upsert(PolicyChannel.CHAT.value, WebBrowseAbility.NAME, "deny")
+    """The call names a parameter web_browse does not declare, so dispatch
+    refuses it whole before any subagent turn opens."""
     provider = ChannelProvider(chat=[
-        _calls(WebBrowseAbility.NAME, instructions="read the front page of example.com"),
-        _says("I am not allowed to browse."),
+        _calls(WebBrowseAbility.NAME, instructions="read the front page", url="https://example.com/"),
+        _says("I could not browse."),
     ])
 
     run_turn(provider, UserConfig(), "what is on example.com?")

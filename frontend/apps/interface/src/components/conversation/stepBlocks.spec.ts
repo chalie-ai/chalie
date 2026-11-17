@@ -508,7 +508,7 @@ describe('the running block', () => {
   it('parked on its own turn\'s ask, names it and waits for you beside Stop — Allow and Deny each send their own answer and hand the head back', async () => {
     const permissions = usePermissionsStore();
     // An ask parked on another turn is never this block's.
-    permissions.enqueue(ask('r0', TURN + 1, 'pim', 'Read the inbox'));
+    permissions.enqueue(ask('r0', TURN + 1, 'email.read', 'Read the inbox'));
     permissions.enqueue(ask('r1', TURN, 'search', 'Search the web for Albania winter rentals'));
     const wrapper = mountTurn(askedTurn());
     const live = () => wrapper.find('.activity');

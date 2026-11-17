@@ -34,7 +34,7 @@ export type { PermissionOrigin } from '../api/policies';
 export interface PermissionRequest {
   /** Opaque ID; resolves the gate on /api/policies/respond. */
   request_id: string;
-  /** Permission key the policy gated, e.g. "pim" or "email.send". */
+  /** Permission key the policy gated, e.g. "email.send". */
   action_id: string;
   /** The model's one-line summary of the gated action; empty when the backend sent none. */
   summary: string;

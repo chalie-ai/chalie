@@ -31,6 +31,7 @@ from mcp.types import CallToolResult, TextContent
 from abilities._delegate import DelegateAbility
 from abilities._registry import AbilityRegistry
 from abilities._result import ToolResult
+from abilities.email import EmailAbility
 from configs.channels.discovery import DiscoveryConfig
 from configs.channels.scheduled import ScheduledConfig
 from configs.channels.user import UserConfig
@@ -52,6 +53,7 @@ from tests._delegates import (
     calls,
     calls_of,
     child_turn,
+    connected_mail,
     delegate_channel,
     drain,
     execution,
@@ -72,6 +74,7 @@ _ERROR = re.compile(r"\A\[[\w.]+\(status=error, code=([\w-]+)")
 _HINT_LINE = re.compile(r"^hint: \S", re.MULTILINE)
 _BLOCK_OPENER = "[follow_up_instruction]"
 _ANSWER = "Paris is the capital of France."
+_NO_MAIL = "I could not read the mail."
 _AGENT = "atlas-reviewer"
 _PROJECT = "lighthouse-migration"
 
@@ -466,35 +469,40 @@ def test_an_outside_agents_subtask_runs_as_that_agent_with_a_clean_context_and_a
     assert replies(db, start["id"], Channel.for_external_agent(_AGENT)) == []
 
 
-def test_an_outside_agent_is_refused_pim_and_its_web_search_cannot_start_a_subtask(
-    db: sqlite3.Connection,
+def test_an_outside_agent_starts_pim_but_its_mail_call_is_refused_and_its_web_search_cannot_start_a_subtask(
+    authed_client: tuple[FlaskClient, sqlite3.Connection, object],
 ) -> None:
     """On a fresh install an outside agent's turn asks ``pim`` to read the
-    person's mail: the permission gate refuses it, so its turn never opens and
-    the refusal lands in the blocked log. It then asks ``web_search``, which a
-    fresh install allows; the search's own turn tries to start a subtask and is
-    refused, as every subagent's turn is, so no subtask opens and the search
-    still answers the call."""
+    person's connected mail. Starting a subagent never asks, so pim's turn opens; its
+    mail search is checked under the outside agent's channel, which a fresh
+    install denies, so the refusal lands in the blocked log and pim still
+    answers. The agent then asks ``web_search``; the search's own turn tries to
+    start a subtask and is refused, as every subagent's turn is, so no subtask
+    opens and the search still answers the call."""
+    client, db, _store = authed_client
     provider = ChannelProvider(
         chat=[
             calls(tool("pim", instructions="read the latest email")),
             calls(_delegate_call("web_search")),
             text("Done."),
         ],
+        pim=[calls(tool(EmailAbility.NAME, action="search", keyword="invoice")), text(_NO_MAIL)],
         web_search=[calls(tool("subtask", action="start", instructions="look it up")), text(_ANSWER)],
     )
 
-    with patched(provider):
+    with connected_mail(client), patched(provider):
         said = _talk("read the person's mail, then look up the capital of France")
         drain()
 
     assert provider.unused() == {}
     assert said == ["Done."]
     [mail] = calls_of(db, "pim")
-    assert mail["state"] == "error", mail["result"]
-    assert provider.texts("pim") == []
-    assert _executions(db, delegate_channel("pim")) == 0
-    assert _blocked(db) == [("pim", "external_agent", "deny")]
+    assert mail["state"] == "done", mail["result"]
+    assert _NO_MAIL in mail["result"]
+    assert _executions(db, delegate_channel("pim")) == 1
+    [search_mail] = calls_of(db, EmailAbility.NAME)
+    assert search_mail["state"] == "error", search_mail["result"]
+    assert _blocked(db) == [(f"{EmailAbility.NAME}.search", "external_agent", "deny")]
 
     [search] = calls_of(db, "web_search")
     assert search["state"] == "done", search["result"]

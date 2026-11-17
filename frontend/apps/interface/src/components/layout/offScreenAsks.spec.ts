@@ -107,22 +107,22 @@ afterEach(() => {
 
 describe('an ask no live line shows', () => {
   it('gets one row naming its turn and what it asks, with Deny, Allow and Open', async () => {
-    const w = await mountDock(ask('r1', 'pim', 'Read the ferry booking email'));
+    const w = await mountDock(ask('r1', 'email.read', 'Read the ferry booking email'));
 
     expect(rows(w)).toHaveLength(1);
     const row = rows(w)[0];
     expect(row.find('.activity__origin').text()).toBe(`Chat · #${CHAT_TURN} ·`);
     expect(row.find('.activity__label').text()).toBe('Read the ferry booking email');
-    expect(row.find('.activity__ask').text()).toBe('Access Email, Calendar & Contacts');
+    expect(row.find('.activity__ask').text()).toBe('Email Read');
     expect(row.text()).toContain('waiting for you');
     expect(row.findAll('button').map((b) => b.text())).toEqual(['Deny', 'Allow', 'Open']);
   });
 
   it('says where each ask came from: the chat, a thread or a scheduled task', async () => {
     const w = await mountDock(
-      ask('r1', 'pim', 'Read the ferry booking email'),
-      ask('r2', 'code_agent', 'Write the fare table script', { type: 'user', turn_id: 12, forked: true }),
-      ask('r3', 'pim', 'Check the timetable inbox', { type: 'scheduled', turn_id: 31, forked: false }),
+      ask('r1', 'email.read', 'Read the ferry booking email'),
+      ask('r2', 'bash.modify_file', 'Write the fare table script', { type: 'user', turn_id: 12, forked: true }),
+      ask('r3', 'email.search', 'Check the timetable inbox', { type: 'scheduled', turn_id: 31, forked: false }),
     );
 
     expect(origins(w)).toEqual([`Chat · #${CHAT_TURN} ·`, 'Thread · #12 ·', 'Scheduled task · #31 ·']);
@@ -144,8 +144,8 @@ describe('an ask no live line shows', () => {
 
   it('Allow sends approval for that ask alone, and its row goes', async () => {
     const w = await mountDock(
-      ask('r1', 'pim', 'Read the ferry booking email'),
-      ask('r2', 'code_agent', 'Write the fare table script'),
+      ask('r1', 'email.read', 'Read the ferry booking email'),
+      ask('r2', 'bash.modify_file', 'Write the fare table script'),
     );
 
     await rowNamed(w, 'Read the ferry booking email').find('.activity__answer--allow').trigger('click');
@@ -157,8 +157,8 @@ describe('an ask no live line shows', () => {
 
   it('Deny sends a refusal for that ask alone, and its row goes', async () => {
     const w = await mountDock(
-      ask('r1', 'pim', 'Read the ferry booking email'),
-      ask('r2', 'code_agent', 'Write the fare table script'),
+      ask('r1', 'email.read', 'Read the ferry booking email'),
+      ask('r2', 'bash.modify_file', 'Write the fare table script'),
     );
 
     await rowNamed(w, 'Write the fare table script').find('.activity__answer--deny').trigger('click');
@@ -170,8 +170,8 @@ describe('an ask no live line shows', () => {
 
   it('an answer that fails to send brings its row back, since the ask still waits', async () => {
     const w = await mountDock(
-      ask('r1', 'pim', 'Read the ferry booking email'),
-      ask('r2', 'code_agent', 'Write the fare table script'),
+      ask('r1', 'email.read', 'Read the ferry booking email'),
+      ask('r2', 'bash.modify_file', 'Write the fare table script'),
     );
     backend.answersFail = true;
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => { /* the failed answer's console line */ });
@@ -186,7 +186,7 @@ describe('an ask no live line shows', () => {
   });
 
   it('Open shows its turn in the thread panel and answers nothing', async () => {
-    const w = await mountDock(ask('r1', 'pim', 'Read the ferry booking email'));
+    const w = await mountDock(ask('r1', 'email.read', 'Read the ferry booking email'));
     const session = useSessionStore();
 
     await rowNamed(w, 'Read the ferry booking email').find('.activity__stop').trigger('click');

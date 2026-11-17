@@ -20,8 +20,8 @@ tool.
 Permission boundary — ``policy_channel`` is inherited from the caller that
 invoked the ``web_browse`` tool (``self.mp.config.policy_channel``):
 the delegate's internal tool calls are gated under the SAME policy channel as
-the caller, not a hardcoded value.  The user-facing permission check still
-happens at the outer ``web_browse`` tool.
+the caller, not a hardcoded value.  Starting ``web_browse`` itself is never
+checked.
 
 The run's browser tab, keyed by the delegate's transcript uid, closes when the
 run's turn ends — completed, crashed or stopped; the turn itself closes it.

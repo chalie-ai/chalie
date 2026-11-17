@@ -29,8 +29,8 @@ Properties of every delegate tool:
 Permission boundary — ``policy_channel`` is inherited from the caller that
 invoked the ``web_search`` tool (``self.mp.config.policy_channel``):
 the delegate's internal tool calls are gated under the SAME policy channel as
-the caller, not a hardcoded value.  The user-facing permission check still
-happens at the outer ``web_search`` tool.
+the caller, not a hardcoded value.  Starting ``web_search`` itself is never
+checked.
 """
 
 from __future__ import annotations

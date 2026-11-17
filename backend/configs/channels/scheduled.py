@@ -50,11 +50,9 @@ class ScheduledConfig(ProcessorConfig):
             channel=Channel.SCHEDULE.value,
             role="user",
             # CHAT, not SUBCONSCIOUS: a fired schedule is work the user queued on
-            # their own behalf, so it runs under the user's own policy rows —
-            # where web_search/web_browse are seeded allow — exactly as the
-            # tool-surface note above and the system prompt already promise.
-            # SUBCONSCIOUS is the silent-housekeeping family that seeds the web
-            # delegates deny; borrowing it here hard-blocked scheduled web work.
+            # their own behalf, so it runs under the user's own policy rows, and
+            # so does every tool a subagent it starts calls. SUBCONSCIOUS is the
+            # silent-housekeeping family, seeded with stricter rows.
             policy_channel=PolicyChannel.CHAT,
             always_available=[*DEFAULT_ALWAYS_AVAILABLE, PlanAbility.NAME],
             skip_transcript=False,

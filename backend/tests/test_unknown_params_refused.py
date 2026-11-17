@@ -21,8 +21,8 @@ the real SQLite DB (``db`` fixture), the real ``DispatchService``, and the real
 abilities. The only substitution is the LLM network boundary
 (``services.provider_service.build_client``), scripted to replay one tool call
 per step. ``schedule.create``, ``user_device`` and ``home.list_devices`` carry
-seeded ``allow`` rows on the ``chat`` channel; ``read`` and ``calendar`` bypass
-the gate.
+seeded ``allow`` rows on the ``chat`` channel; ``read`` bypasses the gate; the
+calendar case allows ``calendar.create_event`` first, as the person would.
 """
 
 import sqlite3
@@ -31,8 +31,11 @@ from unittest.mock import patch
 
 import pytest
 
+from abilities.calendar import CalendarAbility
 from configs.channels.user import UserConfig
+from configs.enums.policy_channel import PolicyChannel
 from controllers.message_processor import MessageProcessor
+from models.policy import Policy
 from models.provider_response import ProviderResponse
 from models.tool_call import ToolCall
 from tests.helpers import NO_PLAN, drain_background_turns, is_planning_request
@@ -184,7 +187,7 @@ def test_newly_declared_calendar_and_home_params_reach_the_tool(db: sqlite3.Conn
     by the tools but never declared; they are declared now, so a call using them
     passes the refusal and the pre-gate and reaches the tool, which answers that
     the service is not connected (none is, in the test database)."""
-    assert db is not None
+    Policy.upsert(PolicyChannel.CHAT.value, f"{CalendarAbility.NAME}.create_event", "allow")
     provider = _ScriptedProvider(
         _step(_tool(
             "calendar", action="create_event", summary="Dentist",

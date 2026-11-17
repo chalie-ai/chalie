@@ -42,8 +42,8 @@ _WEB_BROWSE_TOOLS: tuple[str, ...] = (
 
 
 class WebBrowseConfig(ProcessorConfig):
-    """policy_channel is inherited from the caller; the user-facing permission
-    check happens at the outer ``web_browse`` tool."""
+    """policy_channel is inherited from the caller, so each tool the run calls
+    is checked as the caller's own call would be."""
 
     RENDERS_HTML: ClassVar[bool] = True
     uses_delegate_provider: ClassVar[bool] = True

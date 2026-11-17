@@ -110,16 +110,16 @@ def _seed(db: sqlite3.Connection, channel: str, permission: str, setting: str) -
 # 1. allow + internal both run the callback (internal == allow at the gate)
 @pytest.mark.parametrize("setting", ["allow", "internal"])
 def test_allow_and_internal_run_callback(mgr: PolicyManager, db: sqlite3.Connection, setting: str) -> None:
-    _seed(db, "chat", "web_search", setting)
-    assert mgr.authorize(CH.CHAT, "web_search", _ran) == _ran()
+    _seed(db, "chat", "email.read", setting)
+    assert mgr.authorize(CH.CHAT, "email.read", _ran) == _ran()
 
 
 # 1b. INTERNAL tools ALWAYS bypass — every channel, no row, even over a deny row.
-# email/calendar/contacts are the pim delegate's inner surface: the user-facing
-# permission is the outer `pim` tool, so the inner calls must never gate.
+# The tools that spawn a subagent never gate: what the subagent then calls is
+# gated on its own permission, under the channel of the agent that spawned it.
 @pytest.mark.parametrize("channel", [CH.CHAT, CH.SUBCONSCIOUS, CH.EXTERNAL_AGENT])
 @pytest.mark.parametrize("permission", ["run_script", "search", "browser.open", "recall", "save_graph",
-                                        "email.send", "calendar.create_event", "contacts.get"])
+                                        "subtask.start", "code_agent", "web_search", "web_browse", "pim"])
 def test_internal_tools_always_bypass(mgr: PolicyManager, db: sqlite3.Connection, channel: PolicyChannel, permission: str) -> None:
     # a deny row for the same key must be ignored — INTERNAL wins, no DB lookup
     _seed(db, channel.value, permission, "deny")
@@ -158,8 +158,8 @@ def test_data_layer_roundtrip(mgr: PolicyManager) -> None:
     assert mgr.upsert("chat", "bash.modify_file", "deny") == 1
     assert any(r["permission"] == "bash.modify_file" and r["setting"] == "deny" for r in mgr.get_all())
     assert mgr.upsert("nope", "x", "allow") == 0 and mgr.upsert("chat", "x", "bogus") == 0   # invalid rejected
-    assert mgr.upsert("chat", "email.send", "deny") == 0                        # INTERNAL tool: never user-gated
-    assert not any(r["permission"] == "email.send" for r in mgr.get_all())
+    assert mgr.upsert("chat", "subtask.start", "deny") == 0                     # INTERNAL tool: never user-gated
+    assert not any(r["permission"] == "subtask.start" for r in mgr.get_all())
     mgr.reset_to_defaults()
     assert any(r["permission"] == "bash.modify_file" and r["setting"] == "ask" for r in mgr.get_all())
     mgr._log_blocked("subconscious", "bash.modify_file", "user_unavailable")
@@ -168,16 +168,16 @@ def test_data_layer_roundtrip(mgr: PolicyManager) -> None:
 
 
 # 6. apply_seed reaps every row the seed file no longer lists (older seeds carried
-#    email.*/calendar.*/contacts.* rows; every boot must converge them out) while a
-#    user's setting on a still-seeded permission survives untouched.
+#    a row for each tool that spawns a subagent; every boot must converge them out)
+#    while a user's setting on a still-seeded permission survives untouched.
 def test_apply_seed_reaps_unseeded_rows(mgr: PolicyManager, db: sqlite3.Connection) -> None:
-    _seed(db, "chat", "email.send", "ask")                 # stale rows from an older seed
-    _seed(db, "chat", "calendar.create_event", "ask")
+    _seed(db, "chat", "pim", "allow")                      # stale rows from an older seed
+    _seed(db, "chat", "subtask.start", "deny")
     _seed(db, "subconscious", "search", "deny")            # bare tool name, not tool.action
     _seed(db, "chat", "bash.read", "deny")                 # user's own setting — must survive
     mgr.apply_seed()
     perms = {r["permission"] for r in mgr.get_all()}
-    assert not perms & {"email.send", "calendar.create_event", "search"}
+    assert not perms & {"pim", "subtask.start", "search"}
     # bash.read IS in the seed, so the reap keys on membership and leaves the
     # user's 'deny' in place (INSERT OR IGNORE never overwrites an existing row).
     assert any(r["permission"] == "bash.read" and r["setting"] == "deny" for r in mgr.get_all())
@@ -189,9 +189,9 @@ def test_apply_seed_reaps_unseeded_rows(mgr: PolicyManager, db: sqlite3.Connecti
 def test_ask_with_no_surface_denies_with_steer_and_never_broadcasts(
     mgr: PolicyManager, db: sqlite3.Connection, recorder: _RecordingClient,
 ) -> None:
-    _seed(db, "chat", "pim", "ask")
-    out = mgr.authorize(CH.CHAT, "pim", _ran, summary="Check tomorrow's calendar")
-    assert out == _ASK_NO_SURFACE.format(permission="pim", channel="chat")
+    _seed(db, "chat", "email.read", "ask")
+    out = mgr.authorize(CH.CHAT, "email.read", _ran, summary="Read the latest invoice email")
+    assert out == _ASK_NO_SURFACE.format(permission="email.read", channel="chat")
     row = db.execute("SELECT context, reason FROM policy_blocked_log").fetchone()
     assert (row["context"], row["reason"]) == ("chat", "user_unavailable")
     assert recorder.frames == []
@@ -207,7 +207,7 @@ def test_ask_with_no_surface_denies_with_steer_and_never_broadcasts(
 def test_ask_with_surface_broadcasts_origin_frame_and_resolves(
     mgr: PolicyManager, db: sqlite3.Connection, recorder: _RecordingClient, verdict: str, should_run: bool,
 ) -> None:
-    _seed(db, "chat", "pim", "ask")
+    _seed(db, "chat", "email.read", "ask")
     deadline = time.monotonic() + 5.0
     seen: dict[str, object] = {}
 
@@ -224,9 +224,9 @@ def test_ask_with_surface_broadcasts_origin_frame_and_resolves(
     answerer = threading.Thread(target=_answer_like_the_respond_endpoint)
     answerer.start()
     out = mgr.authorize(
-        CH.CHAT, "pim", _ran,
+        CH.CHAT, "email.read", _ran,
         should_stop=lambda: time.monotonic() > deadline,
-        origin=_origin(), summary="Check tomorrow's calendar",
+        origin=_origin(), summary="Read the latest invoice email",
     )
     answerer.join(timeout=5.0)
 
@@ -240,8 +240,8 @@ def test_ask_with_surface_broadcasts_origin_frame_and_resolves(
     assert request == {
         "type": "permission_request",
         "request_id": rid,
-        "action_id": "pim",
-        "summary": "Check tomorrow's calendar",
+        "action_id": "email.read",
+        "summary": "Read the latest invoice email",
         "origin": {"type": "user", "turn_id": 7, "forked": False},
         "asked_at": asked_at.isoformat(timespec="seconds"),
     }
@@ -252,7 +252,7 @@ def test_ask_with_surface_broadcasts_origin_frame_and_resolves(
         assert out == _ran()
         assert db.execute("SELECT count(*) FROM policy_blocked_log").fetchone()[0] == 0
     else:
-        assert out == "The pim action is not allowed. Do NOT retry."
+        assert out == "The email.read action is not allowed. Do NOT retry."
         assert db.execute("SELECT reason FROM policy_blocked_log").fetchone()["reason"] == "user_denied"
 
 
@@ -261,11 +261,11 @@ def test_ask_with_surface_broadcasts_origin_frame_and_resolves(
 def test_cancelled_turn_unparks_gate_resolves_card_and_logs_nothing(
     mgr: PolicyManager, db: sqlite3.Connection, recorder: _RecordingClient,
 ) -> None:
-    _seed(db, "chat", "pim", "ask")
+    _seed(db, "chat", "email.read", "ask")
     started = time.monotonic()
-    out = mgr.authorize(CH.CHAT, "pim", _ran, should_stop=lambda: True, origin=_origin(), summary="x")
+    out = mgr.authorize(CH.CHAT, "email.read", _ran, should_stop=lambda: True, origin=_origin(), summary="x")
     assert time.monotonic() - started < 2 * _GATE_POLL_SECONDS
-    assert out == "The pim action is not allowed. Do NOT retry."
+    assert out == "The email.read action is not allowed. Do NOT retry."
     assert [f["type"] for f in recorder.frames] == ["permission_request", "permission_resolved"]
     assert recorder.frames[0]["request_id"] == recorder.frames[1]["request_id"]
     assert mgr.pending() == []

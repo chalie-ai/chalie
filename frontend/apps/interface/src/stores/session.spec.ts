@@ -925,7 +925,7 @@ describe('reconnect reconcile', () => {
     pendingMock.mockResolvedValue([
       {
         request_id: 'gate-1',
-        action_id: 'pim',
+        action_id: 'email.read',
         summary: 'Read the inbox',
         asked_at: '2026-10-07T06:32:11+00:00',
         origin: { type: ConfigType.USER, turn_id: 7, forked: true },
@@ -941,7 +941,7 @@ describe('reconnect reconcile', () => {
     expect(permissions.queue).toEqual([
       {
         request_id: 'gate-1',
-        action_id: 'pim',
+        action_id: 'email.read',
         summary: 'Read the inbox',
         asked_at: '2026-10-07T06:32:11+00:00',
         origin: { type: 'user', turn_id: 7, forked: true },

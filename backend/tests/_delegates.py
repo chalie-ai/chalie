@@ -475,11 +475,10 @@ def _forget_vault() -> None:
 def connected_mail(client: FlaskClient) -> Iterator[None]:
     """A mailbox connected the way a person connects one — through the
     capability setup route, which probes the mail server and connects — for
-    the duration of the block, with ``pim`` allowed on the chat through the
-    policy route. The mail server is an IMAP peer on loopback; the vault the
-    credentials are stored in is this test's own, unlocked for the block and
-    dropped after it. On the way out the mailbox is disconnected through the
-    product's own route, which removes the stored credentials."""
+    the duration of the block. The mail server is an IMAP peer on loopback;
+    the vault the credentials are stored in is this test's own, unlocked for
+    the block and dropped after it. On the way out the mailbox is disconnected
+    through the product's own route, which removes the stored credentials."""
     server = _ImapServer(("127.0.0.1", 0), _ImapPeer)
     serving = threading.Thread(target=server.serve_forever, name="imap-peer", daemon=True)
     serving.start()
@@ -498,8 +497,6 @@ def connected_mail(client: FlaskClient) -> Iterator[None]:
         for first_sync in [t for t in threading.enumerate() if t.name == "cap-init-mail"]:
             first_sync.join(timeout=WAIT_S)
             assert not first_sync.is_alive(), "the mailbox's first sync did not end"
-        allow = client.post("/api/policies/-1", json={"channel": "chat", "permission": "pim", "setting": "allow"})
-        assert allow.status_code == 204, allow.data
         yield
     finally:
         client.post("/api/capabilities/disconnect/mail")

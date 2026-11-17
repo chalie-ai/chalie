@@ -26,7 +26,7 @@ import { usePermissionsStore } from './permissions';
 const liveFrame = {
   type: 'permission_request',
   request_id: 'r1',
-  action_id: 'pim',
+  action_id: 'email.read',
   summary: 'Read the inbox',
   asked_at: '2026-10-07T06:32:11+00:00',
   origin: { type: 'user', turn_id: 7, forked: true },
@@ -48,7 +48,7 @@ describe('enqueue', () => {
     store.enqueue(liveFrame);
     expect(store.queue).toEqual([
       {
-        request_id: 'r1', action_id: 'pim', summary: 'Read the inbox',
+        request_id: 'r1', action_id: 'email.read', summary: 'Read the inbox',
         asked_at: '2026-10-07T06:32:11+00:00', origin: { type: 'user', turn_id: 7, forked: true },
       },
     ]);
@@ -67,7 +67,7 @@ describe('enqueue', () => {
 
   it('drops a frame missing request_id or action_id', () => {
     const store = usePermissionsStore();
-    store.enqueue({ type: 'permission_request', action_id: 'pim' });
+    store.enqueue({ type: 'permission_request', action_id: 'email.read' });
     store.enqueue({ type: 'permission_request', request_id: 'r9' });
     expect(store.queue).toEqual([]);
   });
@@ -86,7 +86,7 @@ describe('refreshPending', () => {
     store.enqueue(liveFrame); // arrived over the socket before the fetch answered
     pendingMock.mockResolvedValue([
       {
-        request_id: 'r1', action_id: 'pim', summary: 'Read the inbox',
+        request_id: 'r1', action_id: 'email.read', summary: 'Read the inbox',
         asked_at: '2026-10-07T06:32:11+00:00', origin: { type: 'user', turn_id: 7, forked: true },
       },
       {
