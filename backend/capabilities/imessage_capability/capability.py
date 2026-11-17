@@ -10,23 +10,15 @@ Messages is driven through ``osascript``. The script is fixed text read from
 stdin; the handle, the message and the audio file's path reach it as arguments
 (``on run argv``), so nothing the user or the model writes ever becomes part of
 the script. Success means Messages accepted the message, which is all
-AppleScript can tell; whether it arrived is not known.
-
-Messages is sandboxed and reliably reads an attachment only from its own
-folder, so an audio file is first copied into a folder of its own under
-``~/Library/Messages/Attachments/Chalie``. Writing there needs Full Disk
-Access for the app that runs Chalie. The copies are kept: the sent message in
-the Mac's Messages history points at its copy.
+AppleScript can tell; whether it arrived is not known. An audio file is
+handed to Messages at the path it was given.
 """
 
 from __future__ import annotations
 
 import logging
 import os
-import shutil
 import subprocess
-import uuid
-from pathlib import Path
 
 from capabilities.base import AbstractCapability
 from capabilities.imessage_capability.availability import APPLE_ONLY, AVAILABLE
@@ -45,12 +37,6 @@ _AUTOMATION_HINT = (
     "Allow the app that runs Chalie (Terminal, or the Chalie app) to control Messages "
     "in System Settings → Privacy & Security → Automation."
 )
-_FULL_DISK_ACCESS_HINT = (
-    "Chalie cannot put the voice note where Messages can read it. Allow the app that runs "
-    "Chalie (Terminal, or the Chalie app) Full Disk Access in System Settings → Privacy & "
-    "Security → Full Disk Access. Nothing was sent."
-)
-
 _K_HANDLE = "imessage:handle"
 
 # Long enough for the first send, which waits while macOS asks the user
@@ -61,9 +47,6 @@ _SEND_TIMEOUT_SECONDS = 60
 _NOT_PERMITTED = "-1743"
 
 _RESULT_TAG = "CHALIE_IMESSAGE"
-
-# Inside Messages' own folder, which its sandbox lets it read.
-_STAGING_ROOT = Path.home() / "Library" / "Messages" / "Attachments" / "Chalie"
 
 # The service is picked by type: looking a chat up by its id fails on current
 # macOS. An empty message or path means that part is not sent. The phase says
@@ -158,14 +141,6 @@ def _outcome(done: subprocess.CompletedProcess[str]) -> str | None:
     return "Messages gave an answer Chalie does not understand, so the message may have been sent."
 
 
-def _stage(audio: str) -> str:
-    """Copy *audio* into a new folder of its own under :data:`_STAGING_ROOT`,
-    keeping its name, and return the copy's path."""
-    folder = _STAGING_ROOT / uuid.uuid4().hex
-    folder.mkdir(parents=True)
-    return str(shutil.copy2(audio, folder / Path(audio).name))
-
-
 class ImessageCapability(AbstractCapability):
 
     def __init__(self) -> None:
@@ -238,16 +213,9 @@ class ImessageCapability(AbstractCapability):
         handle = self.load_credential(_K_HANDLE)
         if not handle:
             return {"error": _NOT_CONNECTED}
-        attachment = ""
-        if audio:
-            if not os.path.isfile(audio):
-                return {"error": f"There is no audio file at {audio}. Nothing was sent."}
-            try:
-                attachment = _stage(audio)
-            except PermissionError:
-                logger.warning("[imessage] Could not copy the voice note into Messages' folder.")
-                return {"error": _FULL_DISK_ACCESS_HINT}
-        error = _hand_to_messages(handle, message if message.strip() else "", attachment)
+        if audio and not os.path.isfile(audio):
+            return {"error": f"There is no audio file at {audio}. Nothing was sent."}
+        error = _hand_to_messages(handle, message if message.strip() else "", audio or "")
         if error:
             logger.warning("[imessage] Send failed: %s", error)
             return {"error": error}
