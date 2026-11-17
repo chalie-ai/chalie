@@ -184,9 +184,12 @@ def test_a_subagent_called_from_the_chat_returns_at_once_and_its_answer_comes_ba
     assert execution(USER, reply["turn_id"]).state == TurnExecution.COMPLETED
     assert assistant_texts(db, USER, reply["turn_id"]) == [_ANSWERED]
     opener = messages(block(client, f"/api/threads/{reply['turn_id']}"))[0]
-    assert (opener["role"], opener["content"], opener["speaker"]) == ("user", _ANSWER, label)
-    # The call carried no summary: the reply names its subagent by tool alone.
+    assert (opener["role"], opener["content"]) == ("user", _ANSWER)
+    # The reply carries plain data for the interface to word — the subagent's
+    # tool, and no summary since the call carried none — and never the label
+    # the model reads.
     assert opener["reply_from"] == {"tool_name": delegate, "summary": ""}
+    assert opener.get("speaker") is None
 
     opening, _second, answering, unrelated = provider.read("chat")
     follow_up = _block_opening(_after_reply(answering, label, _ANSWER))
@@ -206,6 +209,28 @@ def test_a_subagent_called_from_the_chat_returns_at_once_and_its_answer_comes_ba
     if steer:
         assert steer[:60] not in unrelated
     assert _BLOCK_OPENER not in opening
+
+
+def test_a_plain_text_answer_reaches_the_chats_reply_exactly_as_the_subagent_wrote_it(
+    authed_client: _Client,
+) -> None:
+    """A subagent replies in plain text, so its reply on the chat holds what it
+    wrote character for character — line breaks kept, ``& < >`` and anything
+    that looks like a tag or an emphasis marker left as typed, never escaped,
+    stripped or turned into markup."""
+    client, db, _store = authed_client
+    answer = "Opens at 9 & closes at 5.\nIf a < b and c > d, see <div> or *notes* and _hours_.\n\nSee you."
+    provider = ChannelProvider(
+        chat=[calls(tool("web_search", instructions=_INSTRUCTIONS)), text(_STARTED), text(_ANSWERED)],
+        web_search=[Held(text(answer))],
+    )
+
+    run_turn(provider, UserConfig(), _QUESTION)
+
+    [call] = calls_of(db, "web_search")
+    [reply] = replies(db, call["id"])
+    opener = messages(block(client, f"/api/threads/{reply['turn_id']}"))[0]
+    assert (opener["role"], opener["content"]) == ("user", answer)
 
 
 def test_a_subagent_called_from_a_thread_reply_answers_in_that_thread(db: sqlite3.Connection) -> None:

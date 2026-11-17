@@ -4,13 +4,14 @@
  *
  * A subtask is fire-and-forget: it outlives the call that started it, so its
  * answer lands later on the CALLER's channel as a user-role row carrying
- * `speaker: 'Reply from subtask #N'` and `reply_from`, the subagent's tool and
- * the one-line summary of the call that started it. The person reads that
- * reply as `Reply from <b>{summary}</b> agent` — the type's plain name in
- * place of a missing summary — and never the tool name or the number. Such a
+ * `reply_from` — plain data, the subagent's tool and the one-line summary of
+ * the call that started it — and no label: the interface words the caption.
+ * The person reads that reply as `Reply from <b>{summary}</b> agent` — the
+ * type's plain name in place of a missing summary — and never the tool name
+ * or the number; its text shows exactly as the subagent wrote it. Such a
  * reply on the user/schedule channel (a typed block — `channel` null) must
- * read as a collapsed chip: folded to its label, its text hidden until a click
- * opens it, another folds it back. It is the ONLY collapsible case: a subtask transcript's own
+ * read as a collapsed chip: folded to its caption, its text hidden until a
+ * click opens it, another folds it back. It is the ONLY collapsible case: a subtask transcript's own
  * input rows (channel `delegate:subtask`, captioned 'Task from Chalie' /
  * 'Message from Chalie') and every other delegate transcript's rows keep the
  * plain caption and always show their text.
@@ -44,8 +45,8 @@ afterEach(() => {
   document.body.innerHTML = '';
 });
 
-/** Any row, with the optional fields a stored row can carry (speaker among
- *  them) — the shape the REST read returns it in. */
+/** Any row, with the optional fields a stored row can carry (speaker and
+ *  reply_from among them) — the shape the REST read returns it in. */
 function row(
   id: string,
   role: ConversationMessage['role'],
@@ -94,9 +95,9 @@ function delegateBlock(channel: string, turnId: number, messages: ConversationMe
   };
 }
 
-/** The reply chip's label: its whole text, and the text it puts in bold. */
-function replyLabel(wrapper: VueWrapper, speaker: string): { text: string; bold: string[] } {
-  const label = wrapper.find(`.user-message[data-speaker="${speaker}"] button.user-message__label--toggle`);
+/** The reply chip's caption: its whole text, and the text it puts in bold. */
+function replyLabel(wrapper: VueWrapper, rowId: string): { text: string; bold: string[] } {
+  const label = wrapper.find(`.user-message[data-transcript-row-id="${rowId}"] button.user-message__label--toggle`);
   expect(label.exists()).toBe(true);
   return { text: label.text(), bold: label.findAll('b').map((b) => b.text()) };
 }
@@ -108,9 +109,8 @@ describe('a subtask reply landing on the user channel', () => {
         block: userBlock(TURN, [
           row('6010', 'user', 'look into the museum hours', TURN),
           // The subtask's answer arrives later, on the user's own channel: a
-          // user-role row naming its subtask.
+          // user-role row naming which subagent it came from.
           row('6011', 'user', 'The answer.', TURN, {
-            speaker: 'Reply from subtask #4',
             reply_from: { tool_name: 'subtask', summary: 'compare museum hours' },
           }),
         ]),
@@ -121,7 +121,7 @@ describe('a subtask reply landing on the user channel', () => {
       attachTo: document.body,
     }));
 
-    const bubble = wrapper.find('.user-message[data-speaker="Reply from subtask #4"]');
+    const bubble = wrapper.find('.user-message[data-transcript-row-id="6011"]');
     expect(bubble.exists()).toBe(true);
     const label = bubble.find('button.user-message__label--toggle');
     expect(label.exists()).toBe(true);
@@ -162,7 +162,6 @@ describe('a reply whose call carries no summary', () => {
         block: userBlock(TURN, [
           row('6020', 'user', 'plan my museum day', TURN),
           ...kinds.map(([tool], i) => row(`602${i + 1}`, 'user', 'The answer.', TURN, {
-            speaker: `Reply from ${tool} #${i + 7}`,
             reply_from: { tool_name: tool, summary: i === 1 ? '  ' : '' },
           })),
         ]),
@@ -171,7 +170,7 @@ describe('a reply whose call carries no summary', () => {
     }));
 
     kinds.forEach(([tool, name], i) => {
-      const { text, bold } = replyLabel(wrapper, `Reply from ${tool} #${i + 7}`);
+      const { text, bold } = replyLabel(wrapper, `602${i + 1}`);
       expect(text).toBe(`Reply from ${name} agent`);
       expect(bold).toEqual([name]);
       expect(text).not.toMatch(/_|\d/);
@@ -181,20 +180,43 @@ describe('a reply whose call carries no summary', () => {
 });
 
 describe('a reply whose call no longer exists', () => {
-  it('still reads as its speaker label, folded', () => {
+  it('reads "Reply from a subagent", folded — no type, no tool name, no number', () => {
     const wrapper = track(mount(TurnView, {
       props: {
         block: userBlock(TURN, [
           row('6030', 'user', 'look into the museum hours', TURN),
-          row('6031', 'user', 'The answer.', TURN, { speaker: 'Reply from a delegate' }),
+          row('6031', 'user', 'The answer.', TURN, { reply_from: { tool_name: null, summary: null } }),
         ]),
       },
       attachTo: document.body,
     }));
 
-    const { text, bold } = replyLabel(wrapper, 'Reply from a delegate');
-    expect(text).toBe('Reply from a delegate');
+    const { text, bold } = replyLabel(wrapper, '6031');
+    expect(text).toBe('Reply from a subagent');
     expect(bold).toEqual([]);
+  });
+});
+
+describe("a plain-text reply's text", () => {
+  it('shows exactly as the subagent wrote it — line breaks, & < > and markdown-like marks as typed, no markup', async () => {
+    const answer = 'Opens at 9 & closes at 5.\nIf a < b and c > d, see <div> or *notes* and _hours_.\n\nSee you.';
+    const wrapper = track(mount(TurnView, {
+      props: {
+        block: userBlock(TURN, [
+          row('6040', 'user', 'look into the museum hours', TURN),
+          row('6041', 'user', answer, TURN, { reply_from: { tool_name: 'web_search', summary: 'museum hours' } }),
+        ]),
+      },
+      attachTo: document.body,
+    }));
+
+    const bubble = wrapper.find('.user-message[data-transcript-row-id="6041"]');
+    await bubble.find('button.user-message__label--toggle').trigger('click');
+    const text = bubble.find('.user-text');
+    expect(text.isVisible()).toBe(true);
+    // The DOM holds the characters themselves, not entities and not elements.
+    expect(text.element.textContent).toBe(answer);
+    expect(text.element.children.length).toBe(0);
   });
 });
 

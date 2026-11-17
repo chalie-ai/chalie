@@ -22,7 +22,8 @@
  *   - the tool and skill searches are never shown, stored or running: a step
  *     that only searched for tools or skills and did not think draws no block
  *     and no row;
- *   - each row's icon is its kind's, every row is a button that opens it, and
+ *   - each row's icon is its kind's — a subagent's, its type's, though the
+ *     head counts them all as one — every row is a button that opens it, and
  *     the status mark closes the row.
  *
  * The last two tests run the running step end to end: live frames go through
@@ -273,10 +274,14 @@ describe('a step reads as what it said, then what its calls did', () => {
 
     const [many, one] = wrapper.findAll('.step');
     expect(many!.find('.step__summary').text()).toBe('Spawned 5 agents, read 1 file and messaged 1 subtask');
-    // Counted together on the head, each call keeps its own row.
+    // Counted together on the head, each call keeps its own row, under its
+    // subagent type's icon.
     expect(callRows(many!.element)).toEqual([
       'Searching Sliema flats', 'Reading the budget', 'Browsing the first listing', 'Finding a free evening',
       'Comparing the rents', 'Drafting the email', 'Asking for a shorter email',
+    ]);
+    expect(many!.findAll('.call .call__icon').map(({ element: i }) => [...i.classList].find((k) => /^lucide-(?!icon$).*(?<!-icon)$/.test(k)))).toEqual([
+      'lucide-search', 'lucide-file-text', 'lucide-globe', 'lucide-mail', 'lucide-square-terminal', 'lucide-bot', 'lucide-bot',
     ]);
     expect(one!.find('.step__summary').text()).toBe('Spawned 1 agent');
   });
@@ -362,7 +367,7 @@ describe('a step reads as what it said, then what its calls did', () => {
       'BUTTON lucide-globe Opening the report img:succeeded',
       'BUTTON lucide-plug Reading issue 7 img:succeeded',
       'BUTTON lucide-wrench Frobnicating img:succeeded',
-      'BUTTON lucide-bot Searching the error img:succeeded',
+      'BUTTON lucide-search Searching the error img:succeeded',
     ]);
   });
 });

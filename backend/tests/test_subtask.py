@@ -163,10 +163,12 @@ def test_reply_after_the_caller_finished_opens_a_new_user_turn(
     )
 
     opener = messages(block(client, f"/api/threads/{reply['turn_id']}"))[0]
-    assert (opener["role"], opener["content"], opener["speaker"]) == ("user", _ANSWER, f"Reply from subtask #{n}")
-    # The reply also names the subagent it came from by the summary of the call
-    # that started it, for the person to read in place of the tool and number.
+    assert (opener["role"], opener["content"]) == ("user", _ANSWER)
+    # The reply carries plain data for the interface to word — the subagent's
+    # tool and the summary of the call that started it — and never the label
+    # the model reads.
     assert opener["reply_from"] == {"tool_name": "subtask", "summary": summary}
+    assert opener.get("speaker") is None
     parent_block = block(client, f"/api/threads/{parent.turn_id}")
     assert chip(parent_block, "subtask")["delegate"] == {
         "channel": _SUBTASK, "turn_id": n, "working": False, "crashed": False, "cancelled": False,

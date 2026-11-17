@@ -4,7 +4,7 @@
  *
  * A tool call that ran as a subagent carries `delegate: {channel, turn_id}`.
  * Every call row is a real <button> that opens, under it, what the call did;
- * a delegate's row carries the Bot glyph, and its opened detail ends on an
+ * a delegate's row carries its subagent type's icon, and its opened detail ends on an
  * "Open transcript" button that opens that subagent's transcript in the
  * thread panel. A call without a delegate opens to its detail with no way
  * into a transcript. The places a call is drawn are all covered, each through
@@ -18,18 +18,18 @@
  * network boundary is stood in for: `fetch`, answering each call's own read
  * (GET /api/tool-calls/<id>). A click is asserted by what it does to the
  * session (`panelDelegate`), the thing the ThreadPanel reads, not by spying on
- * a method. The Bot icon is identified by rendering lucide's own Bot and
- * comparing glyphs, so a restyled class name does not break the spec but a
- * different icon does.
+ * a method. Every delegate here is a web search, so its row is identified by
+ * rendering that type's own icon and comparing glyphs: a restyled class name
+ * does not break the spec, but a different icon does.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { nextTick } from 'vue';
 import { flushPromises, mount } from '@vue/test-utils';
 import type { VueWrapper } from '@vue/test-utils';
-import { Bot } from '@lucide/vue';
 import { ConfigType } from '@chalie/shared';
 import type { DelegateRef } from '@chalie/shared';
 import type { LiveToolPill } from '../../utils/liveActTrail';
+import { subagentKind } from '../../utils/delegateChannel';
 import type { ConversationMessage, ConversationTurnBlock, ToolCallDetail } from '../../api/conversation';
 
 const REF = { channel: 'delegate:web_search', turn_id: 12 };
@@ -95,16 +95,16 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-/** The inner glyph markup lucide draws for the Bot icon. */
-const BOT_GLYPH = mount(Bot).element.innerHTML;
+/** The inner glyph markup lucide draws for the web search subagent's icon. */
+const WEB_SEARCH_GLYPH = mount(subagentKind('web_search').icon).element.innerHTML;
 
-function hasBotIcon(el: Element): boolean {
-  return [...el.querySelectorAll('svg')].some((svg) => svg.innerHTML === BOT_GLYPH);
+function hasWebSearchIcon(el: Element): boolean {
+  return [...el.querySelectorAll('svg')].some((svg) => svg.innerHTML === WEB_SEARCH_GLYPH);
 }
 
-/** Every <button> in the wrapper that carries the Bot glyph — the delegate rows. */
+/** Every <button> in the wrapper that carries the web search glyph — the delegate rows. */
 function delegateButtons(wrapper: VueWrapper): HTMLButtonElement[] {
-  return [...wrapper.element.querySelectorAll('button')].filter(hasBotIcon);
+  return [...wrapper.element.querySelectorAll('button')].filter(hasWebSearchIcon);
 }
 
 /** A row button is named by what it shows (its visible text) — never by a
@@ -217,7 +217,7 @@ function turnWith(working: boolean, toolCalls: ToolCalls, answer?: ConversationM
 }
 
 describe('live calls while the turn works', () => {
-  it('a delegate call on the running line is a row button named by its visible content, with the Bot icon, running or finished; opened, it shows "Open transcript", which opens that subagent\'s transcript', async () => {
+  it('a delegate call on the running line is a row button named by its visible content, with its type\'s icon, running or finished; opened, it shows "Open transcript", which opens that subagent\'s transcript', async () => {
     serve(31, 'web_search', { instructions: 'Find the museum opening hours' }, 'started', REF);
     serve(32, 'web_search', { instructions: 'Check the museum holiday hours' }, 'done', { channel: 'delegate:web_search', turn_id: 13 });
     serve(33, 'web_search', { instructions: 'Find the ticket prices' }, 'started', { channel: 'delegate:web_search', turn_id: 14 });
@@ -261,7 +261,7 @@ describe('live calls while the turn works', () => {
     expect(session.panelDelegate).toEqual({ channel: 'delegate:web_search', turn_id: 14 });
   });
 
-  it('a live call without a delegate is a row button that opens to what it did, with no Bot icon and no way into a transcript', async () => {
+  it('a live call without a delegate is a row button that opens to what it did, with no subagent icon and no way into a transcript', async () => {
     serve(40, 'calendar', { range: 'today' }, 'started', null);
     serve(41, 'weather', { city: 'Valletta' }, 'error', null);
     const wrapper = track(mount(ActivityLine, {
@@ -275,7 +275,7 @@ describe('live calls while the turn works', () => {
     const session = useSessionStore();
 
     // One row per call, in order: 40 by its summary, 41 — with no summary — by
-    // its name. Each is a button, without the Bot glyph.
+    // its name. Each is a button, without the subagent glyph.
     const rows = liveCalls(wrapper);
     expect(rows.map((r) => r.textContent?.trim())).toEqual(['todays agenda', 'weather']);
     expectNamedByContent(rows[0]!, 'todays agenda');
@@ -329,7 +329,7 @@ describe('live calls while the turn works', () => {
 });
 
 describe('settled step blocks', () => {
-  it('a delegate call is a row button with the Bot icon whose opened detail opens its transcript, beside a plain call\'s row button whose detail does not', async () => {
+  it('a delegate call is a row button with its type\'s icon whose opened detail opens its transcript, beside a plain call\'s row button whose detail does not', async () => {
     serveStoredCalls();
     // The settled exchange's work stands above its answer as a block: the
     // row that carried the calls, then the settled answer that closes it.
@@ -340,7 +340,7 @@ describe('settled step blocks', () => {
 
     const rows = [...(wrapper.element as Element).querySelectorAll<HTMLElement>('.call')];
     expect(rows).toHaveLength(2);
-    // One sentence per row, both buttons; only the delegate's carries the Bot.
+    // One sentence per row, both buttons; only the delegate's carries its type's icon.
     expectNamedByContent(rows[0]!, 'museum hours');
     expectNamedByContent(rows[1]!, 'todays agenda');
     expect(delegateButtons(wrapper)).toEqual([rows[0]]);

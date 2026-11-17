@@ -105,18 +105,17 @@ export interface ConversationMessage {
   /**
    * Who wrote this row, when it is not the user — a subtask transcript's own
    * input row carries 'Task from Chalie' or 'Message from Chalie' (on the
-   * `delegate:subtask` channel), and a subagent's reply landing on the chat
-   * carries 'Reply from <subagent> #N', e.g. 'Reply from web_search #2'.
-   * Absent/null on every other row.
+   * `delegate:subtask` channel). Absent/null on every other row, a subagent's
+   * reply included: that row carries `reply_from` instead.
    */
   speaker?: string | null;
   /**
    * On a subagent's reply landing on the chat: the subagent's tool and the
    * one-line summary of the call that started it (empty when the call carried
-   * none), so the reply can be named without the tool name or number. Absent
-   * on every other row, and on a reply whose call was purged.
+   * none) — plain data the interface words the reply's caption from. Both are
+   * null on a reply whose call was purged. Absent on every other row.
    */
-  reply_from?: { tool_name: string; summary: string } | null;
+  reply_from?: { tool_name: string | null; summary: string | null } | null;
   /**
    * Pre-synthesis outcome for a settled row, as of this fetch: 'ready' (audio
    * stored), 'failed' (gave up after its attempts), or absent/null for a row

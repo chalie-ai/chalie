@@ -34,10 +34,11 @@ class PlanTask(DTO):
 
 class ReplyFrom(DTO):
     """The subagent a late reply came from: its ``tool_name`` and the one-line
-    ``summary`` of the call that started it, empty when the call carried none."""
+    ``summary`` of the call that started it, empty when the call carried none.
+    Both ``None`` when the call was purged."""
 
-    tool_name: str
-    summary: str
+    tool_name: str | None
+    summary: str | None
 
 
 class Message(DTO):
@@ -71,13 +72,12 @@ class Message(DTO):
     ``plan`` carries, on a message's input row, the plan the agent kept while
     working it, tasks in number order; ``None`` on rows with no plan — a joined
     row never has one, its tasks join the plan of the message it joined.
-    ``speaker`` names who wrote an input row a tool call caused — ``Task from
-    Chalie`` / ``Message from Chalie`` on a subtask's own rows, ``Reply from
-    <tool> #N`` on a delegate's late reply to its caller; ``None`` on every
-    other row. ``reply_from`` names, on that late reply, the subagent it came
-    from by its tool and the summary of the call that started it, so the client
-    can name it without the tool name or number; ``None`` on every other row
-    and on a reply whose call was purged.
+    ``speaker`` names who wrote an input row a tool call caused on a subtask's
+    own channel — ``Task from Chalie`` / ``Message from Chalie``; ``None`` on
+    every other row. ``reply_from`` marks a delegate's late reply to its
+    caller, naming the subagent it came from by its tool and the summary of
+    the call that started it — the client words the label; ``None`` on every
+    other row.
     """
 
     id: str

@@ -6,7 +6,8 @@
  * so are `find_tools` and `find_skills`, which only load tools and playbooks
  * and mean nothing to the person.
  * Every tool that starts a subagent counts in one group, as agents spawned —
- * spawning while the step runs — whichever tool it is. A kind also names the
+ * spawning while the step runs — whichever tool it is; its own row keeps its
+ * subagent type's icon. A kind also names the
  * view its row opens to; a kind without one opens to its arguments.
  */
 import {
@@ -20,6 +21,7 @@ import {
 } from '@lucide/vue';
 import type { LucideIcon } from '@lucide/vue';
 import type { StepCall } from './turnSteps';
+import { subagentKind } from './delegateChannel';
 
 /** How an opened row shows its call (see toolDetail). */
 export type CallView = 'command' | 'edit' | 'write' | 'read' | 'browser' | 'browse' | 'delegate' | 'email';
@@ -55,9 +57,9 @@ const viewed = (view: CallView, kinds: CallKind[]): CallKind[] => kinds.map((k) 
 const showing = (k: CallKind, ...fields: string[]): CallKind => ({ ...k, fields });
 
 /** A tool that starts a subagent: each call is one more agent spawned, or
- *  spawning while the step runs. */
+ *  spawning while the step runs, under its subagent type's icon. */
 const agent = (key: string, view: CallView): CallKind => ({
-  ...kind(key, Bot, 'spawned 1 agent', 'spawned {n} agents'), group: 'agent', view,
+  ...kind(key, subagentKind(key.replace(/\..*/, '')).icon, 'spawned 1 agent', 'spawned {n} agents'), group: 'agent', view,
   running: { one: 'spawning 1 agent', many: 'spawning {n} agents' },
 });
 

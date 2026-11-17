@@ -387,7 +387,7 @@ function onOpenThread(): void {
         v-else-if="ar.role === 'user'"
         :message="(ar.row as MsgRow).message"
         :label="(ar.row as MsgRow).message.speaker ?? (channel ? 'Task from Chalie' : null)"
-        :collapsible="channel == null && (ar.row as MsgRow).message.speaker != null"
+        :collapsible="channel == null && (ar.row as MsgRow).message.reply_from != null"
         :data-dropped-on-cancel="droppedOnCancel.has((ar.row as MsgRow).message.id) || undefined"
       />
 

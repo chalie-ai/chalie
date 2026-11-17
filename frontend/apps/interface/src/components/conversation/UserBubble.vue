@@ -9,7 +9,7 @@ const props = withDefaults(defineProps<{
   message: ConversationMessage;
   /** Caption naming who wrote this row, when it isn't the user. */
   label?: string | null;
-  /** A subagent's reply — starts folded to its label, a click opens it, another folds it. */
+  /** A subagent's reply — starts folded to its caption, a click opens it, another folds it. */
   collapsible?: boolean;
 }>(), { label: null, collapsible: false });
 
@@ -21,11 +21,11 @@ const showText = computed(
 
 // A subagent's reply reads "Reply from <b>{name}</b> agent": the name is the
 // summary of the call that started it, or its type when the call had none —
-// never its tool name or number.
+// never its tool name or number. A reply whose call was purged names neither.
 const replyName = computed(() => {
   const origin = props.message.reply_from;
   if (!origin) return null;
-  return origin.summary.trim() || subagentKind(origin.tool_name).name;
+  return origin.summary?.trim() || (origin.tool_name ? subagentKind(origin.tool_name).name : null);
 });
 
 // A subagent's reply starts folded to its label; a click opens it, another folds it.
@@ -89,7 +89,7 @@ function openAttachment(att: ConversationAttachment): void {
     :data-user-text="message.content"
   >
     <button
-      v-if="label && collapsible"
+      v-if="collapsible"
       type="button"
       class="user-message__label user-message__label--toggle"
       :aria-expanded="open"
@@ -97,12 +97,9 @@ function openAttachment(att: ConversationAttachment): void {
     >
       <ChevronRight class="user-message__chevron" :size="14" />
       <span v-if="replyName">Reply from <b>{{ replyName }}</b> agent</span>
-      <template v-else>{{ label }}</template>
+      <span v-else>Reply from a subagent</span>
     </button>
-    <span v-else-if="label" class="user-message__label">
-      <template v-if="replyName">Reply from <b>{{ replyName }}</b> agent</template>
-      <template v-else>{{ label }}</template>
-    </span>
+    <span v-else-if="label" class="user-message__label">{{ label }}</span>
 
     <div
       v-if="showText"

@@ -144,18 +144,19 @@ def _apply_user_fields(msg: dict[str, object], r: dict[str, object], attachments
     attachments = attachments_by_id.get(cast("int", r['id']))
     if attachments:
         msg["attachments"] = attachments
-    # Who wrote a row a tool call caused — the same label the prompt shows
-    # ("Task from Chalie", "Reply from subtask #N"); absent on ordinary input.
+    # A late reply carries only which subagent it came from — its tool and the
+    # summary of the call that started it — and the interface words it; the
+    # label the prompt shows ("Reply from subtask #N") is the model's alone.
+    # Any other row a tool call caused carries that label ("Task from
+    # Chalie"); ordinary input carries neither.
     row = Transcript(**r)
-    label = speaker(row)
-    if label is not None:
-        msg["speaker"] = label
-    # A late reply also names the subagent it came from — its tool and the
-    # summary of the call that started it — so the interface can say which
-    # subagent replied without showing the tool name or number.
     origin = reply_from(row)
     if origin is not None:
         msg["reply_from"] = origin
+        return
+    label = speaker(row)
+    if label is not None:
+        msg["speaker"] = label
 
 
 def _tool_call_chips(
