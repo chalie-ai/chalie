@@ -7,7 +7,7 @@
  * data. Reactive so Vue components re-render off it.
  */
 import { reactive } from 'vue';
-import type { DelegateRef } from '@chalie/shared';
+import type { DelegateRef, TurnExecutionState } from '@chalie/shared';
 import { isDelegateChannel } from './delegateChannel';
 
 // ── Public surface types ─────────────────────────────────────────────────────
@@ -132,35 +132,39 @@ export function clearAll(type: string): void {
 // ── Delegate turn run state ─────────────────────────────────────────────────
 
 /**
- * A delegate turn's live run state, keyed `${channel}#${turnId}` — from each
- * delegate turn's own execution frames: true while working, false once ended.
- * An ended turn can work again: a follow-up message to a subtask reopens the
- * same turn, and its frames mark it working. `undefined` means no frame has
- * been seen yet, so a REST read's `working` decides instead.
+ * Each delegate turn's run state as its own latest execution frame gave it,
+ * keyed `${channel}#${turnId}`. An ended turn can work again: a follow-up
+ * message to a subtask reopens the same turn, and its frames mark it working.
  */
-const _delegateRunning = reactive(new Map<string, boolean>());
+const _delegateStates = reactive(new Map<string, TurnExecutionState>());
 
 /** Record a delegate turn's run state from its own execution frame. */
-export function setDelegateRunning(channel: string, turnId: number, running: boolean): void {
-  _delegateRunning.set(`${channel}#${turnId}`, running);
+export function setDelegateState(channel: string, turnId: number, state: TurnExecutionState): void {
+  _delegateStates.set(`${channel}#${turnId}`, state);
 }
 
-/** A delegate turn's live run state — `undefined` when no frame has been
- *  seen for it. */
-export function delegateRunning(channel: string, turnId: number): boolean | undefined {
-  return _delegateRunning.get(`${channel}#${turnId}`);
+/** How the delegate turn `delegate` names stands — the one status the
+ *  running-subagents ring and a call's mark both read: its own execution
+ *  frames once one was seen, else the REST read its ref came from. A live
+ *  frame's ref carries no run state; its subagent has just started. */
+export function delegateState(delegate: DelegateRef): TurnExecutionState {
+  const seen = _delegateStates.get(`${delegate.channel}#${delegate.turn_id}`);
+  if (seen) return seen;
+  if (delegate.working ?? true) return 'working';
+  if (delegate.crashed) return 'crashed';
+  return delegate.cancelled ? 'cancelled' : 'completed';
 }
 
 /** Tear down every delegate feed. A delegate's pills settle only on its own
  *  terminal frame, which a dropped socket loses for good. The run map loses
- *  its still-running entries the same way — the session re-reads every turn
- *  that showed a running subagent, so the REST read's `working` decides
- *  again; ended entries stay. */
+ *  its still-working entries the same way — the session re-reads every turn
+ *  that showed a running subagent, so the REST read decides again; ended
+ *  entries stay. */
 export function clearDelegateFeeds(): void {
   for (const feed of _feeds.keys()) {
     if (isDelegateChannel(feed)) clearAll(feed);
   }
-  for (const [key, running] of _delegateRunning) {
-    if (running) _delegateRunning.delete(key);
+  for (const [key, state] of _delegateStates) {
+    if (state === 'working') _delegateStates.delete(key);
   }
 }

@@ -189,12 +189,18 @@ def test_a_browsing_run_lists_the_pages_it_went_through_in_order_while_it_runs_a
     assert reply["content"] == "Visited every page."
     [fetching] = mid_run
     assert (fetching["state"], fetching["result"], fetching["delegate"]) == (
-        "done", call["result"], {"channel": _RUN_CHANNEL, "turn_id": n, "working": True},
+        "done", call["result"], {
+            "channel": _RUN_CHANNEL, "turn_id": n,
+            "working": True, "crashed": False, "cancelled": False,
+        },
     )
     assert fetching["pages"] == [_page(count, "Visit 1")]
     finished = _detail(client, call["id"])
     assert (finished["state"], finished["result"], finished["delegate"]) == (
-        "done", call["result"], {"channel": _RUN_CHANNEL, "turn_id": n, "working": False},
+        "done", call["result"], {
+            "channel": _RUN_CHANNEL, "turn_id": n,
+            "working": False, "crashed": False, "cancelled": False,
+        },
     )
     assert finished["pages"] == [_page(count, "Visit 1"), _page(a, "Page A"), _page(b, "Page B"), _page(a, "Page A")]
     assert [r.getMessage() for r in caplog.records if r.name == _SERIALIZER_LOG] == []

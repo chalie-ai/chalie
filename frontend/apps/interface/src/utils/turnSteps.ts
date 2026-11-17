@@ -5,7 +5,9 @@
  * steps that said nothing reads as one such row (see `mergeWork`).
  */
 import { reactive } from 'vue';
+import type { TurnExecutionState } from '@chalie/shared';
 import type { ConversationMessage, ToolCallChip } from '../api/conversation';
+import { delegateState } from './liveActTrail';
 import { callKind, type CallKind } from './toolCatalog';
 import { formatElapsed } from './time';
 
@@ -16,6 +18,22 @@ export type StepCall = Pick<ToolCallChip, 'id' | 'tool_name' | 'params' | 'summa
 export interface StepWork {
   thinking?: ConversationMessage['thinking'];
   tool_calls?: StepCall[] | null;
+}
+
+const SUBAGENT_MARK: Record<TurnExecutionState, StepCall['state']> = {
+  working: 'started',
+  completed: 'done',
+  crashed: 'error',
+  cancelled: 'error',
+};
+
+/** What a call's status mark reads: its own state, except on a caller whose
+ *  subagents reply late (`repliesLate`, the person's chat), where a call that
+ *  returned after starting a subagent reads as that subagent stands — running
+ *  while it works, failed once it crashed or was stopped. A caller that waits
+ *  already got its subagent's outcome as the call's own. */
+export function callMark(call: StepCall, repliesLate: boolean): StepCall['state'] {
+  return repliesLate && call.state === 'done' && call.delegate ? SUBAGENT_MARK[delegateState(call.delegate)] : call.state;
 }
 
 /** A call's one-line label: the summary the backend wrote, else the tool's name. */
@@ -79,8 +97,9 @@ const LIST = new Intl.ListFormat('en-GB', { type: 'conjunction' });
 
 /** What a step's shown calls did: one phrase per kind, in the order each kind
  *  first ran. A kind with a target counts the distinct values it acted on; a
- *  call without one counts on its own. Past three kinds, the rest are "n more". */
-export function summarizeCalls(shown: readonly StepCall[]): CallsSummary {
+ *  call without one counts on its own. Past three kinds, the rest are "n more".
+ *  The failed count is the calls whose mark reads failed (see `callMark`). */
+export function summarizeCalls(shown: readonly StepCall[], repliesLate: boolean): CallsSummary {
   const counts = new Map<string, KindCount>();
   for (const call of shown) {
     const kind = callKind(call);
@@ -93,7 +112,8 @@ export function summarizeCalls(shown: readonly StepCall[]): CallsSummary {
   const phrases = [...counts.values()].map((c) => countPhrase(c.kind, c.targets.size + c.untargeted));
   const listed = phrases.length > 3 ? [...phrases.slice(0, 3), `${phrases.length - 3} more`] : phrases;
   const text = LIST.format(listed);
-  return { text: text.charAt(0).toUpperCase() + text.slice(1), failed: shown.filter((c) => c.state === 'error').length };
+  const failed = shown.filter((c) => callMark(c, repliesLate) === 'error').length;
+  return { text: text.charAt(0).toUpperCase() + text.slice(1), failed };
 }
 
 function targetsOf(kind: CallKind, call: StepCall): string[] {

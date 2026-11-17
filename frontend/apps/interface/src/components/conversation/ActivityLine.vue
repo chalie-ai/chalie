@@ -29,8 +29,10 @@ const props = withDefaults(
     undoable?: boolean;
     /** The permission ask this turn is parked on, if any. */
     ask?: PermissionRequest | null;
+    /** The caller's subagents reply late (see `callMark`). */
+    repliesLate?: boolean;
   }>(),
-  { pills: () => [], work: null, undoable: true, ask: null },
+  { pills: () => [], work: null, undoable: true, ask: null, repliesLate: false },
 );
 
 const session = useSessionStore();
@@ -91,6 +93,7 @@ async function onStop(): Promise<void> {
     class="activity"
     :work="work"
     :label="ask && (ask.summary || actionLabel(ask.action_id))"
+    :replies-late="repliesLate"
     live
   >
     <span ref="rootRef" class="activity__controls">

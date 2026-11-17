@@ -53,6 +53,7 @@ from tests._delegates import (
     ChannelProvider,
     Entry,
     Held,
+    as_sent,
     begin,
     block,
     calls,
@@ -147,11 +148,18 @@ def test_reply_after_the_caller_finished_opens_a_new_user_turn(
     assert execution(_SUBTASK, n).state == TurnExecution.COMPLETED
     assert execution(_USER, reply["turn_id"]).state == TurnExecution.COMPLETED
     assert f"Reply from subtask #{n}" in provider.texts("chat")[-1]
+    # The chat's call returned at once with the subtask's number and the label
+    # its answer arrives under — never the answer itself.
+    started = cast("str", calls_of(db, "subtask")[0]["result"])
+    assert f"Subtask #{n} started." in started and f'"Reply from subtask #{n}"' in started
+    assert _ANSWER not in started
 
     opener = messages(block(client, f"/api/threads/{reply['turn_id']}"))[0]
     assert (opener["role"], opener["content"], opener["speaker"]) == ("user", _ANSWER, f"Reply from subtask #{n}")
     parent_block = block(client, f"/api/threads/{parent.turn_id}")
-    assert chip(parent_block, "subtask")["delegate"] == {"channel": _SUBTASK, "turn_id": n, "working": False}
+    assert chip(parent_block, "subtask")["delegate"] == {
+        "channel": _SUBTASK, "turn_id": n, "working": False, "crashed": False, "cancelled": False,
+    }
     task = messages(block(client, f"/api/threads/{n}?channel={_SUBTASK}"))[0]
     assert (task["content"], task["speaker"]) == (_TASK, "Task from Chalie")
 
@@ -314,9 +322,13 @@ def test_stopping_the_caller_stops_its_subtask_without_a_reply(db: sqlite3.Conne
     assert replies(db, call_id) == []
 
 
-def test_a_stopped_subtask_tells_its_caller(db: sqlite3.Connection) -> None:
+def test_a_stopped_subtask_tells_its_caller(
+    authed_client: tuple[FlaskClient, sqlite3.Connection, object], db: sqlite3.Connection,
+) -> None:
     """A subtask stopped on its own — its caller still fine — sends a notice
-    that it was stopped before it finished."""
+    that it was stopped before it finished, and the caller's history shows its
+    call's subtask as stopped, not crashed."""
+    client, _db, _store = authed_client
     held = Held(text(_ANSWER))
     provider = ChannelProvider(chat=[_START, text("Started it."), text("Noted.")], subtask=[held])
 
@@ -336,11 +348,18 @@ def test_a_stopped_subtask_tells_its_caller(db: sqlite3.Connection) -> None:
     [reply] = replies(db, call_id)
     assert reply["content"] == "This subtask was stopped before it finished."
     assert reply["turn_id"] != parent.turn_id
+    assert chip(block(client, f"/api/threads/{parent.turn_id}"), "subtask")["delegate"] == {
+        "channel": _SUBTASK, "turn_id": n, "working": False, "crashed": False, "cancelled": True,
+    }
 
 
-def test_a_crashed_subtask_tells_its_caller_why(db: sqlite3.Connection) -> None:
+def test_a_crashed_subtask_tells_its_caller_why(
+    authed_client: tuple[FlaskClient, sqlite3.Connection, object], db: sqlite3.Connection,
+) -> None:
     """A subtask whose provider fails on every attempt crashes, and its caller
-    is told so with the reason the turn ended on."""
+    is told so with the reason the turn ended on; the caller's history shows
+    its call's subtask as crashed, not stopped."""
+    client, _db, _store = authed_client
     boom = RuntimeError("boom")
     first = Held(boom)
     script: list[Entry] = [first, *(raises(boom) for _ in range(_MAX_PROVIDER_ATTEMPTS - 1))]
@@ -356,10 +375,14 @@ def test_a_crashed_subtask_tells_its_caller_why(db: sqlite3.Connection) -> None:
     assert provider.unused() == {}
     assert len(provider.texts("subtask")) == _MAX_PROVIDER_ATTEMPTS
     call_id = _first_call(db)
-    subtask = execution(_SUBTASK, child_turn(db, _SUBTASK, call_id))
+    n = child_turn(db, _SUBTASK, call_id)
+    subtask = execution(_SUBTASK, n)
     assert (subtask.state, subtask.stop_reason) == (TurnExecution.CRASHED, _EXHAUSTED)
     [reply] = replies(db, call_id)
     assert reply["content"] == f"This subtask crashed: {_EXHAUSTED}"
+    assert chip(block(client, f"/api/threads/{parent.turn_id}"), "subtask")["delegate"] == {
+        "channel": _SUBTASK, "turn_id": n, "working": False, "crashed": True, "cancelled": False,
+    }
 
 
 def test_the_memory_step_after_a_subtask_answers_no_one(
@@ -448,22 +471,44 @@ def test_boot_tells_a_cut_off_subtask_s_caller_once_and_a_cut_off_memory_step_no
 
 
 def test_a_scheduled_task_waits_for_its_subtask_and_ends_once(db: sqlite3.Connection) -> None:
-    """A scheduled task can start a subtask, and it waits for it: the call
-    ends with the subtask's answer under its number, the schedule's model
-    reads that answer on its next step, nothing is sent back to the schedule's
-    thread or to the user's conversation, and the schedule's turn ends once —
-    one execution, one finished frame, after the subtask's. The user's
-    conversation does not own that subtask, so its message to it, sent while
-    the schedule waits, is refused as not found and never reaches it."""
+    """A scheduled task can start a subtask, and it waits for it. The
+    ``subtask`` tool its turn is sent can only start one and says the call
+    waits, while the chat is still sent the follow-up action and told the
+    answer arrives later. The start ends with the subtask's answer and nothing
+    in front of it, the schedule's model reads that answer on its next step,
+    nothing is sent back to the schedule's thread or to the user's
+    conversation, and the schedule's turn ends once — one execution, one
+    finished frame, after the subtask's.
+
+    Nothing can be sent to that subtask: the schedule's own ``message`` call,
+    naming the subtask and the message, is refused whole for parameters it was
+    never shown, and a bare ``message`` is refused too; neither reaches the
+    subtask or claims a reply will come. The user's conversation does not own
+    it, so its message, sent while the schedule waits, is refused as not found
+    and never reaches it either."""
     held = Held(text(_ANSWER))
 
-    def message_it() -> ProviderResponse:
-        started = TurnExecution.filter("channel", _SUBTASK).first()
-        assert started is not None
-        return calls(tool("subtask", action="message", subtask=started.turn_id, message="also add 7"))
+    def started() -> int:
+        found = TurnExecution.filter("channel", _SUBTASK).first()
+        assert found is not None
+        return found.turn_id
+
+    def user_message() -> ProviderResponse:
+        return calls(tool("subtask", action="message", subtask=started(), message="also add 7"))
+
+    def schedule_message() -> ProviderResponse:
+        return calls(tool("subtask", action="message", subtask=started(), message="also add 11"))
 
     provider = ChannelProvider(
-        chat=[_START, message_it, text("Told it."), text("Status: the primes are listed.")],
+        chat=[
+            calls(tool("find_tools", query=["subtask"])),
+            _START,
+            user_message,
+            text("Told it."),
+            schedule_message,
+            calls(tool("subtask", action="message")),
+            text("Status: the primes are listed."),
+        ],
         subtask=[held],
     )
 
@@ -476,12 +521,29 @@ def test_a_scheduled_task_waits_for_its_subtask_and_ends_once(db: sqlite3.Connec
 
     assert held.opened
     assert provider.unused() == {}
-    start, refused = calls_of(db, "subtask")
+
+    # What each turn was sent, read off its own requests.
+    before_discovery, *sent = provider.definitions("chat", "subtask", "write a status update")
+    assert before_discovery is None
+    assert len(sent) == 4
+    for description, actions, params in map(as_sent, sent):
+        assert actions == ["start"]
+        assert params == {"action", "instructions", "act_summary"}
+        assert "waits" in description
+        assert "Reply from" not in description
+    for description, actions, params in map(
+        as_sent, provider.definitions("chat", "subtask", "tell the schedule's subtask"),
+    ):
+        assert actions == ["start", "message"]
+        assert {"subtask", "message"} <= params
+        assert "Reply from subtask #N" in description
+
+    start, user_msg, named, bare = calls_of(db, "subtask")
     call_id = cast("int", start["id"])
     n = child_turn(db, _SUBTASK, call_id)
     assert start["state"] == ToolCall.DONE, start["result"]
-    assert f"Subtask #{n} answered:\n\n{_ANSWER}" in start["result"]
-    assert _ANSWER in provider.texts("chat")[-1]
+    assert start["result"].split("\n")[1:-1] == [_ANSWER]
+    assert _ANSWER in provider.texts("chat")[-3]
     assert replies(db, call_id, _SCHEDULE) == []
     assert replies(db, call_id) == []
 
@@ -499,9 +561,22 @@ def test_a_scheduled_task_waits_for_its_subtask_and_ends_once(db: sqlite3.Connec
     subtask_ended = execution(_SUBTASK, n).ended_at
     assert subtask_ended is not None and subtask_ended <= executions[0]["ended_at"]
 
-    assert refused["state"] == ToolCall.ERROR, refused["result"]
-    assert "code=subtask-not-found" in refused["result"]
-    reached = db.execute(
-        "SELECT COUNT(*) FROM transcript WHERE channel = ? AND tool_call_id = ?", (_SUBTASK, str(refused["id"])),
-    ).fetchone()[0]
-    assert reached == 0
+    assert user_msg["state"] == ToolCall.ERROR, user_msg["result"]
+    assert "code=subtask-not-found" in user_msg["result"]
+    assert named["state"] == ToolCall.ERROR, named["result"]
+    assert named["result"].split("\n")[:3] == [
+        "[subtask(status=error, code=unknown-params)]",
+        "Unknown parameter(s): subtask, message. Nothing was done.",
+        "valid: action | instructions",
+    ]
+    assert bare["state"] == ToolCall.ERROR, bare["result"]
+    for refused in (user_msg, named, bare):
+        assert "will arrive" not in refused["result"]
+        assert "Reply from" not in refused["result"]
+        reached = db.execute(
+            "SELECT COUNT(*) FROM transcript WHERE channel = ? AND tool_call_id = ?",
+            (_SUBTASK, str(refused["id"])),
+        ).fetchone()[0]
+        assert reached == 0
+    assert len(provider.texts("subtask")) == 1
+    assert replies(db, cast("int", named["id"]), _SCHEDULE) == []

@@ -14,13 +14,16 @@ const props = defineProps<{
   /** Overrides the head — the ask a running step is parked on. */
   label?: string | null;
   live?: boolean;
+  /** The caller's subagents reply late (the person's chat): a subagent
+   *  call's mark follows its subagent (see `callMark`). */
+  repliesLate?: boolean;
 }>();
 
 const expanded = ref(false);
 const traces = computed(() => props.work.thinking?.traces ?? []);
 const head = computed(() => props.label || thought(props.work.thinking) || (props.live ? 'Thinking…' : ''));
 const calls = computed(() => visibleCalls(props.work.tool_calls));
-const summary = computed(() => summarizeCalls(calls.value));
+const summary = computed(() => summarizeCalls(calls.value, props.repliesLate));
 const open = computed(() => callsOpen(calls.value));
 </script>
 
@@ -64,7 +67,7 @@ const open = computed(() => callsOpen(calls.value));
     </div>
     <div v-if="calls.length" class="trace-body" :class="{ 'trace-body--open': open }" :inert="!open">
       <div class="trace-body__inner">
-        <ToolCallList :calls="calls" />
+        <ToolCallList :calls="calls" :replies-late="repliesLate" />
       </div>
     </div>
   </div>

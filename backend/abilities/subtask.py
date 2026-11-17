@@ -6,17 +6,20 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""SubtaskAbility — start a subtask: a background turn with a clean context.
+"""SubtaskAbility — start a subtask: a turn with a clean context.
 
-A subtask is a background turn one level deep: it runs on the caller's own
-settings (the user or scheduled turn's config, re-routed onto the subtask
+A subtask is a turn one level deep: it runs on the caller's own settings (the
+user, scheduled or outside agent turn's config, re-routed onto the subtask
 channel) with its own thread and none of the caller's history. ``run()``
 opens the child through :meth:`DelegateAbility.spawn`; who waits for it is
 settled by the caller's kind, as for every delegate: the person's chat gets
 the subtask's number at once and keeps working, the answer arriving later as
-a new message labelled "Reply from subtask #N"; a scheduled task waits and
-gets the answer as the call's result. Only a user or scheduled turn can start
-one, so neither a subtask nor a delegate's child can.
+a new message labelled "Reply from subtask #N", and can send it a follow-up;
+a scheduled task or an outside agent waits and gets the bare answer as the
+call's result, so the tool it is shown can only start one
+(:meth:`SubtaskAbility._caller_waits`). Only the chat, a scheduled task or an
+outside agent's own turn can start one, so neither a subtask nor any other
+subagent's turn can.
 """
 
 from __future__ import annotations
@@ -25,7 +28,12 @@ from typing import TYPE_CHECKING, ClassVar, cast
 
 from abilities._delegate import DelegateAbility, replies_late, reply_label
 from abilities._result import ToolResult
-from configs.channels import ScheduledSubtaskConfig, UserSubtaskConfig
+from configs.channels import (
+    EAMPConfig,
+    ExternalAgentSubtaskConfig,
+    ScheduledSubtaskConfig,
+    UserSubtaskConfig,
+)
 from configs.enums.ability_category import AbilityCategory
 from configs.enums.channels import Channel
 from configs.enums.config_type import ConfigTypeEnum
@@ -41,8 +49,18 @@ from models.transcript import Transcript
 
 if TYPE_CHECKING:
     from controllers.message_processor import MessageProcessor
+    from services.processor_config import ProcessorConfig
 
 _DO_IT_YOURSELF = "Do the work yourself in this turn."
+
+_INSTRUCTIONS: dict[str, object] = {
+    "type": "string",
+    "description": (
+        "start: the whole task, written to stand alone — the subtask sees "
+        "none of this conversation, so include every input, file "
+        "path, constraint and expected output it needs."
+    ),
+}
 
 
 class SubtaskAbility(DelegateAbility[SubtaskParamsBag]):
@@ -50,7 +68,9 @@ class SubtaskAbility(DelegateAbility[SubtaskParamsBag]):
     # ``action`` and its params before run() — an unknown action is rejected
     # with ``valid=('start', 'message')`` and a missing/blank ``instructions``
     # or ``message`` with ``code=missing-params``, so run() only ever sees a
-    # populated leaf.
+    # populated leaf. A caller that waits is shown no ``subtask`` or
+    # ``message`` parameter, so the unknown-parameter check, which runs first,
+    # refuses its ``message`` call: only the chat reaches action "message".
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
         "start": (Keys.instructions,),
         "message": (Keys.subtask, Keys.message),
@@ -70,14 +90,7 @@ class SubtaskAbility(DelegateAbility[SubtaskParamsBag]):
         "type": "object",
         "properties": {
             Keys.action: {"type": "string", "enum": ["start", "message"]},
-            Keys.instructions: {
-                "type": "string",
-                "description": (
-                    "start: the whole task, written to stand alone — the subtask sees "
-                    "none of this conversation, so include every input, file "
-                    "path, constraint and expected output it needs."
-                ),
-            },
+            Keys.instructions: _INSTRUCTIONS,
             Keys.subtask: {
                 "type": "integer",
                 "minimum": 1,
@@ -91,7 +104,32 @@ class SubtaskAbility(DelegateAbility[SubtaskParamsBag]):
         "required": [Keys.action],
     }
 
+    _START_ONLY_PARAMETERS: ClassVar[dict[str, object]] = {
+        "type": "object",
+        "properties": {
+            Keys.action: {"type": "string", "enum": ["start"]},
+            Keys.instructions: _INSTRUCTIONS,
+        },
+        "required": [Keys.action],
+    }
+
+    def _caller_waits(self) -> bool:
+        """Whether this call's caller waits for the subtask's answer — the one
+        place the tool's text and parameters, and how a start returns, are
+        chosen. Settled by the caller's kind alone (:func:`replies_late`), so
+        it holds for the whole turn. The registry's unbound template (no
+        caller) reads as the chat."""
+        return self.mp is not None and not replies_late(self.mp.config.type())
+
     def get_summary(self) -> str:
+        if self._caller_waits():
+            return (
+                "Start a subtask: a turn with your own tools, settings and "
+                "permissions but a clean context — it sees none of this "
+                "conversation, so give it the whole task. The call waits for "
+                "it and returns its answer. Use it for longer work to keep "
+                "your context clean."
+            )
         return (
             "Start a subtask: a background turn with your own tools, settings "
             "and permissions but a clean context — it sees none of this "
@@ -118,35 +156,30 @@ class SubtaskAbility(DelegateAbility[SubtaskParamsBag]):
         return "Use this for longer work to keep your context clean"
 
     def get_parameters(self) -> dict[str, object]:
-        return self._PARAMETERS
+        return self._START_ONLY_PARAMETERS if self._caller_waits() else self._PARAMETERS
 
     def run(self, params: SubtaskParamsBag) -> ToolResult:
         mp = self.mp
         if mp is None:
             raise RuntimeError(f"{self.NAME}.run() dispatched without a bound MessageProcessor")
-        # The kind gate holds for both actions: only a user or scheduled turn
-        # may start a subtask or message one, so neither a subtask nor a
-        # delegate's child can.
-        kind = mp.config.type()
-        if kind not in (ConfigTypeEnum.USER, ConfigTypeEnum.SCHEDULED):
+        # The caller gate holds for both actions: neither a subtask nor any
+        # other subagent's turn may start a subtask or message one.
+        config = self._subtask_config(mp.config)
+        if config is None:
             return ToolResult.err(
                 "Only the user's conversation or a scheduled task can start a subtask; "
                 "a subtask or a delegate cannot.",
                 code="subtask-nested",
                 hint=_DO_IT_YOURSELF,
             )
-        config = ScheduledSubtaskConfig() if kind == ConfigTypeEnum.SCHEDULED else UserSubtaskConfig()
         if isinstance(params, SubtaskStartParams):
             child = self.spawn(config, params.instructions)
-            if replies_late(kind):
-                return self.started(child, self.NAME.capitalize())
-            outcome = self.wait_for(child, hint=_DO_IT_YOURSELF)
-            if outcome.status != "success":
-                return outcome
-            return ToolResult.ok(f"Subtask #{child.turn_id} answered:\n\n{outcome.body}")
+            if self._caller_waits():
+                return self.wait_for(child, hint=_DO_IT_YOURSELF)
+            return self.started(child, self.NAME.capitalize())
         if isinstance(params, SubtaskMessageParams):
             n = params.subtask
-            if not self._subtask_is_ours(mp, kind, n):
+            if not self._subtask_is_ours(mp, n):
                 return ToolResult.err(
                     f"No subtask #{n} belongs to this conversation.",
                     code="subtask-not-found",
@@ -171,14 +204,31 @@ class SubtaskAbility(DelegateAbility[SubtaskParamsBag]):
         raise TypeError(f"{self.NAME}.run() got an unrouted bag: {type(params).__name__}")
 
     @staticmethod
-    def _subtask_is_ours(mp: "MessageProcessor", kind: ConfigTypeEnum | None, n: int) -> bool:
+    def _subtask_config(caller: "ProcessorConfig") -> "ProcessorConfig | None":
+        """The config a subtask of ``caller`` runs on: the caller's own config
+        re-routed onto the subtask channel — or ``None`` when ``caller`` may
+        not start one. The chat and a scheduled task are told by their routing
+        type; an outside agent's own turn has none, so it is told by its exact
+        class — its subtask's config subclasses it, and every other subagent's
+        turn runs on a config of its own."""
+        kind = caller.type()
+        if kind == ConfigTypeEnum.USER:
+            return UserSubtaskConfig()
+        if kind == ConfigTypeEnum.SCHEDULED:
+            return ScheduledSubtaskConfig()
+        if type(caller) is EAMPConfig:
+            return ExternalAgentSubtaskConfig(caller._agent_name, caller._project)
+        return None
+
+    @staticmethod
+    def _subtask_is_ours(mp: "MessageProcessor", n: int) -> bool:
         """Whether subtask ``n`` belongs to this conversation — the ONE address
         check action "message" runs before sending: the subtask's first input
         row carries the caller's ``tool_calls`` id as decimal text, which walks
-        back to the caller's row; that row must sit on this channel, and — the
-        schedule channel is shared by every schedule — on it, on this turn.
-        Any miss (no rows, no link, no call, no caller, wrong owner) is the
-        same "not ours" answer."""
+        back to the caller's row; that row must sit on this channel. Only the
+        chat reaches action "message" (a caller that waits is never shown
+        it). Any miss (no rows, no link, no call, no caller, wrong owner) is
+        the same "not ours" answer."""
         ids = Transcript.ids_for_turn(Channel.DELEGATE_SUBTASK.value, n)
         if not ids:
             return False
@@ -191,9 +241,7 @@ class SubtaskAbility(DelegateAbility[SubtaskParamsBag]):
         caller = Transcript.get(call.transcript_id)
         if caller is None or caller.turn_id is None:
             return False
-        if caller.channel != mp.channel:
-            return False
-        return kind != ConfigTypeEnum.SCHEDULED or caller.turn_id == mp.turn_id
+        return caller.channel == mp.channel
 
 
 def speaker(row: Transcript) -> str | None:

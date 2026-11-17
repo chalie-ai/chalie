@@ -5,7 +5,7 @@
 <script setup lang="ts">
 import { computed, shallowRef, watch } from 'vue';
 import { delegatePillAttrs } from '../../composables/useDelegatePill';
-import { delegateRunning } from '../../utils/liveActTrail';
+import { delegateState } from '../../utils/liveActTrail';
 import { lastDetail, readDetail } from '../../utils/toolCallDetails';
 import { toolDetailView, type DiffLine } from '../../utils/toolDetail';
 import type { StepCall } from '../../utils/turnSteps';
@@ -19,12 +19,12 @@ const failed = shallowRef(false);
 const view = computed(() => (detail.value ? toolDetailView(detail.value) : null));
 const delegate = computed(() => detail.value?.delegate ?? props.call.delegate);
 /** Whether the subagent this call started still runs, as the running-subagents
- *  ring decides it: its live frames when seen, else the call's chip as the
+ *  ring and the call's mark read it (`delegateState`): from the call as the
  *  turn was last drawn — which a reconnect re-reads after a dropped socket
- *  loses the frames — else this call's own newest read. */
+ *  loses the frames — else from this call's own newest read. */
 const subagentRunning = computed(() => {
-  const d = delegate.value;
-  return d ? (delegateRunning(d.channel, d.turn_id) ?? props.call.delegate?.working ?? d.working) : undefined;
+  const d = props.call.delegate ?? detail.value?.delegate;
+  return d ? delegateState(d) === 'working' : undefined;
 });
 
 watch(

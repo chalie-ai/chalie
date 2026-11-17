@@ -38,6 +38,7 @@ from configs.enums.channels import Channel
 from contracts.params.delegate_params_bag import DelegateParamsBag
 from controllers.message_processor import MessageProcessor
 from mcp_server.server import create_mcp_server
+from models.provider_response import ProviderResponse
 from models.turn_execution import TurnExecution
 from services.processor_config import ProcessorConfig
 from tests._delegates import (
@@ -45,6 +46,8 @@ from tests._delegates import (
     ChannelProvider,
     Entry,
     Held,
+    Request,
+    as_sent,
     assistant_texts,
     calls,
     calls_of,
@@ -69,6 +72,8 @@ _ERROR = re.compile(r"\A\[[\w.]+\(status=error, code=([\w-]+)")
 _HINT_LINE = re.compile(r"^hint: \S", re.MULTILINE)
 _BLOCK_OPENER = "[follow_up_instruction]"
 _ANSWER = "Paris is the capital of France."
+_AGENT = "atlas-reviewer"
+_PROJECT = "lighthouse-migration"
 
 
 def _error_code(result: str) -> str | None:
@@ -100,6 +105,40 @@ def _the_one_execution(db: sqlite3.Connection, channel: str, turn_id: int) -> st
         "SELECT state FROM turn_executions WHERE channel = ? AND turn_id = ?", (channel, turn_id),
     ).fetchall()
     return cast("str", row["state"])
+
+
+def _talk(message: str, *, loop_in_human: bool = False) -> list[str]:
+    """What the outside agent :data:`_AGENT` gets back from one
+    ``talk_to_chalie`` call about :data:`_PROJECT`."""
+    result = asyncio.run(create_mcp_server().call_tool("talk_to_chalie", {
+        "message": message, "agent_name": _AGENT, "project_or_task_name": _PROJECT,
+        "loop_in_human": loop_in_human,
+    }))
+    assert isinstance(result, CallToolResult) and not result.is_error
+    return [block.text for block in result.content if isinstance(block, TextContent)]
+
+
+def _blocked(db: sqlite3.Connection) -> list[tuple[str, str, str]]:
+    """Every call the permission gate refused: its permission, policy channel and reason."""
+    return [
+        (r["action_id"], r["context"], r["reason"])
+        for r in db.execute("SELECT action_id, context, reason FROM policy_blocked_log ORDER BY id")
+    ]
+
+
+def _reached(db: sqlite3.Connection, channel: str, call_id: int) -> int:
+    """How many rows on *channel* carry the call *call_id* — none when the call
+    never opened a turn there."""
+    return cast("int", db.execute(
+        "SELECT COUNT(*) FROM transcript WHERE channel = ? AND tool_call_id = ?", (channel, str(call_id)),
+    ).fetchone()[0])
+
+
+def _executions(db: sqlite3.Connection, channel: str) -> int:
+    """How many turns ever opened on *channel*."""
+    return cast("int", db.execute(
+        "SELECT COUNT(*) FROM turn_executions WHERE channel = ?", (channel,),
+    ).fetchone()[0])
 
 
 def _run_waiting(provider: ChannelProvider, config: ProcessorConfig, turn_id: int) -> MessageProcessor:
@@ -241,16 +280,12 @@ def test_an_external_agent_waits_for_its_subagent_and_reads_the_answer_in_the_ca
     authed_client: tuple[FlaskClient, sqlite3.Connection, object],
 ) -> None:
     """An external agent, through ``talk_to_chalie``, asks something Chalie
-    answers with ``web_search`` (which the person allowed for external
-    agents). The call waits for the search: its result is the answer with the
+    answers with ``web_search``, which a fresh install allows external agents.
+    The call waits for the search: its result is the answer with the
     third-party-content warning, Chalie's model reads it on its next step, and
     what the agent gets back is Chalie's answer built on it. Nothing is sent
     back as a reply — not to the agent's channel, not to the person's chat."""
-    client, db, _store = authed_client
-    allow = client.post(
-        "/api/policies/-1", json={"channel": "external_agent", "permission": "web_search", "setting": "allow"},
-    )
-    assert allow.status_code == 204, allow.get_data(as_text=True)
+    _client, db, _store = authed_client
     channel = Channel.for_external_agent("reviewer")
     provider = ChannelProvider(
         chat=[calls(_delegate_call("web_search")), text("Paris.")],
@@ -340,3 +375,129 @@ def test_a_subagent_with_nothing_to_say_comes_back_to_the_scheduled_task_as_no_a
     assert replies(db, call["id"], ScheduledConfig().channel) == []
     assert _the_one_execution(db, ScheduledConfig().channel, _SCHEDULE_ID) == TurnExecution.COMPLETED
     assert assistant_texts(db, ScheduledConfig().channel, _SCHEDULE_ID)[-1] == "Done."
+
+
+def test_an_outside_agents_subtask_runs_as_that_agent_with_a_clean_context_and_answers_the_call(
+    db: sqlite3.Connection,
+) -> None:
+    """An outside agent tells Chalie a codename, then, in a later call that
+    loops the person in, asks for work Chalie hands to a subtask. The agent's
+    turn is sent a ``subtask`` tool that can only start one and says the call
+    waits; the start waits, its result is the subtask's answer with nothing in
+    front of it, and the agent's answer is built on it.
+
+    The subtask runs as that agent and nothing more: its system prompt names
+    the agent and the project; the outside agent's permissions refuse it the
+    device lookup the person's chat is allowed; it reads none of the agent's
+    conversation — not the codename, not the request; and it cannot start a
+    subtask of its own. The person is told about the exchange once, by the
+    agent's own turn — the subtask's turn tells them nothing — and nothing is
+    sent back as a reply."""
+    asked = "find out the capital of France for the migration notes"
+    work = "find out the capital of France"
+    seen: list[Request] = []
+
+    def answering_the_subtask(response: ProviderResponse) -> Entry:
+        # The agent's turn waits on its subtask, so nothing else chat-shaped
+        # runs while the subtask calls: the latest chat call is the subtask's.
+        def entry() -> ProviderResponse:
+            seen.append(provider.last("chat"))
+            return response
+        return entry
+
+    provider = ChannelProvider(chat=[
+        text("Noted."),
+        calls(tool("find_tools", query=["subtask"])),
+        calls(tool("subtask", action="start", instructions=work)),
+        answering_the_subtask(
+            calls(tool("user_device"), tool("subtask", action="start", instructions="double-check it")),
+        ),
+        answering_the_subtask(text(_ANSWER)),
+        text("Paris."),
+        text("Told the person."),
+    ])
+
+    with patched(provider):
+        first = _talk("remember the codename Bluebird")
+        drain()
+        second = _talk(asked, loop_in_human=True)
+        drain()
+
+    assert provider.unused() == {}
+    assert (first, second) == (["Noted."], ["Paris."])
+
+    agents_turn = [r for r in provider.requests if r.route == "chat" and _AGENT in r.system and asked in r.text]
+    assert all("Bluebird" in r.text for r in agents_turn)
+    before_discovery, *sent = [r.definition("subtask") for r in agents_turn]
+    assert before_discovery is None
+    assert len(sent) == 2
+    for description, actions, params in map(as_sent, sent):
+        assert actions == ["start"]
+        assert params == {"action", "instructions", "act_summary"}
+        assert "waits" in description
+
+    start, nested = calls_of(db, "subtask")
+    assert start["state"] == "done", start["result"]
+    assert start["result"].split("\n")[1:-1] == [_ANSWER]
+    assert _ANSWER in agents_turn[-1].text
+
+    assert len(seen) == 2
+    for request in seen:
+        assert _AGENT in request.system and _PROJECT in request.system
+        assert work in request.text
+        assert "Bluebird" not in request.text and asked not in request.text
+
+    [device] = calls_of(db, "user_device")
+    assert device["state"] == "error", device["result"]
+    assert _blocked(db) == [("user_device", "external_agent", "deny")]
+    assert nested["state"] == "error"
+    assert _error_code(nested["result"]) == "subtask-nested"
+    assert _reached(db, _SUBTASK, nested["id"]) == 0
+    n = child_turn(db, _SUBTASK, start["id"])
+    assert _the_one_execution(db, _SUBTASK, n) == TurnExecution.COMPLETED
+
+    assert _executions(db, USER) == 1
+    assert replies(db, start["id"]) == []
+    assert replies(db, start["id"], Channel.for_external_agent(_AGENT)) == []
+
+
+def test_an_outside_agent_is_refused_pim_and_code_agent_and_its_web_search_cannot_start_a_subtask(
+    db: sqlite3.Connection,
+) -> None:
+    """On a fresh install an outside agent's turn asks ``pim`` to read the
+    person's mail and ``code_agent`` to write a script: the permission gate
+    refuses both, so neither turn opens and both land in the blocked log. It
+    then asks ``web_search``, which a fresh install allows; the search's own
+    turn tries to start a subtask and is refused, as every subagent's turn is,
+    so no subtask opens and the search still answers the call."""
+    provider = ChannelProvider(
+        chat=[
+            calls(tool("pim", instructions="read the latest email")),
+            calls(tool("code_agent", instructions="write a script that prints the capital of France")),
+            calls(_delegate_call("web_search")),
+            text("Done."),
+        ],
+        code_agent=[text("print('Paris')")],
+        web_search=[calls(tool("subtask", action="start", instructions="look it up")), text(_ANSWER)],
+    )
+
+    with patched(provider):
+        said = _talk("read the person's mail, script the capital of France, then look it up")
+        drain()
+
+    assert provider.unused() == {"code_agent": 1}
+    assert said == ["Done."]
+    for refused in ("pim", "code_agent"):
+        [call] = calls_of(db, refused)
+        assert call["state"] == "error", call["result"]
+        assert provider.texts(refused) == []
+        assert _executions(db, delegate_channel(refused)) == 0
+    assert _blocked(db) == [("pim", "external_agent", "deny"), ("code_agent", "external_agent", "deny")]
+
+    [search] = calls_of(db, "web_search")
+    assert search["state"] == "done", search["result"]
+    assert _ANSWER in search["result"]
+    [nested] = calls_of(db, "subtask")
+    assert nested["state"] == "error"
+    assert _error_code(nested["result"]) == "subtask-nested"
+    assert _executions(db, _SUBTASK) == 0

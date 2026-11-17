@@ -58,13 +58,13 @@ class WebBrowseAbility(DelegateAbility[DelegateParamsBag]):
 
     def get_summary(self) -> str:
         return (
-            "Spawn a background browsing agent with full web browser control to "
+            "Spawn a browsing agent with full web browser control to "
             "perform an action on one or more websites. It drives a real browser — "
             "rendering pages, filling forms, navigating multi-step flows — and "
             "inspects screenshots with its own vision. Screenshots are saved as "
             "image files whose path any vision tool can view later. Use for acting "
             "on a specific site — not for general lookups. Give it one narrow, "
-            "concrete goal; fire several in parallel for different tasks on the "
+            "concrete goal; start one per task for different tasks on the "
             "same site rather than handing one agent a broad, generic goal."
         )
 

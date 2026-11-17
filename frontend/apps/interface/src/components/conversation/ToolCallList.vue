@@ -6,10 +6,14 @@ import { Check, Minus, X } from '@lucide/vue';
 import type { LucideIcon } from '@lucide/vue';
 import { callKind } from '../../utils/toolCatalog';
 import { detailOpen, toggleDetail } from '../../utils/toolCallDetails';
-import { callLabel, type StepCall } from '../../utils/turnSteps';
+import { callLabel, callMark, type StepCall } from '../../utils/turnSteps';
 import ToolCallDetail from './ToolCallDetail.vue';
 
-defineProps<{ calls: StepCall[] }>();
+const props = defineProps<{
+  calls: StepCall[];
+  /** The caller's subagents reply late (see `callMark`). */
+  repliesLate?: boolean;
+}>();
 
 const STATUS: Record<StepCall['state'], { icon: LucideIcon; label: string }> = {
   done: { icon: Check, label: 'succeeded' },
@@ -19,6 +23,7 @@ const STATUS: Record<StepCall['state'], { icon: LucideIcon; label: string }> = {
 
 const listId = useId();
 const detailId = (c: StepCall): string => `${listId}-call-${c.id}`;
+const mark = (c: StepCall): StepCall['state'] => callMark(c, props.repliesLate);
 </script>
 
 <template>
@@ -27,7 +32,7 @@ const detailId = (c: StepCall): string => `${listId}-call-${c.id}`;
       <button
         type="button"
         class="call"
-        :class="`call--${c.state}`"
+        :class="`call--${mark(c)}`"
         :aria-expanded="detailOpen(c.id)"
         :aria-controls="detailId(c)"
         @click="toggleDetail(c.id)"
@@ -35,11 +40,11 @@ const detailId = (c: StepCall): string => `${listId}-call-${c.id}`;
         <component :is="callKind(c).icon" class="call__icon" :size="16" aria-hidden="true" />
         <span class="call__summary">{{ callLabel(c) }}</span>
         <component
-          :is="STATUS[c.state].icon"
+          :is="STATUS[mark(c)].icon"
           class="call__mark"
           :size="16"
           role="img"
-          :aria-label="STATUS[c.state].label"
+          :aria-label="STATUS[mark(c)].label"
         />
       </button>
       <ToolCallDetail v-if="detailOpen(c.id)" :id="detailId(c)" :call="c" />

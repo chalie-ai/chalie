@@ -9,11 +9,16 @@ class DelegateRef(DTO):
     """The delegate turn a tool call spawned, addressed the way the threads
     read takes it: its full channel plus its ``turn_id``. ``working`` says
     whether that turn is still running as of this read — a subtask outlives
-    the call that started it, so the call's own state cannot say."""
+    the call that started it, so the call's own state cannot say. ``crashed``
+    and ``cancelled`` say how it ended, exactly as on that turn's own block:
+    its most recent execution ended CRASHED, or was stopped. Both are false
+    while that execution is running; the stop reason is never exposed."""
 
     channel: str
     turn_id: int
     working: bool
+    crashed: bool
+    cancelled: bool
 
 
 class Chip(DTO):

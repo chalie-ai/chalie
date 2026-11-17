@@ -189,7 +189,9 @@ def test_parent_thread_read_links_the_delegate_chip_to_its_child_turn(
     thread = block(client, f"/api/threads/{delegate_run.parent.turn_id}")
 
     # The read also says the child is no longer running — it has replied.
-    assert chip(thread, "web_search")["delegate"] == {**delegate_run.ref, "working": False}
+    assert chip(thread, "web_search")["delegate"] == {
+        **delegate_run.ref, "working": False, "crashed": False, "cancelled": False,
+    }
     assert chip(thread, "find_tools")["delegate"] is None
     assert thread["type"] == "user" and thread["channel"] is None
 
@@ -227,7 +229,9 @@ def test_purged_delegate_turn_unlinks_the_chip_and_reads_as_an_unknown_turn(
     client, db, _store = authed_client
     parent_path = f"/api/threads/{delegate_run.parent.turn_id}"
     child_path = f"/api/threads/{delegate_run.child_turn_id}?channel={_CHILD_CHANNEL}"
-    assert chip(block(client, parent_path), "web_search")["delegate"] == {**delegate_run.ref, "working": False}
+    assert chip(block(client, parent_path), "web_search")["delegate"] == {
+        **delegate_run.ref, "working": False, "crashed": False, "cancelled": False,
+    }
 
     db.execute(
         "UPDATE transcript SET created_at = datetime('now', '-200 days') WHERE channel = ?", (_CHILD_CHANNEL,),

@@ -82,6 +82,11 @@ export interface DelegateRef {
    *  of the read (on the person's chat a subagent outlives the call that
    *  started it). Live frames never carry it. */
   working?: boolean;
+  /** Set only on a REST read's chip, like `working`: that turn's most recent
+   *  run crashed, or was stopped — as on the turn's own block. Both false
+   *  while it runs. */
+  crashed?: boolean;
+  cancelled?: boolean;
 }
 
 /** One `turn_executions` row, pushed whole on every state flip (see

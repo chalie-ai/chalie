@@ -17,7 +17,7 @@ import type {
 } from '../../api/conversation';
 import { usePermissionsStore } from '../../stores/permissions';
 import type { PermissionRequest } from '../../stores/permissions';
-import { delegateRunning, liveTrailsFor } from '../../utils/liveActTrail';
+import { delegateState, liveTrailsFor } from '../../utils/liveActTrail';
 import { didWork, mergeWork, showsWork } from '../../utils/turnSteps';
 import UserBubble from './UserBubble.vue';
 import ChalieBubble from './ChalieBubble.vue';
@@ -48,6 +48,11 @@ const emit = defineEmits<{ reply: [turnId: number]; openThread: [turnId: number]
  *  task Chalie handed over. */
 const channel = computed(() => props.block.channel ?? null);
 
+/** Whether this turn's subagents reply late: only the person's chat — its
+ *  main exchange or a thread — gets a subagent's answer as a later message;
+ *  a scheduled task and a subagent's own turn wait for it. */
+const repliesLate = computed(() => channel.value == null && props.type === ConfigType.USER);
+
 /** A forked thread carries at least one row past its settle0 (see
  *  ConversationMessage.thread_message) — derived directly off the prop, no
  *  store/composable needed. */
@@ -77,29 +82,28 @@ const liveLine = computed(() => ({
   pills: liveView.value ? liveTrailsFor(channel.value ?? props.type, props.block.turn_id).flatMap((t) => t.pills) : [],
   undoable: channel.value == null,
   ask: pendingAsk.value,
+  repliesLate: repliesLate.value,
 }));
 
 /** This turn's subagents that are still running — the ring's menu, in
  *  first-seen order. On the chat a subagent outlives the call that started
- *  it, so its live frames decide when seen, else the read's `working`. A live
- *  pill's child just started, so its fallback is running; a stored chip's is
- *  the REST read's `working`. Deduped by channel and turn — turn numbers are
- *  counted per subagent, and a follow-up "message" call points at the same
- *  subtask, the first summary winning. */
+ *  it, so whether it runs is `delegateState`'s, the status its call's mark
+ *  reads too. Deduped by channel and turn — turn numbers are counted per
+ *  subagent, and a follow-up "message" call points at the same subtask, the
+ *  first summary winning. */
 const runningSubtasks = computed(() => {
   const found = new Map<string, { delegate: DelegateRef; summary: string }>();
-  const consider = (delegate: DelegateRef, summary: string | undefined, fallback: boolean): void => {
+  const consider = (delegate: DelegateRef, summary: string | undefined): void => {
     const key = `${delegate.channel}#${delegate.turn_id}`;
-    const running = delegateRunning(delegate.channel, delegate.turn_id) ?? fallback;
-    if (!running || found.has(key)) return;
+    if (delegateState(delegate) !== 'working' || found.has(key)) return;
     found.set(key, { delegate, summary: summary ?? '' });
   };
   for (const pill of liveLine.value.pills) {
-    if (pill.delegate) consider(pill.delegate, pill.summary, true);
+    if (pill.delegate) consider(pill.delegate, pill.summary);
   }
   for (const message of props.block.messages) {
     for (const chip of message.tool_calls ?? []) {
-      if (chip.delegate) consider(chip.delegate, chip.summary, chip.delegate.working ?? false);
+      if (chip.delegate) consider(chip.delegate, chip.summary);
     }
   }
   return [...found.values()];
@@ -397,7 +401,7 @@ function onOpenThread(): void {
 
       <!-- A step's block. The running step's work line is the LIVE line: it
            tracks the act-trail pills and carries the stop. -->
-      <ChalieBubble v-else :message="(ar.row as MsgRow | ActivityRow).message">
+      <ChalieBubble v-else :message="(ar.row as MsgRow | ActivityRow).message" :replies-late="repliesLate">
         <template v-if="ar.row.kind === 'activity'" #step>
           <ActivityLine v-bind="liveLine" :work="(ar.row as ActivityRow).message" />
         </template>

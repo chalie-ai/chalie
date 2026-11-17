@@ -182,21 +182,45 @@ def _tool_call_chips(
     ]
 
 
+def _end_state(latest: TurnExecution | None) -> dict[str, bool]:
+    """How a turn's most recent execution (*latest*) ended — the one reading
+    the turn block and a chip's subagent reference both report.
+
+    ``crashed``: it ended CRASHED — an unhandled step exception, or a process
+    death the boot sweep stamped. A crash that produced no reply row is
+    otherwise indistinguishable from a normal empty turn on refetch (both
+    settle to working:false), so the client needs this to render an "ended
+    unexpectedly" note instead of a bare tool-trace footer. ``cancelled``: it
+    was stopped — a stopped subagent's transcript otherwise just ends after
+    its task, which reads as an empty answer. Both are false while that
+    execution is still running. ``stop_reason`` is deliberately NOT exposed:
+    it is raw str(exc)/"process death", never user-displayable, so the client
+    renders a fixed message."""
+    return {
+        "crashed": bool(latest and latest.state == TurnExecution.CRASHED),
+        "cancelled": bool(latest and latest.state == TurnExecution.CANCELLED),
+    }
+
+
 def _delegates(calls: list[dict[str, object]]) -> dict[int, dict[str, object]]:
     """The child turn each watchable delegate call spawned, keyed by call id:
     one lookup bounded by the calls' lifetimes, and none at all when no call is
     a watchable delegate. Each entry also says whether that turn is still
-    ``working`` as of this read — on the person's chat a subagent outlives the
-    call that started it, so the call's own state cannot say."""
+    ``working`` as of this read and how its most recent execution ended
+    (:func:`_end_state`) — on the person's chat a subagent outlives the call
+    that started it, so the call's own state cannot say. ``working`` is read
+    apart from that execution: a turn can hold a running execution older than
+    its most recent one (a message into a turn whose run has a stop requested
+    opens a new run instead of joining it)."""
     delegates = Transcript.delegate_turns({
         cast("int", c["id"]): (cast("str", c["created_at"]), cast("str | None", c["ended_at"]))
         for c in calls
         if AbilityRegistry.is_watchable_delegate(cast("str", c["tool_name"]))
     })
     for entry in delegates.values():
-        entry["working"] = TurnExecution.open_turn(
-            cast("str", entry["channel"]), cast("int", entry["turn_id"]),
-        ) is not None
+        channel, turn_id = cast("str", entry["channel"]), cast("int", entry["turn_id"])
+        entry["working"] = TurnExecution.open_turn(channel, turn_id) is not None
+        entry.update(_end_state(TurnExecution.latest(channel, turn_id)))
     return delegates
 
 
@@ -517,18 +541,7 @@ class TurnSerializerService:
             "messages": messages,
             "type": config_type,
             "channel": channel if config_type is None else None,
-            # True when the turn's most recent execution ended CRASHED — an unhandled
-            # step exception, or a process death the boot sweep stamped. A crash that
-            # produced no reply row is otherwise indistinguishable from a normal empty
-            # turn on refetch (both settle to working:false), so the FE needs this to
-            # render an "ended unexpectedly" note instead of a bare tool-trace footer.
-            # stop_reason is deliberately NOT exposed: it is raw str(exc)/"process
-            # death", never user-displayable, so the FE renders a fixed message.
-            "crashed": bool(latest and latest.state == TurnExecution.CRASHED),
-            # True when the turn's most recent execution was stopped. A stopped
-            # subagent's transcript otherwise just ends after its task, which
-            # reads as an empty answer, so its panel needs this to say "stopped".
-            "cancelled": bool(latest and latest.state == TurnExecution.CANCELLED),
+            **_end_state(latest),
         }
 
     def bulk_gists(self, channel: str, turn_ids: list[int]) -> dict[int, str]:

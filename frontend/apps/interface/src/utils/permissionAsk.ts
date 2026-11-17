@@ -5,9 +5,10 @@
 import { ConfigType } from '@chalie/shared';
 import type { PermissionOrigin } from '../api/policies';
 
-/** Human prefix for an ask shown away from its turn. */
+/** Where an ask shown away from its turn came from: a scheduled task, the main chat, or a thread. */
 export function originLabel(origin: PermissionOrigin): string {
-  return origin.type === ConfigType.SCHEDULED ? 'Scheduled task' : 'Thread';
+  if (origin.type === ConfigType.SCHEDULED) return 'Scheduled task';
+  return origin.type === ConfigType.USER && !origin.forked ? 'Chat' : 'Thread';
 }
 
 const ACTION_LABELS: Record<string, string> = {

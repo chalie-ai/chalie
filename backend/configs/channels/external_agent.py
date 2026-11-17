@@ -16,8 +16,13 @@ class EAMPConfig(ProcessorConfig):
 
     agent_name / project / loop_in_human are captured on the instance:
     PromptService reads agent_name/project via ``mp.config``; the controller
-    reads ``_loop_in_human`` post-turn to decide human disclosure.
+    reads ``_loop_in_human`` post-turn to decide human disclosure; a subtask
+    the agent starts carries the agent name and project over.
     """
+
+    _agent_name: str
+    _project: str
+    _loop_in_human: bool
 
     def __init__(
         self,

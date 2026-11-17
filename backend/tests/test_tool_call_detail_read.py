@@ -202,11 +202,17 @@ def test_a_subagent_call_from_the_chat_names_its_turn_while_it_works_and_after_a
     assert status == 200, body
     while_working = cast("dict[str, object]", cast("dict[str, object]", body)["result"])
     assert (while_working["state"], while_working["result"], while_working["delegate"]) == (
-        "done", row["result"], {"channel": _WEB_SEARCH_CHANNEL, "turn_id": n, "working": True},
+        "done", row["result"], {
+            "channel": _WEB_SEARCH_CHANNEL, "turn_id": n,
+            "working": True, "crashed": False, "cancelled": False,
+        },
     )
     after = _ok(person, f"/api/tool-calls/{row['id']}")
     assert (after["state"], after["result"], after["delegate"]) == (
-        "done", row["result"], {"channel": _WEB_SEARCH_CHANNEL, "turn_id": n, "working": False},
+        "done", row["result"], {
+            "channel": _WEB_SEARCH_CHANNEL, "turn_id": n,
+            "working": False, "crashed": False, "cancelled": False,
+        },
     )
     assert after["pages"] == []
     [reply] = replies(db, row["id"])

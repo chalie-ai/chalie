@@ -9,7 +9,11 @@ import { showsWork } from '../../utils/turnSteps';
 import SegmentRenderer from './SegmentRenderer.vue';
 import ThinkingAndCalls from './ThinkingAndCalls.vue';
 
-defineProps<{ message: ConversationMessage | null }>();
+defineProps<{
+  message: ConversationMessage | null;
+  /** The caller's subagents reply late (see `callMark`). */
+  repliesLate?: boolean;
+}>();
 </script>
 
 <template>
@@ -29,7 +33,7 @@ defineProps<{ message: ConversationMessage | null }>();
       />
     </template>
     <slot name="step">
-      <ThinkingAndCalls v-if="message && showsWork(message)" :work="message" />
+      <ThinkingAndCalls v-if="message && showsWork(message)" :work="message" :replies-late="repliesLate" />
     </slot>
   </div>
 </template>

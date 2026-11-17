@@ -173,6 +173,12 @@ class Request(NamedTuple):
     text: str
     tools: frozenset[str]
     system: str = ""
+    definitions: tuple[dict[str, object], ...] = ()
+
+    def definition(self, tool_name: str) -> dict[str, object] | None:
+        """The definition of *tool_name* as this call sent it, or ``None``
+        when it was not offered."""
+        return next((d for d in self.definitions if d.get("name") == tool_name), None)
 
 
 def _as_read(request_text: str) -> str:
@@ -248,7 +254,7 @@ class ChannelProvider:
         names = frozenset(str(t["name"]) for t in dto.tools or [])
         route = self._route(dto, text, names)
         with self._lock:
-            self.requests.append(Request(route, text, names, dto.system))
+            self.requests.append(Request(route, text, names, dto.system, tuple(dto.tools or ())))
             script = self._scripts.get(route)
             if not script:
                 return self._NOTHING_NEW if route == "background" else self._TERMINAL
@@ -275,6 +281,21 @@ class ChannelProvider:
         with self._lock:
             return [r.tools for r in self.requests if r.route == route]
 
+    def definitions(self, route: str, tool_name: str, said: str) -> list[dict[str, object] | None]:
+        """The definition of *tool_name* as it was sent on every call routed to
+        *route* whose messages contain *said* — ``None`` on a call it was not
+        offered on — in arrival order. *said* tells apart turns that share a
+        route, such as a scheduled task and the person's chat."""
+        with self._lock:
+            return [r.definition(tool_name) for r in self.requests if r.route == route and said in r.text]
+
+    def last(self, route: str) -> Request:
+        """The latest call routed to *route*. Read from inside a script entry,
+        it is the call that entry answers, as long as no other turn calls on
+        that route meanwhile — true while every other turn waits on this one."""
+        with self._lock:
+            return next(r for r in reversed(self.requests) if r.route == route)
+
     def unused(self) -> dict[str, int]:
         """Every route whose script still holds entries, with how many."""
         with self._lock:
@@ -285,6 +306,16 @@ class ChannelProvider:
         test that has already failed."""
         for held in self._held:
             held.gate.set()
+
+
+def as_sent(definition: dict[str, object] | None) -> tuple[str, object, frozenset[str]]:
+    """A tool definition as a request carried it: its description, the choices
+    its ``action`` parameter offers, and the names of all its parameters."""
+    assert definition is not None, "the tool was not sent on this request"
+    schema = cast("dict[str, object]", definition["input_schema"])
+    properties = cast("dict[str, dict[str, object]]", schema["properties"])
+    action = properties.get("action", {})
+    return str(definition["description"]), action.get("enum"), frozenset(properties)
 
 
 def turn_threads() -> list[threading.Thread]:

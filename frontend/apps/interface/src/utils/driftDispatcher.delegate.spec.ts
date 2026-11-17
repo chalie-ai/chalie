@@ -389,6 +389,14 @@ describe('a delegate call\'s live row on its parent turn', () => {
     w.send({ ...call, state: 'done' });
     await flushPromises();
     expect(w.userEl.querySelectorAll('.activity .call')).toHaveLength(1);
+    // On the chat the call returns at once: its row reads as its subagent
+    // stands, running until the subagent's own frame ends it.
+    expect(w.userEl.querySelectorAll('.activity button.call--started')).toHaveLength(1);
+    w.send({
+      id: 12, channel: CH, type: null, turn_id: 12, started_at: STARTED_AT, ended_at: '2026-01-01T00:00:09Z',
+      cancel_requested: false, state: 'completed', stop_reason: null,
+    });
+    await flushPromises();
     expect(w.userEl.querySelectorAll('.activity button.call--done')).toHaveLength(1);
     const [open] = transcriptButtons(w.userEl);
     expect(transcriptButtons(w.userEl)).toHaveLength(1);

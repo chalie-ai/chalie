@@ -258,7 +258,9 @@ describe('a step reads as what it said, then what its calls did', () => {
         chip(4403, 'browser', { action: 'open', url: 'https://bugs.example/7' }, 'Opening the report'),
         chip(4404, '_mcp_github_get_issue', { number: 7 }, 'Reading issue 7'),
         chip(4405, 'frobnicate', {}, 'Frobnicating'),
-        chip(4406, 'web_search', null, 'Searching the error', 'done', { channel: 'delegate:web_search', turn_id: 77 }),
+        chip(4406, 'web_search', null, 'Searching the error', 'done', {
+          channel: 'delegate:web_search', turn_id: 77, working: false, crashed: false, cancelled: false,
+        }),
       ]),
       row(TURN, 441, 'assistant', 'Fixed.', { settled: true }),
     ], false));

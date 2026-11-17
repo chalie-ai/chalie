@@ -576,12 +576,17 @@ describe('a chat turn\'s subtask ring across a dropped connection', () => {
   const SUBTASK = { channel: 'delegate:subtask', turn_id: 4 };
   const PLAN_TURN = 901;
 
-  /** The settled chat turn that started subtask #4, its chip's `working` as
+  /** How subtask #4's turn stood when the backend read it, as its chip says. */
+  type SubtaskAsRead = 'working' | 'completed' | 'crashed' | 'cancelled';
+
+  /** The settled chat turn that started subtask #4, its chip's run state as
    *  the backend reads it. */
-  function planTurn(subtaskWorking: boolean): ConversationTurnBlock {
+  function planTurn(subtask: SubtaskAsRead): ConversationTurnBlock {
     const start: ToolCallChip = {
       id: 91, tool_name: 'subtask', params: null, summary: 'compare museum hours', state: 'done', ended_at: null,
-      delegate: { ...SUBTASK, working: subtaskWorking },
+      delegate: {
+        ...SUBTASK, working: subtask === 'working', crashed: subtask === 'crashed', cancelled: subtask === 'cancelled',
+      },
     };
     return userThread(PLAN_TURN, [
       msg('9010', 'user', 'Plan my museum day', PLAN_TURN),
@@ -590,10 +595,10 @@ describe('a chat turn\'s subtask ring across a dropped connection', () => {
   }
 
   /** The backend answers a read of the chat turn alone; any other read fails. */
-  function serveChatTurn(subtaskWorking: boolean): Serve {
+  function serveChatTurn(subtask: SubtaskAsRead): Serve {
     return (read) => {
       if (read.turnId !== PLAN_TURN || read.type !== 'user' || read.channel !== null) throw new Error('not this turn');
-      return planTurn(subtaskWorking);
+      return planTurn(subtask);
     };
   }
 
@@ -607,7 +612,7 @@ describe('a chat turn\'s subtask ring across a dropped connection', () => {
 
   /** A fresh app with the chat showing the planning turn as the backend first
    *  read it, the subtask's working frame already in. */
-  async function chatWithRunningSubtask(subtaskWorkingAsRead: boolean): Promise<HTMLElement> {
+  async function chatWithRunningSubtask(asRead: SubtaskAsRead): Promise<HTMLElement> {
     vi.resetModules();
     setActivePinia(createPinia());
     const { useSessionStore } = await import('./session');
@@ -617,7 +622,7 @@ describe('a chat turn\'s subtask ring across a dropped connection', () => {
     const chat = document.body.appendChild(document.createElement('div'));
     turnDom.registerSurface({ id: 'spine', type: 'user', container: chat, component: TurnView });
     cleanups.push(() => turnDom.clearSurfaceContainer(chat));
-    turnDom.upsertTurnToSurfaces(planTurn(subtaskWorkingAsRead), 'user');
+    turnDom.upsertTurnToSurfaces(planTurn(asRead), 'user');
     wsCallbacks.onDrift(subtaskFrame('working'));
     await flushPromises();
     return chat;
@@ -627,12 +632,16 @@ describe('a chat turn\'s subtask ring across a dropped connection', () => {
   const ringCount = (chat: HTMLElement): string | null =>
     chat.querySelector('.subtask-ring .subtask-ring__count')?.textContent ?? null;
 
+  /** What the status mark on the call that started subtask #4 reads. */
+  const callMark = (chat: HTMLElement): string | null =>
+    chat.querySelector('.calls .call .call__mark')?.getAttribute('aria-label') ?? null;
+
   it('drops the ring on reconnect when the subtask finished while the socket was down', async () => {
-    const chat = await chatWithRunningSubtask(true);
+    const chat = await chatWithRunningSubtask('working');
     expect(ringCount(chat)).toBe('1');
 
     // Its terminal frame died with the socket; the backend now reads it done.
-    serve = serveChatTurn(false);
+    serve = serveChatTurn('completed');
     await dropAndRestoreSocket();
 
     expect(chat.querySelector('.subtask-ring')).toBeNull();
@@ -641,17 +650,18 @@ describe('a chat turn\'s subtask ring across a dropped connection', () => {
 
   it('brings the ring back on reconnect when the subtask still runs though the turn\'s last read had it done', async () => {
     // The read is older than the subtask's own working frame, which wins.
-    const chat = await chatWithRunningSubtask(false);
+    const chat = await chatWithRunningSubtask('completed');
     expect(ringCount(chat)).toBe('1');
 
-    serve = serveChatTurn(true);
+    serve = serveChatTurn('working');
     await dropAndRestoreSocket();
 
     expect(ringCount(chat)).toBe('1');
+    expect(callMark(chat)).toBe('running');
   });
 
   it('reads the turn again on the next reconnect when the backend failed the first re-read', async () => {
-    const chat = await chatWithRunningSubtask(false);
+    const chat = await chatWithRunningSubtask('completed');
     expect(ringCount(chat)).toBe('1');
 
     serve = () => {
@@ -661,9 +671,25 @@ describe('a chat turn\'s subtask ring across a dropped connection', () => {
 
     // The ring the first drop hid is not on screen for the second drop to
     // find; only the turn kept from the failed read brings it back.
-    serve = serveChatTurn(true);
+    serve = serveChatTurn('working');
     await dropAndRestoreSocket();
 
     expect(ringCount(chat)).toBe('1');
+  });
+
+  it.each([
+    ['finished', 'succeeded', 'completed', null],
+    ['crashed', 'failed', 'crashed', '1 failed'],
+    ['was stopped', 'failed', 'cancelled', '1 failed'],
+  ] as const)('a subtask that %s while the socket was down: its call\'s mark reads %s after reconnect, as the re-read says', async (_how, mark, asRead, failedCount) => {
+    const chat = await chatWithRunningSubtask('working');
+    expect(callMark(chat)).toBe('running');
+
+    serve = serveChatTurn(asRead);
+    await dropAndRestoreSocket();
+
+    expect(callMark(chat)).toBe(mark);
+    expect(chat.querySelector('.step__failed')?.textContent ?? null).toBe(failedCount);
+    expect(chat.querySelector('.subtask-ring')).toBeNull();
   });
 });
