@@ -2,7 +2,7 @@
 /**
  * Slide-out side drawer shell — the scrim, right-anchored panel, header
  * (title + close), and scrollable list region shared by every right-side
- * overlay (the Activity drawer, the Scheduler dock, the Subagents dock).
+ * overlay (the Activity drawer, the Scheduler dock).
  * Consumers pass a title and their list rows via the default slot; this
  * component owns the open/close transition choreography and Escape-to-close,
  * so the rows are all a consumer has to think about.

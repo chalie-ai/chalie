@@ -1,6 +1,7 @@
 /**
  * Agents store — every subagent still running, keyed by its `agent_id`: what
- * the Subagents dock lists and what lights the top bar's Subagents button.
+ * the Activity drawer lists under "Agents", and part of what shows the top
+ * bar's Activity button.
  *
  * Read in full over REST on every WS connect (`refresh()`), first load and
  * reconnect alike, then kept current by the `agent_changed` frame the server

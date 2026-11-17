@@ -132,9 +132,6 @@ export const useSessionStore = defineStore('session', {
     /** True while the scheduler dock is open. */
     schedulerDockOpen: false,
 
-    /** True while the Subagents dock is open. */
-    subagentDockOpen: false,
-
     /** Registered auth-failure callback (set by App bootstrap). */
     _onAuthFailure: null as (() => void) | null,
 
@@ -180,7 +177,7 @@ export const useSessionStore = defineStore('session', {
         // Likewise the browser's tabs and their hand-offs: a reload or a drop
         // would otherwise miss the frames that announced them.
         void useBrowserStore().refresh();
-        // And the running subagents the Subagents dock lists: an agent that
+        // And the running subagents the Activity drawer lists: an agent that
         // started or ended behind the dead socket sent a frame nobody got.
         void useAgentsStore().refresh();
         // An open delegate panel froze with the socket and lost its live pills
@@ -698,14 +695,6 @@ export const useSessionStore = defineStore('session', {
     },
     closeSchedulerDock(): void {
       this.schedulerDockOpen = false;
-    },
-
-    /** Open / close the Subagents dock. */
-    openSubagentDock(): void {
-      this.subagentDockOpen = true;
-    },
-    closeSubagentDock(): void {
-      this.subagentDockOpen = false;
     },
 
     /** Fire a background notification when the tab is not focused. */

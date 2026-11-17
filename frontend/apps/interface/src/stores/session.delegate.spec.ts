@@ -18,9 +18,9 @@
  * addressed by the subagent's channel alone, must undo nothing, and must leave
  * a chat turn with the same number running.
  *
- * Which subagents still run rides the same lost frames. The Subagents dock
- * and the header's pink Subagents button list the agents table, read again on
- * every connect, so an agent that started or ended while the socket was down
+ * Which subagents still run rides the same lost frames. The Activity drawer's
+ * agents and the header's Activity button follow the agents table, read again
+ * on every connect, so an agent that started or ended while the socket was down
  * shows as the table now says. The status mark on the call that started a
  * subtask follows the chat turn instead: whether the subtask runs comes from
  * its own frames once seen, else from the turn's last read; the drop throws
@@ -30,7 +30,7 @@
  *
  * Real throughout: the session store (its real `init()` wiring), the agents
  * store, the real drift dispatcher, ThreadPanel, the TurnView it registers as
- * its surface, the header and its Subagents dock, the turnDom surface
+ * its surface, the header and its Activity drawer, the turnDom surface
  * registry, the REST wrappers and the shared ApiClient. Two boundaries are
  * faked: `fetch` (the backend, answering thread reads, stops and the agents
  * listing) and the WebSocket singleton (so the connect, disconnect and push
@@ -639,7 +639,7 @@ describe('a chat turn\'s running subtask across a dropped connection', () => {
       cancel_requested: false, state, stop_reason: null,
     }) as unknown as WsPushEvent;
 
-  /** A fresh app — the header, its Subagents dock, the page's first connect
+  /** A fresh app — the header, its Activity drawer, the page's first connect
    *  (which reads the agents the backend lists), and the chat showing the
    *  planning turn as the backend first read it — the subtask's working frame
    *  already in. */
@@ -650,15 +650,15 @@ describe('a chat turn\'s running subtask across a dropped connection', () => {
     const turnDom = await import('../utils/turnDom');
     const { default: TurnView } = await import('../components/conversation/TurnView.vue');
     const { default: PresenceBar } = await import('../components/layout/PresenceBar.vue');
-    const { default: SubagentDock } = await import('../components/overlays/SubagentDock.vue');
+    const { default: TaskDrawer } = await import('../components/overlays/TaskDrawer.vue');
     useSessionStore().init();
     const header = mount(PresenceBar, { attachTo: document.body });
-    const dock = mount(SubagentDock, { attachTo: document.body });
+    const drawer = mount(TaskDrawer, { attachTo: document.body });
     const chat = document.body.appendChild(document.createElement('div'));
     turnDom.registerSurface({ id: 'spine', type: 'user', container: chat, component: TurnView });
     cleanups.push(() => {
       turnDom.clearSurfaceContainer(chat);
-      dock.unmount();
+      drawer.unmount();
       header.unmount();
     });
     wsCallbacks.onConnect();
@@ -669,27 +669,27 @@ describe('a chat turn\'s running subtask across a dropped connection', () => {
     return chat;
   }
 
-  /** The titles the Subagents dock lists, in order. */
+  /** The agent titles the Activity drawer lists, in order. */
   const listed = (): string[] =>
-    [...document.querySelectorAll('aside[aria-label="Subagents"] .drawer-row__label')].map((el) => el.textContent!.trim());
+    [...document.querySelectorAll('aside[aria-label="Activity"] .drawer-row__label')].map((el) => el.textContent!.trim());
 
-  /** Whether the header's Subagents button shows its pink running cue. */
-  const headerIsPink = (): boolean =>
-    document.querySelector('#subagentDockBtn')!.classList.contains('has-activity');
+  /** Whether the header draws its Activity button — only while the drawer
+   *  has a row; no thread here waits unseen, so only an agent draws it. */
+  const headerShows = (): boolean => document.querySelector('#taskDrawerBtn') !== null;
 
   /** What the status mark on the call that started subtask #4 reads. */
   const callMark = (chat: HTMLElement): string | null =>
     chat.querySelector('.calls .call .call__mark')?.getAttribute('aria-label') ?? null;
 
-  it('the first connect lists the running subtask in the dock from the agents table and lights the header', async () => {
+  it('the first connect lists the running subtask in the Activity drawer from the agents table and shows the header\'s button', async () => {
     servedAgents = [SUBTASK_AGENT];
     await chatWithRunningSubtask('working');
 
     expect(listed()).toEqual(['compare museum hours']);
-    expect(headerIsPink()).toBe(true);
+    expect(headerShows()).toBe(true);
   });
 
-  it('drops the subtask from the dock and the header\'s pink on reconnect when it finished while the socket was down', async () => {
+  it('drops the subtask from the Activity drawer and the header\'s button on reconnect when it finished while the socket was down', async () => {
     servedAgents = [SUBTASK_AGENT];
     const chat = await chatWithRunningSubtask('working');
     expect(listed()).toEqual(['compare museum hours']);
@@ -701,14 +701,14 @@ describe('a chat turn\'s running subtask across a dropped connection', () => {
     await dropAndRestoreSocket();
 
     expect(listed()).toEqual([]);
-    expect(headerIsPink()).toBe(false);
+    expect(headerShows()).toBe(false);
     expect(chat.textContent).toContain('I started a subtask for that.');
   });
 
   it('lists an agent that started while the socket was down on reconnect, though no turn on screen started it', async () => {
     await chatWithRunningSubtask('completed');
     expect(listed()).toEqual([]);
-    expect(headerIsPink()).toBe(false);
+    expect(headerShows()).toBe(false);
 
     servedAgents = [{
       ...SUBTASK_AGENT, agent_id: 18, spawned_by_channel: 'schedule', spawned_in_turn: 55,
@@ -718,10 +718,10 @@ describe('a chat turn\'s running subtask across a dropped connection', () => {
     await dropAndRestoreSocket();
 
     expect(listed()).toEqual(['morning news']);
-    expect(headerIsPink()).toBe(true);
+    expect(headerShows()).toBe(true);
   });
 
-  it('keeps the dock as it stood when the agents read fails on reconnect, and corrects it on the next', async () => {
+  it('keeps the Activity drawer as it stood when the agents read fails on reconnect, and corrects it on the next', async () => {
     servedAgents = [SUBTASK_AGENT];
     await chatWithRunningSubtask('working');
     vi.spyOn(console, 'warn').mockImplementation(() => { /* the failed read's warning */ });
@@ -731,12 +731,12 @@ describe('a chat turn\'s running subtask across a dropped connection', () => {
     serve = serveChatTurn('working');
     await dropAndRestoreSocket();
     expect(listed()).toEqual(['compare museum hours']);
-    expect(headerIsPink()).toBe(true);
+    expect(headerShows()).toBe(true);
 
     agentsDown = false;
     await dropAndRestoreSocket();
     expect(listed()).toEqual([]);
-    expect(headerIsPink()).toBe(false);
+    expect(headerShows()).toBe(false);
   });
 
   it('its call\'s mark reads running again on reconnect when the re-read says it still runs, though the turn\'s first read had it done', async () => {

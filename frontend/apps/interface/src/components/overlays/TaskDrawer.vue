@@ -1,20 +1,29 @@
 <script setup lang="ts">
 /**
- * Activity drawer — a slide-out panel that lists forked threads whose reply
- * has settled unseen, one row each, no section split.
+ * Activity drawer — a slide-out panel with two lists, each under its own
+ * title and shown only when it has rows: "Threads", the forked threads whose
+ * reply has settled unseen, and under it "Agents", every subagent still
+ * running, oldest first, from the agents store.
  *
- * The trigger button lives in PresenceBar.vue; the slide-out shell (scrim,
- * panel, close, transition choreography) is SideDrawer. This component supplies
- * the rows and wires them to tasks.isOpen. The hint appears on first
- * open-with-content, an empty drawer says so, and the panel auto-closes when
- * the last item clears.
+ * A subagent row is its type's icon and the one-line summary of the call that
+ * started it — the type's name when the call has none, never the tool name or
+ * number — and opens its transcript in the delegate panel under that title.
+ *
+ * The trigger button lives in PresenceBar.vue and shows only while either list
+ * has rows; the slide-out shell (scrim, panel, close, transition choreography)
+ * is SideDrawer. This component supplies the rows and wires them to
+ * tasks.isOpen. The hint appears on first open-with-content, and the panel
+ * auto-closes when the last row of both lists clears.
  */
 import { computed, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
+import type { DelegateRef } from '@chalie/shared';
 import { useTasksStore } from '../../stores/tasks';
 import { useSessionStore } from '../../stores/session';
+import { useAgentsStore } from '../../stores/agents';
 import { webPlatformAdapter } from '@chalie/shared';
 import { useThreadActivity } from '../../utils/threadActivity';
+import { subagentKind } from '../../utils/delegateChannel';
 import SideDrawer from './SideDrawer.vue';
 
 const HINT_KEY = 'task_strip_hint_shown';
@@ -23,15 +32,35 @@ const HINT_KEY = 'task_strip_hint_shown';
 
 const tasks = useTasksStore();
 const session = useSessionStore();
+const agents = useAgentsStore();
 const { isOpen } = storeToRefs(tasks);
 
 /** DOM-derived (no store) — see `utils/threadActivity.ts`. */
 const threadActivity = useThreadActivity();
-const totalCount = computed(() => threadActivity.value.length);
+
+const agentRows = computed(() =>
+  agents.running.map((agent) => {
+    const kind = subagentKind(agent.type);
+    return {
+      delegate: { channel: agent.channel, turn_id: agent.turn_id },
+      key: agent.agent_id,
+      icon: kind.icon,
+      title: agent.summary.trim() || kind.name,
+    };
+  }),
+);
+
+const totalCount = computed(() => threadActivity.value.length + agentRows.value.length);
 
 /** Open a thread's slide-over from its Activity row, then close the drawer. */
 function openThread(turnId: number, type: string): void {
   session.openThreadPanel(turnId, type);
+  tasks.close();
+}
+
+/** Open a subagent's transcript from its Activity row, then close the drawer. */
+function openSubagent(delegate: DelegateRef, title: string): void {
+  session.openDelegatePanel(delegate, title);
   tasks.close();
 }
 
@@ -71,6 +100,7 @@ watch(totalCount, (count) => {
          opens the thread's slide-over. The mockup's floating notifications
          live here. -->
     <template v-if="threadActivity.length">
+      <h3 class="task-drawer__section">Threads</h3>
       <button
         v-for="ta in threadActivity"
         :key="`thread-${ta.turn_id}`"
@@ -84,7 +114,24 @@ watch(totalCount, (count) => {
         <span class="task-drawer__thread-snippet">{{ ta.snippet }}</span>
       </button>
     </template>
-    <p v-else class="task-drawer__hint">Nothing new. Finished replies in your threads show up here.</p>
+
+    <!-- Subagents still running. Clicking opens the subagent's transcript. -->
+    <template v-if="agentRows.length">
+      <h3 class="task-drawer__section">Agents</h3>
+      <button
+        v-for="row in agentRows"
+        :key="row.key"
+        type="button"
+        class="drawer-row"
+        @click="openSubagent(row.delegate, row.title)"
+      >
+        <span class="drawer-row__top">
+          <component :is="row.icon" class="drawer-row__icon" :size="16" aria-hidden="true" />
+          <span class="drawer-row__label">{{ row.title }}</span>
+          <span class="thread-activity-dot working" aria-hidden="true" />
+        </span>
+      </button>
+    </template>
 
     <!-- First-time hint — shown on first open-with-content. -->
     <div v-if="showHint" class="task-drawer__hint">I'll show what I'm working on here.</div>
@@ -92,6 +139,20 @@ watch(totalCount, (count) => {
 </template>
 
 <style scoped lang="scss">
+// ── Section title ─────────────────────────────────────────────────────────────
+// A mono label over each list, styled like the spine's day marker.
+
+.task-drawer__section {
+  margin: 0;
+  padding: 12px 16px 4px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
 // ── Thread-activity row ──────────────────────────────────────────────────────────
 // Forked threads whose reply has settled unseen, folded out of the mockup's
 // floating notifications. The steady activity dot marks them done.

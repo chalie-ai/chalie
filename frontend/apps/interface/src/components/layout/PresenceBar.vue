@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { Bot, Brain, CalendarClock, Clock, Globe, Moon, Search, Sun } from '@lucide/vue';
+import { Bot, Brain, CalendarClock, Globe, Moon, Search, Sun } from '@lucide/vue';
 import { useSessionStore } from '../../stores/session';
 import { useTasksStore } from '../../stores/tasks';
 import { useBrowserStore } from '../../stores/browser';
@@ -19,10 +19,7 @@ function onTurnStateChanged(): void {
   hasSchedulerActivity.value = hasDoneScheduled();
 }
 const session = useSessionStore();
-
-// Subagents-dock activity cue: pink icon while any subagent runs.
 const agents = useAgentsStore();
-const hasSubagentActivity = computed(() => agents.running.length > 0);
 
 // Replaces the retired `session.isSending` store getter — the mark's dot
 // pulses while the main spine (no stable turn_id) has anything working.
@@ -38,7 +35,9 @@ function toggleBrowser(): void {
 
 /** DOM-derived (no store) — see `utils/threadActivity.ts`. */
 const threadActivity = useThreadActivity();
-const totalCount = computed(() => threadActivity.value.length);
+/** Rows the Activity drawer holds: unseen thread replies plus running
+ *  subagents. The button shows only while there is one. */
+const activityCount = computed(() => threadActivity.value.length + agents.running.length);
 
 const { toggle, theme } = useTheme();
 
@@ -84,24 +83,14 @@ onBeforeUnmount(() => {
         <CalendarClock :size="16" aria-hidden="true" />
       </button>
       <button
-        id="subagentDockBtn"
-        class="btn-icon"
-        :class="{ 'has-activity': hasSubagentActivity }"
-        aria-label="Subagents"
-        title="Subagents"
-        @click="session.openSubagentDock()"
-      >
-        <Bot :size="16" aria-hidden="true" />
-      </button>
-      <button
+        v-if="activityCount > 0"
         id="taskDrawerBtn"
-        class="btn-icon task-drawer-trigger"
-        :class="{ 'has-activity': totalCount > 0 }"
+        class="btn-icon task-drawer-trigger has-activity"
         aria-label="Activity"
         title="Activity"
         @click="tasks.open()"
       >
-        <Clock :size="16" aria-hidden="true" />
+        <Bot :size="16" aria-hidden="true" />
       </button>
       <button
         id="browserBtn"
@@ -140,9 +129,9 @@ onBeforeUnmount(() => {
 }
 
 // Pink cue on a dock button: the scheduler dock's when any scheduled turn is
-// "done" (settled unseen), the Subagents dock's while a subagent runs. The
-// icon SVG inherits this via currentColor, so setting it on the button
-// cascades to the icon.
+// "done" (settled unseen), the Activity button's while it shows. The icon SVG
+// inherits this via currentColor, so setting it on the button cascades to the
+// icon.
 .has-activity {
   color: var(--pink-text);
 }

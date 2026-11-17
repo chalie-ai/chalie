@@ -228,8 +228,8 @@ body {
 
 .loading-overlay__skip:hover { color: var(--text); }
 
-// Thread activity marker (blinker) — one definition shared by the user activity
-// dock (TaskDrawer), the scheduler dock and the Subagents dock. Working (pink)
+// Thread activity marker (blinker) — one definition shared by the Activity
+// drawer (TaskDrawer) and the scheduler dock. Working (pink)
 // pulses while the reply streams; done is a steady standing marker until the
 // user opens the thread.
 .thread-activity-dot {
@@ -247,9 +247,9 @@ body {
   }
 }
 
-// A side drawer's list row, shared by the scheduler dock and the Subagents
-// dock: a bold one-line label (with its activity dot, and a subagent's type
-// icon), and on a schedule a muted line under it.
+// A side drawer's list row, shared by the scheduler dock and the Activity
+// drawer's agents: a bold one-line label (with its activity dot, and a
+// subagent's type icon), and on a schedule a muted line under it.
 .drawer-empty {
   font-size: var(--fs-body);
   color: var(--muted);
