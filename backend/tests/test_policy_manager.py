@@ -175,12 +175,15 @@ def test_apply_seed_reaps_unseeded_rows(mgr: PolicyManager, db: sqlite3.Connecti
     _seed(db, "chat", "subtask.start", "deny")
     _seed(db, "subconscious", "search", "deny")            # bare tool name, not tool.action
     _seed(db, "chat", "bash.read", "deny")                 # user's own setting — must survive
+    _seed(db, "external_agent", "run_script", "allow")     # existing install — keeps allow over the deny seed
     mgr.apply_seed()
     perms = {r["permission"] for r in mgr.get_all()}
     assert not perms & {"pim", "subtask.start", "search"}
-    # bash.read IS in the seed, so the reap keys on membership and leaves the
-    # user's 'deny' in place (INSERT OR IGNORE never overwrites an existing row).
-    assert any(r["permission"] == "bash.read" and r["setting"] == "deny" for r in mgr.get_all())
+    # bash.read and run_script ARE in the seed, so the reap keys on membership and
+    # leaves each existing setting in place (INSERT OR IGNORE never overwrites a row).
+    settings = {(r["channel"], r["permission"]): r["setting"] for r in mgr.get_all()}
+    assert settings[("chat", "bash.read")] == "deny"
+    assert settings[("external_agent", "run_script")] == "allow"
 
 
 # 7. 'ask' on a turn with no surface (origin None — discovery, subconscious, external agent, a

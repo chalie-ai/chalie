@@ -135,7 +135,7 @@
   {"channel": "external_agent", "permission": "mcp_manager.enable", "setting": "internal"},
   {"channel": "external_agent", "permission": "mcp_manager.list", "setting": "internal"},
   {"channel": "external_agent", "permission": "programming_docs_search", "setting": "allow"},
-  {"channel": "external_agent", "permission": "run_script", "setting": "allow"},
+  {"channel": "external_agent", "permission": "run_script", "setting": "deny"},
   {"channel": "external_agent", "permission": "schedule.cancel", "setting": "deny"},
   {"channel": "external_agent", "permission": "schedule.create", "setting": "deny"},
   {"channel": "external_agent", "permission": "schedule.list", "setting": "allow"},

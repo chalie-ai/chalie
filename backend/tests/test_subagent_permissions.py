@@ -322,16 +322,14 @@ def _run_script_call() -> dict[str, object]:
     return tool(_SCRIPT, path=str(FileMapperService.get_code_agent_workspace_path("hello.ts")))
 
 
-def test_a_script_an_outside_agents_code_agent_runs_is_refused_once_the_owner_denies_it(
+def test_a_script_an_outside_agents_code_agent_runs_is_refused_on_a_new_install(
     authed_client: tuple[FlaskClient, sqlite3.Connection, object],
 ) -> None:
-    """A new install allows scripts for outside agents, as the code agent's own
-    row did before. The owner sets it to deny; an outside agent then has a code
-    agent run a script. The script is refused, nothing asks, and the code
+    """A new install denies scripts for outside agents. An outside agent has a
+    code agent run a script: the script is refused, nothing asks, and the code
     agent's answer reaches the outside agent, which waited for it."""
     _client, db, _store = authed_client
-    assert Policy.get_or_create_default(_OUTSIDE, _SCRIPT) == "allow"
-    assert Policy.upsert(_OUTSIDE, _SCRIPT, "deny") == 1
+    assert Policy.get_or_create_default(_OUTSIDE, _SCRIPT) == "deny"
     provider = ChannelProvider(
         chat=[
             calls(tool(FindToolsAbility.NAME, query=[CodeAgentAbility.NAME])),
