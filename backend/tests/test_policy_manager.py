@@ -118,7 +118,7 @@ def test_allow_and_internal_run_callback(mgr: PolicyManager, db: sqlite3.Connect
 # The tools that spawn a subagent never gate: what the subagent then calls is
 # gated on its own permission, under the channel of the agent that spawned it.
 @pytest.mark.parametrize("channel", [CH.CHAT, CH.SUBCONSCIOUS, CH.EXTERNAL_AGENT])
-@pytest.mark.parametrize("permission", ["run_script", "search", "browser.open", "recall", "save_graph",
+@pytest.mark.parametrize("permission", ["search", "browser.open", "recall", "save_graph",
                                         "subtask.start", "code_agent", "web_search", "web_browse", "pim"])
 def test_internal_tools_always_bypass(mgr: PolicyManager, db: sqlite3.Connection, channel: PolicyChannel, permission: str) -> None:
     # a deny row for the same key must be ignored — INTERNAL wins, no DB lookup

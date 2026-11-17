@@ -13,7 +13,9 @@ chat's ``pim`` makes asks on the chat, once per call, listed under the chat turn
 even after that turn has ended. A scheduled task's ``pim`` asks under the
 scheduled task's turn, on the scheduled task's policy channel. A file write the
 person set to ask, three levels down — chat, then subtask, then ``code_agent`` —
-asks on the chat, under the chat turn.
+asks on the chat, under the chat turn. A script a code agent runs is checked
+under its own permission: an outside agent's is refused once the owner denies
+it, and a chat-started one set to ask asks on the chat.
 
 Drives real turns against the real, fully migrated SQLite DB, observed through
 the real socket registry and answered through the real Flask app. The mailbox
@@ -37,6 +39,7 @@ from abilities.code_agent import CodeAgentAbility
 from abilities.email import EmailAbility
 from abilities.find_tools import FindToolsAbility
 from abilities.pim import PimAbility
+from abilities.run_script import RunScriptAbility
 from abilities.subtask import SubtaskAbility
 from abilities.web_browse import WebBrowseAbility
 from abilities.web_search import WebSearchAbility
@@ -85,6 +88,8 @@ _ANSWER = "Paris is the capital of France."
 _NO_MAIL = "I could not read the mail."
 _MAIL_SEARCH = f"{EmailAbility.NAME}.search"
 _FILE_WRITE = WriteFileAbility.NAME
+_SCRIPT = RunScriptAbility.NAME
+_OUTSIDE = PolicyChannel.EXTERNAL_AGENT.value
 
 _SPAWNS = (
     SubtaskAbility.NAME, CodeAgentAbility.NAME, WebSearchAbility.NAME, WebBrowseAbility.NAME, PimAbility.NAME,
@@ -311,3 +316,77 @@ def test_a_file_write_three_subagents_down_asks_on_the_chat_that_started_the_cha
     [subtask] = calls_of(db, SubtaskAbility.NAME)
     [reply] = replies(db, subtask["id"])
     assert reply["content"] == "The notes file could not be written."
+
+
+def _run_script_call() -> dict[str, object]:
+    return tool(_SCRIPT, path=str(FileMapperService.get_code_agent_workspace_path("hello.ts")))
+
+
+def test_a_script_an_outside_agents_code_agent_runs_is_refused_once_the_owner_denies_it(
+    authed_client: tuple[FlaskClient, sqlite3.Connection, object],
+) -> None:
+    """A new install allows scripts for outside agents, as the code agent's own
+    row did before. The owner sets it to deny; an outside agent then has a code
+    agent run a script. The script is refused, nothing asks, and the code
+    agent's answer reaches the outside agent, which waited for it."""
+    _client, db, _store = authed_client
+    assert Policy.get_or_create_default(_OUTSIDE, _SCRIPT) == "allow"
+    assert Policy.upsert(_OUTSIDE, _SCRIPT, "deny") == 1
+    provider = ChannelProvider(
+        chat=[
+            calls(tool(FindToolsAbility.NAME, query=[CodeAgentAbility.NAME])),
+            calls(tool(CodeAgentAbility.NAME, instructions="print hello")),
+            text("The script was not allowed."),
+        ],
+        code_agent=[calls(_run_script_call()), text("I was not allowed to run it.")],
+    )
+
+    with listening() as listener, patched(provider):
+        assert _talk("print hello with a script") == ["The script was not allowed."]
+        drain()
+
+    assert provider.unused() == {}
+    assert [f for f in listener.frames if f.get("type") == "permission_request"] == []
+    assert _blocked(db) == [(_SCRIPT, _OUTSIDE, "deny")]
+    [script] = calls_of(db, _SCRIPT)
+    assert script["state"] == ToolCall.ERROR
+    assert _BLOCK.format(permission=_SCRIPT) in script["result"]
+    [coding] = calls_of(db, CodeAgentAbility.NAME)
+    assert coding["state"] == ToolCall.DONE, coding["result"]
+    assert "I was not allowed to run it." in coding["result"]
+
+
+def test_a_script_a_chat_spawned_code_agent_runs_asks_on_the_chat(
+    authed_client: tuple[FlaskClient, sqlite3.Connection, object],
+) -> None:
+    """The person sets scripts to ask on the chat. The chat starts a code agent,
+    which runs a script: the script asks on the chat, under the chat turn, on
+    the chat's policy channel. Denied, it does not run, and the code agent's
+    answer reaches the chat as a reply."""
+    client, db, _store = authed_client
+    assert Policy.upsert(_CHAT, _SCRIPT, "ask") == 1
+    asks = _Asks()
+    provider = ChannelProvider(
+        chat=[
+            calls(tool(CodeAgentAbility.NAME, instructions="print hello")),
+            text("I have started a coding agent."),
+            text("The coding agent answered."),
+        ],
+        code_agent=[calls(_run_script_call()), text("I was not allowed to run it.")],
+    )
+
+    with listening(asks.note), patched(provider):
+        chat = begin(UserConfig(), "print hello with a script")
+        ask = asks.deny_next(client)
+        chat.result()
+        drain()
+
+    assert provider.unused() == {} and asks.left() == 0
+    assert (ask["action_id"], ask["origin"]) == (_SCRIPT, _origin("user", chat.turn_id))
+    assert _blocked(db) == [(_SCRIPT, _CHAT, "user_denied")]
+    [script] = calls_of(db, _SCRIPT)
+    assert script["state"] == ToolCall.ERROR
+    assert _BLOCK.format(permission=_SCRIPT) in script["result"]
+    [coding] = calls_of(db, CodeAgentAbility.NAME)
+    [reply] = replies(db, coding["id"])
+    assert reply["content"] == "I was not allowed to run it."

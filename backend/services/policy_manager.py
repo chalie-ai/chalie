@@ -10,8 +10,8 @@ The seed file (policy_defaults.json) is the single source of truth for the
 policy table. ``apply_seed`` converges the table to the seed on every boot: it
 INSERT-OR-IGNOREs every seeded row, then DELETES every row whose permission is
 neither in the seed nor an MCP tool permission. Retiring an ability needs only
-a seed-file edit — never a migration. The seed is exhaustive (86 permissions ×
-3 channels = 258 rows), so matching on the permission column alone is correct
+a seed-file edit — never a migration. The seed is exhaustive (87 permissions ×
+3 channels = 261 rows), so matching on the permission column alone is correct
 and complete.
 
 A small set of tools (``INTERNAL``) ALWAYS bypass the gate regardless of channel
@@ -53,10 +53,11 @@ VALID_SETTINGS = {"internal", "allow", "ask", "deny"}
 # admission grounds: (1) read-only / scratch / infrastructure tools — never
 # user-gated; (2) the tools that spawn subagents — starting and managing
 # subagents is internal mechanics, never asked; (3) delegate-exclusive inner
-# tools of web_search, web_browse and code_agent (search/news, browser,
-# run_script), which have no permission of their own. email / calendar /
-# contacts are NOT here: they carry seeded per-action rows, gated on the
-# spawner's channel. Nor are the mutating file primitives (write_file /
+# tools of web_search and web_browse (search/news, browser), which have no
+# permission of their own. email / calendar / contacts are NOT here: they
+# carry seeded per-action rows, gated on the spawner's channel; nor is
+# code_agent's run_script, which carries one seeded row per channel. Nor are
+# the mutating file primitives (write_file /
 # edit_file / move / make_dir / delete / set_permissions): they carry seeded
 # ``allow`` rows, so the user can tighten them per channel. ANY action on
 # INTERNAL tools runs unconditionally;
@@ -65,7 +66,7 @@ VALID_SETTINGS = {"internal", "allow", "ask", "deny"}
 INTERNAL = frozenset({
     "browser", "chalie_docs", "chat_history_compactor", "code_agent",
     "delete_graph", "find_skills", "find_tools", "image_preview", "mcp_tools", "news", "pim",
-    "plan", "read", "recall", "review_tool_calls", "review_transcript", "run_script", "save_graph",
+    "plan", "read", "recall", "review_tool_calls", "review_transcript", "save_graph",
     "save_map", "save_synthesis", "search", "skill_manager", "subtask", "web_browse", "web_fetch",
     "web_search",
 })

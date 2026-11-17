@@ -113,7 +113,7 @@ describe('an ask no live line shows', () => {
     const row = rows(w)[0];
     expect(row.find('.activity__origin').text()).toBe(`Chat · #${CHAT_TURN} ·`);
     expect(row.find('.activity__label').text()).toBe('Read the ferry booking email');
-    expect(row.find('.activity__ask').text()).toBe('Email Read');
+    expect(row.find('.activity__ask').text()).toBe('Read Email');
     expect(row.text()).toContain('waiting for you');
     expect(row.findAll('button').map((b) => b.text())).toEqual(['Deny', 'Allow', 'Open']);
   });
