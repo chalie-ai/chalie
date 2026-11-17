@@ -60,7 +60,8 @@ export function visibleCalls(calls: readonly StepCall[] | null | undefined): Ste
 }
 
 /** Whether the step has work the person can see: it thought, or made a call
- *  the catalog does not hide. A step that only updated the plan has none. */
+ *  the catalog does not hide. A step that only updated the plan, or only
+ *  searched for tools, has none. */
 export function showsWork(work: StepWork): boolean {
   return Boolean(thought(work.thinking) || visibleCalls(work.tool_calls).length);
 }
@@ -95,16 +96,18 @@ interface KindCount {
 
 const LIST = new Intl.ListFormat('en-GB', { type: 'conjunction' });
 
-/** What a step's shown calls did: one phrase per kind, in the order each kind
- *  first ran. A kind with a target counts the distinct values it acted on; a
- *  call without one counts on its own. Past three kinds, the rest are "n more".
- *  The failed count is the calls whose mark reads failed (see `callMark`). */
+/** What a step's shown calls did: one phrase per group of kinds, in the order
+ *  each group first ran. A kind with a target counts the distinct values it
+ *  acted on; a call without one counts on its own. Past three groups, the rest
+ *  are "n more". The failed count is the calls whose mark reads failed (see
+ *  `callMark`). */
 export function summarizeCalls(shown: readonly StepCall[], repliesLate: boolean): CallsSummary {
   const counts = new Map<string, KindCount>();
   for (const call of shown) {
     const kind = callKind(call);
-    const count = counts.get(kind.key) ?? { kind, targets: new Set<string>(), untargeted: 0 };
-    counts.set(kind.key, count);
+    const group = kind.group ?? kind.key;
+    const count = counts.get(group) ?? { kind, targets: new Set<string>(), untargeted: 0 };
+    counts.set(group, count);
     const targets = targetsOf(kind, call);
     targets.forEach((t) => count.targets.add(t));
     if (!targets.length) count.untargeted += 1;

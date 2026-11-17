@@ -2,9 +2,11 @@
  * toolCatalog — what each kind of tool call is called in a step's summary:
  * its icon, its phrase for one and for {n}, and the argument naming what it
  * acts on, so calls on the same value count once. A kind is a tool, or a tool
- * and its `action` argument. `plan` is hidden — the plan card shows it. A kind
- * also names the view its row opens to; a kind without one opens to its
- * arguments.
+ * and its `action` argument. `plan` is hidden — the plan card shows it — and
+ * so is `find_tools`, which only loads tools and means nothing to the person.
+ * Every tool that starts a subagent counts in one group, as agents spawned,
+ * whichever tool it is. A kind also names the view its row opens to; a kind
+ * without one opens to its arguments.
  */
 import {
   ArrowDownUp, ArrowLeft, BookmarkPlus, BookOpen, BookOpenText, Blocks, Bot, Brain, BrainCog,
@@ -22,8 +24,10 @@ import type { StepCall } from './turnSteps';
 export type CallView = 'command' | 'edit' | 'write' | 'read' | 'browser' | 'browse' | 'delegate' | 'email';
 
 export interface CallKind {
-  /** The group a call counts in: its tool, or `tool.action`. */
+  /** The tool, or `tool.action`. */
   key: string;
+  /** The group a call counts in, when kinds share one phrase; else its key. */
+  group?: string;
   icon: LucideIcon;
   /** The lower-case phrase for one, then for `{n}`. */
   one: string;
@@ -46,6 +50,11 @@ const times = (key: string, icon: LucideIcon, phrase: string): CallKind => kind(
 const viewed = (view: CallView, kinds: CallKind[]): CallKind[] => kinds.map((k) => ({ ...k, view }));
 
 const showing = (k: CallKind, ...fields: string[]): CallKind => ({ ...k, fields });
+
+/** A tool that starts a subagent: each call is one more agent spawned. */
+const agent = (key: string, view: CallView): CallKind => ({
+  ...kind(key, Bot, 'spawned 1 agent', 'spawned {n} agents'), group: 'agent', view,
+});
 
 const skillKinds = (tool: string): CallKind[] => [
   kind(`${tool}.create`, NotebookPen, 'created 1 skill', 'created {n} skills', 'title'),
@@ -79,7 +88,7 @@ const KINDS: CallKind[] = [
   times('review_tool_calls', History, 'reviewed earlier tool calls'),
   times('review_transcript', MessagesSquare, 'reviewed the conversation'),
   times('find_skills', Sparkles, 'looked for a skill'),
-  times('find_tools', PackageSearch, 'looked for tools'),
+  { ...times('find_tools', PackageSearch, 'looked for tools'), hidden: true },
   times('weather', CloudSun, 'checked the weather'),
   times('user_device', MonitorSmartphone, 'checked your device'),
   kind('timer', Timer, 'started 1 timer', 'started {n} timers'),
@@ -87,14 +96,12 @@ const KINDS: CallKind[] = [
   kind('delete_graph', Eraser, 'forgot 1 fact', 'forgot {n} facts', 'subject'),
   kind('save_map', BookmarkPlus, 'saved 1 memory', 'saved {n} memories'),
   times('save_synthesis', UserRoundPen, 'updated the user profile'),
-  ...viewed('delegate', [
-    kind('code_agent', Bot, 'delegated 1 coding task', 'delegated {n} coding tasks'),
-    kind('web_search', Bot, 'delegated 1 web search', 'delegated {n} web searches'),
-    kind('pim', Bot, 'delegated 1 mail & calendar task', 'delegated {n} mail & calendar tasks'),
-    kind('subtask.start', Bot, 'started 1 subtask', 'started {n} subtasks'),
-    kind('subtask.message', Bot, 'messaged 1 subtask', 'messaged {n} subtasks', 'subtask'),
-  ]),
-  { ...kind('web_browse', Bot, 'delegated 1 browsing task', 'delegated {n} browsing tasks'), view: 'browse' },
+  agent('code_agent', 'delegate'),
+  agent('web_search', 'delegate'),
+  agent('pim', 'delegate'),
+  agent('subtask.start', 'delegate'),
+  agent('web_browse', 'browse'),
+  { ...kind('subtask.message', Bot, 'messaged 1 subtask', 'messaged {n} subtasks', 'subtask'), view: 'delegate' },
   ...viewed('browser', [
     showing(kind('browser.open', Globe, 'opened 1 page', 'opened {n} pages', 'url'), 'url'),
     showing(kind('browser.read', FileText, 'read 1 page', 'read {n} pages'), 'section'),

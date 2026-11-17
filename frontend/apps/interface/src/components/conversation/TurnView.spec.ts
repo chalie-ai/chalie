@@ -975,7 +975,7 @@ describe('the plan — live under its message, gone once it settles', () => {
     // The plan call is the card's: the row said nothing, so the live line
     // shows its search alone, in its rows and in what its head says it did.
     expect(layout(wrapper)).toEqual(['user:what is the weather', 'plan', 'live']);
-    expect(wrapper.find('.activity .step__summary').text()).toBe('Delegated 1 web search');
+    expect(wrapper.find('.activity .step__summary').text()).toBe('Spawned 1 agent');
     expect(wrapper.findAll('.activity .call__summary').map((c) => c.text())).toEqual(['ran web_search']);
     const rows = wrapper.findAll('.msg-row');
     expect(rows[1]!.classes()).toEqual(expect.arrayContaining(['msg-row--chalie', 'msg-row--lead']));
@@ -1040,7 +1040,7 @@ describe('the plan — live under its message, gone once it settles', () => {
     expect(layout(wrapper)).toEqual([
       'user:what is the weather', 'step:ran web_search | Sunny, 24°.', 'footer',
     ]);
-    expect(wrapper.find('.step .step__summary').text()).toBe('Delegated 1 web search');
+    expect(wrapper.find('.step .step__summary').text()).toBe('Spawned 1 agent');
     expect(wrapper.find('.plan-card').exists()).toBe(false);
     expect(footerOf(wrapper).text()).not.toContain('plan');
   });

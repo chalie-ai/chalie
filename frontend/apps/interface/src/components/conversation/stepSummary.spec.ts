@@ -11,11 +11,14 @@
  *
  *   - what a row said stands before its block, the running row's too;
  *   - each step's phrase, counted per kind by distinct target (or by call when
- *     the kind has none), MCP tools as one kind, an unknown tool by its name;
+ *     the kind has none), MCP tools as one kind, an unknown tool by its name,
+ *     and every tool that starts a subagent as one count of agents spawned;
  *   - a failure is counted on the folded head;
  *   - plan calls are the plan card's: a step that only updated the plan and
  *     did not think draws no block and no row, while the card stands and the
  *     exchange's duration still counts that step's time;
+ *   - the tool search is never shown, stored or running: a step that only
+ *     searched for tools and did not think draws no block and no row;
  *   - each row's icon is its kind's, every row is a button that opens it, and
  *     the status mark closes the row.
  *
@@ -224,7 +227,7 @@ describe('a step reads as what it said, then what its calls did', () => {
     expect(wrapper.find('.plan-card').exists()).toBe(true);
     expect(wrapper.findAll('.step:not(.activity)')).toHaveLength(0);
     const live = wrapper.find('.activity');
-    expect(live.find('.step__summary').text()).toBe('Delegated 1 web search');
+    expect(live.find('.step__summary').text()).toBe('Spawned 1 agent');
     expect(live.findAll('.call__summary').map((c) => c.text())).toEqual(['Searching ferry times']);
     expect(wrapper.text()).not.toMatch(/Setting up the plan|Starting the ferry check|Marking the ferry check/);
   });
@@ -246,6 +249,73 @@ describe('a step reads as what it said, then what its calls did', () => {
     expect(wrapper.text()).not.toContain('Setting up the plan');
     // From the question at 09:00:00 to the answer at 09:00:30.
     expect(wrapper.find('.speech-form__meta').text()).toMatch(/· 30s/);
+  });
+
+  it('counts every tool that starts a subagent as one more agent spawned, whichever tool it is and wherever it ran among the other calls', () => {
+    const wrapper = mountTurn(block(TURN, [
+      row(TURN, 459, 'user', 'Find me a flat in Sliema and book a viewing'),
+      saidStep(460, [
+        chip(4600, 'web_search', { instructions: 'Sliema flats to rent' }, 'Searching Sliema flats'),
+        chip(4601, 'read', { source: 'budget.md' }, 'Reading the budget'),
+        chip(4602, 'web_browse', { instructions: 'Open the first listing' }, 'Browsing the first listing'),
+        chip(4603, 'pim', { instructions: 'Find a free evening' }, 'Finding a free evening'),
+        chip(4604, 'code_agent', { instructions: 'Compare the rents' }, 'Comparing the rents'),
+        chip(4605, 'subtask', { action: 'start', instructions: 'Draft the email to the agent' }, 'Drafting the email'),
+        // Messaging a running subtask spawns nothing, so it keeps its own phrase.
+        chip(4606, 'subtask', { action: 'message', subtask: 1, message: 'Keep it short' }, 'Asking for a shorter email'),
+      ]),
+      saidStep(461, [chip(4610, 'subtask', { action: 'start', instructions: 'Book the viewing' }, 'Booking the viewing')]),
+      row(TURN, 462, 'assistant', 'The viewing is booked.', { settled: true }),
+    ], false));
+
+    const [many, one] = wrapper.findAll('.step');
+    expect(many!.find('.step__summary').text()).toBe('Spawned 5 agents, read 1 file and messaged 1 subtask');
+    // Counted together on the head, each call keeps its own row.
+    expect(callRows(many!.element)).toEqual([
+      'Searching Sliema flats', 'Reading the budget', 'Browsing the first listing', 'Finding a free evening',
+      'Comparing the rents', 'Drafting the email', 'Asking for a shorter email',
+    ]);
+    expect(one!.find('.step__summary').text()).toBe('Spawned 1 agent');
+  });
+
+  it('never shows the tool search, which only loads tools: a step that only searched for tools, without thinking or text, takes no row and leaves the lead to the answer', () => {
+    const wrapper = mountTurn(block(TURN, [
+      row(TURN, 469, 'user', 'What is on my calendar tomorrow?'),
+      step(470, [chip(4700, 'find_tools', { query: 'calendar' }, 'Finding calendar tools')]),
+      row(TURN, 471, 'assistant', 'Two meetings tomorrow.', { settled: true }),
+    ], false));
+
+    const rows = wrapper.findAll('.msg-row');
+    expect(rows.map((r) => r.text().includes('Two meetings tomorrow.') ? 'answer' : r.classes().find((c) => /^msg-row--(user|footer)$/.test(c)))).toEqual([
+      'msg-row--user', 'answer', 'msg-row--footer',
+    ]);
+    expect(rows[1]!.classes()).toContain('msg-row--lead');
+    expect(wrapper.find('.step').exists()).toBe(false);
+    expect(wrapper.text()).not.toMatch(/Looked for tools|Finding calendar tools/);
+  });
+
+  it('leaves the tool search out of every step it ran in: beside other calls only they are counted and listed, and beside thinking only the thought shows', () => {
+    const wrapper = mountTurn(block(TURN, [
+      row(TURN, 479, 'user', 'Read my lease and check tomorrow'),
+      saidStep(480, [
+        chip(4800, 'find_tools', { query: 'files' }, 'Finding file tools'),
+        chip(4801, 'read', { source: 'lease.pdf' }, 'Reading the lease'),
+        chip(4802, 'find_tools', { query: 'calendar' }, 'Finding calendar tools'),
+      ]),
+      row(TURN, 481, 'assistant', '<p>Step 481.</p>', {
+        thinking: { traces: ['A calendar tool first.'], duration_ms: 4000, tokens: 12 },
+        tool_calls: [chip(4810, 'find_tools', { query: 'calendar events' }, 'Finding calendar tools again')],
+      }),
+      row(TURN, 482, 'assistant', 'The lease is fine and tomorrow is free.', { settled: true }),
+    ], false));
+
+    const [withCalls, withThought] = wrapper.findAll('.step');
+    expect(withCalls!.find('.step__summary').text()).toBe('Read 1 file');
+    expect(callRows(withCalls!.element)).toEqual(['Reading the lease']);
+    expect(withThought!.find('.step__label').text()).toBe('Thought for 4s');
+    expect(withThought!.find('.step__summary').exists()).toBe(false);
+    expect(withThought!.find('.call').exists()).toBe(false);
+    expect(wrapper.text()).not.toMatch(/Looked for tools|Finding file tools|Finding calendar tools/);
   });
 
   it('opens each call row on its kind\'s icon and closes it on its outcome; every row, a delegate\'s too, is a button that opens it', () => {
@@ -423,5 +493,33 @@ describe('the running step, fed by live frames', () => {
     expect(summaryToggle(stored()).getAttribute('aria-expanded')).toBe('true');
     expect(callsBody(stored()).hasAttribute('inert')).toBe(false);
     expect(callRows(stored())).toEqual(['Reading the lease', 'Fetching the deposit rules']);
+  });
+
+  it('counts every subagent its frames started as one more agent spawned, whichever tool started it', async () => {
+    const w = await makeWorld();
+
+    await w.send(toolFrame(9301, 'web_search', 'started', 'Searching the deposit rules', { instructions: 'Malta deposit rules' }));
+    await w.send(toolFrame(9302, 'subtask', 'started', 'Checking the lease clauses', { action: 'start', instructions: 'Check each clause' }));
+    await w.send(toolFrame(9303, 'code_agent', 'started', 'Adding up the deposit', { instructions: 'Add up the deposit' }));
+
+    const live = w.el.querySelector('.activity')!;
+    expect(live.querySelector('.step__summary')!.textContent).toBe('Spawned 3 agents');
+    expect(callRows(live)).toEqual(['Searching the deposit rules', 'Checking the lease clauses', 'Adding up the deposit']);
+  });
+
+  it('never shows the tool search while it runs: alone, the running step reads only "Thinking…"; beside another call, only that call', async () => {
+    const w = await makeWorld();
+    const live = () => w.el.querySelector('.activity')!;
+
+    await w.send(toolFrame(9401, 'find_tools', 'started', 'Finding lease tools', { query: 'lease' }));
+    expect(live().querySelector('.step__label')!.textContent).toBe('Thinking…');
+    expect(live().querySelector('.step__summary')).toBeNull();
+    expect(live().querySelector('.call')).toBeNull();
+
+    await w.send(toolFrame(9401, 'find_tools', 'done', 'Finding lease tools', { query: 'lease' }));
+    await w.send(toolFrame(9402, 'read', 'started', 'Reading the lease', { source: 'lease.pdf' }));
+    expect(live().querySelector('.step__summary')!.textContent).toBe('Read 1 file');
+    expect(callRows(live())).toEqual(['Reading the lease']);
+    expect(w.el.textContent).not.toMatch(/Looked for tools|Finding lease tools/);
   });
 });

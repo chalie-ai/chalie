@@ -12,7 +12,7 @@
  *
  *   - what a row said comes first, then its block: one muted head line —
  *     "Thought for Xs" only when the row thought, then what its calls did
- *     ("Delegated 3 web searches") — over one row per call; the user row's
+ *     ("Spawned 3 agents") — over one row per call; the user row's
  *     turn-zero calls are its memory seed and draw no block; plan calls are the
  *     plan card's, never a block's; a thought with nothing to unfold has no
  *     chevron;
@@ -121,7 +121,7 @@ const ANSWER_ROW: ConversationMessage = {
 /** The six step rows said nothing, so they read as one block: their thinking
  *  time summed (35.9s), none of what they thought, their calls in the order
  *  they ran. The plan calls (10, 18, 19) are not among them. */
-const MERGED = 'Thought for 36s · Used load_tools, delegated 5 web searches and read 1 file › '
+const MERGED = 'Thought for 36s · Used load_tools, spawned 5 agents and read 1 file › '
   + 'Loading web search tools, Searching Malta winter rentals, Searching Spain winter rentals, '
   + 'Searching Albania winter rentals, Albania winter weather, Albania cost of living, Reading the Albania cost page';
 
@@ -133,9 +133,9 @@ const SAID_ROWS = STEP_ROWS.map((r) => ({ ...r, content: `<p>Working on ${r.id}.
  *  thought alone. */
 const STEP_LABELS = [
   'Thought for 9s · Used load_tools › Loading web search tools',
-  'Thought for 4s · Delegated 1 web search › Searching Malta winter rentals',
-  'Thought for 3s · Delegated 1 web search › Searching Spain winter rentals',
-  'Thought for 11s · Delegated 3 web searches › Searching Albania winter rentals, Albania winter weather, Albania cost of living',
+  'Thought for 4s · Spawned 1 agent › Searching Malta winter rentals',
+  'Thought for 3s · Spawned 1 agent › Searching Spain winter rentals',
+  'Thought for 11s · Spawned 3 agents › Searching Albania winter rentals, Albania winter weather, Albania cost of living',
   'Thought for 6s · Read 1 file › Reading the Albania cost page',
   'Thought for 2s',
 ];
@@ -245,7 +245,7 @@ describe('a researched exchange reads as one block per row of work', () => {
     expect(layout(wrapper)).toEqual([
       'user',
       `Recall is done. | step:${STEP_LABELS[0]}`,
-      'step:Thought for 7s · Delegated 2 web searches › Searching Malta winter rentals, Searching Spain winter rentals',
+      'step:Thought for 7s · Spawned 2 agents › Searching Malta winter rentals, Searching Spain winter rentals',
       `Working on 33. | step:${STEP_LABELS[3]}`,
       'step:Thought for 9s · Read 1 file › Reading the Albania cost page',
       'Malta is the easiest quiet winter. | step:Thought for 33s',
@@ -340,7 +340,7 @@ describe('a researched exchange reads as one block per row of work', () => {
     ], false));
 
     const [merged] = steps(wrapper);
-    expect(workText(merged!).split(' › ')[0]).toBe('Thought for 36s · Used load_tools, delegated 5 web searches and read 1 file · 2 failed');
+    expect(workText(merged!).split(' › ')[0]).toBe('Thought for 36s · Used load_tools, spawned 5 agents and read 1 file · 2 failed');
   });
 });
 
@@ -360,7 +360,7 @@ describe('a block says only what its row did', () => {
     expect(layout(mountTurn(thinTurn()))).toEqual([
       'user',
       'Dates. | step:Thought for 5s',
-      'Search. | step:Thought · Delegated 1 web search › web_search',
+      'Search. | step:Thought · Spawned 1 agent › web_search',
       'Visa. | step:Read 1 file › Reading the visa page',
       'Malta is the easiest quiet winter. | step:Thought for 33s',
       'footer',
@@ -456,7 +456,7 @@ describe('the running block', () => {
     vi.advanceTimersByTime(12_000);
     await wrapper.vm.$nextTick();
 
-    expect(workText(live)).toBe('Thinking… · Delegated 1 web search and read 1 file › Searching Albania winter rentals, Reading the cost page');
+    expect(workText(live)).toBe('Thinking… · Spawned 1 agent and read 1 file › Searching Albania winter rentals, Reading the cost page');
     expect(live.findAll('.call').map((c) => [c.find('.call__summary').text(), c.find('.call__mark').attributes('aria-label')])).toEqual([
       ['Searching Albania winter rentals', 'running'],
       ['Reading the cost page', 'succeeded'],
@@ -472,7 +472,7 @@ describe('the running block', () => {
     startLiveTool(ConfigType.USER, TURN, 59, 'web_search', 'Checking the exchange rate');
     const wrapper = mountTurn(askedTurn());
     const element = wrapper.find('.activity').element;
-    expect(workText(wrapper.find('.activity'))).toBe('Thinking… · Delegated 1 web search › Checking the exchange rate');
+    expect(workText(wrapper.find('.activity'))).toBe('Thinking… · Spawned 1 agent › Checking the exchange rate');
 
     // The refetch returns the running row: its reasoning, its calls still running.
     const running = stepRow(57, { traces: ['Table first.'], duration_ms: 2400, tokens: 60 }, [
@@ -483,7 +483,7 @@ describe('the running block', () => {
 
     expect(layout(wrapper)).toEqual(['user', 'live']);
     expect(wrapper.find('.activity').element).toBe(element);
-    expect(workText(wrapper.find('.activity'))).toBe('Thought for 2s · Delegated 1 web search › Checking the exchange rate');
+    expect(workText(wrapper.find('.activity'))).toBe('Thought for 2s · Spawned 1 agent › Checking the exchange rate');
     expect(wrapper.find('.activity').text()).not.toMatch(/Drafting the comparison|Table first/);
   });
 
@@ -494,14 +494,14 @@ describe('the running block', () => {
     const element = wrapper.find('.activity').element;
     expect(layout(wrapper)).toEqual(['user', 'live']);
     expect(workText(wrapper.find('.activity'))).toBe(
-      'Thought for 13s · Used load_tools and delegated 2 web searches › Loading web search tools, Searching Malta winter rentals, Checking the exchange rate',
+      'Thought for 13s · Used load_tools and spawned 2 agents › Loading web search tools, Searching Malta winter rentals, Checking the exchange rate',
     );
 
     await wrapper.setProps({ block: turn([USER_ROW, ...before], true) });
 
     expect(layout(wrapper)).toEqual(['user', 'live']);
     expect(wrapper.find('.activity').element).toBe(element);
-    expect(workText(wrapper.find('.activity')).split(' › ')[0]).toBe('Thought for 34s · Used load_tools, delegated 6 web searches and read 1 file');
+    expect(workText(wrapper.find('.activity')).split(' › ')[0]).toBe('Thought for 34s · Used load_tools, spawned 6 agents and read 1 file');
     expect(wrapper.findAll('.activity .call__summary').at(-1)!.text()).toBe('Checking the exchange rate');
   });
 
