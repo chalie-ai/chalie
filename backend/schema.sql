@@ -481,8 +481,9 @@ CREATE INDEX IF NOT EXISTS idx_tool_calls_created ON tool_calls(created_at DESC)
 -- only. Either way compacted_up_to_id is the transcript row id the checkpoint
 -- folded up to, and the view's read drops its rows at or before it. No
 -- foreign keys: once a thread's opening row is purged its checkpoint matches
--- no row and reads as gone. A row with no compacted_up_to_id predates these
--- columns and is never read.
+-- no row and reads as gone. A row with no compacted_up_to_id is one the
+-- upgrade could not match to a transcript row (its thread has no rows), and
+-- it is never read.
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS compactions (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -12,7 +12,8 @@ The watermark is two-axis, selected by ``opening_id`` (the conversation view);
   thread's checkpoint is found by its record id. The thread read drops that
   thread's rows whose ``id <= compacted_up_to_id``.
 
-A row with no ``compacted_up_to_id`` predates these columns and is never read.
+A row with no ``compacted_up_to_id`` is one the upgrade could not match to a
+transcript row (its thread has no rows), and it is never read.
 The two axes never collide (§6.1): a MAIN compaction can't hide a fork reply and
 a FORK compaction can't hide the spine. This model owns the ``compactions`` SQL
 only; ``CompactionService`` owns the checkpoint envelope (``_wrap_with_checkpoint``).

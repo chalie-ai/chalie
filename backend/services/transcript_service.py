@@ -56,7 +56,9 @@ class TranscriptService:
         the fixed flag can't). Feeds
         ``PromptService``'s history assembly. ``[]`` when the config
         suppresses history. BOTH views exclude ``role='memory'`` rows
-        (memory-step inputs — turn plumbing, not conversation) by name. A
+        (memory-step inputs — turn plumbing, not conversation) by name. MAIN
+        reads turns, so a row with no ``turn_id`` belongs to none and is not
+        on it. A
         PRIOR turn that never settled is NOT dropped: a crash leaves its input
         row behind and the rendered thread still shows it, so dropping it here
         would hide from the model a message the user is looking at — the
@@ -106,6 +108,7 @@ class TranscriptService:
             for row in (
                 Transcript.filter("channel", channel)
                 .filter("id", watermark, ">")
+                .filter("turn_id", None, "IS NOT")
                 .filter("role", "memory", "!=")
                 .order_by("id ASC")
                 .get()
