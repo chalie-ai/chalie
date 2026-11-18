@@ -14,7 +14,9 @@ stored:
 * it shows on every later step of the turn the call was made in;
 * it is gone on the next turn, which rebuilds its context from the transcript;
 * the stored ``tool_calls`` row holds the bare result, and so does the tool
-  chip the person sees.
+  chip the person sees;
+* a hand-over written when the turn runs out of room reads the result as the
+  model was shown it, nudge included, and no stored row keeps the nudge.
 
 Drives the real production entry point (construct inertly, ``begin()``,
 ``result()``) against the real SQLite DB, with the real ``DispatchService``,
@@ -32,10 +34,13 @@ import pytest
 
 from abilities._ability import FOLLOW_UP_BLOCK, Ability
 from abilities._result import ToolResult
+from abilities._turn_handover_config import TurnHandoverConfig
+from abilities.chat_history_compactor import ChatHistoryCompactionConfig
 from configs.channels.user import UserConfig
 from configs.enums.ability_category import AbilityCategory
 from configs.enums.policy_channel import PolicyChannel
 from controllers.message_processor import MessageProcessor
+from exceptions import ContextLimit
 from models.policy import Policy
 from models.provider_response import ProviderResponse
 from models.thread_gist import ThreadGist
@@ -209,3 +214,75 @@ def test_stored_row_and_tool_chip_hold_the_bare_result(db: sqlite3.Connection) -
     chip = _serializer().tool_call(cast(int, row.id))
     assert chip is not None
     assert chip["result"] == row.result
+
+
+_HANDOVER_MARK = TurnHandoverConfig().system_prompt.splitlines()[0]
+_COMPACTION_MARK = ChatHistoryCompactionConfig().system_prompt.splitlines()[0]
+
+
+class _RunsOutOfRoomProvider:
+    """Serves the hand-over and the compactor by their system prompts and
+    records each hand-over body. The main turn calls ``nudge_probe``, is then
+    refused for length once, and answers on the retry; anything after that
+    gets the same answer."""
+
+    def __init__(self) -> None:
+        self.main_sends = 0
+        self.handover_bodies: list[str] = []
+
+    def get_context_limit(self) -> int:
+        return 200000
+
+    def send(self, dto: ProviderApiRequest) -> ProviderResponse:
+        system = dto.system
+        if _HANDOVER_MARK in system:
+            self.handover_bodies.append("\n".join(str(m.get("content") or "") for m in dto.messages))
+            return _answer("I was mid-task.")
+        if _COMPACTION_MARK in system:
+            return _answer("## Now\nthe compacted checkpoint")
+        self.main_sends += 1
+        if self.main_sends == 1:
+            return _step(nudge_probe.NAME, q="first")
+        if self.main_sends == 2:
+            raise ContextLimit("payload exceeds the model's maximum context length")
+        return _answer("All done.")
+
+
+def _stored_cells_containing(db: sqlite3.Connection, text: str) -> list[str]:
+    """Every ``table.column`` of an ordinary table whose stored value contains
+    *text*. Full-text index tables are skipped: their shadow tables hold the
+    same text and are scanned."""
+    tables = [r[0] for r in db.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND sql NOT LIKE 'CREATE VIRTUAL%'"
+    )]
+    hits: list[str] = []
+    for table in tables:
+        cursor = db.execute(f'SELECT * FROM "{table}"')
+        columns = [c[0] for c in cursor.description]
+        for row in cursor:
+            for column, value in zip(columns, row):
+                if isinstance(value, bytes):
+                    value = value.decode("utf-8", "replace")
+                if isinstance(value, str) and text in value:
+                    hits.append(f"{table}.{column}")
+    return hits
+
+
+def test_handover_reads_the_nudge_and_no_row_stores_it(db: sqlite3.Connection) -> None:
+    """When the turn runs out of room after the probe, the hand-over the model
+    writes itself is built from the result as the model was shown it — the
+    nudge included — and the nudge reaches no stored row."""
+    Policy.upsert(PolicyChannel.CHAT.value, nudge_probe.NAME, "allow")
+    provider = _RunsOutOfRoomProvider()
+    mp = MessageProcessor(UserConfig(), raw_input="probe the nudge")  # inert (I2)
+    with patch(_BUILD_CLIENT, return_value=provider):
+        mp.begin()
+        mp.result()
+        drain_background_turns()
+
+    execution = mp.turn_execution_service.latest_for_turn()
+    assert execution is not None
+    assert execution.state == TurnExecution.COMPLETED
+    assert len(provider.handover_bodies) == 1
+    assert _BLOCK in provider.handover_bodies[0]
+    assert _stored_cells_containing(db, _NUDGE) == []
