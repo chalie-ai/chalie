@@ -210,9 +210,9 @@ def test_a_scheduled_task_or_discovery_waits_for_its_subagent_and_reads_the_answ
     db: sqlite3.Connection, make_caller: Callable[[], ProcessorConfig], turn_id: int, delegate: str,
 ) -> None:
     """A scheduled task, or a discovery run, that calls a subagent waits for it:
-    the call's result is the subagent's answer, with the suggested next step
-    the subagent carries, and the caller's model
-    reads it on its next step. Nothing is sent back as a reply — not to the
+    the call's result is the subagent's answer, stored bare, and the caller's
+    model reads it on its next step together with the suggested next step the
+    subagent carries. Nothing is sent back as a reply — not to the
     caller's own channel, not to the person's chat — and the caller's turn runs
     once and completes."""
     caller = make_caller()
@@ -226,12 +226,10 @@ def test_a_scheduled_task_or_discovery_waits_for_its_subagent_and_reads_the_answ
     assert provider.unused() == {}
     [call] = calls_of(db, delegate)
     assert call["state"] == "done", call["result"]
-    assert _ANSWER in call["result"]
-    if nudge:
-        assert nudge in call["result"]
-    else:
-        assert _BLOCK_OPENER not in call["result"]
+    assert _ANSWER in call["result"] and _BLOCK_OPENER not in call["result"]
     assert _ANSWER in provider.texts("chat")[-1]
+    if nudge:
+        assert nudge in provider.read("chat")[-1]
     assert replies(db, call["id"]) == []
     assert replies(db, call["id"], caller.channel) == []
     assert _the_one_execution(db, caller.channel, mp.turn_id) == TurnExecution.COMPLETED

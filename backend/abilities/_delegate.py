@@ -45,15 +45,10 @@ from models.turn_execution import TurnExecution
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from typing import Protocol
 
     from configs.enums.policy_channel import PolicyChannel
     from controllers.message_processor import MessageProcessor
     from services.processor_config import ProcessorConfig
-
-    class _ActTrailRenderer(Protocol):
-        def _render_act_trail(self) -> str | None: ...
-
 
 logger = logging.getLogger(__name__)
 
@@ -336,13 +331,3 @@ def reply_follow_up(row: Transcript) -> str:
         return ""
     follow_up = AbilityRegistry.get(call.tool_name).follow_up(ToolResult.ok(answer), None)
     return f"\n{FOLLOW_UP_BLOCK.format(text=follow_up)}" if follow_up else ""
-
-
-def render_trail(mp: object) -> str:
-    """Render the current act-trail for a delegate's user prompt, or '' on miss."""
-    try:
-        trail = cast("_ActTrailRenderer", mp)._render_act_trail()
-        return trail or ""
-    except Exception:
-        logger.warning("[DELEGATE] act-trail render failed", exc_info=True)
-        return ""

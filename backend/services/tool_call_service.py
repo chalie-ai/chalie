@@ -19,6 +19,13 @@ result does not) gated by ``self.mp.push_websocket`` and silenced
 outright for the turn-zero memory seed (§6.10); a terminal one is followed by
 the turn's ``updated`` refetch poke. A delegate tool's frame also names the
 child turn it spawned, read off that turn's input row.
+
+``tool_calls.result`` holds the bare tool result. The text the calling model
+is shown may carry more — a follow-up block, a loop-guard steer — and that
+text lives only on this instance (:meth:`shown`), which lives exactly as long
+as one exchange: it is shown on every later step of that exchange and never
+stored, so no later reader (the interface, a hand-over, a skill draft, a later
+turn) ever sees it.
 """
 
 from __future__ import annotations
@@ -44,6 +51,9 @@ class ToolCallService:
 
     def __init__(self, mp: "MessageProcessor") -> None:
         self.mp = mp
+        # Row id → the text the model was shown, kept only where it differs
+        # from the stored bare result.
+        self._shown: dict[int, str] = {}
 
     def start(
         self, tool_name: str, params: dict[str, object], summary: "str | None" = None
@@ -80,9 +90,11 @@ class ToolCallService:
         # exists only for TEXT-UUID models (episodes).
         return cast("int | None", call.id)
 
-    def finish(self, call_id: "int | None", result: str, state: str) -> None:
+    def finish(self, call_id: "int | None", result: str, state: str, shown: "str | None" = None) -> None:
         """Write the terminal ``result``/``state`` onto a row :meth:`start`
-        opened, stamp ``ended_at``, and emit the terminal frame. No-op when
+        opened, stamp ``ended_at``, and emit the terminal frame. ``shown`` is
+        the text the model sees in place of ``result`` for the rest of this
+        exchange (see :meth:`shown`); it is never stored. No-op when
         ``call_id`` is None (the call was never recorded — no anchor). A
         write failure logs and is non-fatal."""
         if call_id is None:
@@ -100,6 +112,7 @@ class ToolCallService:
                 "[ToolCallService.finish] write failed (non-fatal): call=%s: %s", call_id, exc,
             )
             return
+        self._keep_shown(call_id, result, shown)
         call.delegate = self._spawned(call)
         self._emit(call)
 
@@ -134,14 +147,15 @@ class ToolCallService:
         state: str = ToolCall.DONE,
         summary: "str | None" = None,
         emit: bool = True,
+        shown: "str | None" = None,
     ) -> None:
         """One-shot terminal row for an outcome that never enters live
         execution (a denied/pre-validation-failed call, an unknown tool, or
         the turn-zero memory seed): written whole with its terminal ``state``
         and ``ended_at`` set. ``emit=False`` persists the audit row without a
         WS frame — an unknown tool must still land on the trail but fires no
-        live pill. A write failure logs and is non-fatal. Skips silently with
-        no anchor row."""
+        live pill. ``shown`` is as for :meth:`finish`. A write failure logs
+        and is non-fatal. Skips silently with no anchor row."""
         transcript_id = self._transcript_id()
         if transcript_id is None:
             logger.debug("[ToolCallService.record] skipping (no transcript_id): tool=%s", tool_name)
@@ -164,8 +178,23 @@ class ToolCallService:
                 tool_name, transcript_id, exc,
             )
             return
+        self._keep_shown(cast(int, call.id), result, shown)
         if emit:
             self._emit(call)
+
+    def shown(self, call: ToolCall) -> str:
+        """The text the model sees for *call* on its act trail: what this
+        exchange's dispatch showed it when that differs from the stored bare
+        result, else the stored result. A row this instance did not write — a
+        row from before results were stored bare included — reads as
+        stored."""
+        return self._shown.get(cast(int, call.id), call.result)
+
+    def _keep_shown(self, call_id: int, result: str, shown: "str | None") -> None:
+        """Hold *shown* for :meth:`shown` when it differs from the stored
+        *result*."""
+        if shown is not None and shown != result:
+            self._shown[call_id] = shown
 
     def by_turn(self) -> "list[ToolCall]":
         """Every tool call of the current turn, derived by joining

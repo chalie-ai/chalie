@@ -371,6 +371,11 @@ class PromptService:
         visible trail: only calls after the most recent ``chat_history_compactor``
         marker render, mirroring the pre-rewrite ``_render_act_trail``.
 
+        Each call renders as the model was shown it when it ran
+        (``tool_call_service.shown``): the stored bare result plus any
+        follow-up block or loop-guard steer, which are held for this exchange
+        only and never stored.
+
         The turn-0 auto-seed recall (``"_auto": true`` in its params) renders as
         a ``[background_memory]`` context block instead of a tool-call row — a
         seed presented as a call teaches the model that every turn opens with a
@@ -472,7 +477,7 @@ class PromptService:
         for call in calls:
             if call.tool_name == "chat_history_compactor" or cast("int", call.id) <= last_compaction:
                 continue
-            result = call.result
+            result = self.mp.tool_call_service.shown(call)
             tid = call.transcript_id
             while pending and pending[-1] < tid:
                 joined_after(pending.pop())
@@ -542,8 +547,8 @@ class PromptService:
             return ""
 
     def _trail(self) -> str:
-        """:meth:`act_trail`, guarded — the exception-safety the delegate
-        channels' ``render_trail`` wrapper used to provide."""
+        """:meth:`act_trail`, guarded: a trail-render failure logs and must
+        not crash the turn."""
         try:
             return self.act_trail()
         except Exception as exc:  # noqa: BLE001 — a trail-render hiccup must not crash the turn

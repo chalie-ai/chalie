@@ -92,32 +92,36 @@ class DispatchService:
         not retry a blocked tool forever. No cancel check — the loop guards
         should_stop() one line before calling this.
 
-        Appends a steering suffix to the persisted result when the same tool
+        Appends a steering suffix to what the model is shown when the same tool
         has already fired with identical params this turn, breaking the loop
-        before the hard runaway-kill threshold. The steer is persisted into the
-        tool_calls row so the model re-reads it on its next step (see
-        ``prompt_service`` rendering ``call.result``); the return value carries
-        the same string so callers see what the model will see."""
+        before the hard runaway-kill threshold. The steer and the tool's own
+        follow-up block are shown, never stored: the tool_calls row holds the
+        bare result, and the shown text lives on ``tool_call_service`` for the
+        rest of this exchange, so the model re-reads it on each later step
+        (``prompt_service`` renders ``tool_call_service.shown``). The return
+        value is the shown text, so callers see what the model will see."""
         params, act_summary, ability = self._prepare(tool_name, params)
         if ability is None:
             result_text = f"Unknown tool: {tool_name}"
             steer = self._repeat_error_steer(tool_name, result_text) or self._repeat_call_steer(tool_name, params)
             self.mp.tool_call_service.record(
-                tool_name=tool_name, params=params, result=result_text + steer,
+                tool_name=tool_name, params=params, result=result_text, shown=result_text + steer,
                 summary=act_summary, state=ToolCall.ERROR, emit=False,
             )
             return result_text + steer
 
-        result_text, call_id, state = self._dispatch_bound(tool_name, ability, params, act_summary)
+        result_text, shown, call_id, state = self._dispatch_bound(tool_name, ability, params, act_summary)
         steer = self._repeat_error_steer(tool_name, result_text) or self._repeat_call_steer(tool_name, params)
         if call_id is not None:
-            self.mp.tool_call_service.finish(call_id=call_id, result=result_text + steer, state=state)
+            self.mp.tool_call_service.finish(
+                call_id=call_id, result=result_text, shown=shown + steer, state=state,
+            )
         else:
             self.mp.tool_call_service.record(
-                tool_name=tool_name, params=params, result=result_text + steer,
+                tool_name=tool_name, params=params, result=result_text, shown=shown + steer,
                 summary=act_summary, state=state, emit=True,
             )
-        return result_text + steer
+        return shown + steer
 
     def _prepare(
         self, tool_name: str, params: dict[str, object],
@@ -190,19 +194,21 @@ class DispatchService:
         ability: "Ability",
         params: dict[str, object],
         act_summary: "str | None",
-    ) -> tuple[str, int | None, str]:
+    ) -> tuple[str, str, int | None, str]:
         """The ability-found path for ALREADY-canonicalised params (:meth:`_prepare`
         has sanitised the values, lifted ``act_summary``, and healed the keys):
         unknown-parameter refusal → ACTION_REQUIRED pre-gate → resolve permission →
-        policy-gate ``_execute``. Returns the rendered result, the tool_calls row id
-        opened on the allow path (``None`` when the call never executed), and the
-        terminal state to write."""
+        policy-gate ``_execute``. Returns the rendered bare result, the text the
+        model is shown (the bare result plus any follow-up block), the tool_calls
+        row id opened on the allow path (``None`` when the call never executed),
+        and the terminal state to write."""
         if (pre := self._refuse_unknown(ability, params) or self._prevalidate(ability, params)) is not None:
             # Both pre-gates fire BEFORE the permission is formed: a
             # hallucinated action would otherwise lazily seed a bogus
             # '<tool>.<action>' ask row and freeze the turn waiting for human
             # approval. Malformed input never reaches the policy gate or run().
-            return self._render(tool_name, pre, None), None, ToolCall.ERROR
+            refused = self._render(tool_name, pre, None)
+            return refused, refused, None, ToolCall.ERROR
 
         # The risk class the gate keys on is derived from the inputs via the
         # ability's classify_action hook (default None), NOT trusted from a
@@ -215,9 +221,10 @@ class DispatchService:
 
         call_id: int | None = None
         state = ToolCall.ERROR
+        shown: str | None = None
 
         def _run_gated() -> str:
-            nonlocal call_id, state
+            nonlocal call_id, state, shown
             # The SAME resolved action feeds the permission and the
             # untrusted-content steer: one non-injectable classification, two
             # consumers. Keying the steer off the raw 'action' param instead
@@ -225,13 +232,13 @@ class DispatchService:
             # str HERE, not at the resolution above — a non-str action must keep
             # forming the permission exactly as before (a bogus '<tool>.<junk>'
             # ask row is the pre-gate's problem, not something to widen away).
-            text, call_id, state = self._execute(
+            text, shown, call_id, state = self._execute(
                 ability, params, act_summary, action if isinstance(action, str) else None,
             )
             return text
 
         result_text = self._authorize(permission, _run_gated, act_summary)
-        return result_text, call_id, state
+        return result_text, result_text if shown is None else shown, call_id, state
 
     def _repeat_error_steer(self, tool_name: str, result_text: str) -> str:
         """Steering suffix when this exact error already fired for an identical
@@ -318,13 +325,14 @@ class DispatchService:
     def _execute(
         self, ability: "Ability", params: dict[str, object], act_summary: "str | None" = None,
         action: "str | None" = None,
-    ) -> tuple[str, "int | None", str]:
+    ) -> tuple[str, str, "int | None", str]:
         """Open row (via ``tool_call_service.start`` — emits ``started``) →
         run → resolve terminal state → render. Called ONLY on the allow path
         (``_dispatch_bound`` passes this as the gate's callback). Returns the
-        rendered envelope STRING plus the opened row id and its resolved terminal
-        state, so ``_dispatch_bound`` can finish that same row instead of opening
-        a second one.
+        rendered bare envelope STRING (what is stored), the same envelope with
+        the ability's follow-up block (what the model is shown), and the opened
+        row id and its resolved terminal state, so ``_dispatch_bound`` can
+        finish that same row instead of opening a second one.
 
         Reads the bound parent off ``ability.mp`` (set by ``_bind()``).
         act_summary (popped from params by ``dispatch()``) is the live summary;
@@ -350,8 +358,10 @@ class DispatchService:
         if tr.rich is not None and self.mp.config.RENDERS_CARDS:
             ordinal = self._next_ordinal(tool_name)
 
+        bare = self._render(tool_name, tr, ordinal)
         follow_up = ability.follow_up(tr, action)
-        return self._render(tool_name, tr, ordinal, follow_up=follow_up), call_id, state
+        shown = self._render(tool_name, tr, ordinal, follow_up=follow_up) if follow_up else bare
+        return bare, shown, call_id, state
 
     # ── Unknown-parameter refusal ──────────────────────────────────────────────
 
