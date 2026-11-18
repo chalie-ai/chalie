@@ -19,7 +19,7 @@ it does not cover reads exactly as one that does not exist.
 from __future__ import annotations
 
 from abc import ABC
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from abilities._ability import Ability, B
 from abilities._delegate import replies_late
@@ -27,6 +27,9 @@ from abilities._result import ToolResult
 from configs.enums.ability_category import AbilityCategory
 from models.agent import Agent
 from models.transcript import Transcript
+
+if TYPE_CHECKING:
+    from controllers.message_processor import MessageProcessor
 
 _SPAWN_AGAIN = "If you need to perform follow-ups you can spawn a new agent"
 
@@ -40,12 +43,17 @@ class AgentAbility(Ability[B], ABC):
     def get_search_tooltip(self) -> str:
         return self.get_summary()
 
-    def mine(self, agent: Agent) -> bool:
-        """Whether this call may manage ``agent``: the caller is the person's
-        chat, and ``agent`` is one the chat spawned."""
+    def bound(self) -> MessageProcessor:
+        """The MessageProcessor this call runs under — every agent tool has one."""
         mp = self.mp
         if mp is None:
             raise RuntimeError(f"{self.NAME}.run() dispatched without a bound MessageProcessor")
+        return mp
+
+    def mine(self, agent: Agent) -> bool:
+        """Whether this call may manage ``agent``: the caller is the person's
+        chat, and ``agent`` is one the chat spawned."""
+        mp = self.bound()
         return replies_late(mp.config.type()) and agent.spawned_by_channel == mp.channel
 
     def owned(self, agent_id: int) -> Agent | None:

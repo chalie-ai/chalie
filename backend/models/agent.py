@@ -85,10 +85,18 @@ class Agent(Model):
     @classmethod
     def end(cls, agent_id: int, status: str, response_id: int | None) -> bool:
         """Move a running agent to its terminal ``status`` — once: an agent
-        that already ended keeps its first outcome. Returns whether it moved."""
+        that already ended keeps its first outcome, unless a stop
+        (:meth:`cancel`) ends it again. Returns whether it moved."""
         moved = (
             cls.filter("agent_id", agent_id)
             .filter("status", cls.RUNNING)
             .update(status=status, response_id=response_id)
         )
+        return moved > 0
+
+    @classmethod
+    def cancel(cls, agent_id: int) -> bool:
+        """Move an agent to ``cancelled`` from any status — a stop always ends
+        it cancelled, whatever it was. Returns whether it moved."""
+        moved = cls.filter("agent_id", agent_id).filter("status", cls.CANCELLED, "!=").update(status=cls.CANCELLED)
         return moved > 0

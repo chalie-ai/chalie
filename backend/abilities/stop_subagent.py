@@ -6,26 +6,29 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""StopSubagentAbility — stop a running subagent the chat spawned.
+"""StopSubagentAbility — stop a subagent the chat spawned.
 
-The stop goes through :meth:`TurnExecutionService.cancel_turn`, the one cancel
-path, stamped :data:`STOP_REASON_PARENT_STOPPED` as when the caller's own stop
+A stop always ends the subagent cancelled, whatever its status. A working one
+goes through :meth:`TurnExecutionService.cancel_turn`, the one cancel path,
+stamped :data:`STOP_REASON_PARENT_STOPPED` as when the caller's own stop
 reaches it: the chat asked for the stop, so no "was stopped" reply comes back
-to it, and every subagent the stopped one spawned is stopped with it. A
-subagent that already ended gets how it ended instead (:func:`ended`).
+to it, and every subagent the stopped one spawned is stopped with it. One that
+already ended is moved to cancelled (:meth:`AgentService.cancel`), and the
+panel is told.
 """
 
 from __future__ import annotations
 
 from typing import ClassVar
 
-from abilities._agents import AgentAbility, ended, label, not_found
+from abilities._agents import AgentAbility, label, not_found
 from abilities._result import ToolResult
 from configs.enums.channels import Channel
 from configs.enums.param_key import Keys
 from contracts.params.agent_params_bag import AgentIdParams
 from contracts.params.param_bag import ParamBag
 from models.agent import Agent
+from services.agent_service import AgentService
 
 
 class StopSubagentAbility(AgentAbility[AgentIdParams]):
@@ -68,12 +71,14 @@ class StopSubagentAbility(AgentAbility[AgentIdParams]):
         agent = self.owned(params.agent_id)
         if agent is None:
             return not_found(params.agent_id)
-        if agent.status == Agent.RUNNING:
-            channel = Channel.for_delegate(agent.type)
-            if TurnExecutionService.cancel_turn(channel, agent.turn_id, stop_reason=STOP_REASON_PARENT_STOPPED):
-                return ToolResult.ok(f"Subagent {label(agent)} stopped.")
+        if agent.status == Agent.RUNNING and not TurnExecutionService.cancel_turn(
+            Channel.for_delegate(agent.type), agent.turn_id, stop_reason=STOP_REASON_PARENT_STOPPED,
+        ):
             # Nothing was cancelled: the subagent ended on its own first.
-            agent = Agent.by_id(agent.agent_id)
-            if agent is None or agent.status == Agent.RUNNING:
+            current = Agent.by_id(agent.agent_id)
+            if current is None or current.status == Agent.RUNNING:
                 raise RuntimeError(f"{self.NAME}: subagent #{params.agent_id} is still running after its stop")
-        return ended(agent)
+        cancelled = AgentService.cancel(agent.agent_id)
+        if cancelled is not None:
+            self.bound().announce(AgentService.frame(cancelled))
+        return ToolResult.ok(f"Subagent {label(agent)} stopped.")

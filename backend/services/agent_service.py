@@ -11,7 +11,8 @@ it from.
 
 Every way a subagent's turn ends — it answers, it is stopped, it crashes, or
 the process died under it — closes the agent in the transaction that closes
-that turn, through :meth:`end`, or at boot through :meth:`fail_running`.
+that turn, through :meth:`end`, or at boot through :meth:`fail_running`. A
+stop ends one cancelled whatever its status, through :meth:`cancel`.
 :meth:`view` is the row plus what a surface needs to draw it (its channel, and
 the summary of the call that started it); :meth:`frame` carries that on the
 wire whenever a row is written. Mp-less (Rule-3 depth): its callers hold the transaction.
@@ -65,6 +66,12 @@ class AgentService:
         or not its turn ever got an execution row to sweep."""
         ended = (Agent.by_id(a.agent_id) for a in Agent.running() if Agent.end(a.agent_id, Agent.FAILED, None))
         return [a for a in ended if a is not None]
+
+    @staticmethod
+    def cancel(agent_id: int) -> Agent | None:
+        """End agent ``agent_id`` cancelled, whatever its status — ``None``
+        when it already was."""
+        return Agent.by_id(agent_id) if Agent.cancel(agent_id) else None
 
     @staticmethod
     def spawn_call_id(agent: Agent) -> int | None:

@@ -10,13 +10,14 @@ a ``deny`` stored for any of them is not read.
   it a message. The message joins the subagent's own turn as a message from
   Chalie, carrying the call that spawned it, so the subagent reads it before it
   answers and its one reply goes back to that call. Once it is done, it is no
-  longer listed, and a message or a stop gets its final response instead.
+  longer listed and a message gets its final response, while a stop still ends
+  it cancelled and tells the panel.
 * A message to a working subtask joins its turn the same way: a message from
   Chalie, carrying the call that started it, read before it answers, with its
   one reply going back to that call.
 * Stopping a subtask stops it and the search it was waiting on, and nothing
-  comes back to the chat — it asked for the stop. A stopped subagent then
-  reads as stopped.
+  comes back to the chat — it asked for the stop. A second stop is told it
+  stopped again, with nothing written; a message reads it as stopped.
 * A subagent a scheduled task spawned is invisible to the chat: it is not
   listed, and the other three answer as for a number no subagent has. It runs
   on untouched.
@@ -27,7 +28,8 @@ a ``deny`` stored for any of them is not read.
   none, and are told no subagent has the number of a search the chat spawned.
   The search works on, with nothing joined to it, and answers the chat.
 * A subagent a restart cut off, which the next boot's sweep ends failed, reads
-  as stopped to a message or a stop, and its status reads failed.
+  as stopped to a message and its status reads failed; a stop then ends it
+  cancelled and tells the panel.
 * Once retention purges a subagent channel, its turn numbers come round again.
   A number the chat holds for a subagent it stopped then reaches only that
   stopped subagent, never the newer one working on the same turn number — and
@@ -177,6 +179,14 @@ def _input_rows(db: sqlite3.Connection, channel: str, turn_id: int) -> list[tupl
     ]
 
 
+def _statuses(frames: list[dict[str, object]], n: int) -> list[str]:
+    """The status each ``agent_changed`` frame for agent ``n`` carried, in order."""
+    return [
+        cast("dict[str, str]", f["agent"])["status"] for f in frames
+        if f.get("type") == "agent_changed" and cast("dict[str, int]", f["agent"])["agent_id"] == n
+    ]
+
+
 def _executions(channel: str, turn_id: int) -> int:
     return len(TurnExecution.filter("channel", channel).filter("turn_id", turn_id).get())
 
@@ -188,9 +198,9 @@ def test_the_chat_lists_checks_and_messages_its_working_subagent_then_reads_how_
     held on its next step. The chat finds the four tools, lists the search,
     reads its status and messages it, then ends its turn. Released, the search
     reads the message before it answers, and its one reply opens a turn on the
-    chat, which lists its subagents again and finds none, then messages and
-    stops the finished search and reads its status: the message and the stop
-    each get its final response."""
+    chat, which lists its subagents again and finds none, reads the finished
+    search's status, messages it and stops it: the message gets its final
+    response, and the stop ends it cancelled and tells the panel."""
     client, db, _store = authed_client
     _deny_agent_tools()
     held = Held(text(_DRAFT))
@@ -270,14 +280,16 @@ def test_the_chat_lists_checks_and_messages_its_working_subagent_then_reads_how_
     assert _answer(sent) == ("success", None, f"Message sent to subagent {_WEB} #{n}.")
     assert _answer(too_late) == _finished(_ANSWER)
     [stopped_late] = calls_of(db, StopSubagentAbility.NAME)
-    assert _answer(stopped_late) == _finished(_ANSWER)
+    assert _answer(stopped_late) == ("success", None, f"Subagent {_WEB} #{n} stopped.")
 
     # The message joined the search's own turn, carrying the call that spawned
     # it; the late ones reached nothing.
     assert _input_rows(db, _WEB_CHANNEL, n_turn) == [(_TASK, False, spawn_id), (_MESSAGE, True, spawn_id)]
     assert _executions(_WEB_CHANNEL, n_turn) == 1
     assert execution(_WEB_CHANNEL, n_turn).state == TurnExecution.COMPLETED
-    assert cast("Agent", Agent.by_id(n)).status == Agent.DONE
+    # The stop ended the done search cancelled, and the panel was told.
+    assert cast("Agent", Agent.by_id(n)).status == Agent.CANCELLED
+    assert _statuses(listener.frames, n) == [Agent.RUNNING, Agent.DONE, Agent.CANCELLED]
 
     # The search read it as Chalie's message on the step after the held one.
     read = provider.read(_WEB)
@@ -363,8 +375,9 @@ def test_stopping_a_subtask_stops_it_and_its_own_search_and_sends_nothing_back(d
     """The chat spawns a subtask, which spawns a ``web_search`` and waits on
     it. While the search is held, the chat stops the subtask: it is told the
     subtask stopped, the subtask and its search both end stopped by their
-    caller, and no reply comes back for either. A second stop, a message and a
-    status read then each find it stopped."""
+    caller, and no reply comes back for either. A second stop is told it
+    stopped, with nothing written and no frame sent; a message finds it stopped
+    and a status read cancelled."""
     _deny_agent_tools()
     held = Held(text(_DRAFT))
     seen: dict[str, int] = {}
@@ -412,13 +425,14 @@ def test_stopping_a_subtask_stops_it_and_its_own_search_and_sends_nothing_back(d
 
     stopped, stopped_again = calls_of(db, StopSubagentAbility.NAME)
     assert _answer(stopped) == ("success", None, f"Subagent {SubtaskAbility.NAME} #{n} stopped.")
-    assert _answer(stopped_again) == ("error", "agent-stopped", _STOPPED)
+    assert _answer(stopped_again) == ("success", None, f"Subagent {SubtaskAbility.NAME} #{n} stopped.")
     [message] = calls_of(db, MessageSubagentAbility.NAME)
     assert _answer(message) == ("error", "agent-stopped", _STOPPED)
     [status] = calls_of(db, AgentStatusAbility.NAME)
     assert json.loads(_answer(status)[2]) == {
         "agent_id": n, "type": SubtaskAbility.NAME, "status": Agent.CANCELLED, "last_output": None,
     }
+    assert _statuses(listener.frames, n) == [Agent.RUNNING, Agent.CANCELLED]
 
     for channel, turn_id, tool_name in ((_SUBTASK, subtask_turn, SubtaskAbility.NAME), (_WEB_CHANNEL, search_turn, _WEB)):
         ended = execution(channel, turn_id)
@@ -614,7 +628,8 @@ def test_a_stopped_subagents_number_never_reaches_the_newer_one_on_its_reused_tu
     """The chat stops a ``web_search`` it spawned. Retention then purges the
     search channel, so the next search the chat spawns runs as the same turn
     number. While that one works, the chat messages, stops and checks the
-    first by its number: each finds the first stopped, with nothing written.
+    first by its number: the message and the status read find it stopped and
+    the stop says it stopped, with nothing written.
     It then messages the newer search by its own number, which reads that
     message — and only that one — before it answers, and is not stopped."""
     _deny_agent_tools()
@@ -695,7 +710,7 @@ def test_a_stopped_subagents_number_never_reaches_the_newer_one_on_its_reused_tu
     assert _answer(message) == ("error", "agent-stopped", _STOPPED)
     assert _answer(to_the_newer) == ("success", None, f"Message sent to subagent {_WEB} #{newer.agent_id}.")
     [*_, stopped_again] = calls_of(db, StopSubagentAbility.NAME)
-    assert _answer(stopped_again) == ("error", "agent-stopped", _STOPPED)
+    assert _answer(stopped_again) == ("success", None, f"Subagent {_WEB} #{n} stopped.")
     [status] = calls_of(db, AgentStatusAbility.NAME)
     assert json.loads(_answer(status)[2]) == {
         "agent_id": n, "type": _WEB, "status": Agent.CANCELLED, "last_output": None,
@@ -714,20 +729,20 @@ def test_a_stopped_subagents_number_never_reaches_the_newer_one_on_its_reused_tu
     assert reply["content"] == _ANSWER
 
 
-def test_a_subagent_a_restart_cut_off_reads_as_stopped_and_its_status_as_failed(db: sqlite3.Connection) -> None:
+def test_a_subagent_a_restart_cut_off_reads_as_failed_and_a_stop_ends_it_cancelled(db: sqlite3.Connection) -> None:
     """The process dies while a ``web_search`` the chat spawned is mid-call, so
     its agent is left running. The next boot's sweep ends it failed and tells
-    the chat it was cut off. The chat then messages, stops and checks it by its
-    number: the message and the stop each find it stopped, nothing joins its
-    turn, and its status reads failed."""
+    the chat it was cut off. The chat then messages, checks and stops it by its
+    number: the message finds it stopped and nothing joins its turn, its status
+    reads failed, and the stop ends it cancelled and tells the panel."""
     _deny_agent_tools()
     seen: dict[str, int] = {}
 
     def reach_it() -> ProviderResponse:
         return calls(
             tool(MessageSubagentAbility.NAME, agent_id=seen["n"], message=_MESSAGE),
-            tool(StopSubagentAbility.NAME, agent_id=seen["n"]),
             tool(AgentStatusAbility.NAME, agent_id=seen["n"]),
+            tool(StopSubagentAbility.NAME, agent_id=seen["n"]),
         )
 
     provider = ChannelProvider(
@@ -763,12 +778,13 @@ def test_a_subagent_a_restart_cut_off_reads_as_stopped_and_its_status_as_failed(
     assert _blocked(db) == []
     [message] = calls_of(db, MessageSubagentAbility.NAME)
     assert _answer(message) == ("error", "agent-stopped", _STOPPED)
-    [stopped] = calls_of(db, StopSubagentAbility.NAME)
-    assert _answer(stopped) == ("error", "agent-stopped", _STOPPED)
     [status] = calls_of(db, AgentStatusAbility.NAME)
     assert json.loads(_answer(status)[2]) == {"agent_id": n, "type": _WEB, "status": Agent.FAILED, "last_output": None}
+    [stopped] = calls_of(db, StopSubagentAbility.NAME)
+    assert _answer(stopped) == ("success", None, f"Subagent {_WEB} #{n} stopped.")
+    assert _statuses(frames, n) == [Agent.CANCELLED]
 
     assert _input_rows(db, _WEB_CHANNEL, turn) == [(_TASK, False, str(search["id"]))]
     assert _executions(_WEB_CHANNEL, turn) == 1
     assert execution(_WEB_CHANNEL, turn).stop_reason == STOP_REASON_PROCESS_DEATH
-    assert cast("Agent", Agent.by_id(n)).status == Agent.FAILED
+    assert cast("Agent", Agent.by_id(n)).status == Agent.CANCELLED

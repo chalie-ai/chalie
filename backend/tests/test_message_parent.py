@@ -537,6 +537,8 @@ def test_stopping_a_subagent_that_waits_for_a_reply_ends_its_wait_and_sends_noth
 
     assert len(provider.read(_WEB)) == 1
     assert cast("Agent", Agent.by_id(n)).status == Agent.CANCELLED
+    changed = [cast("dict[str, object]", f["agent"]) for f in listener.frames if f.get("type") == "agent_changed"]
+    assert [a["status"] for a in changed if a["agent_id"] == n] == [Agent.RUNNING, Agent.CANCELLED]
     ended = execution(_WEB_CHANNEL, turn)
     assert (ended.state, ended.stop_reason) == (TurnExecution.CANCELLED, STOP_REASON_PARENT_STOPPED)
     assert replies(db, cast("int", spawn["id"])) == []
