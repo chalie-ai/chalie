@@ -314,9 +314,9 @@ def _init_services() -> None:
 
 
 def _reply_to_swept_delegates(swept: list["TurnExecution"]) -> None:
-    """Tell the caller of every delegate turn the boot sweep closed that a
-    restart cut it off — the reply the delegate's own end would have sent,
-    had its process lived. ``reply_to_caller`` settles, from the stored rows,
+    """Tell the caller of every delegate turn the boot sweep closed that it
+    crashed — the reply the delegate's own end would have sent, had its
+    process lived. ``reply_to_caller`` settles, from the stored rows,
     whether a swept turn has a caller that did not wait for it; any other
     swept turn is skipped. One failed notice is logged and the rest still go
     out: a caller missing its notice must never stop the boot."""

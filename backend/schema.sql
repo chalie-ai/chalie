@@ -546,13 +546,16 @@ CREATE TABLE IF NOT EXISTS plan_tasks (
 -- ────────────────────────────────────────────────────────────────
 -- AGENTS — one row per subagent spawned, by any caller. agent_id is the
 -- number the model uses for it; type is the spawn tool's name, and the
--- subagent runs on a channel of its own, delegate:<type>:<agent_id>, its turn
--- there being turn_id.
+-- subagent runs on a channel of its own, delegate:<type>:<agent_id>, its
+-- current turn there being turn_id: its spawn turn, then each turn a message
+-- opens on it.
 -- spawned_by_channel / spawned_in_turn name the caller's turn; prompt is the
--- plain task it wrote. status leaves 'running' once, when the run ends;
--- response_id is the final reply row of a run that ended 'done'. The
--- retention sweep may delete that row; the agent is still kept, so its
--- reference is cleared rather than the agent deleted with it.
+-- plain task it wrote. status leaves 'running' once per turn, when that turn
+-- ends; a message to a 'done' agent opens its next turn and sets it running
+-- again. response_id is the row its latest turn ended on: the final reply
+-- when that turn ended 'done', the turn's last row when it ended 'cancelled'
+-- or 'failed'. The retention sweep may delete that row; the agent is still
+-- kept, so its reference is cleared rather than the agent deleted with it.
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS agents (
     agent_id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -619,12 +622,17 @@ CREATE INDEX IF NOT EXISTS idx_turn_executions_open
 -- still working, or while other messages already waited. Each turn end on
 -- the channel removes the oldest and opens its turn, one per turn end.
 -- tool_call_id is the tool_calls row that sent the message, if any.
+-- origin is the JSON of the sender's origin, where its turn's prompts land, if any.
+-- response_id is the transcript row of the subagent answer the message carries,
+-- whose follow-up block its turn's prompt shows, if any. No foreign key.
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS queued_messages (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     channel      TEXT    NOT NULL,
     text         TEXT    NOT NULL,
     tool_call_id INTEGER,
+    origin       TEXT,
+    response_id  INTEGER,
     created_at   TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 

@@ -180,7 +180,7 @@ def earlier_agents(db: sqlite3.Connection) -> None:
                 type=WebSearchAbility.NAME, prompt="an earlier search",
                 spawned_by_channel=Channel.SCHEDULE.value, spawned_in_turn=n, turn_id=100_000 + n,
             ).insert()
-            Agent.end(agent.agent_id, Agent.DONE, None)
+            Agent.end(agent.agent_id, agent.turn_id, Agent.DONE, None)
 
 
 # ── Vault backup isolation ────────────────────────────────────────

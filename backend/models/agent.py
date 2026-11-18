@@ -12,7 +12,8 @@ Active-record row-model. The table's key is ``agent_id`` —
 there is **no** ``id`` column — so the base ``Model.save()``/``delete()``
 (id-centric) do not apply; ``__columns__`` omits ``id`` and this model carries
 its own :meth:`insert`. ``type`` is the spawn tool's name and ``turn_id`` the
-subagent's own turn on its own channel (:attr:`channel`). Holds no mp, calls
+subagent's current turn on its own channel (:attr:`channel`) — its spawn turn
+first, then each turn a message opens (:meth:`resume`). Holds no mp, calls
 no service (Rule-3 depth).
 """
 
@@ -81,12 +82,27 @@ class Agent(Model):
         return cls.filter("status", cls.RUNNING).order_by("agent_id ASC").get()
 
     @classmethod
-    def end(cls, agent_id: int, status: str, response_id: int | None) -> bool:
-        """Move a running agent to its terminal ``status`` — once: an agent
-        that already ended keeps its first outcome, unless a stop
-        (:meth:`cancel`) ends it again. Returns whether it moved."""
+    def resume(cls, agent_id: int, turn_id: int) -> bool:
+        """Move an agent that ended done onto its next turn, ``turn_id``, as
+        running again — in the transaction that opens that turn. Returns
+        whether it moved; a running, cancelled or failed agent never does."""
         moved = (
             cls.filter("agent_id", agent_id)
+            .filter("status", cls.DONE)
+            .update(status=cls.RUNNING, turn_id=turn_id)
+        )
+        return moved > 0
+
+    @classmethod
+    def end(cls, agent_id: int, turn_id: int, status: str, response_id: int | None) -> bool:
+        """Move a running agent to its terminal ``status`` from its current
+        turn, ``turn_id`` — each turn ends its agent once: a turn that already
+        ended it, or that is no longer its current turn, moves nothing, and
+        only a stop (:meth:`cancel`) ends it again. Returns whether it
+        moved."""
+        moved = (
+            cls.filter("agent_id", agent_id)
+            .filter("turn_id", turn_id)
             .filter("status", cls.RUNNING)
             .update(status=status, response_id=response_id)
         )

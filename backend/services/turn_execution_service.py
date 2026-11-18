@@ -24,10 +24,12 @@ that commits (:class:`~services.agent_service.AgentService`).
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
-from abilities.message_parent import waiting_on
 from configs.channels import config_for
+from configs.enums.channels import Channel
+from models.queued_message import QueuedMessage
 from models.tool_call import ToolCall
 from models.transcript import Transcript
 from models.turn_execution import TurnExecution
@@ -47,9 +49,19 @@ logger = logging.getLogger(__name__)
 #: never got to close.
 STOP_REASON_PROCESS_DEATH = "process death"
 #: Stamped as ``stop_reason`` on a delegate's turn stopped by its caller's own
-#: stop, by the stop of the chat turn its waiting message is in, or by the
-#: chat's ``stop_subagent`` call naming it.
+#: stop, or by the chat's ``stop_subagent`` call naming it.
 STOP_REASON_PARENT_STOPPED = "parent stopped"
+
+
+@dataclass(frozen=True)
+class CancelledTurn:
+    """A turn :meth:`TurnExecutionService.stamp_cancelled` closed: its
+    execution row, the agent that turn ended (``None`` when it ended none),
+    and the turn's own tool calls, whose delegate turns are stopped with it."""
+
+    execution: TurnExecution
+    agent: Agent | None
+    calls: list[ToolCall]
 
 
 class TurnExecutionService:
@@ -62,8 +74,9 @@ class TurnExecutionService:
         """Insert this turn's row (state=working), stash it on
         ``self.mp.execution``, and emit the lifecycle frame. ``None`` on a
         write failure (logged) — ``should_stop`` fails open when there is no
-        row to poll. A turn a spawn opened first announces its ``agents`` row,
-        committed with its input row in ``begin()``."""
+        row to poll. A turn opened on a subagent — its spawn, or a later turn
+        a message resumed it on — first announces its ``agents`` row,
+        committed with its input row."""
         if self.mp.agent is not None:
             self.mp.announce(AgentService.frame(self.mp.agent))
         try:
@@ -135,55 +148,101 @@ class TurnExecutionService:
         (:meth:`MessageProcessor.broadcast_as`). :meth:`finish` becomes a
         no-op once it observes this row already terminal — the row closed here
         always wins, never resurrected or overwritten by the doomed turn's own
-        eventual finish(). The read and the write share one ``BEGIN
-        IMMEDIATE`` transaction, so a turn settling or a message joining on
-        another thread lands wholly before or wholly after it. Stopping a
-        caller's turn also stops every delegate turn its own tool calls
-        spawned — a subtask running in the background as much as a child the
-        caller is blocked waiting on — each cancelled in turn from here with
-        :data:`STOP_REASON_PARENT_STOPPED`, the same reason ``stop_subagent``
-        stamps when the chat stops one child by name; an already-ended child
-        simply returns ``None``. It also stops every subagent whose message
-        the turn holds and that still waits on it for a reply. A subagent's
-        turn closes its ``agents`` row ``cancelled`` in the same
-        transaction."""
-        from controllers.message_processor import MessageProcessor  # noqa: PLC0415 — the MP imports this module
+        eventual finish().
 
+        The cancel is two parts. :meth:`stamp_cancelled` is the read and every
+        write, run here in one ``BEGIN IMMEDIATE`` transaction, so a turn
+        settling or a message joining or queuing on another thread lands
+        wholly before or wholly after it; :meth:`propagate_cancel` sends the
+        frames and stops the children only once that commits, so no surface
+        is told of a state it cannot yet read. A caller that must decide inside
+        a transaction of its own whether there is a turn to cancel —
+        ``stop_subagent``, which reads its subagent's status there — runs the
+        stamp inside that transaction and the propagation once it commits,
+        and gets the same ordering. Here, a stamp that fails is rolled back
+        and logged, and ``None`` comes back, as when no turn is open.
+
+        Stopping a caller's turn also stops every delegate turn its own tool
+        calls spawned — a subtask running in the background as much as a
+        child the caller is blocked waiting on, or a subagent's turn a message
+        it sent opened, however much later — each cancelled in turn by
+        :meth:`propagate_cancel` with :data:`STOP_REASON_PARENT_STOPPED`, the
+        same reason ``stop_subagent`` stamps when the chat stops one child by
+        name; an already-ended child simply returns ``None``. A message one of
+        its calls sent to a subagent, still waiting in that subagent's queue
+        (:class:`QueuedMessage`), is deleted in the stamp's transaction, so it
+        never opens a turn; its text stays in that call's own row. A message
+        waiting on the chat is never deleted, even when one of the stopped
+        turn's calls queued it — a subagent's reply, keyed by the call that
+        spawned it, or a subagent's message to the chat, keyed by its own call
+        — so it still opens its chat turn. A subagent's turn closes its
+        ``agents`` row ``cancelled`` in the stamp's transaction, keeping the
+        turn's last row."""
         try:
             with Database.transaction():
-                execution = TurnExecution.open_turn(channel, turn_id)
-                if execution is None:
-                    return None
-                execution.cancel_requested = True
-                execution.state = TurnExecution.CANCELLED
-                execution.ended_at = utc_now().isoformat()
-                execution.stop_reason = stop_reason
-                execution.save()
-                agent = AgentService.end(execution.channel, execution.turn_id, execution.state)
+                cancelled = cls.stamp_cancelled(channel, turn_id, stop_reason)
         except Exception as exc:
             logger.warning(
                 "[TurnExecutionService] cancel failed for channel=%s turn_id=%s: %s",
                 channel, turn_id, exc,
             )
             return None
+        if cancelled is None:
+            return None
+        cls.propagate_cancel(cancelled)
+        return cancelled.execution
+
+    @staticmethod
+    def stamp_cancelled(channel: str, turn_id: int, stop_reason: str | None) -> CancelledTurn | None:
+        """The writes of :meth:`cancel_turn`, inside the caller's transaction,
+        sending nothing: the live row for (channel, turn_id) stamped
+        CANCELLED with ``stop_reason`` and ``ended_at``, a subagent's
+        ``agents`` row on that turn ended ``cancelled`` with the turn's last
+        row, and every message the turn's calls left queued off the chat
+        deleted. ``None`` when no row for the turn is open. What comes back is
+        what :meth:`propagate_cancel` needs once the transaction commits."""
+        execution = TurnExecution.open_turn(channel, turn_id)
+        if execution is None:
+            return None
+        execution.cancel_requested = True
+        execution.state = TurnExecution.CANCELLED
+        execution.ended_at = utc_now().isoformat()
+        execution.stop_reason = stop_reason
+        execution.save()
+        agent = AgentService.end(
+            execution.channel, execution.turn_id, execution.state,
+            Transcript.last_id(execution.channel, execution.turn_id),
+        )
+        calls = ToolCall.by_turn(channel, turn_id)
+        QueuedMessage.filter_in("tool_call_id", [c.id for c in calls]).filter(
+            "channel", Channel.USER.value, "!=",
+        ).delete()
+        return CancelledTurn(execution=execution, agent=agent, calls=calls)
+
+    @classmethod
+    def propagate_cancel(cls, cancelled: CancelledTurn) -> None:
+        """What follows :meth:`stamp_cancelled` once its transaction commits:
+        the closed row's frame, sent as that turn's own frames are, the frame
+        of the agent it ended, and the cancel of every delegate turn the
+        stopped turn's calls spawned (:meth:`cancel_turn`, each in its own
+        transaction)."""
+        from controllers.message_processor import MessageProcessor  # noqa: PLC0415 — the MP imports this module
+
+        execution = cancelled.execution
         MessageProcessor.broadcast_as(execution, execution.channel, cls._row_config(execution))
-        if agent is not None:
-            Websocket.broadcast(AgentService.frame(agent))
+        if cancelled.agent is not None:
+            Websocket.broadcast(AgentService.frame(cancelled.agent))
         # Cascade to every delegate child the caller's tool calls spawned: a
         # child only reads its own row's flag, so it would otherwise run on
         # against a stopped conversation. An already-ended child returns None.
-        calls = ToolCall.by_turn(channel, turn_id)
-        children = Transcript.delegate_turns({cast("int", c.id): (c.created_at, c.ended_at) for c in calls})
+        # Open-ended: a message a call queued may have opened its turn long
+        # after the call ended.
+        children = Transcript.delegate_turns({cast("int", c.id): (c.created_at, None) for c in cancelled.calls})
         for entry in children.values():
             cls.cancel_turn(
                 cast("str", entry["channel"]), cast("int", entry["turn_id"]),
                 stop_reason=STOP_REASON_PARENT_STOPPED,
             )
-        # A subagent whose message this turn holds waits on it for the reply,
-        # which this stop means will never come.
-        for agent in waiting_on(channel, turn_id):
-            cls.cancel_turn(agent.channel, agent.turn_id, stop_reason=STOP_REASON_PARENT_STOPPED)
-        return execution
 
     @staticmethod
     def _row_config(execution: TurnExecution) -> ProcessorConfig | None:
@@ -226,13 +285,13 @@ class TurnExecutionService:
 
         A subagent's turn that this closes closes its ``agents`` row in the
         same transaction — ``done`` with its final reply row, ``cancelled`` or
-        ``failed`` — and that row's frame follows the lifecycle frame. A turn
-        whose row :meth:`open` failed to write has no row to close, but its
-        agent still ends here, so it is never left running."""
+        ``failed`` with the turn's last row (:meth:`_response_id`) — and that
+        row's frame follows the lifecycle frame. A turn whose row :meth:`open`
+        failed to write has no row to close, but its agent still ends here, so
+        it is never left running."""
         current: TurnExecution | None = self.mp.execution
-        response_id = self.mp.current_transcript_id if state == TurnExecution.COMPLETED else None
         if current is None or current.id is None:
-            self._end_agent_without_row(state, response_id)
+            self._end_agent_without_row(state)
             return None
         execution = TurnExecution(
             id=current.id,
@@ -253,7 +312,10 @@ class TurnExecutionService:
                     .filter("ended_at", None, "IS")
                     .update(ended_at=execution.ended_at, state=state, stop_reason=stop_reason)
                 )
-                agent = AgentService.end(execution.channel, execution.turn_id, state, response_id) if closed else None
+                agent = (
+                    AgentService.end(execution.channel, execution.turn_id, state, self._response_id(state))
+                    if closed else None
+                )
         except Exception as exc:
             logger.warning("[TurnExecutionService] finish failed for id=%s: %s", current.id, exc)
             return None
@@ -272,15 +334,21 @@ class TurnExecutionService:
             self.mp.announce(AgentService.frame(agent))
         return execution
 
-    def _end_agent_without_row(self, state: str, response_id: int | None) -> None:
-        """End the agent this turn's spawn recorded when the turn has no
-        execution row to close it with — logged, never raised, as for the
-        row itself."""
+    def _response_id(self, state: str) -> int | None:
+        """The row this turn ends on, which its agent keeps: the final reply
+        when it completed, else the turn's last row."""
+        if state == TurnExecution.COMPLETED:
+            return self.mp.current_transcript_id
+        return Transcript.last_id(self.mp.channel, self.mp.turn_id)
+
+    def _end_agent_without_row(self, state: str) -> None:
+        """End the agent this turn opened on when the turn has no execution
+        row to close it with — logged, never raised, as for the row itself."""
         if self.mp.agent is None:
             return
         try:
             with self.mp.db.transaction():
-                agent = AgentService.end(self.mp.channel, self.mp.turn_id, state, response_id)
+                agent = AgentService.end(self.mp.channel, self.mp.turn_id, state, self._response_id(state))
         except Exception as exc:
             logger.warning(
                 "[TurnExecutionService] ending agent #%s failed: %s", self.mp.agent.agent_id, exc,

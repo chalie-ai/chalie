@@ -6,7 +6,8 @@ spawned it: the person's chat, a scheduled task, or another subagent. The row's
 ``agent_id`` is the number the model knows the subagent by, never its turn id.
 The row ends with its turn, once: ``done`` with the id of its final answer,
 ``cancelled`` when the person or its caller's stop ends it, ``failed`` when it
-crashed or a restart cut it off. Every write goes out on the socket as an
+crashed or a restart cut it off — the last two with the id of the last row
+its turn wrote. Every write goes out on the socket as an
 ``agent_changed`` frame carrying the row as the listing returns it, and
 ``GET /api/agents/all`` lists the agents still running to a person signed in on
 the page — never to a bearer-token client.
@@ -145,6 +146,15 @@ def _final_answer(db: sqlite3.Connection, channel: str, turn_id: int) -> sqlite3
     return cast("sqlite3.Row", row)
 
 
+def _last_row(db: sqlite3.Connection, channel: str, turn_id: int) -> int:
+    """The id of the last row one turn wrote, whatever its role."""
+    row = db.execute(
+        "SELECT MAX(id) FROM transcript WHERE channel = ? AND turn_id = ?", (channel, turn_id),
+    ).fetchone()
+    assert row is not None and row[0] is not None, f"no rows on {channel} turn {turn_id}"
+    return cast("int", row[0])
+
+
 def _running(
     agent_id: int, name: str, turn_id: int, *, by: str, in_turn: int, prompt: str = _INSTRUCTIONS,
     summary: str = _SUMMARY,
@@ -273,8 +283,9 @@ def test_a_subagent_another_subagent_spawns_names_that_subagent_and_its_turn(aut
 
 def test_a_subagent_the_person_stops_is_cancelled_once_with_no_answer(authed_client: _Client) -> None:
     """The person stops a running search from its panel. Its row is
-    ``cancelled`` with no answer, and the socket carries the row twice —
-    running, then cancelled — even though the search's own turn ends after."""
+    ``cancelled`` with the id of its turn's last row — never its late answer —
+    and the socket carries the row twice — running, then cancelled — even
+    though the search's own turn ends after."""
     client, db, _store = authed_client
     held = Held(text(_ANSWER))
     provider = ChannelProvider(
@@ -293,16 +304,18 @@ def test_a_subagent_the_person_stops_is_cancelled_once_with_no_answer(authed_cli
     assert stop.status_code == 200 and (stop.get_json() or {})["result"]["cancelled"] is True
     assert held.opened and provider.unused() == {}
     running = _running(EARLIER_AGENTS + 1, WebSearchAbility.NAME, turn, by=USER, in_turn=parent.turn_id, summary="")
-    cancelled = {**running, "status": "cancelled"}
-    assert tuple(_row(db, EARLIER_AGENTS + 1)[k] for k in ("status", "response_id")) == ("cancelled", None)
+    last = _last_row(db, channel, turn)
+    cancelled = {**running, "status": "cancelled", "response_id": last}
+    assert tuple(_row(db, EARLIER_AGENTS + 1)[k] for k in ("status", "response_id")) == ("cancelled", last)
+    assert _ANSWER not in [r[0] for r in db.execute("SELECT content FROM transcript WHERE id = ?", (last,))]
     assert _frames(listener) == [_changed(running), _changed(cancelled)]
     assert _listing(client) == _empty_listing()
 
 
 def test_stopping_the_caller_cancels_the_subtask_it_started_once(authed_client: _Client) -> None:
     """The person stops the chat while the subtask it started is mid-call.
-    The subtask's row is ``cancelled`` with no answer, and the socket carries
-    exactly one cancelled frame for it."""
+    The subtask's row is ``cancelled`` with the id of its turn's last row, and
+    the socket carries exactly one cancelled frame for it."""
     client, db, _store = authed_client
     caller_held = Held(text("Done for now."))
     subtask_held = Held(text(_ANSWER))
@@ -323,13 +336,16 @@ def test_stopping_the_caller_cancels_the_subtask_it_started_once(authed_client: 
     channel, turn = child(db, _SUBTASK, calls_of(db, SubtaskAbility.NAME)[0]["id"])
     assert execution(channel, turn).stop_reason == "parent stopped"
     running = _running(EARLIER_AGENTS + 1, SubtaskAbility.NAME, turn, by=USER, in_turn=parent.turn_id, summary="")
-    assert tuple(_row(db, EARLIER_AGENTS + 1)[k] for k in ("status", "response_id")) == ("cancelled", None)
-    assert _frames(listener) == [_changed(running), _changed({**running, "status": "cancelled"})]
+    last = _last_row(db, channel, turn)
+    assert tuple(_row(db, EARLIER_AGENTS + 1)[k] for k in ("status", "response_id")) == ("cancelled", last)
+    assert _frames(listener) == [
+        _changed(running), _changed({**running, "status": "cancelled", "response_id": last}),
+    ]
 
 
 def test_a_subagent_whose_provider_keeps_failing_ends_failed(authed_client: _Client) -> None:
     """The search's provider fails on every attempt, so the search crashes:
-    its row is ``failed`` with no answer, sent once."""
+    its row is ``failed`` with the id of its turn's last row, sent once."""
     client, db, _store = authed_client
     boom = RuntimeError("boom")
     script: list[Entry] = [Held(boom), *(raises(boom) for _ in range(_MAX_PROVIDER_ATTEMPTS - 1))]
@@ -343,17 +359,19 @@ def test_a_subagent_whose_provider_keeps_failing_ends_failed(authed_client: _Cli
     channel, turn = child(db, _kind(WebSearchAbility.NAME), calls_of(db, WebSearchAbility.NAME)[0]["id"])
     assert execution(channel, turn).state == TurnExecution.CRASHED
     running = _running(EARLIER_AGENTS + 1, WebSearchAbility.NAME, turn, by=USER, in_turn=parent.turn_id, summary="")
-    assert tuple(_row(db, EARLIER_AGENTS + 1)[k] for k in ("status", "response_id")) == ("failed", None)
+    last = _last_row(db, channel, turn)
+    assert tuple(_row(db, EARLIER_AGENTS + 1)[k] for k in ("status", "response_id")) == ("failed", last)
     assert [f for f in frames if f.get("type") == "agent_changed"] == [
-        _changed(running), _changed({**running, "status": "failed"}),
+        _changed(running), _changed({**running, "status": "failed", "response_id": last}),
     ]
     assert _listing(client) == _empty_listing()
 
 
 def test_a_subagent_a_restart_cut_off_stays_listed_until_boot_ends_it_failed(authed_client: _Client) -> None:
     """The process dies while the search is mid-call, so its row is still
-    ``running`` — and still listed. The next boot's sweep ends it ``failed``,
-    sends that row once, and the listing is empty."""
+    ``running`` — and still listed. The next boot's sweep ends it ``failed``
+    with the id of its turn's last row, sends that row once, and the listing
+    is empty."""
     client, db, _store = authed_client
     script: list[Entry] = [dies]
     provider = ChannelProvider(
@@ -362,7 +380,7 @@ def test_a_subagent_a_restart_cut_off_stays_listed_until_boot_ends_it_failed(aut
 
     with process_deaths_expected():
         parent, _frames_before = run_turn(provider, UserConfig(), _QUESTION)
-    turn = child(db, _kind(WebSearchAbility.NAME), calls_of(db, WebSearchAbility.NAME)[0]["id"]).turn_id
+    channel, turn = child(db, _kind(WebSearchAbility.NAME), calls_of(db, WebSearchAbility.NAME)[0]["id"])
     running = _running(EARLIER_AGENTS + 1, WebSearchAbility.NAME, turn, by=USER, in_turn=parent.turn_id, summary="")
     assert _listing(client)["result"] == [running]
 
@@ -372,8 +390,9 @@ def test_a_subagent_a_restart_cut_off_stays_listed_until_boot_ends_it_failed(aut
         drain()
 
     assert provider.unused() == {}
-    assert tuple(_row(db, EARLIER_AGENTS + 1)[k] for k in ("status", "response_id")) == ("failed", None)
-    assert _frames(listener) == [_changed({**running, "status": "failed"})]
+    last = _last_row(db, channel, turn)
+    assert tuple(_row(db, EARLIER_AGENTS + 1)[k] for k in ("status", "response_id")) == ("failed", last)
+    assert _frames(listener) == [_changed({**running, "status": "failed", "response_id": last})]
     assert _listing(client) == _empty_listing()
 
 

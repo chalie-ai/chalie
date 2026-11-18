@@ -8,26 +8,40 @@
 
 """StopSubagentAbility — stop a subagent the chat spawned.
 
-A stop always ends the subagent cancelled, whatever its status. A working one
-goes through :meth:`TurnExecutionService.cancel_turn`, the one cancel path,
-stamped :data:`STOP_REASON_PARENT_STOPPED` as when the caller's own stop
-reaches it: the chat asked for the stop, so no "was stopped" reply comes back
-to it, and every subagent the stopped one spawned is stopped with it. One that
-already ended is moved to cancelled (:meth:`AgentService.cancel`), and the
-panel is told.
+A stop always ends the subagent cancelled, whatever its status. It is one
+``BEGIN IMMEDIATE`` transaction, the kind every
+:meth:`MessageProcessor.deliver` and :meth:`MessageProcessor.drain` also
+takes, so a message another thread of the chat sends the subagent, and a turn
+of its that a message opens, land wholly before or wholly after it: every
+message still queued for it is deleted, so none can open a turn of its, and
+its status is read and acted on in the same transaction. A working one has
+its turn stamped cancelled by :meth:`TurnExecutionService.stamp_cancelled`,
+the writes of the one cancel path, with :data:`STOP_REASON_PARENT_STOPPED`
+as when the caller's own stop reaches it: the chat asked for the stop, so no
+"was stopped" reply comes back to it. Once the stop commits,
+:meth:`TurnExecutionService.propagate_cancel` sends the frames and stops
+every subagent the stopped one spawned. One running with no turn open yet —
+its spawn before its execution opens — raises, and the whole stop rolls
+back. One that already ended is moved to cancelled
+(:meth:`AgentService.cancel`), and the panel is told once that commits.
 """
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
-from abilities._agents import AgentAbility, label, not_found
+from abilities._agents import AgentAbility, label
 from abilities._result import ToolResult
 from configs.enums.param_key import Keys
 from contracts.params.agent_params_bag import AgentIdParams
 from contracts.params.param_bag import ParamBag
 from models.agent import Agent
+from models.queued_message import QueuedMessage
 from services.agent_service import AgentService
+from services.database import Database
+
+if TYPE_CHECKING:
+    from services.turn_execution_service import CancelledTurn
 
 
 class StopSubagentAbility(AgentAbility[AgentIdParams]):
@@ -45,7 +59,7 @@ class StopSubagentAbility(AgentAbility[AgentIdParams]):
     }
 
     def get_summary(self) -> str:
-        return "Stop a running subagent."
+        return "Stop a subagent you spawned. It ends cancelled, whatever its status."
 
     def get_examples(self) -> list[str]:
         return [
@@ -68,16 +82,27 @@ class StopSubagentAbility(AgentAbility[AgentIdParams]):
         )
 
         agent = self.owned(params.agent_id)
-        if agent is None:
-            return not_found(params.agent_id)
-        if agent.status == Agent.RUNNING and not TurnExecutionService.cancel_turn(
-            agent.channel, agent.turn_id, stop_reason=STOP_REASON_PARENT_STOPPED,
-        ):
-            # Nothing was cancelled: the subagent ended on its own first.
+        if isinstance(agent, ToolResult):
+            return agent
+        stamped: CancelledTurn | None = None
+        cancelled: Agent | None = None
+        with Database.transaction():
+            QueuedMessage.filter("channel", agent.channel).delete()
             current = Agent.by_id(agent.agent_id)
-            if current is None or current.status == Agent.RUNNING:
-                raise RuntimeError(f"{self.NAME}: subagent #{params.agent_id} is still running after its stop")
-        cancelled = AgentService.cancel(agent.agent_id)
-        if cancelled is not None:
+            if current is None:
+                raise RuntimeError(f"{self.NAME}: subagent #{params.agent_id} vanished during its stop")
+            if current.status == Agent.RUNNING:
+                stamped = TurnExecutionService.stamp_cancelled(
+                    current.channel, current.turn_id, STOP_REASON_PARENT_STOPPED,
+                )
+                if stamped is None:
+                    # Running with no open execution to stamp, as a spawn is
+                    # before its execution opens: the whole stop rolls back.
+                    raise RuntimeError(f"{self.NAME}: subagent #{params.agent_id} is still running after its stop")
+            else:
+                cancelled = AgentService.cancel(agent.agent_id)
+        if stamped is not None:
+            TurnExecutionService.propagate_cancel(stamped)
+        elif cancelled is not None:
             self.bound().announce(AgentService.frame(cancelled))
         return ToolResult.ok(f"Subagent {label(agent)} stopped.")

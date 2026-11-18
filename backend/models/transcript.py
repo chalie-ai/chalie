@@ -128,28 +128,26 @@ class Transcript(Model):
         return int(row[0]) if row and row[0] is not None else None
 
     @classmethod
-    def last_answer(cls, channel: str, turn_id: int) -> str | None:
-        """Content of the turn's newest settled assistant row — the answer its
-        latest completed exchange ended on, as stored — or None for a turn that
-        never settled. Mirrors :meth:`settle0`'s style."""
+    def last_id(cls, channel: str, turn_id: int) -> int | None:
+        """``id`` of the turn's last row, or None when it has none. Mirrors
+        :meth:`first_id`'s style."""
         row = cls._bound_connection().execute(
-            f"SELECT content FROM transcript WHERE channel = ? AND turn_id = ? "
-            f"AND {cls._SETTLE_PREDICATE} ORDER BY id DESC LIMIT 1",
+            "SELECT MAX(id) FROM transcript WHERE channel = ? AND turn_id = ?",
             (channel, turn_id),
         ).fetchone()
-        return cast("str | None", row[0]) if row else None
+        return int(row[0]) if row and row[0] is not None else None
 
     @classmethod
-    def last_said(cls, channel: str, turn_id: int) -> str | None:
-        """Content of the turn's newest assistant row that says something —
-        settled or not, skipping the empty rows of calls that only ran tools —
-        or None for a turn whose model has written nothing yet."""
+    def last_answer_id(cls, channel: str, turn_id: int) -> int | None:
+        """``id`` of the turn's newest settled assistant row — the answer its
+        latest completed exchange ended on — or None for a turn that never
+        settled. Mirrors :meth:`settle0`'s style."""
         row = cls._bound_connection().execute(
-            "SELECT content FROM transcript WHERE channel = ? AND turn_id = ? AND role = 'assistant' "
-            "AND TRIM(content, char(32, 9, 10, 13)) != '' ORDER BY id DESC LIMIT 1",
+            f"SELECT MAX(id) FROM transcript WHERE channel = ? AND turn_id = ? "
+            f"AND {cls._SETTLE_PREDICATE}",
             (channel, turn_id),
         ).fetchone()
-        return cast("str | None", row[0]) if row else None
+        return int(row[0]) if row and row[0] is not None else None
 
     @classmethod
     def ids_for_turn(cls, channel: str, turn_id: int) -> list[int]:
@@ -336,9 +334,12 @@ class Transcript(Model):
         row, whose ``tool_call_id`` holds the caller's call id as text.
 
         ``calls`` maps each id to its ``(created_at, ended_at)``. A child row is
-        written after its call opened and before it ended, so the read is bounded
-        to the batch's span — earliest open to latest end, open-ended while any
-        call still runs — and to the delegate channels' range of the
+        written after its call opened and, unless a message the call queued
+        opened it later, before it ended, so the read is bounded to the
+        batch's span — earliest open to latest end, open-ended when any
+        ``ended_at`` is ``None``: that call still runs, or the caller passes
+        ``None`` to find a turn its queued message opened later — and to the
+        delegate channels' range of the
         ``(channel, created_at)`` index (every subagent has a channel of its
         own, so they cannot be listed): ``tool_call_id`` is unindexed.
         A call with no such row (not a delegate, not yet started, or purged by

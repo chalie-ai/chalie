@@ -13,7 +13,9 @@ Only the person's chat manages subagents, since only the chat is replied to
 late (:func:`replies_late`) — every other caller waits for its subagent, so
 there is nothing running for it to manage. And the chat manages only the
 subagents it spawned. :meth:`AgentAbility.mine` is that one rule; a subagent
-it does not cover reads exactly as one that does not exist.
+it does not cover reads exactly as one that does not exist. One of its own
+that is archived (:meth:`AgentService.archived`) is managed no more: a tool
+naming it answers that it was archived (:meth:`AgentAbility.owned`).
 """
 
 from __future__ import annotations
@@ -26,12 +28,13 @@ from abilities._delegate import replies_late
 from abilities._result import ToolResult
 from configs.enums.ability_category import AbilityCategory
 from models.agent import Agent
-from models.transcript import Transcript
+from services.agent_service import AgentService
 
 if TYPE_CHECKING:
     from controllers.message_processor import MessageProcessor
 
-_SPAWN_AGAIN = "If you need to perform follow-ups you can spawn a new agent"
+#: What a management tool answers for an archived subagent, read by the model.
+ARCHIVED_TEXT = "Subagent {type} #{agent_id} has been archived. Spawn a new one for this work."
 
 
 class AgentAbility(Ability[B], ABC):
@@ -56,11 +59,17 @@ class AgentAbility(Ability[B], ABC):
         mp = self.bound()
         return replies_late(mp.config.type()) and agent.spawned_by_channel == mp.channel
 
-    def owned(self, agent_id: int) -> Agent | None:
+    def owned(self, agent_id: int) -> Agent | ToolResult:
         """The subagent ``agent_id`` names when this call may manage it, else
-        ``None``."""
+        the error the call returns: :func:`not_found` for one it may not
+        manage, ``agent-archived`` for one of its own that is archived
+        (:meth:`AgentService.archived`)."""
         agent = Agent.by_id(agent_id)
-        return agent if agent is not None and self.mine(agent) else None
+        if agent is None or not self.mine(agent):
+            return not_found(agent_id)
+        if AgentService.archived(agent):
+            return ToolResult.err(ARCHIVED_TEXT.format(type=agent.type, agent_id=agent.agent_id), code="agent-archived")
+        return agent
 
 
 def not_found(agent_id: int) -> ToolResult:
@@ -73,14 +82,3 @@ def label(agent: Agent) -> str:
     """``<type> #<agent_id>`` — how a subagent is named to the model."""
     return f"{agent.type} #{agent.agent_id}"
 
-
-def ended(agent: Agent) -> ToolResult:
-    """What a call aimed at a subagent that is no longer running gets back: its
-    final response when it finished with one, else that it was stopped."""
-    response = Transcript.get(agent.response_id) if agent.response_id is not None else None
-    if agent.status == Agent.DONE and response is not None and response.content.strip():
-        return ToolResult.err(
-            f"This agent has finished working. The final response was; {response.content}. {_SPAWN_AGAIN}",
-            code="agent-finished",
-        )
-    return ToolResult.err(f"This agent was stopped before it finished. {_SPAWN_AGAIN}", code="agent-stopped")

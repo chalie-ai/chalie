@@ -13,42 +13,40 @@ caller waits for its subagent, so nothing is free to answer a message. The
 processor offers it on such a subagent's turn itself, never through a config,
 since one config runs a subagent whichever caller spawned it.
 
-The message is posted to the chat turn that spawned the subagent, exactly as
-its late reply is (:func:`post_to_caller`), but linked to this call's own
-``tool_calls`` id — the reply is linked to the spawning call, which is how the
-two are told apart. The call then waits for the next message to join the
-subagent's turn — the chat's ``message_subagent`` — and returns it as its
-result with :data:`SUBAGENT_NUDGE`. A message taken here is never filed for
-the act trail, so it reaches the model once. A stop ends the wait with no
-reply — and stopping the chat turn the message opened or joined stops the
-subagent waiting on it (:func:`waiting_on`). While any subagent waits, every
-message the person sends the chat reads, for the chat's model, followed by a
-line naming each one (:func:`waiting_notice`).
+The message is delivered to the chat (:meth:`MessageProcessor.deliver`): it
+opens a new chat turn, or queues behind the one working. Its row is linked to
+this call's own ``tool_calls`` id — the subagent's replies are linked to the
+spawning call, which is how the two are told apart. The call returns at once;
+the chat's answer, sent with ``message_subagent``, opens the subagent's next
+turn. A subagent whose turn's latest call is this one waits for that answer
+(:func:`waiting`) — while it finishes that turn and once it has ended, when
+it posts no reply for that turn — and is named, for the chat's model, after
+every message the person sends the chat (:func:`waiting_notice`).
 """
 
 from __future__ import annotations
 
-import time
-from typing import ClassVar, cast
+from typing import ClassVar
 
 from abilities._ability import UNKNOWN_TOOL, Ability
 from abilities._agents import label
-from abilities._delegate import late_caller, post_to_caller
 from abilities._result import ToolResult
 from abilities.message_subagent import MessageSubagentAbility
-from configs.enums.channels import Channel, delegate_type
+from configs.enums.channels import Channel
 from configs.enums.param_key import Keys
 from contracts.params.agent_params_bag import MessageParentParams
 from contracts.params.param_bag import ParamBag
 from models.agent import Agent
+from models.queued_message import QueuedMessage
 from models.tool_call import ToolCall
 from models.transcript import Transcript
 from services.agent_service import AgentService
 
-# How often the wait checks for a reply or a stop — the ask gate's own beat.
-_POLL_SECONDS = 0.25
-
-_STOPPED = "The message was sent. The wait was stopped before a reply arrived."
+_SENT = "Message sent."
+_FOLLOW_UP = (
+    "You'll be invoked again once the reply lands. "
+    "If there is nothing else you can do without the answer just stop."
+)
 
 
 class MessageParentAbility(Ability[MessageParentParams]):
@@ -66,7 +64,7 @@ class MessageParentAbility(Ability[MessageParentParams]):
     }
 
     def get_summary(self) -> str:
-        return "Send a message to the agent that spawned you and wait for its reply."
+        return "Send a message to the agent that spawned you. You are invoked again when its reply lands."
 
     def get_examples(self) -> list[str]:
         return [
@@ -84,22 +82,23 @@ class MessageParentAbility(Ability[MessageParentParams]):
     def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
+    def get_follow_up(self, tr: ToolResult) -> str:
+        return _FOLLOW_UP
+
     def run(self, params: MessageParentParams) -> ToolResult:
+        # Lazy: the chat's config and the controller both load this module.
+        from configs.channels import UserConfig  # noqa: PLC0415
+        from controllers.message_processor import MessageProcessor  # noqa: PLC0415
+
         mp = self.mp
         if mp is None:
             raise RuntimeError(f"{self.NAME}.run() dispatched without a bound MessageProcessor")
         if not holds(mp.agent):
             return ToolResult.err(UNKNOWN_TOOL.format(tool_name=self.NAME), code="unknown-tool")
-        resolved = late_caller(mp.channel, mp.turn_id)
-        if resolved is None or self.tool_call_id is None:
-            raise RuntimeError(f"{self.NAME}: {mp.channel} turn {mp.turn_id} has no chat turn to message")
-        post_to_caller(resolved[0], params.message, self.tool_call_id)
-        while not (rows := mp.take_joined()):
-            if mp.turn_execution_service.should_stop():
-                return ToolResult.ok(_STOPPED)
-            time.sleep(_POLL_SECONDS)
-        replies = "\n\n".join(row.content for row in rows)
-        return ToolResult.ok(f"{replies}\n{SUBAGENT_NUDGE}")
+        if self.tool_call_id is None:
+            raise RuntimeError(f"{self.NAME}: {mp.channel} turn {mp.turn_id} ran it without a tool_calls row")
+        MessageProcessor.deliver(UserConfig(), params.message, self.tool_call_id)
+        return ToolResult.ok(_SENT)
 
 
 PARENT_NUDGE = (
@@ -112,16 +111,10 @@ WAITING_NOTICE = (
     f"Reply with `{MessageSubagentAbility.NAME}` so they can continue."
 )
 
-SUBAGENT_NUDGE = (
-    "Do not acknowledge this message. "
-    f"Use `{MessageParentAbility.NAME}` again only to report progress or to ask for clarification. "
-    "Otherwise, complete the task."
-)
-
 _SPAWNED = "You have been spawned by agent {turn_id} to perform the task; {prompt}. "
 _ASK = (
     f"You can ask for more context if needed by using `{MessageParentAbility.NAME}`. "
-    "This will send a message to the agent that spawned you and wait for its reply. Else, finish"
+    "This will send a message to the agent that spawned you; you are invoked again when its reply lands. Else, finish"
 )
 _FINISH = " the task naturally and your final output will be sent to the agent that spawned you automatically."
 
@@ -155,55 +148,58 @@ def sender(call: ToolCall) -> Agent:
     long as the call is: a subagent's record is never deleted, and the call
     goes only with its row (:func:`_origin`)."""
     origin = _origin(call)
-    agent = AgentService.on_turn(origin.channel, cast("int", origin.turn_id))
+    agent = AgentService.of_channel(origin.channel)
     if agent is None:
-        raise RuntimeError(f"{call.tool_name} call {call.id}: {origin.channel} turn {origin.turn_id} has no subagent")
+        raise RuntimeError(f"{call.tool_name} call {call.id}: {origin.channel} has no subagent")
     return agent
+
+
+def _awaited(agent: Agent) -> ToolCall | None:
+    """The ``message_parent`` call whose answer ``agent`` still waits for:
+    the latest call of its current turn, which is still running or ended
+    done, and no message the chat sent it since waits in its queue. ``None``
+    when it waits for none."""
+    if agent.status not in (Agent.RUNNING, Agent.DONE):
+        return None
+    calls = ToolCall.by_turn(agent.channel, agent.turn_id)
+    if not calls or calls[-1].tool_name != MessageParentAbility.NAME:
+        return None
+    call = calls[-1]
+    if QueuedMessage.filter("channel", agent.channel).filter("tool_call_id", call.id, ">").exists():
+        return None
+    return call
 
 
 def waiting(row: Transcript) -> Agent | None:
     """The subagent whose ``message_parent`` call posted chat ``row``, while
-    it still waits for a reply: the call is still running, so is its
-    subagent, and no message has joined the subagent's turn since ``row``.
-    ``None`` for any other row."""
+    it still waits for the answer to that call (:func:`_awaited`). ``None``
+    for any other row."""
     link = row.tool_call_id
     if link is None or not link.isdecimal():
         return None
     call = ToolCall.get(int(link))
-    if call is None or call.tool_name != MessageParentAbility.NAME or call.state != ToolCall.STARTED:
+    if call is None or call.tool_name != MessageParentAbility.NAME:
         return None
     agent = sender(call)
-    if agent.status != Agent.RUNNING:
-        return None
-    if Transcript.joined_since(agent.channel, agent.turn_id, cast("int", row.id)):
-        return None
-    return agent
-
-
-def waiting_on(channel: str, turn_id: int) -> list[Agent]:
-    """Every subagent whose message sits in turn ``(channel, turn_id)`` —
-    the chat turn it opened or joined — and still waits for a reply
-    (:func:`waiting`): the turn it waits on, so stopped with it."""
-    rows = Transcript.filter("channel", channel).filter("turn_id", turn_id).get()
-    return [agent for row in rows if (agent := waiting(row)) is not None]
+    awaited = _awaited(agent)
+    return agent if awaited is not None and awaited.id == call.id else None
 
 
 def waiting_for(channel: str) -> list[Agent]:
-    """Every subagent ``channel`` spawned whose message still waits for a
-    reply (:func:`waiting`), oldest first — only the chat's ever do
-    (:func:`holds`)."""
-    found: list[Agent] = []
-    for agent in Agent.running():
-        if agent.spawned_by_channel != channel:
-            continue
-        for call in ToolCall.by_turn(agent.channel, agent.turn_id):
-            if call.tool_name != MessageParentAbility.NAME or call.state != ToolCall.STARTED:
-                continue
-            row = Transcript.filter("channel", channel).filter("tool_call_id", str(call.id)).first()
-            if row is not None and waiting(row) is not None:
-                found.append(agent)
-                break
-    return found
+    """Every subagent ``channel`` spawned that waits for an answer
+    (:func:`_awaited`) to a message that has reached ``channel``, oldest
+    first — only the chat's ever do (:func:`holds`)."""
+    live = (
+        Agent.filter_in("status", (Agent.RUNNING, Agent.DONE))
+        .filter("spawned_by_channel", channel)
+        .order_by("agent_id ASC")
+        .get()
+    )
+    return [
+        agent for agent in live
+        if (call := _awaited(agent)) is not None
+        and Transcript.filter("channel", channel).filter("tool_call_id", str(call.id)).exists()
+    ]
 
 
 def waiting_notice(channel: str) -> str:
@@ -223,13 +219,3 @@ def parent_nudge(row: Transcript) -> str:
     subagent still waits for a reply (:func:`waiting`), else ``''``. Derived
     on every read, never stored."""
     return f"\n{PARENT_NUDGE}" if waiting(row) is not None else ""
-
-
-def joined_nudge(row: Transcript) -> str:
-    """What follows ``row``, a message joined into a running turn, in that
-    turn's act trail: a newline and :data:`SUBAGENT_NUDGE` when the turn is a
-    subagent's — only the chat sends one (``message_subagent``), and only
-    to a subagent it spawned, which holds ``message_parent`` — else ``''``."""
-    if delegate_type(row.channel) is None:
-        return ""
-    return f"\n{SUBAGENT_NUDGE}"

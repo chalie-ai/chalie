@@ -5,16 +5,18 @@ When the person's chat calls a subagent that runs a turn of its own
 keep the chat waiting: it returns at once with the subagent's number and the
 label its answer will arrive under. Once the subagent's turn ends, its outcome
 comes back to the chat as a reply under that label, and the chat answers it.
-The reply goes where the call was made — a new turn for a call from the
-thread's opening exchange, the thread itself for a call from a thread reply,
-the very turn that made the call while that turn is still working — and never
-into some other turn that happens to be working.
+The reply always opens a chat turn of its own: at once while the chat is idle,
+or queued until the chat turn working then ends — the caller's own turn
+included — and never joins a turn that is working, nor the thread the call
+was made from.
 
 The reply holds exactly what the subagent said: its answer, or a one-line notice
-when it finished with nothing to say, was stopped, crashed, or was cut off by a
-restart. The next step a subagent suggests reaches the model only while it
+when it finished with nothing to say, was cancelled, or crashed (a restart
+cutting it off included). The next step a subagent suggests reaches the model only while it
 answers that reply — directly after the answer — never in what the person
-reads, never in a later exchange, and never on a notice. The chat is offered the subagent on
+reads, never in a later exchange, and never on a notice. It is the next step
+of the answer that reply carries, whatever turn the subagent has moved on to
+while the reply waited. The chat is offered the subagent on
 every request; the turn that answers the reply is offered, besides, the tools
 the subagent's next step names. A subagent's own turn is never offered itself.
 
@@ -39,6 +41,9 @@ from abilities._delegate import DelegateAbility
 from abilities._registry import AbilityRegistry
 from abilities._result import ToolResult
 from abilities.code_agent import CodeAgentAbility
+from abilities.find_tools import FindToolsAbility
+from abilities.message_subagent import MessageSubagentAbility
+from abilities.recall import Recall
 from abilities.web_browse import WebBrowseAbility
 from abilities.web_fetch import WebFetchAbility
 from configs.channels import config_for
@@ -46,8 +51,11 @@ from configs.channels.user import UserConfig
 from configs.enums.config_type import ConfigTypeEnum
 from contracts.params.delegate_params_bag import DelegateParamsBag
 from controllers.message_processor import _MAX_PROVIDER_ATTEMPTS, MessageProcessor
+from models.agent import Agent
+from models.provider_response import ProviderResponse
 from models.turn_execution import TurnExecution
 from run import _reply_to_swept_delegates
+from services.agent_service import CANCELLED_TEXT, CRASHED_TEXT
 from tests._delegates import (
     USER,
     WAIT_S,
@@ -87,6 +95,9 @@ _ANSWERED = "Here is what it found."
 _BLOCK_OPENER = "[follow_up_instruction]"
 _BLOCK_CLOSER = "[end:follow_up_instruction]"
 _EXHAUSTED = "The AI provider failed to respond after several attempts. Please try again in a moment."
+_STEER = "now find its opening hours"
+_LATER_ANSWER = "The Louvre opens at nine."
+_NOTHING_TO_SAY = f"This {WebBrowseAbility.NAME} finished without an answer."
 
 _Client = tuple[FlaskClient, sqlite3.Connection, object]
 
@@ -229,11 +240,10 @@ def test_a_plain_text_answer_reaches_the_chats_reply_exactly_as_the_subagent_wro
     assert (opener["role"], opener["content"]) == ("user", answer)
 
 
-def test_a_subagent_called_from_a_thread_reply_answers_in_that_thread(db: sqlite3.Connection) -> None:
+def test_a_subagent_called_from_a_thread_reply_answers_in_a_turn_of_its_own(db: sqlite3.Connection) -> None:
     """A thread reply on a finished exchange calls ``web_search``; the search
-    ends after the thread reply has ended. Its answer comes back into that
-    thread — the same turn, never a new one — and the chat's answer to it ends
-    the thread's latest exchange."""
+    ends after the thread reply has ended. Its answer opens a chat turn of its
+    own — never the thread the call was made from — which the chat answers."""
     held = Held(text(_ANSWER))
     provider = ChannelProvider(
         chat=[
@@ -257,46 +267,53 @@ def test_a_subagent_called_from_a_thread_reply_answers_in_that_thread(db: sqlite
     assert held.opened and provider.unused() == {}
     [call] = calls_of(db, "web_search")
     [reply] = replies(db, call["id"])
-    assert (reply["turn_id"], reply["joined"]) == (opener.turn_id, 0)
-    assert _user_turns(db) == [opener.turn_id]
-    assert execution(USER, opener.turn_id).state == TurnExecution.COMPLETED
-    assert assistant_texts(db, USER, opener.turn_id)[-1] == _ANSWERED
+    assert (reply["turn_id"] != opener.turn_id, reply["joined"]) == (True, 0)
+    assert _user_turns(db) == [opener.turn_id, reply["turn_id"]]
+    assert assistant_texts(db, USER, opener.turn_id)[-1] == _STARTED
+    assert execution(USER, reply["turn_id"]).state == TurnExecution.COMPLETED
+    assert assistant_texts(db, USER, reply["turn_id"]) == [_ANSWERED]
 
 
 def test_a_subagent_that_finishes_without_an_answer_says_so_in_its_reply(db: sqlite3.Connection) -> None:
-    """A search that ends with nothing to say still replies, so the chat is
-    not left waiting on a promise: the reply says the search finished without
+    """A browse that ends with nothing to say still replies, so the chat is
+    not left waiting on a promise: the reply says the browse finished without
     an answer, and the model answering it reads that notice with no
-    follow-up block, then answers it on its own turn."""
-    held = Held(calls(tool("recall", query="capital of France")))
+    next step after it — though a browse's answer carries one — then answers
+    it on its own turn."""
+    held = Held(calls(tool(Recall.NAME, query="capital of France")))
     provider = ChannelProvider(
-        chat=[calls(tool("web_search", instructions=_INSTRUCTIONS)), text(_STARTED), text("It found nothing.")],
-        web_search=[held, text("")],
+        chat=[
+            calls(tool(WebBrowseAbility.NAME, instructions=_INSTRUCTIONS)),
+            text(_STARTED),
+            text("It found nothing."),
+        ],
+        web_browse=[held, text("")],
     )
 
     parent, _frames = run_turn(provider, UserConfig(), _QUESTION)
 
     assert held.opened and provider.unused() == {}
-    [call] = calls_of(db, "web_search")
+    [call] = calls_of(db, WebBrowseAbility.NAME)
     [reply] = replies(db, call["id"])
-    assert reply["content"] == "This web_search finished without an answer."
+    assert reply["content"] == _NOTHING_TO_SAY
     assert reply["turn_id"] != parent.turn_id
     assert execution(USER, reply["turn_id"]).state == TurnExecution.COMPLETED
     assert assistant_texts(db, USER, reply["turn_id"]) == ["It found nothing."]
     answering = provider.read("chat")[-1]
-    assert "This web_search finished without an answer." in answering
+    assert _NOTHING_TO_SAY in answering
     assert _BLOCK_OPENER not in answering
 
 
 def test_two_subagents_that_answer_while_their_caller_works_are_each_answered_once(db: sqlite3.Connection) -> None:
-    """One chat turn calls ``web_browse`` and ``code_agent``; both finish
-    while that turn is still working. Both answers join the working turn —
-    no turn of their own — and the turn reads them together on one more step,
-    so each answer is answered exactly once. On that step the browse's answer
-    is followed directly by its suggested next step and nothing else;
-    ``code_agent``'s, which carries none, is not. That step is offered both subagents and, as
-    well, the tool the browse's next step names (``web_fetch``), which no
-    earlier request of the turn was offered."""
+    """One chat turn calls ``web_browse`` and ``code_agent``; both finish,
+    the browse first, while that turn is still working. Neither answer joins
+    the working turn: each waits for it to end, then opens a chat turn of its
+    own, the browse's first, so each answer is answered exactly once. The
+    turn answering the browse reads its answer followed directly by its
+    suggested next step and nothing else; the turn answering ``code_agent``,
+    which carries none, reads no next step. Every request is offered both
+    subagents; only the turn answering the browse is offered, as well, the
+    tool its next step names (``web_fetch``)."""
     caller = Held(text("Both started."))
     browse = Held(text("Browse: Paris."))
     code = Held(text("Code: the script prints Paris."))
@@ -307,7 +324,8 @@ def test_two_subagents_that_answer_while_their_caller_works_are_each_answered_on
                 tool(CodeAgentAbility.NAME, instructions="write a script that prints the capital of France"),
             ),
             caller,
-            text("Both answered."),
+            text("Browse answered."),
+            text("Code answered."),
         ],
         web_browse=[browse],
         code_agent=[code],
@@ -319,38 +337,158 @@ def test_two_subagents_that_answer_while_their_caller_works_are_each_answered_on
         for h, what in ((caller, "the caller's second step"), (browse, "the browse"), (code, "the code agent")):
             wait(h.entered, what)
         browse.gate.set()
+        _held_threads_end(browse)
         code.gate.set()
-        _held_threads_end(browse, code)
+        _held_threads_end(code)
         caller.gate.set()
         parent.result()
         drain()
 
     assert caller.opened and browse.opened and code.opened and provider.unused() == {}
     numbers: dict[str, int] = {}
+    turns: dict[str, int] = {}
     for tool_name in (WebBrowseAbility.NAME, CodeAgentAbility.NAME):
         [call] = calls_of(db, tool_name)
         [reply] = replies(db, call["id"])
-        assert (reply["turn_id"], reply["joined"]) == (parent.turn_id, 1), tool_name
+        assert reply["joined"] == 0, tool_name
+        turns[tool_name] = reply["turn_id"]
         numbers[tool_name] = agent_number(child(db, delegate_channel(tool_name), call["id"]).channel)
-    assert _user_turns(db) == [parent.turn_id]
+    assert _user_turns(db) == [parent.turn_id, turns[WebBrowseAbility.NAME], turns[CodeAgentAbility.NAME]]
+    assert assistant_texts(db, USER, parent.turn_id)[-1] == "Both started."
+    for tool_name, said in ((WebBrowseAbility.NAME, "Browse answered."), (CodeAgentAbility.NAME, "Code answered.")):
+        assert execution(USER, turns[tool_name]).state == TurnExecution.COMPLETED, tool_name
+        assert assistant_texts(db, USER, turns[tool_name]) == [said], tool_name
     chat = provider.read("chat")
-    assert len(chat) == 3
-    answering = chat[-1]
+    assert len(chat) == 4
+    answering_browse, answering_code = chat[2], chat[3]
     browse_block = _block_opening(_after_reply(
-        answering, f"Reply from {WebBrowseAbility.NAME} #{numbers[WebBrowseAbility.NAME]}", "Browse: Paris.",
+        answering_browse, f"Reply from {WebBrowseAbility.NAME} #{numbers[WebBrowseAbility.NAME]}", "Browse: Paris.",
     ))
-    assert browse_block == f"\n{FOLLOW_UP_BLOCK.format(text=nudge)}", answering[-1500:]
+    assert browse_block == f"\n{FOLLOW_UP_BLOCK.format(text=nudge)}", answering_browse[-1500:]
+    assert answering_browse.count(_BLOCK_OPENER) == 1
     code_tail = _after_reply(
-        answering, f"Reply from {CodeAgentAbility.NAME} #{numbers[CodeAgentAbility.NAME]}",
+        answering_code, f"Reply from {CodeAgentAbility.NAME} #{numbers[CodeAgentAbility.NAME]}",
         "Code: the script prints Paris.",
     )
     assert _block_opening(code_tail) is None
-    assert answering.count(_BLOCK_OPENER) == 1
+    assert _BLOCK_OPENER not in answering_code
     offered = provider.offered("chat")
-    assert {WebBrowseAbility.NAME, CodeAgentAbility.NAME, WebFetchAbility.NAME} <= offered[-1], offered[-1]
-    assert not any(WebFetchAbility.NAME in names for names in offered[:-1]), offered
-    assert execution(USER, parent.turn_id).state == TurnExecution.COMPLETED
-    assert assistant_texts(db, USER, parent.turn_id)[-1] == "Both answered."
+    assert all({WebBrowseAbility.NAME, CodeAgentAbility.NAME} <= names for names in offered), offered
+    assert WebFetchAbility.NAME in offered[2], offered[2]
+    assert not any(WebFetchAbility.NAME in names for names in (*offered[:2], offered[3])), offered
+
+
+def _answer_then_steer(first: Held) -> list[Entry]:
+    """A chat turn's first three steps: it calls ``web_browse``; once the
+    browse has answered on *first* — its reply waiting on this working turn —
+    it finds ``message_subagent``; then it messages the browse, which opens
+    the browse's next turn at once."""
+    def answer_meanwhile() -> ProviderResponse:
+        wait(first.entered, "the browse's first turn")
+        first.gate.set()
+        _held_threads_end(first)
+        return calls(tool(FindToolsAbility.NAME, query=[MessageSubagentAbility.NAME]))
+
+    def steer() -> ProviderResponse:
+        [agent] = Agent.filter("type", WebBrowseAbility.NAME).get()
+        return calls(tool(MessageSubagentAbility.NAME, agent_id=agent.agent_id, message=_STEER))
+
+    return [calls(tool(WebBrowseAbility.NAME, instructions=_INSTRUCTIONS)), answer_meanwhile, steer]
+
+
+def test_a_waiting_reply_keeps_its_next_step_while_the_subagent_works_on_a_later_message(
+    db: sqlite3.Connection,
+) -> None:
+    """``web_browse`` answers while the chat turn that called it still works,
+    so its reply waits on the chat. That turn then messages the browse, whose
+    next turn opens at once and is still working when the chat turn ends. The
+    chat turn the waiting reply opens reads the first answer followed
+    directly by that answer's suggested next step, once, and nothing of the
+    browse's later answer; once the later turn ends, its answer comes back as
+    a reply of its own."""
+    first = Held(text(_ANSWER))
+    later = Held(text(_LATER_ANSWER))
+    answering = Held(text(_ANSWERED))
+
+    def end_while_it_works() -> ProviderResponse:
+        wait(later.entered, "the browse's next turn")
+        return text(_STARTED)
+
+    provider = ChannelProvider(
+        chat=[*_answer_then_steer(first), end_while_it_works, answering, text("Noted.")],
+        web_browse=[first, later],
+    )
+
+    with patched(provider):
+        chat = begin(UserConfig(), _QUESTION)
+        wait(answering.entered, "the chat turn the waiting reply opened")
+        answering.gate.set()
+        _held_threads_end(answering)
+        later.gate.set()
+        _held_threads_end(later)
+        drain()
+
+    assert first.opened and later.opened and answering.opened and provider.unused() == {}
+    [spawn] = calls_of(db, WebBrowseAbility.NAME)
+    n = agent_number(child(db, delegate_channel(WebBrowseAbility.NAME), spawn["id"]).channel)
+    reply, later_reply = replies(db, spawn["id"])
+    assert (reply["content"], later_reply["content"]) == (_ANSWER, _LATER_ANSWER)
+    assert chat.turn_id < reply["turn_id"] < later_reply["turn_id"]
+    chat_read = provider.read("chat")
+    assert len(chat_read) == 6
+    answering_reply = chat_read[4]
+    nudge = AbilityRegistry.get(WebBrowseAbility.NAME).get_follow_up(ToolResult.ok(_ANSWER))
+    follow_up = _block_opening(_after_reply(answering_reply, f"Reply from {WebBrowseAbility.NAME} #{n}", _ANSWER))
+    assert follow_up == f"\n{FOLLOW_UP_BLOCK.format(text=nudge)}", answering_reply[-1500:]
+    assert answering_reply.count(_BLOCK_OPENER) == 1
+    assert _LATER_ANSWER not in answering_reply
+
+
+def test_a_waiting_reply_keeps_its_next_step_after_the_subagents_later_turn_ends_with_nothing_to_say(
+    db: sqlite3.Connection,
+) -> None:
+    """``web_browse`` answers while the chat turn that called it still works,
+    so its reply waits on the chat. That turn then messages the browse, whose
+    next turn ends with nothing to say before the chat turn does, so its
+    notice waits behind the reply. The chat turn the reply opens still reads
+    the first answer followed directly by that answer's suggested next step,
+    once; the turn the notice opens after it reads the notice with no next
+    step at all."""
+    first = Held(text(_ANSWER))
+    later = Held(calls(tool(Recall.NAME, query="Louvre opening hours")))
+
+    def end_once_it_is_done() -> ProviderResponse:
+        wait(later.entered, "the browse's next turn")
+        later.gate.set()
+        _held_threads_end(later)
+        return text(_STARTED)
+
+    provider = ChannelProvider(
+        chat=[*_answer_then_steer(first), end_once_it_is_done, text(_ANSWERED), text("Noted.")],
+        web_browse=[first, later, text("")],
+    )
+
+    with patched(provider):
+        chat = begin(UserConfig(), _QUESTION)
+        chat.result()
+        drain()
+
+    assert first.opened and later.opened and provider.unused() == {}
+    [spawn] = calls_of(db, WebBrowseAbility.NAME)
+    n = agent_number(child(db, delegate_channel(WebBrowseAbility.NAME), spawn["id"]).channel)
+    reply, notice = replies(db, spawn["id"])
+    assert (reply["content"], notice["content"]) == (_ANSWER, _NOTHING_TO_SAY)
+    assert chat.turn_id < reply["turn_id"] < notice["turn_id"]
+    chat_read = provider.read("chat")
+    assert len(chat_read) == 6
+    answering_reply, answering_notice = chat_read[4:]
+    label = f"Reply from {WebBrowseAbility.NAME} #{n}"
+    nudge = AbilityRegistry.get(WebBrowseAbility.NAME).get_follow_up(ToolResult.ok(_ANSWER))
+    follow_up = _block_opening(_after_reply(answering_reply, label, _ANSWER))
+    assert follow_up == f"\n{FOLLOW_UP_BLOCK.format(text=nudge)}", answering_reply[-1500:]
+    assert answering_reply.count(_BLOCK_OPENER) == 1
+    assert _block_opening(_after_reply(answering_notice, label, _NOTHING_TO_SAY)) is None
+    assert _BLOCK_OPENER not in answering_notice
 
 
 def test_a_reply_never_lands_in_another_turn_that_is_working(db: sqlite3.Connection) -> None:
@@ -388,24 +526,28 @@ def test_a_reply_never_lands_in_another_turn_that_is_working(db: sqlite3.Connect
 
 
 def test_a_subagent_the_person_stops_tells_the_chat_it_was_stopped(authed_client: _Client) -> None:
-    """After the chat's turn has ended, the person stops the search from its
-    transcript panel while it is mid-call. The search ends cancelled with its
+    """After the chat's turn has ended, the person stops the browse from its
+    transcript panel while it is mid-call. The browse ends cancelled with its
     late answer never stored, and the chat is told, in a reply that opens a
-    turn of its own, that the search was stopped before it finished — with no
-    follow-up block — and answers it."""
+    turn of its own, that the session was cancelled — with no next step
+    after it, though a browse's answer carries one — and answers it."""
     client, db, _store = authed_client
     held = Held(text(_ANSWER))
     provider = ChannelProvider(
-        chat=[calls(tool("web_search", instructions=_INSTRUCTIONS)), text(_STARTED), text("It was stopped.")],
-        web_search=[held],
+        chat=[
+            calls(tool(WebBrowseAbility.NAME, instructions=_INSTRUCTIONS)),
+            text(_STARTED),
+            text("It was stopped."),
+        ],
+        web_browse=[held],
     )
 
     with patched(provider):
         parent = begin(UserConfig(), _QUESTION)
         parent.result()
-        wait(held.entered, "the search's model call")
-        [call] = calls_of(db, "web_search")
-        channel, n = child(db, delegate_channel("web_search"), call["id"])
+        wait(held.entered, "the browse's model call")
+        [call] = calls_of(db, WebBrowseAbility.NAME)
+        channel, n = child(db, delegate_channel(WebBrowseAbility.NAME), call["id"])
         stop = client.delete(f"/api/threads/{n}?channel={channel}")
         held.gate.set()
         drain()
@@ -415,19 +557,20 @@ def test_a_subagent_the_person_stops_tells_the_chat_it_was_stopped(authed_client
     assert execution(channel, n).state == TurnExecution.CANCELLED
     assert _ANSWER not in assistant_texts(db, channel, n)
     [reply] = replies(db, call["id"])
-    assert reply["content"] == "This web_search was stopped before it finished."
+    assert reply["content"] == CANCELLED_TEXT
     assert (reply["turn_id"] != parent.turn_id, reply["joined"]) == (True, 0)
     assert execution(USER, reply["turn_id"]).state == TurnExecution.COMPLETED
     assert assistant_texts(db, USER, reply["turn_id"]) == ["It was stopped."]
     answering = provider.read("chat")[-1]
-    assert "This web_search was stopped before it finished." in answering
+    assert CANCELLED_TEXT in answering
     assert _BLOCK_OPENER not in answering
 
 
-def test_a_subagent_whose_provider_keeps_failing_tells_the_chat_why_it_crashed(db: sqlite3.Connection) -> None:
+def test_a_subagent_whose_provider_keeps_failing_tells_the_chat_it_crashed(db: sqlite3.Connection) -> None:
     """The search's provider fails on every attempt after the chat's turn has
-    ended. The search crashes, and the chat is told why, in a reply that opens
-    a turn of its own — with no follow-up block — and answers it."""
+    ended. The search crashes, and the chat is told it crashed, in a reply
+    that opens a turn of its own — with no follow-up block — and answers
+    it."""
     boom = RuntimeError("boom")
     first = Held(boom)
     script: list[Entry] = [first, *(raises(boom) for _ in range(_MAX_PROVIDER_ATTEMPTS - 1))]
@@ -444,7 +587,7 @@ def test_a_subagent_whose_provider_keeps_failing_tells_the_chat_why_it_crashed(d
     search = execution(*child(db, delegate_channel("web_search"), call["id"]))
     assert (search.state, search.stop_reason) == (TurnExecution.CRASHED, _EXHAUSTED)
     [reply] = replies(db, call["id"])
-    assert reply["content"] == f"This web_search crashed: {_EXHAUSTED}"
+    assert reply["content"] == CRASHED_TEXT
     assert (reply["turn_id"] != parent.turn_id, reply["joined"]) == (True, 0)
     assert execution(USER, reply["turn_id"]).state == TurnExecution.COMPLETED
     assert assistant_texts(db, USER, reply["turn_id"]) == ["It failed."]
@@ -454,8 +597,8 @@ def test_a_subagent_whose_provider_keeps_failing_tells_the_chat_why_it_crashed(d
 def test_boot_tells_the_chat_a_subagent_was_cut_off_by_a_restart(db: sqlite3.Connection) -> None:
     """The process dies while the search is mid-call, so nothing is sent back
     then. The next boot closes the search's turn as cut off by the restart and
-    tells the chat so, once, in a reply that opens a turn of its own — with no
-    follow-up block — which the chat answers."""
+    tells the chat it crashed, once, in a reply that opens a turn of its own —
+    with no follow-up block — which the chat answers."""
     script: list[Entry] = [dies]
     provider = ChannelProvider(
         chat=[calls(tool("web_search", instructions=_INSTRUCTIONS)), text(_STARTED), text("It was cut off.")],
@@ -479,7 +622,7 @@ def test_boot_tells_the_chat_a_subagent_was_cut_off_by_a_restart(db: sqlite3.Con
         (channel, n, TurnExecution.CRASHED, "process death"),
     ]
     [reply] = replies(db, call["id"])
-    assert reply["content"] == "This web_search was cut off by a restart before it finished."
+    assert reply["content"] == CRASHED_TEXT
     assert (reply["turn_id"] != parent.turn_id, reply["joined"]) == (True, 0)
     assert execution(USER, reply["turn_id"]).state == TurnExecution.COMPLETED
     assert assistant_texts(db, USER, reply["turn_id"]) == ["It was cut off."]

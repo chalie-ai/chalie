@@ -6,31 +6,38 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""MessageSubagentAbility — send a message into a running subagent's turn.
+"""MessageSubagentAbility — send a message to a subagent the chat spawned.
 
-The message joins the subagent's own turn (:meth:`MessageProcessor.join`) on
-its own channel, never opening another. It is written as an input row on the
-config the subagent was spawned on — read from the one place that chooses it,
-:meth:`DelegateAbility.child_config` — bound to that channel, carrying
-the ``tool_calls`` id of the call that spawned it, as the subagent's first row
-does, so the row belongs to that call wherever the call is followed (its stop,
-its pill, its reply). The running loop takes the message in at its next
-boundary. A subagent that is no longer running gets how it ended instead
-(:func:`ended`).
+The message is delivered to the subagent's own channel
+(:meth:`MessageProcessor.deliver`), on the config its next turn runs on
+(:func:`agent_config`): a finished subagent picks up at once in its next
+turn, with all its earlier turns in its history, and a running one gets it as
+the turn after the one working. Its row carries this call's own
+``tool_calls`` id, and its turn the chat turn's origin, so a tool that asks
+for the person's approval there asks on the chat, as at its spawn. The result
+is the same either way, naming the label the subagent's answer will come back
+under. A subagent that ended cancelled or failed opens no turn again:
+:meth:`MessageProcessor.deliver` checks that in the transaction it queues or
+opens in, so a stop from another thread of the chat lands wholly before the
+check or wholly after the message, and on :class:`~exceptions.AgentStopped`
+the call returns what the subagent last gave
+(:meth:`AgentService.last_output`), read off the row that check read.
 """
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import ClassVar, cast
 
-from abilities._agents import AgentAbility, ended, label, not_found
-from abilities._delegate import DelegateAbility
+from abilities._agents import AgentAbility, label
+from abilities._delegate import agent_config, reply_label
 from abilities._result import ToolResult
 from configs.enums.param_key import Keys
 from contracts.params.agent_params_bag import AgentMessageParams
 from contracts.params.param_bag import ParamBag
-from models.agent import Agent
+from exceptions import AgentStopped
 from services.agent_service import AgentService
+
+_SENT = 'Message sent to subagent {label}. Its reply will reach you as "{reply}".'
 
 
 class MessageSubagentAbility(AgentAbility[AgentMessageParams]):
@@ -42,14 +49,20 @@ class MessageSubagentAbility(AgentAbility[AgentMessageParams]):
     _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
-            Keys.agent_id: {"type": "integer", "description": "The subagent's agent_id."},
+            Keys.agent_id: {
+                "type": "integer",
+                "description": "The agent_id of a subagent you spawned, running or finished.",
+            },
             Keys.message: {"type": "string", "description": "What to tell the subagent."},
         },
         "required": [Keys.agent_id, Keys.message],
     }
 
     def get_summary(self) -> str:
-        return "Send a message to a running subagent, or reply to a message it sent you."
+        return (
+            "Send a message to a subagent you spawned, or reply to one it sent you. "
+            "A finished subagent picks up again with all its earlier work."
+        )
 
     def get_examples(self) -> list[str]:
         return [
@@ -66,29 +79,14 @@ class MessageSubagentAbility(AgentAbility[AgentMessageParams]):
 
     def run(self, params: AgentMessageParams) -> ToolResult:
         # Lazy: the registry and the controller both load this module.
-        from abilities._registry import AbilityRegistry  # noqa: PLC0415
         from controllers.message_processor import MessageProcessor  # noqa: PLC0415
 
-        mp = self.mp
-        if mp is None:
-            raise RuntimeError(f"{self.NAME}.run() dispatched without a bound MessageProcessor")
         agent = self.owned(params.agent_id)
-        if agent is None:
-            return not_found(params.agent_id)
-        if agent.status == Agent.RUNNING:
-            spawner = AbilityRegistry.get(agent.type)
-            if not isinstance(spawner, DelegateAbility):
-                raise RuntimeError(f"{self.NAME}: subagent #{agent.agent_id}'s type {agent.type!r} is not a delegate")
-            config = spawner.child_config(mp.config)
-            if config is None:
-                raise RuntimeError(f"{self.NAME}: {agent.type} has no config for a {mp.channel} caller")
-            joined = MessageProcessor(config.on_channel(agent.channel), agent.turn_id).join(
-                params.message, spine_only=True, tool_call_id=AgentService.spawn_call_id(agent),
-            )
-            if joined is not None:
-                return ToolResult.ok(f"Message sent to subagent {label(agent)}.")
-            # Nothing to join: the subagent ended before the message landed.
-            agent = Agent.by_id(agent.agent_id)
-            if agent is None or agent.status == Agent.RUNNING:
-                raise RuntimeError(f"{self.NAME}: subagent #{params.agent_id} is running but has no turn to join")
-        return ended(agent)
+        if isinstance(agent, ToolResult):
+            return agent
+        try:
+            MessageProcessor.deliver(agent_config(agent), params.message, self.tool_call_id, self.bound().origin)
+        except AgentStopped as stopped:
+            # A cancelled or failed agent's last output is always its notice.
+            return ToolResult.err(cast("str", AgentService.last_output(stopped.agent)), code="agent-stopped")
+        return ToolResult.ok(_SENT.format(label=label(agent), reply=reply_label(agent.type, agent.agent_id)))

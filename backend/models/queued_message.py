@@ -23,7 +23,9 @@ from models.model import Model
 class QueuedMessage(Model):
     """One message waiting for its channel's next turn."""
 
-    __columns__: ClassVar[tuple[str, ...]] = ("id", "channel", "text", "tool_call_id", "created_at")
+    __columns__: ClassVar[tuple[str, ...]] = (
+        "id", "channel", "text", "tool_call_id", "origin", "response_id", "created_at",
+    )
 
     @classmethod
     def get_table(cls) -> str:
@@ -32,6 +34,12 @@ class QueuedMessage(Model):
     channel: str
     text: str
     tool_call_id: int | None
+    # JSON of the origin its turn prompts on (``MessageProcessor.origin``), or
+    # None when the turn uses its own.
+    origin: str | None
+    # The transcript row of the subagent answer the message carries, whose
+    # follow-up block its turn shows, or None when it carries none.
+    response_id: int | None
     created_at: str
 
     @classmethod

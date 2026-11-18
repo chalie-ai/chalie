@@ -151,7 +151,7 @@ class SubtaskAbility(DelegateAbility[DelegateParamsBag]):
         return None
 
 
-def speaker(row: Transcript) -> str | None:
+def speaker(row: Transcript, *, interface: bool = False) -> str | None:
     """The speaker label for a transcript row linked to the tool call that
     caused it, or ``None`` so the row keeps its normal label.
 
@@ -162,10 +162,11 @@ def speaker(row: Transcript) -> str | None:
     ``Scheduled task``:
 
     * ``"Task from Chalie"`` — a subtask's own first input row, the task its
-      caller handed it (the first id of the subtask's turn). Every other
+      caller handed it (the first row on its channel). Every other
       subagent's first row keeps its normal label.
-    * ``"Message from Chalie"`` — a later input row on any subagent's
-      channel: a message Chalie sent into the running subagent.
+    * ``"Message from Chalie"`` — for the ``interface`` only, the input row
+      of a later turn on any subagent's channel: a message Chalie sent it.
+      The model reads that row under its normal label.
     * ``"Reply from <tool> #N"`` — a delegate's late reply, ``<tool>`` being
       the delegate the link's call ran and ``N`` the agent it spawned, read
       off the channel its child ran on — rendered without the number when its
@@ -184,10 +185,10 @@ def speaker(row: Transcript) -> str | None:
     if link is None or not link.isdecimal():
         return None
     if delegate_type(row.channel) is not None:
-        ids = Transcript.ids_for_turn(row.channel, row.turn_id) if row.turn_id is not None else []
-        if ids and cast("int", row.id) == ids[0]:
+        first = Transcript.filter("channel", row.channel).order_by("id ASC").first()
+        if first is not None and first.id == row.id:
             return "Task from Chalie" if delegate_type(row.channel) == SubtaskAbility.NAME else None
-        return "Message from Chalie"
+        return "Message from Chalie" if interface else None
     if row.channel in (Channel.USER, Channel.SCHEDULE):
         call = ToolCall.get(int(link))
         if call is None:

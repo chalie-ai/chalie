@@ -155,7 +155,7 @@ def _apply_user_fields(msg: dict[str, object], r: dict[str, object], attachments
     if origin is not None:
         msg["reply_from"] = origin
         return
-    label = speaker(row)
+    label = speaker(row, interface=True)
     if label is not None:
         msg["speaker"] = label
 

@@ -37,7 +37,7 @@ from abilities._delegate import replies_late, reply_follow_up
 from abilities._registry import AbilityRegistry
 from abilities.code_agent import CodeAgentAbility
 from abilities.find_tools import FindToolsAbility
-from abilities.message_parent import joined_nudge, parent_nudge, spawn_message, waiting_notice
+from abilities.message_parent import parent_nudge, spawn_message, waiting_notice
 from abilities.pim import PimAbility
 from abilities.plan import PlanAbility, plans
 from abilities.recall import Recall
@@ -49,6 +49,7 @@ from configs.channels.memory_step import PROMPT_CHANNEL as MEMORY_STEP_PROMPT_CH
 from configs.channels.user import UserConfig
 from configs.enums.channels import Channel, delegate_type
 from exceptions import UnroutedPromptChannel
+from models.agent import Agent
 from models.plan_task import PlanTask
 from models.tool_call import ToolCall
 from models.transcript import Transcript
@@ -421,11 +422,10 @@ class PromptService:
         the order they arrived: a message sent while a call was in flight
         follows that call's reply and tool results. A message taken in before
         a compaction still renders — the compaction folds earlier turns, never
-        this exchange — and one not yet taken in does not. A joined delegate
-        reply carrying an answer is followed by its tool's follow-up block
-        (:func:`reply_follow_up`), and one the person sent by the line naming
-        every subagent still waiting for a reply (:func:`waiting_notice`).
-        With nothing joined the trail is unchanged."""
+        this exchange — and one not yet taken in does not. A joined message
+        the person sent is followed by the line naming every subagent still
+        waiting for a reply (:func:`waiting_notice`). With nothing joined the
+        trail is unchanged."""
         calls = self.mp.tool_call_service.by_exchange()
         last_compaction = max(
             (cast("int", call.id) for call in calls if call.tool_name == "chat_history_compactor"),
@@ -470,7 +470,7 @@ class PromptService:
                 waiting = waiting_notice(self.mp.channel) if said is None else ""
                 parts.append(
                     f"[{self._format_ts(row.created_at)}] {said or 'user'}: "
-                    f"{row.content}{reply_follow_up(row)}{parent_nudge(row)}{joined_nudge(row)}{waiting}"
+                    f"{row.content}{parent_nudge(row)}{waiting}"
                 )
 
         # Traces anchored to rows that never got a call (an empty-completion
@@ -573,12 +573,14 @@ class PromptService:
     # ── UserConfig (channel="user") ──────────────────────────────────────────
 
     def _task(self) -> str:
-        """This turn's input as the model reads it: on a subagent's turn, the
-        task inside who spawned it and how its answer gets back
-        (:func:`spawn_message`); on any other turn, the input itself. The
-        stored row keeps the bare task."""
+        """This turn's input as the model reads it: on the turn that spawned a
+        subagent, the task inside who spawned it and how its answer gets back
+        (:func:`spawn_message`); on every other turn, a subagent's later turns
+        included, the input itself. The stored row keeps the bare input."""
         agent = self.mp.agent
-        return spawn_message(agent, self.mp.raw_input) if agent is not None else self.mp.raw_input
+        if agent is None or not isinstance(self.mp.metadata.get("agent"), Agent):
+            return self.mp.raw_input
+        return spawn_message(agent, self.mp.raw_input)
 
     def _user_system_prompt(self) -> str:
         """``UserConfig``: the voice line (cache-warm prefix) over the config's
@@ -600,9 +602,10 @@ class PromptService:
         input line carries the turn's stamp (the model's only time source);
         the heartbeat never rides the user message — its locale line sits at
         the bottom of the system prompt. A delegate reply carrying an answer
-        is followed by its tool's follow-up block (:func:`reply_follow_up`);
-        a message the person sent, by the line naming every subagent still
-        waiting for a reply (:func:`waiting_notice`)."""
+        is followed by its tool's follow-up block, built from the answer row
+        this turn holds in its metadata (:func:`reply_follow_up`); a message
+        the person sent, by the line naming every subagent still waiting for
+        a reply (:func:`waiting_notice`)."""
         parts: list[str] = []
 
         user_def = self.user_definition()
@@ -620,8 +623,10 @@ class PromptService:
             parts.append(handover)
 
         anchor = self.mp.transcript_service.anchor_row()
+        response_id = cast("int | None", self.mp.metadata.get("response_id"))
         label, follow_up = (
-            (speaker(anchor), reply_follow_up(anchor) + parent_nudge(anchor)) if anchor is not None else (None, "")
+            (speaker(anchor), reply_follow_up(anchor, response_id) + parent_nudge(anchor))
+            if anchor is not None else (None, "")
         )
         if label is None:
             follow_up += waiting_notice(self.mp.channel)
@@ -757,60 +762,61 @@ class PromptService:
             lines.append(f"[{ts}] {content}")
         return "\n".join(lines)
 
-    # ── WebBrowseConfig (channel="delegate:web_browse:{agent_id}", prompt_channel="delegate:web_browse") ──
+    # ── typed subagents (web_browse, web_search, pim, code_agent) ────────────
 
-    def _web_browse_prompt(self) -> str:
-        """``WebBrowseConfig.get_user_prompt``: the (stamped) browsing goal
-        then this turn's act trail."""
-        parts = [f"[{self._input_stamp()}] Browsing goal:\n{self._task()}"]
+    def _delegate_prompt(self, heading: str) -> str:
+        """A typed subagent's prompt: its own earlier turns under ``## Previous
+        Messages`` (the guarded history read, so compaction and the context
+        limit apply), the stamped input under ``heading``, then this turn's act
+        trail — joined by blank lines. The stamped line is the subagent's only
+        clock."""
+        parts: list[str] = []
+        prev = self._prev()
+        if prev:
+            parts.append(f"## Previous Messages\n{prev}")
+        parts.append(f"[{self._input_stamp()}] {heading}:\n{self._task()}")
         trail = self._trail()
         if trail:
             parts.append(trail)
         return "\n\n".join(parts)
+
+    # ── WebBrowseConfig (channel="delegate:web_browse:{agent_id}", prompt_channel="delegate:web_browse") ──
+
+    def _web_browse_prompt(self) -> str:
+        """``WebBrowseConfig.get_user_prompt``: :meth:`_delegate_prompt` under
+        the browsing goal."""
+        return self._delegate_prompt("Browsing goal")
 
     # ── WebSearchConfig (channel="delegate:web_search:{agent_id}", prompt_channel="delegate:web_search") ──
 
     def _web_search_prompt(self) -> str:
-        """``WebSearchConfig.get_user_prompt``: the (stamped) research query
-        then this turn's act trail."""
-        parts = [f"[{self._input_stamp()}] Research query:\n{self._task()}"]
-        trail = self._trail()
-        if trail:
-            parts.append(trail)
-        return "\n\n".join(parts)
+        """``WebSearchConfig.get_user_prompt``: :meth:`_delegate_prompt` under
+        the research query."""
+        return self._delegate_prompt("Research query")
 
     # ── PimConfig (channel="delegate:pim:{agent_id}", prompt_channel="delegate:pim") ──
 
     def _pim_prompt(self) -> str:
-        """``PimConfig.get_user_prompt``: the (stamped) personal-information
-        instruction then this turn's act trail."""
-        parts = [f"[{self._input_stamp()}] Instruction:\n{self._task()}"]
-        trail = self._trail()
-        if trail:
-            parts.append(trail)
-        return "\n\n".join(parts)
+        """``PimConfig.get_user_prompt``: :meth:`_delegate_prompt` under the
+        personal-information instruction."""
+        return self._delegate_prompt("Instruction")
 
     # ── CodeAgentConfig (channel="delegate:code_agent:{agent_id}", prompt_channel="delegate:code_agent") ──
 
     def _code_agent_prompt(self) -> str:
-        """``CodeAgentConfig.get_user_prompt``: the (stamped) coding task, then
-        this turn's act trail.
+        """``CodeAgentConfig.get_user_prompt``: :meth:`_delegate_prompt` under
+        the coding task.
 
-        This string is the delegate's ENTIRE input — it renders no earlier
-        turn — and the stamped Task line is its only clock: the World State block no
-        longer rides along (the input stamp is the model's only time source),
-        and a coding agent that cannot date its own work writes wrong dates
-        into the files it creates. Kept as its own builder rather than remapped
-        onto the user channel through ``prompt_channel`` — a task is a
-        hand-off, not a user utterance, and that assembly would also inject the
-        user-identity synthesis and a post-compaction banner naming a tool this
-        channel does not pin."""
-        parts: list[str] = []
-        parts.append(f"[{self._input_stamp()}] Task:\n{self._task()}")
-        trail = self._trail()
-        if trail:
-            parts.append(trail)
-        return "\n\n".join(parts)
+        This string is the delegate's ENTIRE input — its own earlier turns,
+        the task, its trail — and the stamped Task line is its only clock: the
+        World State block no longer rides along (the input stamp is the model's
+        only time source), and a coding agent that cannot date its own work
+        writes wrong dates into the files it creates. Kept as its own builder
+        rather than remapped onto the user channel through ``prompt_channel`` —
+        a task is a hand-off, not a user utterance, and that assembly would
+        also inject the user-identity synthesis and a post-compaction banner
+        naming a tool this channel does not pin."""
+        return self._delegate_prompt("Task")
 
     # ── EAMPConfig (channel="external-agent:{name}", prompt_channel="external_agent") ──
 
