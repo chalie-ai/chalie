@@ -182,7 +182,9 @@ def test_run_completes_and_writes_a_checkpoint_without_crashing(db: sqlite3.Conn
     assert result.status == "success"
     checkpoint = Compaction.latest_main("user")
     assert checkpoint is not None
-    assert checkpoint.compacted_up_to == turn_id
+    last_row = Transcript.filter("channel", "user").filter("turn_id", turn_id).order_by("id DESC").first()
+    assert last_row is not None
+    assert checkpoint.compacted_up_to_id == last_row.id
 
 
 # ── Rich-media card gate (DispatchService) ──────────────────────────────────────

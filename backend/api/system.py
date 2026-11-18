@@ -401,15 +401,15 @@ class ObservabilityCompactionResource(Resource):
     def get(self) -> CompactionView | ResponseReturnValue:
         """Continuity-compaction synthesis for the chat ('user') channel (read-only)."""
         try:
-            # MAIN-spine checkpoint (for_turn_id NULL): the watermark is a turn_id.
-            # The DTO field keeps its name so the existing Brain view needs no change.
+            # MAIN-spine checkpoint: the watermark is a transcript row id, and
+            # ``latest_main`` only returns a checkpoint that carries one.
             record = Compaction.latest_main(Channel.USER.value)
             if record is None:
                 return CompactionView(compaction=None)
             return CompactionView(
                 compaction=CompactionRecord(
                     summary=record.content,
-                    compacted_up_to_id=record.compacted_up_to,
+                    compacted_up_to_id=cast("int", record.compacted_up_to_id),
                     compacted_at=format_date(record.created_at, for_ui=True) or "",
                 ),
             )

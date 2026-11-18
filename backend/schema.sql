@@ -315,16 +315,16 @@ CREATE VIRTUAL TABLE IF NOT EXISTS lists_vec USING vec0(embedding float[768]);
 -- ────────────────────────────────────────────────────────────────
 -- THREAD GIST — one terse 3-5 word topical label per conversation thread (a
 -- turn grown past its settle0). Written once, on the first reply past settle0.
--- Logical FK (channel, turn_id) → transcript; pure FE affordance, no embedding,
--- no search index.
+-- Found by its thread's opening transcript row id (opening_id). No foreign
+-- key: once that row is purged the label matches no row and reads as gone.
+-- Pure FE affordance, no embedding, no search index.
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS thread_gist (
-    channel     TEXT NOT NULL,
-    turn_id     INTEGER NOT NULL,
+    opening_id  INTEGER,
     gist        TEXT,
-    created_at  TEXT NOT NULL,
-    PRIMARY KEY (channel, turn_id)
+    created_at  TEXT NOT NULL
 );
+CREATE UNIQUE INDEX IF NOT EXISTS ux_thread_gist_opening ON thread_gist(opening_id);
 
 -- ────────────────────────────────────────────────────────────────
 -- WRAPPER TOKENS — bearer auth for external programmatic access
@@ -475,24 +475,24 @@ CREATE INDEX IF NOT EXISTS idx_tool_calls_created ON tool_calls(created_at DESC)
 -- in its own table means firing one never moves a turn_id, so the
 -- turn boundary stays stable across a mid-turn collapse.
 --
--- Two-axis watermark — one table, two scopes told apart by for_turn_id.
--- A MAIN-view checkpoint leaves for_turn_id empty and stores a turn id in
--- compacted_up_to, so the spine read drops every turn at or before that id.
--- A FORK-view checkpoint sets for_turn_id to its thread and stores a
--- transcript row id, so the thread read drops that thread's rows at or
--- before it. The two scopes sit on different axes and never collide, so a
--- MAIN checkpoint can't hide a fork reply and a FORK checkpoint can't hide
--- the spine.
+-- One table, two scopes told apart by opening_id. A MAIN-view checkpoint
+-- leaves opening_id empty and covers the spine; a FORK-view checkpoint sets
+-- opening_id to its thread's opening transcript row id and covers that thread
+-- only. Either way compacted_up_to_id is the transcript row id the checkpoint
+-- folded up to, and the view's read drops its rows at or before it. No
+-- foreign keys: once a thread's opening row is purged its checkpoint matches
+-- no row and reads as gone. A row with no compacted_up_to_id predates these
+-- columns and is never read.
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS compactions (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    channel         TEXT NOT NULL,
-    for_turn_id     INTEGER,
-    compacted_up_to INTEGER NOT NULL,
-    content         TEXT NOT NULL,
-    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel             TEXT NOT NULL,
+    opening_id          INTEGER,
+    compacted_up_to_id  INTEGER,
+    content             TEXT NOT NULL,
+    created_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
-CREATE INDEX IF NOT EXISTS ix_compactions_scope ON compactions(channel, for_turn_id, id);
+CREATE INDEX IF NOT EXISTS ix_compactions_scope ON compactions(channel, opening_id, id);
 
 -- ────────────────────────────────────────────────────────────────
 -- USER SYNTHESIS — versioned append-only user profile summary
@@ -600,7 +600,10 @@ CREATE TABLE IF NOT EXISTS turn_executions (
     cancel_requested  INTEGER NOT NULL DEFAULT 0,
     state             TEXT NOT NULL DEFAULT 'working'
                       CHECK (state IN ('working', 'completed', 'cancelled', 'crashed')),
-    stop_reason       TEXT
+    stop_reason       TEXT,
+    -- The transcript row id of the input this execution was opened for; NULL
+    -- when the turn wrote none (a hidden-input opener). No foreign key.
+    input_id          INTEGER
 );
 
 -- Serves both DELETE /api/thread/<turn_id>'s point lookup (this channel's

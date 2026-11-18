@@ -76,6 +76,7 @@ class TurnExecutionService:
                 cancel_requested=False,
                 state=TurnExecution.WORKING,
                 stop_reason=None,
+                input_id=self.mp.uid,
             ).save()
         except Exception as exc:
             logger.warning("[TurnExecutionService] open failed for turn_id=%s: %s", self.mp.turn_id, exc)
@@ -243,6 +244,7 @@ class TurnExecutionService:
             cancel_requested=current.cancel_requested,
             state=state,
             stop_reason=stop_reason,
+            input_id=current.input_id,
         )
         try:
             with self.mp.db.transaction():

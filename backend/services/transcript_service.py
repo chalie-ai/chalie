@@ -105,7 +105,7 @@ class TranscriptService:
             by_turn: dict[int, list[Transcript]] = {}
             for row in (
                 Transcript.filter("channel", channel)
-                .filter("turn_id", watermark, ">")
+                .filter("id", watermark, ">")
                 .filter("role", "memory", "!=")
                 .order_by("id ASC")
                 .get()

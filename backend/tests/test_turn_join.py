@@ -174,7 +174,9 @@ def _label_thread(turn_id: int) -> None:
     """Give a thread its label up front. A reply into an unlabelled thread
     launches a label-writing call of its own at the same provider, which would
     race the reply's own call for the scripted responses."""
-    ThreadGist(channel=_CHANNEL, turn_id=turn_id, gist="seeded label").upsert()
+    opening_id = Transcript.first_id(_CHANNEL, turn_id)
+    assert opening_id is not None
+    ThreadGist(opening_id=opening_id, gist="seeded label").upsert()
 
 
 def _start_working_turn(client: FlaskClient, provider: _Provider, text: str) -> dict[str, object]:

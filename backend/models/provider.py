@@ -6,7 +6,7 @@ autoincrement ``id``, so every read-by-id and targeted write goes through the
 base verbs (:meth:`~models.model.Model.get`, ``filter("id", ...).update(...)``
 / ``.delete()``) straight off this class — no bespoke id-centric CRUD needed,
 unlike :class:`~models.setting.Setting` (keyed by ``key``) or
-:class:`~models.thread_gist.ThreadGist` (composite key).
+:class:`~models.thread_gist.ThreadGist` (keyed by ``opening_id``).
 
 Two bespoke ``@classmethod``\\ s carry raw SQL the builder genuinely cannot
 express (Critical 3 carve-outs, both computed/SQL-function, not predicates):

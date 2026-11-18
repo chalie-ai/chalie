@@ -116,6 +116,18 @@ class Transcript(Model):
         return int(row[0]) if row and row[0] is not None else None
 
     @classmethod
+    def first_id(cls, channel: str, turn_id: int, *, above: int = 0) -> int | None:
+        """``id`` of the turn's first row past ``above``, or None when it has
+        none. With the default ``above`` it is the turn's opening row, the
+        record id other tables find a thread by. Mirrors :meth:`settle0`'s
+        style."""
+        row = cls._bound_connection().execute(
+            "SELECT MIN(id) FROM transcript WHERE channel = ? AND turn_id = ? AND id > ?",
+            (channel, turn_id, above),
+        ).fetchone()
+        return int(row[0]) if row and row[0] is not None else None
+
+    @classmethod
     def last_answer(cls, channel: str, turn_id: int) -> str | None:
         """Content of the turn's newest settled assistant row — the answer its
         latest completed exchange ended on, as stored — or None for a turn that
@@ -507,16 +519,16 @@ class Transcript(Model):
 
     # A thread matches a search term when either its user-role content or its
     # (LLM-generated) gist label carries it. The gist half is a correlated
-    # subquery keyed on the real ``transcript.turn_id`` (not the NULL-safe
-    # ``_TURN_KEY``) — ``thread_gist`` rows only ever exist for a real turn_id,
-    # never for a legacy NULL-turn_id singleton, so this correctly matches
-    # nothing for those. Wrapped in MAX(COALESCE(..., 0)) to mirror the
-    # ``_CANCELLED_ORPHAN_HAVING`` idiom: a per-row correlated subquery
-    # aggregated across the GROUP, since HAVING cannot reference a
+    # subquery that finds the label by the thread's opening row id
+    # (``thread_gist.opening_id``): the group matches when one of its rows is
+    # that opening row. A legacy NULL-turn_id singleton never gets a label, so
+    # this matches nothing for those. Wrapped in MAX(COALESCE(..., 0)) to
+    # mirror the ``_CANCELLED_ORPHAN_HAVING`` idiom: a per-row correlated
+    # subquery aggregated across the GROUP, since HAVING cannot reference a
     # non-aggregated, non-grouped column directly.
     _GIST_MATCH: ClassVar[str] = (
-        "MAX(COALESCE((SELECT 1 FROM thread_gist tg WHERE tg.channel = transcript.channel "
-        "AND tg.turn_id = transcript.turn_id AND tg.gist LIKE ?), 0)) = 1"
+        "MAX(COALESCE((SELECT 1 FROM thread_gist tg WHERE tg.opening_id = transcript.id "
+        "AND tg.gist LIKE ?), 0)) = 1"
     )
 
     @classmethod
