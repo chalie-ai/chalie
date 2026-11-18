@@ -10,7 +10,8 @@ reply only while the turn it asked in ended on that question.
   behind it; that turn's end opens the subagent's next turn, moving it from
   waiting to running.
 * The next boot's sweep leaves a waiting subagent waiting: no turn of its was
-  cut off, so nothing ends it and nothing is posted.
+  cut off, so nothing ends it and nothing is posted, and the chat lists it as
+  waiting and reads its status as waiting.
 * A chat turn reads the reminder naming, oldest first, every subagent that
   waits and whose message has reached the chat — not one whose message still
   waits behind a working turn, and not the one whose message opened the turn.
@@ -30,6 +31,7 @@ a sleep.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 from datetime import timedelta
@@ -40,6 +42,8 @@ from flask.testing import FlaskClient
 
 from abilities._agents import label
 from abilities._turn_handover_config import TurnHandoverConfig
+from abilities.agent_status import AgentStatusAbility
+from abilities.list_agents import ListAgentsAbility
 from abilities.message_parent import WAITING_REMINDER, MessageParentAbility
 from abilities.message_subagent import MessageSubagentAbility
 from abilities.recall import Recall
@@ -76,13 +80,14 @@ from tests._delegates import (
     tool,
     wait,
 )
-from tests.test_agent_tools import _answer, _input_rows, _statuses
+from tests.test_agent_tools import _answer, _find_agent_tools, _input_rows, _statuses
 from tests.test_agents_table import _empty_listing, _listing
 from tests.test_message_parent import (
     _ANSWER,
     _QUESTION,
     _REPLY,
     _SENT,
+    _SUMMARY,
     _USER,
     _WAITS,
     _WEB,
@@ -288,12 +293,18 @@ def test_the_next_boot_leaves_a_waiting_subagent_waiting(db: sqlite3.Connection)
     """The search asks and waits. What the next boot runs — the backfill, the
     sweep and the notices — cuts off no turn of its: the search still waits,
     no frame moves it, nothing is posted for it, and the person's next message
-    reads the reminder naming it."""
+    reads the reminder naming it. That turn finds the agent tools, lists the
+    search as waiting, and reads its status as waiting, with the text its turn
+    ended on."""
     asking = Held(_ask())
     unanswered = Held(text("Let me think about that."))
     unanswered.gate.set()
+
+    def check_it() -> ProviderResponse:
+        return calls(tool(ListAgentsAbility.NAME), tool(AgentStatusAbility.NAME, agent_id=_the_search().agent_id))
+
     provider = ChannelProvider(
-        chat=[_spawn(), text("Started."), unanswered, text("Hello.")],
+        chat=[_spawn(), text("Started."), unanswered, _find_agent_tools(), check_it, text("Hello.")],
         web_search=[asking, text(_WAITS)],
     )
 
@@ -314,7 +325,13 @@ def test_the_next_boot_leaves_a_waiting_subagent_waiting(db: sqlite3.Connection)
     assert _statuses(listener.frames, n) == [Agent.RUNNING, Agent.WAITING]
     [spawn] = calls_of(db, _WEB)
     assert replies(db, cast("int", spawn["id"])) == []
-    assert [_named(r) for r in provider.read("chat")] == [None, None, None, label(agent)]
+    assert [_named(r) for r in provider.read("chat")] == [None, None, None] + [label(agent)] * 3
+    [listed] = calls_of(db, ListAgentsAbility.NAME)
+    assert _answer(listed)[:2] == ("success", None)
+    assert json.loads(_answer(listed)[2]) == [{"agent_id": n, "type": _WEB, "summary": _SUMMARY, "status": Agent.WAITING}]
+    [status] = calls_of(db, AgentStatusAbility.NAME)
+    assert _answer(status)[:2] == ("success", None)
+    assert json.loads(_answer(status)[2]) == {"agent_id": n, "type": _WEB, "status": Agent.WAITING, "last_output": _WAITS}
 
 
 def test_the_reminder_names_oldest_first_the_waiting_subagents_whose_message_reached_the_chat(

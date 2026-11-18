@@ -84,6 +84,11 @@ class Agent(Model):
         return cls.filter("status", cls.RUNNING).order_by("agent_id ASC").get()
 
     @classmethod
+    def spawned_by(cls, channel: str) -> Sequence[Agent]:
+        """Every agent ``channel`` spawned, of any status, oldest first."""
+        return cls.filter("spawned_by_channel", channel).order_by("agent_id ASC").get()
+
+    @classmethod
     def active(cls) -> Sequence[Agent]:
         """Every agent running or waiting for its caller's reply, oldest
         first."""

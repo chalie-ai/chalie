@@ -10,9 +10,9 @@ a ``deny`` stored for any of them is not read.
   and sends it a message. The message waits for the subagent's turn to end,
   then opens its next turn, carrying the message's own call, read bare after
   its first turn; each turn's reply goes back to the call that spawned it, in
-  a chat turn of its own. Once it is done, it is no longer listed and its
-  status reads its latest answer, while a stop still ends it cancelled and
-  tells the panel.
+  a chat turn of its own. Once it is done, it is still listed, as done, and
+  its status reads its latest answer, while a stop still ends it cancelled
+  and tells the panel.
 * A message to a working subtask opens its next turn the same way, with each
   turn's reply going back to the call that started it.
 * Stopping a subtask stops it and the search it was waiting on, and nothing
@@ -35,7 +35,8 @@ a ``deny`` stored for any of them is not read.
   the search, each on turn 1 there. A status read and a message each reach the
   search whose number they carry, and each reply comes back labelled with its
   own search's number. Stopping one of the two while both work ends only that
-  one; the other answers on.
+  one; the chat then lists both, oldest first, the stopped one as cancelled,
+  and the other answers on.
 
 Drives real turns against the real, fully migrated SQLite DB, observed through
 the real socket registry and read back through the real Flask app. The only
@@ -126,7 +127,7 @@ _FERRY_TASK = "find this week's news about the harbour ferry"
 _FERRY_SUMMARY = "Searching the ferry news"
 _FERRY_ANSWER = "This week: the ferry runs every hour."
 _NOTHING_REACHED = "No subagent has that number."
-_NONE_RUNNING = "No agents are currently running"
+_NO_SUBAGENTS = "You have no subagents"
 
 _HEAD = re.compile(r"^\[\w+\(status=(?P<status>\w+)(?:, code=(?P<code>[\w-]+))?")
 
@@ -199,9 +200,9 @@ def test_the_chat_lists_checks_and_messages_its_working_subagent_then_reads_how_
     turn. Released, the search answers; that reply opens a turn on the chat,
     and the message waiting for the search opens the search's next turn,
     which reads it bare after its first turn and answers again. That second
-    reply opens another chat turn, which lists its subagents and finds none,
-    reads the finished search's status — its latest answer — and stops it:
-    the stop ends it cancelled and tells the panel."""
+    reply opens another chat turn, which lists the search again, now done,
+    reads its status — its latest answer — and stops it: the stop ends it
+    cancelled and tells the panel."""
     client, db, _store = authed_client
     _deny_agent_tools()
     held = Held(text(_DRAFT))
@@ -266,9 +267,11 @@ def test_the_chat_lists_checks_and_messages_its_working_subagent_then_reads_how_
     status, code, body = _answer(listed)
     assert (status, code) == ("success", None)
     assert json.loads(body) == [{"agent_id": n, "type": _WEB, "summary": _SUMMARY, "status": Agent.RUNNING}]
-    # Done, it drops out of the same chat's list.
+    # Done, it stays in the same chat's list, listed as done.
     assert _answer(listed_done)[:2] == ("success", None)
-    assert _answer(listed_done)[2] == _NONE_RUNNING
+    assert json.loads(_answer(listed_done)[2]) == [
+        {"agent_id": n, "type": _WEB, "summary": _SUMMARY, "status": Agent.DONE},
+    ]
 
     # Working on its first turn it has given nothing yet, whatever it wrote
     # on the way; done, it reads its latest answer.
@@ -504,7 +507,7 @@ def test_the_chat_cannot_see_or_reach_a_subagent_a_scheduled_task_spawned(db: sq
 
     [listed] = calls_of(db, ListAgentsAbility.NAME)
     assert _answer(listed)[:2] == ("success", None)
-    assert _answer(listed)[2] == _NONE_RUNNING
+    assert _answer(listed)[2] == _NO_SUBAGENTS
     for tool_name in (AgentStatusAbility.NAME, MessageSubagentAbility.NAME, StopSubagentAbility.NAME):
         [call] = calls_of(db, tool_name)
         assert _answer(call) == _not_found(n)
@@ -554,7 +557,7 @@ def test_a_scheduled_task_manages_no_subagent_not_even_its_own(db: sqlite3.Conne
     n = agent_number(child(db, _WEB_CHANNEL, cast("int", search["id"])).channel)
 
     [listed] = calls_of(db, ListAgentsAbility.NAME)
-    assert _answer(listed)[2] == _NONE_RUNNING
+    assert _answer(listed)[2] == _NO_SUBAGENTS
     for tool_name in (AgentStatusAbility.NAME, MessageSubagentAbility.NAME, StopSubagentAbility.NAME):
         [call] = calls_of(db, tool_name)
         assert _answer(call) == _not_found(n)
@@ -624,7 +627,7 @@ def test_no_caller_but_the_chat_reaches_the_chats_working_subagent_even_by_its_r
 
     [listed] = calls_of(db, ListAgentsAbility.NAME)
     assert _answer(listed)[:2] == ("success", None)
-    assert _answer(listed)[2] == _NONE_RUNNING
+    assert _answer(listed)[2] == _NO_SUBAGENTS
     for tool_name in (AgentStatusAbility.NAME, MessageSubagentAbility.NAME, StopSubagentAbility.NAME):
         [call] = calls_of(db, tool_name)
         assert _answer(call) == _not_found(n)
@@ -826,10 +829,11 @@ def test_two_searches_the_chat_spawns_run_on_channels_of_their_own_and_each_repl
 
 def test_stopping_one_of_two_working_searches_ends_only_that_one(db: sqlite3.Connection) -> None:
     """While two ``web_search`` subagents the chat spawned are working, each on
-    turn 1 of its own channel, the chat stops the first and reads the second's
-    status. Only the first ends — cancelled, stopped by its caller, with no
-    reply — while the second reads as working, answers on, and its reply comes
-    back labelled with its own number."""
+    turn 1 of its own channel, the chat stops the first, reads the second's
+    status and lists its subagents. Only the first ends — cancelled, stopped by
+    its caller, with no reply — and it is still listed, as cancelled, ahead of
+    the second, which reads as working, answers on, and its reply comes back
+    labelled with its own number."""
     _deny_agent_tools()
     first_held = Held(text(_DRAFT))
     second_held = Held(text(_FERRY_ANSWER))
@@ -841,6 +845,7 @@ def test_stopping_one_of_two_working_searches_ends_only_that_one(db: sqlite3.Con
         return calls(
             tool(StopSubagentAbility.NAME, agent_id=first.agent_id),
             tool(AgentStatusAbility.NAME, agent_id=second.agent_id),
+            tool(ListAgentsAbility.NAME),
         )
 
     provider = ChannelProvider(
@@ -865,6 +870,13 @@ def test_stopping_one_of_two_working_searches_ends_only_that_one(db: sqlite3.Con
     assert _answer(stopped) == ("success", None, f"Subagent {_WEB} #{a} stopped.")
     [status] = calls_of(db, AgentStatusAbility.NAME)
     assert json.loads(_answer(status)[2]) == {"agent_id": b, "type": _WEB, "status": Agent.RUNNING, "last_output": None}
+    # Stopped, the first stays listed, oldest first, ahead of the one at work.
+    [listed] = calls_of(db, ListAgentsAbility.NAME)
+    assert _answer(listed)[:2] == ("success", None)
+    assert json.loads(_answer(listed)[2]) == [
+        {"agent_id": a, "type": _WEB, "summary": _SUMMARY, "status": Agent.CANCELLED},
+        {"agent_id": b, "type": _WEB, "summary": _FERRY_SUMMARY, "status": Agent.RUNNING},
+    ]
 
     ended = execution(a_channel, a_turn)
     assert (ended.state, ended.stop_reason) == (TurnExecution.CANCELLED, STOP_REASON_PARENT_STOPPED)

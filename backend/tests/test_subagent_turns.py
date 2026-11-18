@@ -34,8 +34,9 @@ one, never joined.
 * A chat turn stopped while its message waits for a working search drops the
   message, which keeps its text in the call that sent it; a turn the message
   already opened, minutes after its call ended, stops with it.
-* A search that ended more than a week ago is archived to every tool; one
-  still working never is.
+* A search that ended more than a week ago is archived to every tool, and the
+  chat's list leaves it out; one still working never is, and one that ended
+  just under a week ago is still listed, as done, and reachable.
 * A stop of a finished subtask drops the message waiting on its memory step,
   and no turn opens for it.
 
@@ -66,6 +67,7 @@ from abilities._result import ToolResult
 from abilities.agent_status import AgentStatusAbility
 from abilities.code_agent import CodeAgentAbility
 from abilities.find_tools import FindToolsAbility
+from abilities.list_agents import ListAgentsAbility
 from abilities.message_parent import MessageParentAbility
 from abilities.message_subagent import _SENT, MessageSubagentAbility
 from abilities.recall import Recall
@@ -126,6 +128,7 @@ from tests.test_agent_tools import (
     _FERRY_TASK,
     _FIRST_WORDS,
     _MESSAGE,
+    _NO_SUBAGENTS,
     _SUMMARY,
     _TASK,
     _answer,
@@ -1424,9 +1427,11 @@ def test_a_search_that_ended_over_a_week_ago_is_archived_and_one_still_working_n
 ) -> None:
     """The chat reads the status of a ``web_search`` while it works, before it
     has answered: it reads running, not archived. The search answers and ends.
-    Once the row it ended on is more than a week old, a message, a stop and a
-    status read are each answered that it is archived: the message opens no
-    turn, and the stop leaves it done."""
+    With the row it ended on just under a week old, the chat still lists it,
+    as done, and its status read returns its answer. Once that row is more
+    than a week old, the chat's list leaves it out — it has no subagents — and
+    a message, a stop and a status read are each answered that it is archived:
+    the message opens no turn, and the stop leaves it done."""
     held = Held(text(_ANSWER))
     seen: dict[str, int] = {}
 
@@ -1443,9 +1448,13 @@ def test_a_search_that_ended_over_a_week_ago_is_archived_and_one_still_working_n
         held.gate.set()
         return text("Started.")
 
+    def check_it() -> ProviderResponse:
+        return calls(tool(ListAgentsAbility.NAME), tool(AgentStatusAbility.NAME, agent_id=seen["n"]))
+
     def reach_it() -> ProviderResponse:
         n = seen["n"]
         return calls(
+            tool(ListAgentsAbility.NAME),
             _message(n, _LATER),
             tool(StopSubagentAbility.NAME, agent_id=n),
             tool(AgentStatusAbility.NAME, agent_id=n),
@@ -1458,6 +1467,9 @@ def test_a_search_that_ended_over_a_week_ago_is_archived_and_one_still_working_n
             status_while_it_works,
             release_it,
             text("Noted."),
+            _find_agent_tools(),
+            check_it,
+            text("It is done."),
             _find_agent_tools(),
             reach_it,
             text("It was archived."),
@@ -1474,19 +1486,39 @@ def test_a_search_that_ended_over_a_week_ago_is_archived_and_one_still_working_n
     answered = cast("Agent", Agent.by_id(n))
     assert (answered.status, answered.turn_id) == (Agent.DONE, turn)
     assert answered.response_id is not None
-    aged = utc_now() - ARCHIVE_AFTER - timedelta(days=1)
-    assert Transcript.filter("id", answered.response_id).update(created_at=aged.strftime("%Y-%m-%d %H:%M:%S")) == 1
 
+    def age_its_row(by: timedelta) -> None:
+        """Date the row the search ended on ``by`` before now."""
+        aged = (utc_now() - by).strftime("%Y-%m-%d %H:%M:%S")
+        assert Transcript.filter("id", answered.response_id).update(created_at=aged) == 1
+
+    # An hour short of the archive age — a margin the wall clock cannot cross
+    # while the turn runs.
+    age_its_row(ARCHIVE_AFTER - timedelta(hours=1))
+    run_turn(provider, UserConfig(), "is the bridge search done?")
+    age_its_row(ARCHIVE_AFTER + timedelta(days=1))
     run_turn(provider, UserConfig(), "any news on the bridge?")
 
     assert held.opened and provider.unused() == {}
+    working, status_under, status_later = calls_of(db, AgentStatusAbility.NAME)
+    listed_under, listed_later = calls_of(db, ListAgentsAbility.NAME)
     # While it worked, it read running.
-    working, status_later = calls_of(db, AgentStatusAbility.NAME)
     assert _answer(working)[:2] == ("success", None)
     assert json.loads(_answer(working)[2]) == {
         "agent_id": n, "type": _WEB, "status": Agent.RUNNING, "last_output": None,
     }
-    # Ended over a week ago, it is archived to every tool.
+    # Ended just under a week ago, it is still listed, as done, and reachable.
+    assert _answer(listed_under)[:2] == ("success", None)
+    assert json.loads(_answer(listed_under)[2]) == [
+        {"agent_id": n, "type": _WEB, "summary": _SUMMARY, "status": Agent.DONE},
+    ]
+    assert _answer(status_under)[:2] == ("success", None)
+    assert json.loads(_answer(status_under)[2]) == {
+        "agent_id": n, "type": _WEB, "status": Agent.DONE, "last_output": _ANSWER,
+    }
+    # Ended over a week ago, the list leaves it out and it is archived to
+    # every other tool.
+    assert _answer(listed_later) == ("success", None, _NO_SUBAGENTS)
     archived = ("error", "agent-archived", ARCHIVED_TEXT.format(type=_WEB, agent_id=n))
     [sent] = calls_of(db, MessageSubagentAbility.NAME)
     [stopped] = calls_of(db, StopSubagentAbility.NAME)

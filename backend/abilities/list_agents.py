@@ -6,12 +6,15 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""ListAgentsAbility — the subagents the chat spawned that are still running.
+"""ListAgentsAbility — the subagents the chat spawned that are not archived.
 
-Each entry is drawn the way the interface's agent list draws it
-(:meth:`AgentService.view`): its number, its type, the one-line summary of the
-call that spawned it, and its status. With none running — always so for any
-caller other than the chat (:meth:`AgentAbility.mine`) — it says so in words.
+Every one the chat can still manage, oldest first, whatever its status —
+running, waiting for the chat's reply, done, cancelled or failed — less an archived
+one (:meth:`AgentService.archived`). Each entry is drawn the way the
+interface's agent list draws it (:meth:`AgentService.view`): its number, its
+type, the one-line summary of the call that spawned it, and its status. With
+none — always so for any caller other than the chat (:meth:`AgentAbility.mine`)
+— it says so in words.
 """
 
 from __future__ import annotations
@@ -26,7 +29,7 @@ from models.agent import Agent
 from services.agent_service import AgentService
 
 _FIELDS = ("agent_id", "type", "summary", "status")
-_NONE_RUNNING = "No agents are currently running"
+_NO_AGENTS = "You have no subagents"
 
 
 class ListAgentsAbility(AgentAbility[ListAgentsParams]):
@@ -38,8 +41,8 @@ class ListAgentsAbility(AgentAbility[ListAgentsParams]):
 
     def get_summary(self) -> str:
         return (
-            "List the subagents you spawned that are still running, with each one's "
-            "agent_id, type, summary and status."
+            "List the subagents you spawned that are not archived, with each one's "
+            "agent_id, type, summary and status: running, waiting, done, cancelled or failed."
         )
 
     def get_examples(self) -> list[str]:
@@ -56,7 +59,11 @@ class ListAgentsAbility(AgentAbility[ListAgentsParams]):
         return self._PARAMETERS
 
     def run(self, params: ListAgentsParams) -> ToolResult:
-        running = [AgentService.view(agent) for agent in Agent.running() if self.mine(agent)]
-        if not running:
-            return ToolResult.ok(_NONE_RUNNING)
-        return ToolResult.ok([{key: view[key] for key in _FIELDS} for view in running])
+        listed = [
+            AgentService.view(agent)
+            for agent in Agent.spawned_by(self.bound().channel)
+            if self.mine(agent) and not AgentService.archived(agent)
+        ]
+        if not listed:
+            return ToolResult.ok(_NO_AGENTS)
+        return ToolResult.ok([{key: view[key] for key in _FIELDS} for view in listed])
