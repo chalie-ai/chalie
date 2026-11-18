@@ -51,9 +51,12 @@ class PimConfig(ProcessorConfig):
             always_available=[EmailAbility.NAME, CalendarAbility.NAME, ContactsAbility.NAME, Recall.NAME, PlanAbility.NAME],
             skip_transcript=False,  # write a delegate-channel transcript row so
             skip_input_row=False,   # _setup assigns the uid the act-trail needs
-            suppress_history=True,
+            suppress_history=False,
             memory_seed=True,
         )
+        # The spawning turn rebinds ``channel`` to the subagent's own; the
+        # prompt is chosen by the kind's bare channel.
+        object.__setattr__(self, "prompt_channel", Channel.DELEGATE_PIM.value)
 
     @property
     def system_prompt(self) -> str:

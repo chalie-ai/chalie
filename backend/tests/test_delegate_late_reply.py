@@ -60,7 +60,7 @@ from tests._delegates import (
     block,
     calls,
     calls_of,
-    child_turn,
+    child,
     connected_mail,
     delegate_channel,
     dies,
@@ -166,7 +166,7 @@ def test_a_subagent_called_from_the_chat_returns_at_once_and_its_answer_comes_ba
 
     assert held.opened and provider.unused() == {}
     [call] = calls_of(db, delegate)
-    n = agent_number(delegate, child_turn(db, delegate_channel(delegate), call["id"]))
+    n = agent_number(child(db, delegate_channel(delegate), call["id"]).channel)
     label = f"Reply from {delegate} #{n}"
     assert call["state"] == "done", call["result"]
     assert (
@@ -331,7 +331,7 @@ def test_two_subagents_that_answer_while_their_caller_works_are_each_answered_on
         [call] = calls_of(db, tool_name)
         [reply] = replies(db, call["id"])
         assert (reply["turn_id"], reply["joined"]) == (parent.turn_id, 1), tool_name
-        numbers[tool_name] = agent_number(tool_name, child_turn(db, delegate_channel(tool_name), call["id"]))
+        numbers[tool_name] = agent_number(child(db, delegate_channel(tool_name), call["id"]).channel)
     assert _user_turns(db) == [parent.turn_id]
     chat = provider.read("chat")
     assert len(chat) == 3
@@ -394,7 +394,6 @@ def test_a_subagent_the_person_stops_tells_the_chat_it_was_stopped(authed_client
     turn of its own, that the search was stopped before it finished — with no
     follow-up block — and answers it."""
     client, db, _store = authed_client
-    channel = delegate_channel("web_search")
     held = Held(text(_ANSWER))
     provider = ChannelProvider(
         chat=[calls(tool("web_search", instructions=_INSTRUCTIONS)), text(_STARTED), text("It was stopped.")],
@@ -406,7 +405,7 @@ def test_a_subagent_the_person_stops_tells_the_chat_it_was_stopped(authed_client
         parent.result()
         wait(held.entered, "the search's model call")
         [call] = calls_of(db, "web_search")
-        n = child_turn(db, channel, call["id"])
+        channel, n = child(db, delegate_channel("web_search"), call["id"])
         stop = client.delete(f"/api/threads/{n}?channel={channel}")
         held.gate.set()
         drain()
@@ -442,7 +441,7 @@ def test_a_subagent_whose_provider_keeps_failing_tells_the_chat_why_it_crashed(d
     assert first.opened and provider.unused() == {}
     assert len(provider.texts("web_search")) == _MAX_PROVIDER_ATTEMPTS
     [call] = calls_of(db, "web_search")
-    search = execution(delegate_channel("web_search"), child_turn(db, delegate_channel("web_search"), call["id"]))
+    search = execution(*child(db, delegate_channel("web_search"), call["id"]))
     assert (search.state, search.stop_reason) == (TurnExecution.CRASHED, _EXHAUSTED)
     [reply] = replies(db, call["id"])
     assert reply["content"] == f"This web_search crashed: {_EXHAUSTED}"
@@ -457,7 +456,6 @@ def test_boot_tells_the_chat_a_subagent_was_cut_off_by_a_restart(db: sqlite3.Con
     then. The next boot closes the search's turn as cut off by the restart and
     tells the chat so, once, in a reply that opens a turn of its own — with no
     follow-up block — which the chat answers."""
-    channel = delegate_channel("web_search")
     script: list[Entry] = [dies]
     provider = ChannelProvider(
         chat=[calls(tool("web_search", instructions=_INSTRUCTIONS)), text(_STARTED), text("It was cut off.")],
@@ -467,7 +465,7 @@ def test_boot_tells_the_chat_a_subagent_was_cut_off_by_a_restart(db: sqlite3.Con
     with process_deaths_expected():
         parent, _frames = run_turn(provider, UserConfig(), _QUESTION)
     [call] = calls_of(db, "web_search")
-    n = child_turn(db, channel, call["id"])
+    channel, n = child(db, delegate_channel("web_search"), call["id"])
     assert [(r.channel, r.turn_id) for r in TurnExecution.open_rows()] == [(channel, n)]
     assert replies(db, call["id"]) == []
 

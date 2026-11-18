@@ -1,8 +1,9 @@
 """Feature test: a subtask runs beside the person's chat and always answers
 it; a scheduled task waits for its subtask instead.
 
-A ``subtask`` call from the chat opens a background turn on the
-``delegate:subtask`` channel and returns at once, so the chat keeps working.
+A ``subtask`` call from the chat opens a background turn on the subtask's own
+``delegate:subtask:<agent_id>`` channel and returns at once, so the chat keeps
+working.
 Whatever way the subtask ends, its outcome comes back on the chat as an input
 row linked to the call that asked for it ("Reply from subtask #N"):
 
@@ -14,7 +15,7 @@ row linked to the call that asked for it ("Reply from subtask #N"):
 * a subtask stopped by its caller's stop sends nothing back — no one is
   waiting — while one stopped on its own, one that crashed, and one a restart
   cut off each send a notice saying so;
-* the memory step runs on the subtask channel too, in a turn of its own, and
+* the memory step runs on the subtask's own channel too, in a turn of its own, and
   that turn has no caller: it sends nothing back, finished or cut off.
 
 Drives the real production entry point (construct inertly, ``begin()``,
@@ -33,7 +34,6 @@ from typing import cast
 import pytest
 from flask.testing import FlaskClient
 
-from abilities.subtask import SubtaskAbility
 from configs.channels import config_for
 from configs.channels.scheduled import ScheduledConfig
 from configs.channels.subtask import UserSubtaskConfig
@@ -58,7 +58,7 @@ from tests._delegates import (
     block,
     calls,
     calls_of,
-    child_turn,
+    child,
     chip,
     dies,
     drain,
@@ -99,13 +99,13 @@ def _all_replies(db: sqlite3.Connection) -> list[str]:
     ]
 
 
-def _memory_turns(db: sqlite3.Connection) -> list[int]:
-    """Every memory-step turn on the subtask channel — the turns whose
+def _memory_turns(db: sqlite3.Connection, channel: str) -> list[int]:
+    """Every memory-step turn on a subtask's own *channel* — the turns whose
     opening row carries the ``memory`` role."""
     return [
         cast("int", r["turn_id"]) for r in db.execute(
             "SELECT DISTINCT turn_id FROM transcript WHERE channel = ? AND role = 'memory' ORDER BY turn_id",
-            (_SUBTASK,),
+            (channel,),
         ).fetchall()
     ]
 
@@ -144,12 +144,12 @@ def test_reply_after_the_caller_finished_opens_a_new_user_turn(
     assert provider.unused() == {}
     call_id = _first_call(db)
     [reply] = replies(db, call_id)
-    n = child_turn(db, _SUBTASK, call_id)
-    number = agent_number(SubtaskAbility.NAME, n)
+    channel, n = child(db, _SUBTASK, call_id)
+    number = agent_number(channel)
     assert number != n
     assert (reply["content"], reply["joined"]) == (_ANSWER, 0)
     assert reply["turn_id"] != parent.turn_id
-    assert execution(_SUBTASK, n).state == TurnExecution.COMPLETED
+    assert execution(channel, n).state == TurnExecution.COMPLETED
     assert execution(_USER, reply["turn_id"]).state == TurnExecution.COMPLETED
     assert f"Reply from subtask #{number}" in provider.texts("chat")[-1]
     # The chat's call returned at once with the subtask's number and the label
@@ -173,9 +173,9 @@ def test_reply_after_the_caller_finished_opens_a_new_user_turn(
     assert opener.get("speaker") is None
     parent_block = block(client, f"/api/threads/{parent.turn_id}")
     assert chip(parent_block, "subtask")["delegate"] == {
-        "channel": _SUBTASK, "turn_id": n, "working": False, "crashed": False, "cancelled": False,
+        "channel": channel, "turn_id": n, "working": False, "crashed": False, "cancelled": False,
     }
-    task = messages(block(client, f"/api/threads/{n}?channel={_SUBTASK}"))[0]
+    task = messages(block(client, f"/api/threads/{n}?channel={channel}"))[0]
     assert (task["content"], task["speaker"]) == (_TASK, "Task from Chalie")
 
 
@@ -202,9 +202,9 @@ def test_reply_joins_the_caller_turn_while_it_still_works(db: sqlite3.Connection
     assert provider.unused() == {}
     call_id = _first_call(db)
     [reply] = replies(db, call_id)
-    n = child_turn(db, _SUBTASK, call_id)
+    channel, _n = child(db, _SUBTASK, call_id)
     assert (reply["content"], reply["turn_id"], reply["joined"]) == (_ANSWER, parent.turn_id, 1)
-    assert f"Reply from subtask #{agent_number(SubtaskAbility.NAME, n)}" in provider.texts("chat")[-1]
+    assert f"Reply from subtask #{agent_number(channel)}" in provider.texts("chat")[-1]
     assert execution(_USER, parent.turn_id).state == TurnExecution.COMPLETED
     count = db.execute(
         "SELECT COUNT(*) FROM turn_executions WHERE channel = ? AND turn_id = ?", (_USER, parent.turn_id),
@@ -242,7 +242,8 @@ def test_a_subtask_cannot_start_a_subtask(db: sqlite3.Connection) -> None:
     assert refused["state"] == ToolCall.ERROR
     assert "code=subtask-nested" in refused["result"]
     linked = db.execute(
-        "SELECT COUNT(*) FROM transcript WHERE channel = ? AND tool_call_id IS NOT NULL", (_SUBTASK,),
+        "SELECT COUNT(*) FROM transcript WHERE channel >= ? AND channel < ? AND tool_call_id IS NOT NULL",
+        (f"{_SUBTASK}:", f"{_SUBTASK};"),
     ).fetchone()[0]
     assert linked == 1
     assert "subtask-nested" in provider.texts("subtask")[-1]
@@ -269,10 +270,10 @@ def test_stopping_the_caller_stops_its_subtask_without_a_reply(db: sqlite3.Conne
 
     assert caller_held.opened and subtask_held.opened
     call_id = _first_call(db)
-    n = child_turn(db, _SUBTASK, call_id)
+    channel, n = child(db, _SUBTASK, call_id)
     caller = execution(_USER, parent.turn_id)
     assert (caller.state, caller.stop_reason) == (TurnExecution.CANCELLED, None)
-    subtask = execution(_SUBTASK, n)
+    subtask = execution(channel, n)
     assert (subtask.state, subtask.stop_reason) == (TurnExecution.CANCELLED, "parent stopped")
     assert replies(db, call_id) == []
 
@@ -292,19 +293,19 @@ def test_a_stopped_subtask_tells_its_caller(
         parent.result()
         wait(held.entered, "the subtask's provider call")
         call_id = _first_call(db)
-        n = child_turn(db, _SUBTASK, call_id)
-        TurnExecutionService.cancel_turn(_SUBTASK, n)
+        channel, n = child(db, _SUBTASK, call_id)
+        TurnExecutionService.cancel_turn(channel, n)
         held.gate.set()
 
     assert held.opened
     assert provider.unused() == {}
-    subtask = execution(_SUBTASK, n)
+    subtask = execution(channel, n)
     assert (subtask.state, subtask.stop_reason) == (TurnExecution.CANCELLED, None)
     [reply] = replies(db, call_id)
     assert reply["content"] == "This subtask was stopped before it finished."
     assert reply["turn_id"] != parent.turn_id
     assert chip(block(client, f"/api/threads/{parent.turn_id}"), "subtask")["delegate"] == {
-        "channel": _SUBTASK, "turn_id": n, "working": False, "crashed": False, "cancelled": True,
+        "channel": channel, "turn_id": n, "working": False, "crashed": False, "cancelled": True,
     }
 
 
@@ -330,13 +331,13 @@ def test_a_crashed_subtask_tells_its_caller_why(
     assert provider.unused() == {}
     assert len(provider.texts("subtask")) == _MAX_PROVIDER_ATTEMPTS
     call_id = _first_call(db)
-    n = child_turn(db, _SUBTASK, call_id)
-    subtask = execution(_SUBTASK, n)
+    channel, n = child(db, _SUBTASK, call_id)
+    subtask = execution(channel, n)
     assert (subtask.state, subtask.stop_reason) == (TurnExecution.CRASHED, _EXHAUSTED)
     [reply] = replies(db, call_id)
     assert reply["content"] == f"This subtask crashed: {_EXHAUSTED}"
     assert chip(block(client, f"/api/threads/{parent.turn_id}"), "subtask")["delegate"] == {
-        "channel": _SUBTASK, "turn_id": n, "working": False, "crashed": True, "cancelled": False,
+        "channel": channel, "turn_id": n, "working": False, "crashed": True, "cancelled": False,
     }
 
 
@@ -344,7 +345,7 @@ def test_the_memory_step_after_a_subtask_answers_no_one(
     real_memory_step: None, db: sqlite3.Connection, caplog: pytest.LogCaptureFixture,
 ) -> None:
     """With the real memory step armed, a finished subtask's settle runs a
-    memory step on the subtask channel, in a turn of its own. Only the
+    memory step on the subtask's own channel, in a turn of its own. Only the
     subtask's own turn answers the caller: exactly one reply reaches it, and
     nothing fails trying to report the memory step's turn to a caller it does
     not have."""
@@ -359,10 +360,10 @@ def test_the_memory_step_after_a_subtask_answers_no_one(
 
     assert held.opened
     assert provider.unused() == {}
-    n = child_turn(db, _SUBTASK, _first_call(db))
-    [memory] = _memory_turns(db)
+    channel, n = child(db, _SUBTASK, _first_call(db))
+    [memory] = _memory_turns(db, channel)
     assert memory != n
-    assert execution(_SUBTASK, memory).state == TurnExecution.COMPLETED
+    assert execution(channel, memory).state == TurnExecution.COMPLETED
     assert _all_replies(db) == [_ANSWER]
     assert _errors(caplog, "controllers.message_processor") == []
 
@@ -370,9 +371,9 @@ def test_the_memory_step_after_a_subtask_answers_no_one(
 def test_boot_tells_a_cut_off_subtask_s_caller_once_and_a_cut_off_memory_step_no_one(
     db: sqlite3.Connection, caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """The process dies with two turns open on the subtask channel: a subtask
-    mid-call, and the memory step of an earlier subtask that had already
-    answered. Boot closes both as cut off by the restart and tells the cut-off
+    """The process dies with two turns open on subtasks' own channels: a
+    subtask mid-call, and the memory step of an earlier subtask that had
+    already answered. Boot closes both as cut off by the restart and tells the cut-off
     subtask's caller exactly once, in a new user turn that answers it; the
     memory step's turn has no caller, so it gets no notice and nothing fails
     trying to send one."""
@@ -395,16 +396,18 @@ def test_boot_tells_a_cut_off_subtask_s_caller_once_and_a_cut_off_memory_step_no
         drain()
         answered_id = _first_call(db)
         assert [r["content"] for r in replies(db, answered_id)] == [_ANSWER]
-        ids = Transcript.ids_for_turn(_SUBTASK, child_turn(db, _SUBTASK, answered_id))
-        MessageProcessor.process(memory_step_config(UserSubtaskConfig(), ids)).result()
+        answered = child(db, _SUBTASK, answered_id)
+        ids = Transcript.ids_for_turn(answered.channel, answered.turn_id)
+        MessageProcessor.process(memory_step_config(UserSubtaskConfig().on_channel(answered.channel), ids)).result()
         caller = begin(UserConfig(), "now find the primes below 10 in the background")
         caller.result()
         drain()
         cut_id = cast("int", calls_of(db, "subtask")[1]["id"])
-        cut = child_turn(db, _SUBTASK, cut_id)
-        [memory] = _memory_turns(db)
+        cut = child(db, _SUBTASK, cut_id)
+        assert cut.channel != answered.channel
+        [memory] = _memory_turns(db, answered.channel)
         assert sorted((r.channel, r.turn_id) for r in TurnExecution.open_rows()) == sorted([
-            (_SUBTASK, memory), (_SUBTASK, cut),
+            (answered.channel, memory), cut,
         ])
 
         swept = MessageProcessor(config_for(ConfigTypeEnum.USER)).turn_execution_service.sweep_orphaned()
@@ -413,8 +416,8 @@ def test_boot_tells_a_cut_off_subtask_s_caller_once_and_a_cut_off_memory_step_no
     assert first.opened
     assert provider.unused() == {}
     assert sorted((r.channel, r.turn_id, r.state, r.stop_reason) for r in swept) == sorted([
-        (_SUBTASK, memory, TurnExecution.CRASHED, "process death"),
-        (_SUBTASK, cut, TurnExecution.CRASHED, "process death"),
+        (answered.channel, memory, TurnExecution.CRASHED, "process death"),
+        (*cut, TurnExecution.CRASHED, "process death"),
     ])
     [notice] = replies(db, cut_id)
     assert _all_replies(db) == [_ANSWER, _CUT_OFF]
@@ -474,7 +477,7 @@ def test_a_scheduled_task_waits_for_its_subtask_and_ends_once(db: sqlite3.Connec
 
     [start] = calls_of(db, "subtask")
     call_id = cast("int", start["id"])
-    n = child_turn(db, _SUBTASK, call_id)
+    channel, n = child(db, _SUBTASK, call_id)
     assert start["state"] == ToolCall.DONE, start["result"]
     assert start["result"].split("\n")[1:-1] == [_ANSWER]
     assert _ANSWER in provider.texts("chat")[-1]
@@ -492,6 +495,6 @@ def test_a_scheduled_task_waits_for_its_subtask_and_ends_once(db: sqlite3.Connec
         and f["state"] != TurnExecution.WORKING
     ]
     assert ended == [TurnExecution.COMPLETED]
-    subtask_ended = execution(_SUBTASK, n).ended_at
+    subtask_ended = execution(channel, n).ended_at
     assert subtask_ended is not None and subtask_ended <= executions[0]["ended_at"]
     assert len(provider.texts("subtask")) == 1

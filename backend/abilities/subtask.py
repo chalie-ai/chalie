@@ -35,12 +35,11 @@ from configs.channels import (
     UserSubtaskConfig,
 )
 from configs.enums.ability_category import AbilityCategory
-from configs.enums.channels import WATCHABLE_DELEGATE_CHANNELS, Channel
+from configs.enums.channels import Channel, delegate_type
 from configs.enums.config_type import ConfigTypeEnum
 from configs.enums.param_key import Keys
 from contracts.params.delegate_params_bag import DelegateParamsBag
 from contracts.params.param_bag import ParamBag
-from models.agent import Agent
 from models.tool_call import ToolCall
 from models.transcript import Transcript
 from services.agent_service import AgentService
@@ -168,9 +167,10 @@ def speaker(row: Transcript) -> str | None:
     * ``"Message from Chalie"`` — a later input row on any subagent's
       channel: a message Chalie sent into the running subagent.
     * ``"Reply from <tool> #N"`` — a delegate's late reply, ``<tool>`` being
-      the delegate the link's call ran and ``N`` the agent it spawned —
-      rendered without the number when its child row or its agent no longer
-      exists, and
+      the delegate the link's call ran and ``N`` the agent it spawned, read
+      off the channel its child ran on — rendered without the number when its
+      child row no longer exists or ran before each agent had a channel of
+      its own, and
       ``"Reply from a delegate"`` when the call itself no longer exists
       (purged). Replies land only on the user channel; the schedule channel
       is still read because an earlier build sent scheduled tasks' replies
@@ -183,10 +183,10 @@ def speaker(row: Transcript) -> str | None:
     link = row.tool_call_id
     if link is None or not link.isdecimal():
         return None
-    if row.channel in WATCHABLE_DELEGATE_CHANNELS:
+    if delegate_type(row.channel) is not None:
         ids = Transcript.ids_for_turn(row.channel, row.turn_id) if row.turn_id is not None else []
         if ids and cast("int", row.id) == ids[0]:
-            return "Task from Chalie" if row.channel == Channel.DELEGATE_SUBTASK else None
+            return "Task from Chalie" if delegate_type(row.channel) == SubtaskAbility.NAME else None
         return "Message from Chalie"
     if row.channel in (Channel.USER, Channel.SCHEDULE):
         call = ToolCall.get(int(link))
@@ -198,11 +198,10 @@ def speaker(row: Transcript) -> str | None:
         entry = Transcript.delegate_turns(
             {call_id: (call.created_at, call.ended_at)},
         ).get(call_id)
-        child_turn_id = entry["turn_id"] if entry is not None else None
-        agent = Agent.by_turn(call.tool_name, cast("int", child_turn_id)) if child_turn_id is not None else None
+        agent = AgentService.of_channel(cast("str", entry["channel"])) if entry is not None else None
         if agent is None:
             return f"Reply from {call.tool_name}"
-        return reply_label(call.tool_name, agent.agent_id)
+        return reply_label(agent.type, agent.agent_id)
     return None
 
 

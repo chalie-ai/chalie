@@ -1,9 +1,9 @@
 """Feature test: a delegate's child turn can be followed from the parent's tool pill.
 
-A delegate ability (``web_search`` here) runs a child turn on its own
-``delegate:<name>`` channel. Called from the person's chat, the call returns at
-once and the child's answer comes back later as a message of its own on the
-chat, linked to the same call. The surface needs three things to let a person
+A delegate ability (``web_search`` here) runs a child turn on the child's own
+``delegate:<name>:<agent_id>`` channel. Called from the person's chat, the call
+returns at once and the child's answer comes back later as a message of its own
+on the chat, linked to the same call. The surface needs three things to let a person
 watch that child:
 
 * a durable link from the parent's ``tool_calls`` row to the child's input row;
@@ -51,7 +51,7 @@ from tests._delegates import (
     calls,
     calls_of,
     chip,
-    child_turn,
+    child,
     execution,
     messages,
     replies,
@@ -63,7 +63,7 @@ from tests._delegates import (
 
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 
-_CHILD_CHANNEL = "delegate:web_search"
+_CHILD_KIND = "delegate:web_search"
 _QUESTION = "what is the capital of France?"
 _INSTRUCTIONS = "find the capital of France"
 _CHILD_ANSWER = "Paris is the capital of France."
@@ -79,12 +79,13 @@ class _DelegateRun:
     parent: MessageProcessor
     frames: list[dict[str, object]]
     web_search_call_id: int
+    child_channel: str
     child_turn_id: int
 
     @property
     def ref(self) -> dict[str, object]:
         """The ``delegate`` reference the parent's pill must carry."""
-        return {"channel": _CHILD_CHANNEL, "turn_id": self.child_turn_id}
+        return {"channel": self.child_channel, "turn_id": self.child_turn_id}
 
 
 @pytest.fixture
@@ -104,7 +105,7 @@ def delegate_run(db: sqlite3.Connection) -> _DelegateRun:
     parent, frames = run_turn(provider, UserConfig(), _QUESTION)
     assert held.opened and provider.unused() == {}
     call_id = cast("int", calls_of(db, "web_search")[0]["id"])
-    return _DelegateRun(parent, frames, call_id, child_turn(db, _CHILD_CHANNEL, call_id))
+    return _DelegateRun(parent, frames, call_id, *child(db, _CHILD_KIND, call_id))
 
 
 def test_delegate_input_row_is_stamped_with_the_parent_tool_call(
@@ -119,7 +120,7 @@ def test_delegate_input_row_is_stamped_with_the_parent_tool_call(
 
     call_id = str(delegate_run.web_search_call_id)
     assert [(r["channel"], r["role"], r["tool_call_id"]) for r in stamped] == [
-        (_CHILD_CHANNEL, "web_search", call_id),
+        (delegate_run.child_channel, "web_search", call_id),
         (USER, "user", call_id),
     ]
     assert stamped[0]["content"] == _INSTRUCTIONS
@@ -131,7 +132,7 @@ def test_every_delegate_frame_is_addressed_by_channel_never_by_type(delegate_run
     reach the wire carrying the full channel and the child's turn id and NO
     ``type``: a ``type`` would route them into the user thread whose numeric turn
     id they share."""
-    delegate_frames = [f for f in delegate_run.frames if f.get("channel") == _CHILD_CHANNEL]
+    delegate_frames = [f for f in delegate_run.frames if f.get("channel") == delegate_run.child_channel]
 
     assert delegate_frames, "the child turn's frames must reach the wire"
     assert all("type" not in f for f in delegate_frames)
@@ -207,9 +208,9 @@ def test_child_turn_reads_by_channel_with_its_instruction_as_a_user_message(
     The user thread sharing the same numeric turn id is a different block."""
     client, _db, _store = authed_client
 
-    thread = block(client, f"/api/threads/{delegate_run.child_turn_id}?channel={_CHILD_CHANNEL}")
+    thread = block(client, f"/api/threads/{delegate_run.child_turn_id}?channel={delegate_run.child_channel}")
 
-    assert thread["channel"] == _CHILD_CHANNEL and thread["type"] is None
+    assert thread["channel"] == delegate_run.child_channel and thread["type"] is None
     assert thread["cancelled"] is False
     rows = messages(thread)
     assert (rows[0]["role"], rows[0]["content"]) == ("user", _INSTRUCTIONS)
@@ -228,21 +229,24 @@ def test_purged_delegate_turn_unlinks_the_chip_and_reads_as_an_unknown_turn(
     existed — a quiet empty block, not an error."""
     client, db, _store = authed_client
     parent_path = f"/api/threads/{delegate_run.parent.turn_id}"
-    child_path = f"/api/threads/{delegate_run.child_turn_id}?channel={_CHILD_CHANNEL}"
+    child_path = f"/api/threads/{delegate_run.child_turn_id}?channel={delegate_run.child_channel}"
     assert chip(block(client, parent_path), "web_search")["delegate"] == {
         **delegate_run.ref, "working": False, "crashed": False, "cancelled": False,
     }
 
     db.execute(
-        "UPDATE transcript SET created_at = datetime('now', '-200 days') WHERE channel = ?", (_CHILD_CHANNEL,),
+        "UPDATE transcript SET created_at = datetime('now', '-200 days') WHERE channel = ?",
+        (delegate_run.child_channel,),
     )
     db.commit()
     GarbageCollectorService().run()
 
-    assert db.execute("SELECT COUNT(*) FROM transcript WHERE channel = ?", (_CHILD_CHANNEL,)).fetchone()[0] == 0
+    assert db.execute(
+        "SELECT COUNT(*) FROM transcript WHERE channel = ?", (delegate_run.child_channel,),
+    ).fetchone()[0] == 0
     assert chip(block(client, parent_path), "web_search")["delegate"] is None
     purged = block(client, child_path)
-    never_existed = block(client, f"/api/threads/987654?channel={_CHILD_CHANNEL}")
+    never_existed = block(client, f"/api/threads/987654?channel={delegate_run.child_channel}")
     assert purged["messages"] == []
     assert {k: v for k, v in purged.items() if k != "turn_id"} == {
         k: v for k, v in never_existed.items() if k != "turn_id"
@@ -283,9 +287,9 @@ def _assert_call_returned_at_once_and_its_child_replied(
     linked to the call, opening a turn of its own that completed with the
     model's answer to it."""
     assert call["state"] == "done" and _CHILD_ANSWER not in call["result"]
-    child = child_turn(db, _CHILD_CHANNEL, call["id"])
-    assert assistant_texts(db, _CHILD_CHANNEL, child) == [_CHILD_ANSWER]
-    assert execution(_CHILD_CHANNEL, child).state == TurnExecution.COMPLETED
+    channel, n = child(db, _CHILD_KIND, call["id"])
+    assert assistant_texts(db, channel, n) == [_CHILD_ANSWER]
+    assert execution(channel, n).state == TurnExecution.COMPLETED
     [reply] = replies(db, call["id"])
     assert cast("str", reply["content"]).startswith(_CHILD_ANSWER)
     assert reply["turn_id"] != parent.turn_id
@@ -334,9 +338,8 @@ def test_failed_announcement_does_not_fail_the_delegate_call(db: sqlite3.Connect
         "the announcement must not have gone out"
     )
     assert web_search[-1]["state"] == "done"
-    assert web_search[-1]["delegate"] == {
-        "channel": _CHILD_CHANNEL, "turn_id": child_turn(db, _CHILD_CHANNEL, call["id"]),
-    }
+    channel, n = child(db, _CHILD_KIND, call["id"])
+    assert web_search[-1]["delegate"] == {"channel": channel, "turn_id": n}
 
 
 @dataclass(frozen=True)

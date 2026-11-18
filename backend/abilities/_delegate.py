@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING, ClassVar, cast
 
 from abilities._ability import FOLLOW_UP_BLOCK, Ability, B
 from abilities._result import ToolResult
-from configs.enums.channels import WATCHABLE_DELEGATE_CHANNELS
+from configs.enums.channels import delegate_type
 from configs.enums.config_type import ConfigTypeEnum
 from models.agent import Agent
 from models.tool_call import ToolCall
@@ -220,7 +220,7 @@ def late_caller(channel: str, turn_id: int) -> tuple[Transcript, ToolCall] | Non
     (:func:`replies_late`) gets the subagent's answer as its call's result. So
     the caller returned is always the person's chat.
     """
-    if channel not in WATCHABLE_DELEGATE_CHANNELS:
+    if delegate_type(channel) is None:
         return None
     rows = Transcript.by_turn(channel, turn_id)
     if rows and rows[0]["role"] == "memory":

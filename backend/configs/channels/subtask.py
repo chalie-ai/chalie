@@ -8,8 +8,8 @@
 
 """Subtask configs — a background turn that runs with its caller's settings.
 
-A subtask is an ordinary turn on the ``delegate:subtask`` channel, one turn per
-subtask. It thinks as the turn that started it: the same system prompt,
+A subtask is an ordinary turn on its own ``delegate:subtask:{agent_id}``
+channel, one turn per subtask. It thinks as the turn that started it: the same system prompt,
 permissions and provider, because each config here IS its caller's config with
 only the routing, the background posture and the ready tools changed
 (``DiscoveryConfig``'s shape). The one part of the chat's system prompt
@@ -19,9 +19,8 @@ builder picks the user persona by ``isinstance(config, UserConfig)`` and the
 outside agent's by ``isinstance(config, EAMPConfig)``, so a copy or a fresh
 class would lose it.
 
-Every subtask turn is its own conversation (``turn_scoped_history``): it reads
-none of the caller's history and none of another subtask's work, only its own
-thread.
+Every subtask has a channel of its own: it reads none of the caller's history
+and none of another subtask's work, only its own turns.
 """
 
 from __future__ import annotations
@@ -38,14 +37,14 @@ def _as_subtask(config: UserConfig | ScheduledConfig | EAMPConfig) -> None:
     """Re-route *config* onto the subtask channel, keeping the caller's prompt
     assembly: the prompt key is read before the channel changes, exactly as
     the prompt builder reads it (``prompt_channel``, else ``channel``). Writes
-    go to the subtask channel, the history is the subtask's own thread, and
-    the turn id is always allocated here (a scheduled caller owns its
+    go to the subtask's own channel (the spawning turn rebinds the bare
+    kind channel set here), the history is that channel's, and the turn id is
+    always allocated here (a scheduled caller owns its
     schedule's ids; a subtask never does)."""
     object.__setattr__(config, "prompt_channel", config.prompt_channel or config.channel)
     object.__setattr__(config, "channel", Channel.DELEGATE_SUBTASK.value)
     object.__setattr__(config, "read_channel", None)
     object.__setattr__(config, "external_turn_id", False)
-    object.__setattr__(config, "turn_scoped_history", True)
 
 
 class UserSubtaskConfig(UserConfig):

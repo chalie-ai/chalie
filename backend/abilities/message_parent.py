@@ -36,7 +36,7 @@ from abilities._agents import label
 from abilities._delegate import late_caller, post_to_caller
 from abilities._result import ToolResult
 from abilities.message_subagent import MessageSubagentAbility
-from configs.enums.channels import WATCHABLE_DELEGATE_CHANNELS, Channel
+from configs.enums.channels import Channel, delegate_type
 from configs.enums.param_key import Keys
 from contracts.params.agent_params_bag import MessageParentParams
 from contracts.params.param_bag import ParamBag
@@ -175,7 +175,7 @@ def waiting(row: Transcript) -> Agent | None:
     agent = sender(call)
     if agent.status != Agent.RUNNING:
         return None
-    if Transcript.joined_since(Channel.for_delegate(agent.type), agent.turn_id, cast("int", row.id)):
+    if Transcript.joined_since(agent.channel, agent.turn_id, cast("int", row.id)):
         return None
     return agent
 
@@ -196,7 +196,7 @@ def waiting_for(channel: str) -> list[Agent]:
     for agent in Agent.running():
         if agent.spawned_by_channel != channel:
             continue
-        for call in ToolCall.by_turn(Channel.for_delegate(agent.type), agent.turn_id):
+        for call in ToolCall.by_turn(agent.channel, agent.turn_id):
             if call.tool_name != MessageParentAbility.NAME or call.state != ToolCall.STARTED:
                 continue
             row = Transcript.filter("channel", channel).filter("tool_call_id", str(call.id)).first()
@@ -230,6 +230,6 @@ def joined_nudge(row: Transcript) -> str:
     turn's act trail: a newline and :data:`SUBAGENT_NUDGE` when the turn is a
     subagent's — only the chat sends one (``message_subagent``), and only
     to a subagent it spawned, which holds ``message_parent`` — else ``''``."""
-    if row.channel not in WATCHABLE_DELEGATE_CHANNELS:
+    if delegate_type(row.channel) is None:
         return ""
     return f"\n{SUBAGENT_NUDGE}"

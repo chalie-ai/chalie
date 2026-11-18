@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from configs.enums.channels import Channel, delegate_name
+from configs.enums.channels import delegate_agent_id
 from models.agent import Agent
 from models.tool_call import ToolCall
 from models.transcript import Transcript
@@ -52,12 +52,20 @@ class AgentService:
             return None
         return Agent.by_id(agent.agent_id)
 
-    @staticmethod
-    def on_turn(channel: str, turn_id: int) -> Agent | None:
+    @classmethod
+    def on_turn(cls, channel: str, turn_id: int) -> Agent | None:
         """The agent whose own turn is ``turn_id`` on ``channel``, or ``None``
-        when that turn is not a subagent's."""
-        name = delegate_name(channel)
-        return Agent.by_turn(name, turn_id) if name is not None else None
+        when that turn is not a subagent's — another turn on its channel (its
+        memory step) is not."""
+        agent = cls.of_channel(channel)
+        return agent if agent is not None and agent.turn_id == turn_id else None
+
+    @staticmethod
+    def of_channel(channel: str) -> Agent | None:
+        """The agent whose own channel ``channel`` is, or ``None``."""
+        agent_id = delegate_agent_id(channel)
+        agent = Agent.by_id(agent_id) if agent_id is not None else None
+        return agent if agent is not None and agent.channel == channel else None
 
     @staticmethod
     def fail_running() -> list[Agent]:
@@ -76,9 +84,9 @@ class AgentService:
     @staticmethod
     def spawn_call_id(agent: Agent) -> int | None:
         """The ``tool_calls`` id of the call that spawned ``agent``, read off
-        its turn's first row — or ``None`` once that row is gone."""
-        channel = Channel.for_delegate(agent.type)
-        first = Transcript.filter("channel", channel).filter("turn_id", agent.turn_id).order_by("id ASC").first()
+        the first row on its channel (its task) — or ``None`` once that row is
+        gone."""
+        first = Transcript.filter("channel", agent.channel).order_by("id ASC").first()
         if first is None or first.tool_call_id is None:
             return None
         return int(first.tool_call_id)
@@ -95,7 +103,7 @@ class AgentService:
     def view(cls, agent: Agent) -> dict[str, object]:
         """The row as plain data, plus the subagent's channel and the summary
         the spawning call gave (:meth:`summary`)."""
-        return {**agent.to_dict(), "channel": Channel.for_delegate(agent.type), "summary": cls.summary(agent)}
+        return {**agent.to_dict(), "channel": agent.channel, "summary": cls.summary(agent)}
 
     @classmethod
     def frame(cls, agent: Agent) -> WsMessage:

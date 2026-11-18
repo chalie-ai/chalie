@@ -546,10 +546,8 @@ CREATE TABLE IF NOT EXISTS plan_tasks (
 -- ────────────────────────────────────────────────────────────────
 -- AGENTS — one row per subagent spawned, by any caller. agent_id is the
 -- number the model uses for it; type is the spawn tool's name, and the
--- subagent's own turn runs on that tool's delegate channel as turn_id.
--- Turn ids are counted per channel and start over once retention has purged
--- a channel's newest turns, so type + turn_id is not unique: the newest row
--- for the pair is the live one.
+-- subagent runs on a channel of its own, delegate:<type>:<agent_id>, its turn
+-- there being turn_id.
 -- spawned_by_channel / spawned_in_turn name the caller's turn; prompt is the
 -- plain task it wrote. status leaves 'running' once, when the run ends;
 -- response_id is the final reply row of a run that ended 'done'. The
@@ -567,7 +565,6 @@ CREATE TABLE IF NOT EXISTS agents (
     response_id        INTEGER REFERENCES transcript(id) ON DELETE SET NULL,
     turn_id            INTEGER NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_agents_type_turn ON agents(type, turn_id);
 
 -- ────────────────────────────────────────────────────────────────
 -- TRANSCRIPT THINKING — chain-of-thought traces per transcript anchor

@@ -17,8 +17,9 @@ calls ``DelegateAbility.delegate()``, which runs it through
 SUBAGENT_TYPES registry, and no make_subagent_config() factory.
 
 Properties of every delegate tool:
-  - Clean context — skip_transcript / skip_input_row / suppress_history all True,
-    no personality, no history, no world state.
+  - Clean context — each subagent runs on a channel of its own
+    (``delegate:<type>:<agent_id>``): no personality, no other conversation's
+    history, no world state.
   - Goal-driven system prompt — short, task-specific.
   - Finite tool surface — always_available lists exactly what the delegate needs;
     it does NOT pin find_tools, so the delegate cannot discover anything else.

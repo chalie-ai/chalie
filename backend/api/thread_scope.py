@@ -9,7 +9,9 @@ its actions from drifting on the default or on what an unknown type means.
 
 The single-turn read and the stop alone also accept ``channel``: a watchable
 delegate turn has no ConfigType of its own, so it is addressed by its channel
-instead — its side panel reads it and its stop button stops it.
+instead — a subagent's own (``delegate:web_search:12``), or the bare channel of
+its kind that older turns ran on — its side panel reads it and its stop button
+stops it.
 """
 
 from __future__ import annotations
@@ -17,7 +19,7 @@ from __future__ import annotations
 from flask import request
 
 from configs.channels import ProcessorConfig, config_for
-from configs.enums.channels import WATCHABLE_DELEGATE_CHANNELS
+from configs.enums.channels import delegate_type
 from exceptions import EndpointError
 
 
@@ -72,6 +74,6 @@ class ThreadScope:
         if "type" in request.args:
             raise EndpointError("Pass type or channel, not both")
         channel = request.args["channel"]
-        if channel not in WATCHABLE_DELEGATE_CHANNELS:
+        if delegate_type(channel) is None:
             raise EndpointError("Invalid channel")
         return channel, None

@@ -8,8 +8,9 @@
 
 """WebSearchConfig — delegate channel for the ``web_search`` tool.
 
-Writes a real per-turn transcript row on its own ``delegate:web_search``
-channel so the delegate can render its own act-trail across ACT iterations.
+Writes a real per-turn transcript row on the subagent's own
+``delegate:web_search:{agent_id}`` channel so the delegate can render its own
+act-trail across ACT iterations.
 Without that row the turn uid is never assigned and ``_render_act_trail``
 returns "" — the loop would re-search blind to its own results with no way to
 converge. ``skip_input_row`` (HiddenInput) is
@@ -35,6 +36,12 @@ from services.processor_config import ProcessorConfig
 
 if TYPE_CHECKING:
     from configs.enums.policy_channel import PolicyChannel
+
+# The closing line of the system prompt: what the subagent knows of itself.
+_NO_PERSONALITY = (
+    "You have no user personality. Your earlier turns, if any, are the earlier "
+    "queries you were given and your answers to them."
+)
 
 _WEB_SEARCH_TOOLS: tuple[str, ...] = (
     SearchAbility.NAME,
@@ -66,16 +73,19 @@ class WebSearchConfig(ProcessorConfig):
             always_available=[*tools, Recall.NAME, PlanAbility.NAME],
             skip_transcript=False,  # write a delegate-channel transcript row so
             skip_input_row=False,   # _setup assigns the uid the act-trail needs
-            suppress_history=True,
+            suppress_history=False,
             memory_seed=True,
         )
+        # The spawning turn rebinds ``channel`` to the subagent's own; the
+        # prompt is chosen by the kind's bare channel.
+        object.__setattr__(self, "prompt_channel", Channel.DELEGATE_WEB_SEARCH.value)
 
     @property
     def system_prompt(self) -> str:
-        return """You are a focused web-research agent. You receive one research query and answer it from the web.
+        return f"""You are a focused web-research agent. You receive one research query and answer it from the web.
 
 Be efficient. Run ONE search, then work from the result snippets — they usually already answer the query. Read a full page only when the snippets are genuinely insufficient for a specific missing detail, and read at most the one or two most relevant pages. Do not re-search to fill gaps; synthesise from what the first search and any targeted reads gave you.
 
 Cite the sources you actually used. Never fabricate URLs, quotes, or facts. If the web yields nothing useful, say so plainly.
 
-Return a concise synthesis that directly answers the query. You have no conversation history and no user personality — work only from the query."""
+Return a concise synthesis that directly answers the query. {_NO_PERSONALITY}"""

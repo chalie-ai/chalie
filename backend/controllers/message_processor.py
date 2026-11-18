@@ -76,7 +76,7 @@ from abilities.message_parent import MessageParentAbility, holds
 from abilities.plan import PlanAbility, plans
 from abilities.recall import Recall
 from configs.channels.user import UserConfig
-from configs.enums.channels import WATCHABLE_DELEGATE_CHANNELS, Channel
+from configs.enums.channels import Channel, delegate_type
 from configs.enums.param_key import Keys
 from configs.enums.plan_task_status import PlanTaskStatus
 from configs.enums.provider_type import ProviderType
@@ -306,7 +306,7 @@ class MessageProcessor:
         and a cancel addressed to a turn this process does not hold (which knows
         only the row's channel and the config its type resolves to, if any).
 
-        A watchable delegate turn (``WATCHABLE_DELEGATE_CHANNELS``) broadcasts
+        A watchable delegate turn (:func:`delegate_type`) broadcasts
         addressed by its channel, so a surface following it can stream it live.
         Any other turn broadcasts only when its config opts in
         (``BROADCASTS_STATE`` — the ``user`` and ``scheduled`` types) AND carries
@@ -314,7 +314,7 @@ class MessageProcessor:
         ``type_value() is None``) never reaches the wire. Past the gate this is
         a thin pass to ``Websocket.broadcast`` (itself a no-op on ``None`` and
         when nobody is listening)."""
-        if channel in WATCHABLE_DELEGATE_CHANNELS:
+        if delegate_type(channel) is not None:
             Websocket.broadcast(instance, channel=channel)
         elif config is not None and config.BROADCASTS_STATE and config.type_value() is not None:
             Websocket.broadcast(instance)
@@ -341,12 +341,10 @@ class MessageProcessor:
     def fork_view(self) -> bool:
         """True when this turn's history is its own thread's rows (the FORK
         view) rather than every turn on the channel (the MAIN view): a reply
-        into an existing turn, or any turn on a channel whose every turn is its
-        own conversation (``turn_scoped_history``). The history read, the
-        compaction watermark and the compactor all key on this one answer, so
-        the rows a checkpoint folds and the floor that cuts them never sit on
-        different axes."""
-        return self._forked or self.config.turn_scoped_history
+        into an existing turn. The history read, the compaction watermark and
+        the compactor all key on this one answer, so the rows a checkpoint
+        folds and the floor that cuts them never sit on different axes."""
+        return self._forked
 
     @property
     def origin(self) -> dict[str, object] | None:
@@ -419,8 +417,11 @@ class MessageProcessor:
         turn-id allocation, fork guard and input row land in one single-writer
         transaction — with, for a turn a spawn opened, its ``agents``
         row (``metadata["agent"]``), so a subagent's number exists the moment
-        its turn does. Attachments land *after* that transaction commits
-        and *before* the execution row opens: after, because copying a file of
+        its turn does. That row is written first: its number names the
+        subagent's own channel (:attr:`Agent.channel`), which the turn is
+        rebound to and opens on as that channel's first turn. Attachments land
+        *after* that transaction commits and *before* the execution row opens:
+        after, because copying a file of
         arbitrary size inside ``BEGIN IMMEDIATE`` would hold SQLite's write
         lock for the length of the copy; before, because the ``working`` frame
         ``open()`` emits is the cue clients refetch on — a turn announced
@@ -430,7 +431,18 @@ class MessageProcessor:
         the thread starts. ``begin()`` never joins — it returns the instant the
         daemon is running."""
         with self.db.transaction():
+            agent = self.metadata.get("agent")
+            if isinstance(agent, Agent):
+                agent.turn_id = 1
+                self.agent = agent.insert()
+                self.config = self.config.on_channel(self.agent.channel)
+                self.channel = self.config.channel
             self.turn_id = self.transcript_service.allocate_turn()
+            if self.agent is not None and self.turn_id != self.agent.turn_id:
+                raise RuntimeError(
+                    f"subagent {self.agent.agent_id}: its own channel {self.channel} "
+                    f"already holds turns; its first opened as turn {self.turn_id}"
+                )
             if self.config.external_turn_id:
                 # turn_id came from a key space the caller owns (schedule id). Its first
                 # use opens a MAIN turn; a repeat appends as FORK. Derive forked-ness from
@@ -442,10 +454,6 @@ class MessageProcessor:
             self.current_transcript_id = self.uid
             if self.uid is not None:
                 self._consumed_through = self.uid
-            agent = self.metadata.get("agent")
-            if isinstance(agent, Agent):
-                agent.turn_id = self.turn_id
-                self.agent = agent.insert()
         self._land_attachments()
         self.turn_execution_service.open()
         self.metadata["turn_id"] = self.turn_id

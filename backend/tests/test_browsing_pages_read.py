@@ -45,7 +45,7 @@ from tests._delegates import (
     Held,
     agent_number,
     calls_of,
-    child_turn,
+    child,
     delegate_channel,
     replies,
     run_turn,
@@ -55,7 +55,7 @@ pytest_plugins = ("tests._browser_live",)
 pytestmark = [pytest.mark.e2e, pytest.mark.usefixtures("chat_provider", "earlier_agents")]
 
 _SERIALIZER_LOG = TurnSerializerService.__module__
-_RUN_CHANNEL = delegate_channel(WebBrowseAbility.NAME)
+_RUN_KIND = delegate_channel(WebBrowseAbility.NAME)
 _MISSING = "Nothing like this"
 
 Frame = dict[str, object]
@@ -190,17 +190,17 @@ def test_a_browsing_run_lists_the_pages_it_went_through_in_order_while_it_runs_a
 
     [call] = calls_of(db, WebBrowseAbility.NAME)
     assert run_id == [call["id"]]
-    n = child_turn(db, _RUN_CHANNEL, call["id"])
+    channel, n = child(db, _RUN_KIND, call["id"])
     # The chat's call ended at once: its result is the notice that the run
     # started, never the run's answer, which arrives as a reply of its own.
-    assert f"Reply from {WebBrowseAbility.NAME} #{agent_number(WebBrowseAbility.NAME, n)}" in call["result"]
+    assert f"Reply from {WebBrowseAbility.NAME} #{agent_number(channel)}" in call["result"]
     assert "Visited every page." not in call["result"]
     [reply] = replies(db, call["id"])
     assert reply["content"] == "Visited every page."
     [fetching] = mid_run
     assert (fetching["state"], fetching["result"], fetching["delegate"]) == (
         "done", call["result"], {
-            "channel": _RUN_CHANNEL, "turn_id": n,
+            "channel": channel, "turn_id": n,
             "working": True, "crashed": False, "cancelled": False,
         },
     )
@@ -208,7 +208,7 @@ def test_a_browsing_run_lists_the_pages_it_went_through_in_order_while_it_runs_a
     finished = _detail(client, call["id"])
     assert (finished["state"], finished["result"], finished["delegate"]) == (
         "done", call["result"], {
-            "channel": _RUN_CHANNEL, "turn_id": n,
+            "channel": channel, "turn_id": n,
             "working": False, "crashed": False, "cancelled": False,
         },
     )

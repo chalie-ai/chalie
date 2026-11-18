@@ -45,7 +45,7 @@ from tests._delegates import (
     begin,
     calls,
     calls_of,
-    child_turn,
+    child,
     execution,
     listening,
     patched,
@@ -160,12 +160,12 @@ def _assert_the_subtask_answered_the_chat(db: sqlite3.Connection, run: _Answered
     """The subtask finished its own turn, and its answer arrived on the chat as
     a reply opening a turn of its own, the chat's turn having ended."""
     [call] = calls_of(db, SubtaskAbility.NAME)
-    n = child_turn(db, _SUBTASK, call["id"])
-    assert execution(_SUBTASK, n).state == TurnExecution.COMPLETED
+    channel, n = child(db, _SUBTASK, call["id"])
+    assert execution(channel, n).state == TurnExecution.COMPLETED
     [reply] = replies(db, call["id"])
     assert reply["content"] == _ANSWER
     assert reply["turn_id"] != run.chat_turn
-    assert f"Reply from {SubtaskAbility.NAME} #{agent_number(SubtaskAbility.NAME, n)}" in run.provider.texts("chat")[-1]
+    assert f"Reply from {SubtaskAbility.NAME} #{agent_number(channel)}" in run.provider.texts("chat")[-1]
 
 
 def test_an_approved_prompt_runs_the_tool_and_the_subtask_still_answers_the_chat(

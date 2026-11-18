@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import copy
 from abc import ABC
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar
@@ -104,7 +105,9 @@ class ProcessorConfig(ABC):
 
     channel: str
     """Transcript / telemetry channel.  E.g. 'user', 'discovery',
-    'external-agent:mybot', 'delegate:web_search'."""
+    'external-agent:mybot', 'delegate:web_search:12'. A subagent's config
+    declares its kind's bare ``delegate:<type>``; the turn that spawns the
+    subagent rebinds it to the subagent's own channel (:meth:`on_channel`)."""
 
     role: str
     """Transcript role for the input row.  E.g. 'user', 'external_agent',
@@ -136,8 +139,8 @@ class ProcessorConfig(ABC):
     """True → input row skipped but assistant row still written (hidden_input)."""
 
     suppress_history: bool
-    """True → get_previous_messages() returns '' (housekeeping loops).
-    Set on all channels except UMP and ExternalAgent."""
+    """True → the history read returns nothing (housekeeping loops), and the
+    channel is never context-gated or compacted."""
 
     # ── Turn-0 auto-seed (declarative, not a hook) ────────────────────────────
 
@@ -163,14 +166,6 @@ class ProcessorConfig(ABC):
     research turn and read the research log, while fire 1 (MAIN) reads the
     user spine."""
 
-    turn_scoped_history: bool = False
-    """True → every turn on this channel is its own conversation: a new turn
-    reads no earlier turn's rows, and a later message into the same turn reads
-    that turn's rows only — the history a reply into a thread already gets.
-    ``False`` ⇒ a new turn reads every earlier turn on its read channel (the
-    main chat). Only the subtask configs set it, so one subtask never reads
-    another's work."""
-
     # ── PromptService dispatch override ───────────────────────────────────────
 
     prompt_channel: str | None = None
@@ -178,7 +173,8 @@ class ProcessorConfig(ABC):
     ``channel``. Only configs whose ``channel`` is dynamic or channel-specific
     yet share another channel's prompt assembly set this — DiscoveryConfig
     (``= "user"``) reuses the user prompts; EAMPConfig (``= "external_agent"``)
-    has a per-agent dynamic ``channel``."""
+    and each subagent's config (``= "delegate:<type>"``, or a subtask's
+    caller's) have a dynamic ``channel``."""
 
     # ── External turn-id ownership ────────────────────────────────────────────
 
@@ -238,7 +234,13 @@ class ProcessorConfig(ABC):
 
     def with_hidden_input(self) -> "ProcessorConfig":
         """Return a shallow copy with ``skip_input_row=True``."""
-        import copy  # noqa: PLC0415
         clone = copy.copy(self)
         object.__setattr__(clone, "skip_input_row", True)
+        return clone
+
+    def on_channel(self, channel: str) -> "ProcessorConfig":
+        """Return a shallow copy that writes and reads on ``channel`` — a
+        subagent's own (:meth:`Channel.for_agent`)."""
+        clone = copy.copy(self)
+        object.__setattr__(clone, "channel", channel)
         return clone

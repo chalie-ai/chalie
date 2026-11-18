@@ -23,7 +23,6 @@ from typing import ClassVar
 
 from abilities._agents import AgentAbility, label, not_found
 from abilities._result import ToolResult
-from configs.enums.channels import Channel
 from configs.enums.param_key import Keys
 from contracts.params.agent_params_bag import AgentIdParams
 from contracts.params.param_bag import ParamBag
@@ -72,7 +71,7 @@ class StopSubagentAbility(AgentAbility[AgentIdParams]):
         if agent is None:
             return not_found(params.agent_id)
         if agent.status == Agent.RUNNING and not TurnExecutionService.cancel_turn(
-            Channel.for_delegate(agent.type), agent.turn_id, stop_reason=STOP_REASON_PARENT_STOPPED,
+            agent.channel, agent.turn_id, stop_reason=STOP_REASON_PARENT_STOPPED,
         ):
             # Nothing was cancelled: the subagent ended on its own first.
             current = Agent.by_id(agent.agent_id)

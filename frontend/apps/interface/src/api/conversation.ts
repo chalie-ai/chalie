@@ -285,8 +285,9 @@ export const conversation = {
   /**
    * GET /api/threads/<turn_id>?channel= — one delegate turn's full block (the
    * subagent panel's read + WS refetch). turn_id is unique only per channel,
-   * so the full `delegate:<name>` channel is always sent, and a block echoed
-   * back on any other channel rejects rather than reach a caller as this turn.
+   * so the subagent's own `delegate:<name>:<agent_id>` channel is always sent,
+   * and a block echoed back on any other channel rejects rather than reach a
+   * caller as this turn.
    */
   delegateThread(turnId: number, channel: string): Promise<DelegateTurnBlock> {
     return api

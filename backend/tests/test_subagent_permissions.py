@@ -63,7 +63,7 @@ from tests._delegates import (
     begin,
     calls,
     calls_of,
-    child_turn,
+    child,
     connected_mail,
     delegate_channel,
     drain,
@@ -194,8 +194,8 @@ def test_starting_a_subagent_never_asks_on_any_channel(
     assert _blocked(db) == []
     [call] = calls_of(db, spawn)
     assert call["state"] == ToolCall.DONE, call["result"]
-    channel = _SUBTASK if spawn == SubtaskAbility.NAME else delegate_channel(spawn)
-    assert execution(channel, child_turn(db, channel, call["id"])).state == TurnExecution.COMPLETED
+    kind = _SUBTASK if spawn == SubtaskAbility.NAME else delegate_channel(spawn)
+    assert execution(*child(db, kind, call["id"])).state == TurnExecution.COMPLETED
 
 
 def test_each_mail_search_a_chat_spawned_pim_makes_asks_on_the_chat_after_the_chat_turn_ended(

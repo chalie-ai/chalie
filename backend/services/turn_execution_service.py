@@ -28,7 +28,6 @@ from typing import TYPE_CHECKING, cast
 
 from abilities.message_parent import waiting_on
 from configs.channels import config_for
-from configs.enums.channels import Channel
 from models.tool_call import ToolCall
 from models.transcript import Transcript
 from models.turn_execution import TurnExecution
@@ -182,9 +181,7 @@ class TurnExecutionService:
         # A subagent whose message this turn holds waits on it for the reply,
         # which this stop means will never come.
         for agent in waiting_on(channel, turn_id):
-            cls.cancel_turn(
-                Channel.for_delegate(agent.type), agent.turn_id, stop_reason=STOP_REASON_PARENT_STOPPED,
-            )
+            cls.cancel_turn(agent.channel, agent.turn_id, stop_reason=STOP_REASON_PARENT_STOPPED)
         return execution
 
     @staticmethod

@@ -8,12 +8,10 @@
 
 """MessageSubagentAbility — send a message into a running subagent's turn.
 
-The message joins the subagent's own turn (:meth:`MessageProcessor.join`),
-never opening another. It joins whichever execution is open on that turn, not
-only the turn's first: a subagent's turn runs no reply, and on a turn number a
-purge let come round again the first execution is an older subagent's. It is
-written as an input row on the config the subagent was spawned on — read from
-the one place that chooses it, :meth:`DelegateAbility.child_config` — carrying
+The message joins the subagent's own turn (:meth:`MessageProcessor.join`) on
+its own channel, never opening another. It is written as an input row on the
+config the subagent was spawned on — read from the one place that chooses it,
+:meth:`DelegateAbility.child_config` — bound to that channel, carrying
 the ``tool_calls`` id of the call that spawned it, as the subagent's first row
 does, so the row belongs to that call wherever the call is followed (its stop,
 its pill, its reply). The running loop takes the message in at its next
@@ -84,8 +82,8 @@ class MessageSubagentAbility(AgentAbility[AgentMessageParams]):
             config = spawner.child_config(mp.config)
             if config is None:
                 raise RuntimeError(f"{self.NAME}: {agent.type} has no config for a {mp.channel} caller")
-            joined = MessageProcessor(config, agent.turn_id).join(
-                params.message, spine_only=False, tool_call_id=AgentService.spawn_call_id(agent),
+            joined = MessageProcessor(config.on_channel(agent.channel), agent.turn_id).join(
+                params.message, spine_only=True, tool_call_id=AgentService.spawn_call_id(agent),
             )
             if joined is not None:
                 return ToolResult.ok(f"Message sent to subagent {label(agent)}.")

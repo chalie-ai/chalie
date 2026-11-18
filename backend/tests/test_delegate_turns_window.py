@@ -5,7 +5,9 @@ watchable child turn did each one spawn?" — read off the child's input row, wh
 ``tool_call_id`` holds the caller's id. The ``tool_call_id`` column is unindexed,
 so the read is bounded to the batch's time window (earliest open to latest end,
 plus slack for a child row that lands after its call ended) and walks the
-``(channel, created_at)`` index instead. The window has to be tight enough to be
+``(channel, created_at)`` index instead, over the range every delegate channel
+sorts in — each subagent's own channel (``delegate:web_search:12``) and each
+kind's bare one. The window has to be tight enough to be
 fast and loose enough never to lose a real child; each test here is a real
 situation where getting that wrong either hides a live link or invents one.
 
@@ -22,13 +24,13 @@ from models.transcript import Transcript
 
 pytestmark = pytest.mark.unit
 
-_CHANNEL = "delegate:web_search"
+_CHANNEL = "delegate:web_search:12"
 _CALL_ID = 7
 
 
 def _child_row(
     db: sqlite3.Connection, created_at: str, *, call_id: int = _CALL_ID, channel: str = _CHANNEL,
-    turn_id: int = 3,
+    turn_id: int = 1,
 ) -> None:
     """A delegate input row stamped with *call_id*, written at *created_at* in the
     shape SQLite's ``datetime('now')`` gives the column (whole-second UTC)."""
@@ -53,7 +55,7 @@ def test_child_row_stamped_in_the_second_the_call_opened_is_found(db: sqlite3.Co
 
     found = _spawned(("2026-03-01T10:00:00.900000+00:00", "2026-03-01T10:00:05+00:00"))
 
-    assert found == {"channel": _CHANNEL, "turn_id": 3}
+    assert found == {"channel": _CHANNEL, "turn_id": 1}
 
 
 def test_child_row_landing_after_a_crash_backfilled_call_is_found(db: sqlite3.Connection) -> None:
@@ -64,22 +66,22 @@ def test_child_row_landing_after_a_crash_backfilled_call_is_found(db: sqlite3.Co
 
     found = _spawned(("2026-03-01T10:00:00+00:00", "2026-03-01T10:00:00+00:00"))
 
-    assert found == {"channel": _CHANNEL, "turn_id": 3}
+    assert found == {"channel": _CHANNEL, "turn_id": 1}
 
 
 def test_call_still_running_resolves_to_a_child_written_long_after_it_opened(db: sqlite3.Connection) -> None:
     """A call with no ``ended_at`` yet has no upper bound — a long-running
     delegate's pill must keep pointing at its child however late the row landed,
     even when the same batch holds a call that finished minutes earlier."""
-    _child_row(db, "2026-03-01 10:30:00", call_id=7, turn_id=3)
-    _child_row(db, "2026-03-01 10:00:02", call_id=8, turn_id=4)
+    _child_row(db, "2026-03-01 10:30:00", call_id=7)
+    _child_row(db, "2026-03-01 10:00:02", call_id=8, channel="delegate:web_search:13")
 
     found = Transcript.delegate_turns({
         7: ("2026-03-01T10:00:00+00:00", None),
         8: ("2026-03-01T10:00:01+00:00", "2026-03-01T10:00:05+00:00"),
     })
 
-    assert found == {7: {"channel": _CHANNEL, "turn_id": 3}, 8: {"channel": _CHANNEL, "turn_id": 4}}
+    assert found == {7: {"channel": _CHANNEL, "turn_id": 1}, 8: {"channel": "delegate:web_search:13", "turn_id": 1}}
 
 
 @pytest.mark.parametrize(
@@ -99,18 +101,32 @@ def test_matching_stamp_outside_the_calls_window_is_not_credited_to_it(
 
 def test_each_call_is_credited_only_with_the_child_stamped_with_its_own_id(db: sqlite3.Connection) -> None:
     """In a batch, each call is credited with its OWN child, on that child's own
-    channel: another call's child is not borrowed, and a call nothing was stamped
-    for resolves to no child."""
-    _child_row(db, "2026-03-01 10:00:02", call_id=7, turn_id=3)
-    _child_row(db, "2026-03-01 10:00:03", call_id=8, turn_id=4, channel="delegate:pim")
+    channel — two subagents of one kind each on theirs, and a turn stored on a
+    kind's bare channel on that: another call's child is not borrowed, and a
+    call nothing was stamped for resolves to no child."""
+    _child_row(db, "2026-03-01 10:00:02", call_id=7)
+    _child_row(db, "2026-03-01 10:00:03", call_id=8, channel="delegate:web_search:13")
+    _child_row(db, "2026-03-01 10:00:04", call_id=9, turn_id=4, channel="delegate:pim")
     opened, ended = "2026-03-01T10:00:00+00:00", "2026-03-01T10:00:10+00:00"
 
-    found = Transcript.delegate_turns({7: (opened, ended), 8: (opened, ended), 10: (opened, ended)})
+    found = Transcript.delegate_turns({7: (opened, ended), 8: (opened, ended), 9: (opened, ended), 10: (opened, ended)})
 
     assert found == {
-        7: {"channel": _CHANNEL, "turn_id": 3},
-        8: {"channel": "delegate:pim", "turn_id": 4},
+        7: {"channel": _CHANNEL, "turn_id": 1},
+        8: {"channel": "delegate:web_search:13", "turn_id": 1},
+        9: {"channel": "delegate:pim", "turn_id": 4},
     }
+
+
+@pytest.mark.parametrize("channel", ["user", "compaction", "discovery", "external-agent:bot"])
+def test_a_row_off_the_delegate_channels_is_not_credited_as_a_child(db: sqlite3.Connection, channel: str) -> None:
+    """Only a delegate channel holds a child turn. A row on any other channel —
+    the chat's own, or one sorting just before or after the delegate channels —
+    carrying the call's id inside its window is not linked as the call's
+    child."""
+    _child_row(db, "2026-03-01 10:00:02", channel=channel)
+
+    assert _spawned(("2026-03-01T10:00:00+00:00", "2026-03-01T10:00:05+00:00")) is None
 
 
 def test_call_timestamps_are_compared_in_utc(db: sqlite3.Connection) -> None:
@@ -123,7 +139,7 @@ def test_call_timestamps_are_compared_in_utc(db: sqlite3.Connection) -> None:
     naive = _spawned(("2026-03-01 10:00:00", "2026-03-01 10:00:09"))
     offset = _spawned(("2026-03-01T12:00:00+02:00", "2026-03-01T12:00:09+02:00"))
 
-    assert naive == offset == {"channel": _CHANNEL, "turn_id": 3}
+    assert naive == offset == {"channel": _CHANNEL, "turn_id": 1}
 
 
 def test_unparseable_call_timestamp_fails_loudly(db: sqlite3.Connection) -> None:

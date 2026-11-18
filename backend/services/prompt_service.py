@@ -47,7 +47,7 @@ from abilities.web_search import WebSearchAbility
 from configs.channels.external_agent import EAMPConfig
 from configs.channels.memory_step import PROMPT_CHANNEL as MEMORY_STEP_PROMPT_CHANNEL
 from configs.channels.user import UserConfig
-from configs.enums.channels import WATCHABLE_DELEGATE_CHANNELS, Channel
+from configs.enums.channels import Channel, delegate_type
 from exceptions import UnroutedPromptChannel
 from models.plan_task import PlanTask
 from models.tool_call import ToolCall
@@ -222,7 +222,7 @@ class PromptService:
         if replies_late(self.mp.config.type()):
             base += _KEEPING_THE_CHAT_MOVING
         if self.mp.config.RENDERS_HTML:
-            subagent = self.mp.config.channel in WATCHABLE_DELEGATE_CHANNELS
+            subagent = delegate_type(self.mp.config.channel) is not None
             base += _PLAIN_TEXT_REPLY if subagent else _RESPONSE_FORMAT
         if locale := self.locale_line():
             base += f"\n\n{locale}"
@@ -757,7 +757,7 @@ class PromptService:
             lines.append(f"[{ts}] {content}")
         return "\n".join(lines)
 
-    # ── WebBrowseConfig (channel="delegate:web_browse") ──────────────────────
+    # ── WebBrowseConfig (channel="delegate:web_browse:{agent_id}", prompt_channel="delegate:web_browse") ──
 
     def _web_browse_prompt(self) -> str:
         """``WebBrowseConfig.get_user_prompt``: the (stamped) browsing goal
@@ -768,7 +768,7 @@ class PromptService:
             parts.append(trail)
         return "\n\n".join(parts)
 
-    # ── WebSearchConfig (channel="delegate:web_search") ──────────────────────
+    # ── WebSearchConfig (channel="delegate:web_search:{agent_id}", prompt_channel="delegate:web_search") ──
 
     def _web_search_prompt(self) -> str:
         """``WebSearchConfig.get_user_prompt``: the (stamped) research query
@@ -779,7 +779,7 @@ class PromptService:
             parts.append(trail)
         return "\n\n".join(parts)
 
-    # ── PimConfig (channel="delegate:pim") ───────────────────────────────────
+    # ── PimConfig (channel="delegate:pim:{agent_id}", prompt_channel="delegate:pim") ──
 
     def _pim_prompt(self) -> str:
         """``PimConfig.get_user_prompt``: the (stamped) personal-information
@@ -790,14 +790,14 @@ class PromptService:
             parts.append(trail)
         return "\n\n".join(parts)
 
-    # ── CodeAgentConfig (channel="delegate:code_agent") ──────────────────────
+    # ── CodeAgentConfig (channel="delegate:code_agent:{agent_id}", prompt_channel="delegate:code_agent") ──
 
     def _code_agent_prompt(self) -> str:
         """``CodeAgentConfig.get_user_prompt``: the (stamped) coding task, then
         this turn's act trail.
 
-        ``suppress_history=True`` makes this string the delegate's ENTIRE input,
-        and the stamped Task line is its only clock: the World State block no
+        This string is the delegate's ENTIRE input — it renders no earlier
+        turn — and the stamped Task line is its only clock: the World State block no
         longer rides along (the input stamp is the model's only time source),
         and a coding agent that cannot date its own work writes wrong dates
         into the files it creates. Kept as its own builder rather than remapped

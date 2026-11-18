@@ -12,10 +12,8 @@ Active-record row-model. The table's key is ``agent_id`` —
 there is **no** ``id`` column — so the base ``Model.save()``/``delete()``
 (id-centric) do not apply; ``__columns__`` omits ``id`` and this model carries
 its own :meth:`insert`. ``type`` is the spawn tool's name and ``turn_id`` the
-subagent's own turn on that tool's delegate channel. Turn ids are counted per
-channel and start over once retention has purged a channel's newest turns, so
-the pair is not unique: the newest row for it is the live one. Holds no mp,
-calls no service (Rule-3 depth).
+subagent's own turn on its own channel (:attr:`channel`). Holds no mp, calls
+no service (Rule-3 depth).
 """
 
 from __future__ import annotations
@@ -23,6 +21,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import ClassVar, Self, cast
 
+from configs.enums.channels import Channel
 from models.model import Model
 
 
@@ -53,6 +52,11 @@ class Agent(Model):
     response_id: int | None
     turn_id: int
 
+    @property
+    def channel(self) -> str:
+        """The channel this subagent runs its turns on — its own."""
+        return Channel.for_agent(self.type, self.agent_id)
+
     def insert(self) -> Self:
         """Write this row as a new, running agent and read its ``agent_id``
         back. Never commits — the caller's ``Database.transaction()`` does."""
@@ -70,12 +74,6 @@ class Agent(Model):
     def by_id(cls, agent_id: int) -> Agent | None:
         """The agent the model calls ``agent_id``, or ``None``."""
         return cls.filter("agent_id", agent_id).first()
-
-    @classmethod
-    def by_turn(cls, type_: str, turn_id: int) -> Agent | None:
-        """The agent whose own turn is ``turn_id`` on ``type_``'s channel — the
-        newest, since a purged channel numbers its turns from the start again."""
-        return cls.filter("type", type_).filter("turn_id", turn_id).order_by("agent_id DESC").first()
 
     @classmethod
     def running(cls) -> Sequence[Agent]:

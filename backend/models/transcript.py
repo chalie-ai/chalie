@@ -17,7 +17,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import ClassVar, Self, cast
 
-from configs.enums.channels import WATCHABLE_DELEGATE_CHANNELS
+from configs.enums.channels import DELEGATE_CHANNEL_SPAN
 from models.model import Model
 
 # How long after a call's ``ended_at`` its child's input row may still land. A
@@ -326,19 +326,19 @@ class Transcript(Model):
         ``calls`` maps each id to its ``(created_at, ended_at)``. A child row is
         written after its call opened and before it ended, so the read is bounded
         to the batch's span — earliest open to latest end, open-ended while any
-        call still runs — and walks the ``(channel, created_at)`` index rather
-        than every row the delegate channels hold: ``tool_call_id`` is unindexed.
+        call still runs — and to the delegate channels' range of the
+        ``(channel, created_at)`` index (every subagent has a channel of its
+        own, so they cannot be listed): ``tool_call_id`` is unindexed.
         A call with no such row (not a delegate, not yet started, or purged by
         retention) is simply absent. Empty input short-circuits to ``{}``."""
         if not calls:
             return {}
-        channels = sorted(WATCHABLE_DELEGATE_CHANNELS)
         sql = (
             f"SELECT tool_call_id, channel, turn_id FROM transcript "
-            f"WHERE channel IN ({cls._placeholders(len(channels))}) "
+            f"WHERE channel >= ? AND channel < ? "
             f"AND tool_call_id IN ({cls._placeholders(len(calls))}) AND created_at >= ?"
         )
-        params = [*channels, *(str(i) for i in calls), min(_row_time(c) for c, _ in calls.values())]
+        params = [*DELEGATE_CHANNEL_SPAN, *(str(i) for i in calls), min(_row_time(c) for c, _ in calls.values())]
         ended = [e for _, e in calls.values() if e is not None]
         if len(ended) == len(calls):
             sql += " AND created_at <= ?"

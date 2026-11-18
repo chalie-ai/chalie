@@ -46,7 +46,7 @@ class TranscriptService:
     def read(self) -> list[Transcript]:
         """The current turn's history view, above the compaction watermark
         (§6.1): FORK (``self.mp.fork_view`` — a reply into an already-settled
-        thread, or any turn on a ``turn_scoped_history`` channel) returns the
+        thread) returns the
         whole turn, unfloored, between the watermark and this turn's anchoring
         row; MAIN (a fresh turn) returns every prior turn above the watermark,
         each floored at its own settle0. Keyed off the same ``mp.fork_view``

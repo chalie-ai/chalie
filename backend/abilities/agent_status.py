@@ -10,10 +10,8 @@
 
 The last thing it wrote is the newest assistant row of its own turn that says
 something (:meth:`Transcript.last_said`) — its final reply once it is done,
-else its latest words so far; ``None`` while it has written nothing, and once
-its turn number belongs to a newer subagent (a purged channel numbers its turns
-from the start again, so its own rows are gone). Only a subagent the chat
-spawned is read (:meth:`AgentAbility.owned`).
+else its latest words so far; ``None`` while it has written nothing. Only a
+subagent the chat spawned is read (:meth:`AgentAbility.owned`).
 """
 
 from __future__ import annotations
@@ -22,11 +20,9 @@ from typing import ClassVar
 
 from abilities._agents import AgentAbility, not_found
 from abilities._result import ToolResult
-from configs.enums.channels import Channel
 from configs.enums.param_key import Keys
 from contracts.params.agent_params_bag import AgentIdParams
 from contracts.params.param_bag import ParamBag
-from models.agent import Agent
 from models.transcript import Transcript
 
 
@@ -68,12 +64,5 @@ class AgentStatusAbility(AgentAbility[AgentIdParams]):
             "agent_id": agent.agent_id,
             "type": agent.type,
             "status": agent.status,
-            "last_output": _last_output(agent),
+            "last_output": Transcript.last_said(agent.channel, agent.turn_id),
         })
-
-
-def _last_output(agent: Agent) -> str | None:
-    owner = Agent.by_turn(agent.type, agent.turn_id)
-    if owner is None or owner.agent_id != agent.agent_id:
-        return None
-    return Transcript.last_said(Channel.for_delegate(agent.type), agent.turn_id)

@@ -51,7 +51,7 @@ from tests._delegates import (
     assistant_texts,
     calls,
     calls_of,
-    child_turn,
+    child,
     connected_mail,
     delegate_channel,
     drain,
@@ -97,8 +97,8 @@ def _delegate_call(tool_name: str) -> dict[str, object]:
 
 def _delegate_turn(db: sqlite3.Connection, tool_name: str) -> tuple[str, int]:
     """The channel and turn of the subagent turn the one call of *tool_name* opened."""
-    channel = _SUBTASK if tool_name == "subtask" else delegate_channel(tool_name)
-    return channel, child_turn(db, channel, calls_of(db, tool_name)[0]["id"])
+    kind = _SUBTASK if tool_name == "subtask" else delegate_channel(tool_name)
+    return child(db, kind, calls_of(db, tool_name)[0]["id"])
 
 
 def _the_one_execution(db: sqlite3.Connection, channel: str, turn_id: int) -> str:
@@ -128,11 +128,13 @@ def _blocked(db: sqlite3.Connection) -> list[tuple[str, str, str]]:
     ]
 
 
-def _reached(db: sqlite3.Connection, channel: str, call_id: int) -> int:
-    """How many rows on *channel* carry the call *call_id* — none when the call
-    never opened a turn there."""
+def _reached(db: sqlite3.Connection, kind: str, call_id: int) -> int:
+    """How many rows on the own channel of any subagent of *kind* (that kind's
+    bare channel) carry the call *call_id* — none when the call never opened
+    such a subagent's turn."""
     return cast("int", db.execute(
-        "SELECT COUNT(*) FROM transcript WHERE channel = ? AND tool_call_id = ?", (channel, str(call_id)),
+        "SELECT COUNT(*) FROM transcript WHERE channel >= ? AND channel < ? AND tool_call_id = ?",
+        (f"{kind}:", f"{kind};", str(call_id)),
     ).fetchone()[0])
 
 
@@ -140,6 +142,14 @@ def _executions(db: sqlite3.Connection, channel: str) -> int:
     """How many turns ever opened on *channel*."""
     return cast("int", db.execute(
         "SELECT COUNT(*) FROM turn_executions WHERE channel = ?", (channel,),
+    ).fetchone()[0])
+
+
+def _kind_executions(db: sqlite3.Connection, kind: str) -> int:
+    """How many turns ever opened on the own channels of the subagents of
+    *kind* (that kind's bare channel), all told."""
+    return cast("int", db.execute(
+        "SELECT COUNT(*) FROM turn_executions WHERE channel >= ? AND channel < ?", (f"{kind}:", f"{kind};"),
     ).fetchone()[0])
 
 
@@ -450,8 +460,7 @@ def test_an_outside_agents_subtask_runs_as_that_agent_with_a_clean_context_and_a
     assert nested["state"] == "error"
     assert _error_code(nested["result"]) == "subtask-nested"
     assert _reached(db, _SUBTASK, nested["id"]) == 0
-    n = child_turn(db, _SUBTASK, start["id"])
-    assert _the_one_execution(db, _SUBTASK, n) == TurnExecution.COMPLETED
+    assert _the_one_execution(db, *child(db, _SUBTASK, start["id"])) == TurnExecution.COMPLETED
 
     assert _executions(db, USER) == 1
     assert replies(db, start["id"]) == []
@@ -488,7 +497,7 @@ def test_an_outside_agent_starts_pim_but_its_mail_call_is_refused_and_its_web_se
     [mail] = calls_of(db, "pim")
     assert mail["state"] == "done", mail["result"]
     assert _NO_MAIL in mail["result"]
-    assert _executions(db, delegate_channel("pim")) == 1
+    assert _kind_executions(db, delegate_channel("pim")) == 1
     [search_mail] = calls_of(db, EmailAbility.NAME)
     assert search_mail["state"] == "error", search_mail["result"]
     assert _blocked(db) == [(f"{EmailAbility.NAME}.search", "external_agent", "deny")]
@@ -499,4 +508,4 @@ def test_an_outside_agent_starts_pim_but_its_mail_call_is_refused_and_its_web_se
     [nested] = calls_of(db, "subtask")
     assert nested["state"] == "error"
     assert _error_code(nested["result"]) == "subtask-nested"
-    assert _executions(db, _SUBTASK) == 0
+    assert _kind_executions(db, _SUBTASK) == 0

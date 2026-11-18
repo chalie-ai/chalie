@@ -85,7 +85,7 @@ from tests._delegates import (
     block,
     calls,
     calls_of,
-    child_turn,
+    child,
     delegate_channel,
     drain,
     execution,
@@ -211,8 +211,8 @@ def test_a_subagent_asks_the_chat_waits_for_its_reply_and_finishes_with_it(
     n = seen["n"]
     [spawn] = calls_of(db, _WEB)
     spawn_id = cast("int", spawn["id"])
-    turn = child_turn(db, _WEB_CHANNEL, spawn_id)
-    assert agent_number(_WEB, turn) == n
+    searcher, turn = child(db, _WEB_CHANNEL, spawn_id)
+    assert agent_number(searcher) == n
     [asked] = calls_of(db, MessageParentAbility.NAME)
     [sent] = calls_of(db, MessageSubagentAbility.NAME)
     assert _answer(sent) == ("success", None, f"Message sent to subagent {_WEB} #{n}.")
@@ -226,9 +226,9 @@ def test_a_subagent_asks_the_chat_waits_for_its_reply_and_finishes_with_it(
     assert cast("str", asked["result"]).split("\n")[1:-1] == [_REPLY, SUBAGENT_NUDGE]
     assert read[1].count(_REPLY) == 1 and read[1].count(SUBAGENT_NUDGE) == 1
     assert "Message from Chalie" not in read[1]
-    assert _input_rows(db, _WEB_CHANNEL, turn) == [(_TASK, False, str(spawn_id)), (_REPLY, True, str(spawn_id))]
-    assert _executions(_WEB_CHANNEL, turn) == 1
-    assert execution(_WEB_CHANNEL, turn).state == TurnExecution.COMPLETED
+    assert _input_rows(db, searcher, turn) == [(_TASK, False, str(spawn_id)), (_REPLY, True, str(spawn_id))]
+    assert _executions(searcher, turn) == 1
+    assert execution(searcher, turn).state == TurnExecution.COMPLETED
     assert cast("Agent", Agent.by_id(n)).status == Agent.DONE
 
     # The message opened a turn of its own on the chat, carrying its own call.
@@ -289,8 +289,8 @@ def test_every_kind_of_subagent_the_chat_spawns_reads_that_it_may_message_the_ch
     assert MessageParentAbility.NAME in offered
     [spawn] = calls_of(db, tool_name)
     spawn_id = cast("int", spawn["id"])
-    channel = _SUBTASK if tool_name == SubtaskAbility.NAME else delegate_channel(tool_name)
-    turn = child_turn(db, channel, spawn_id)
+    kind = _SUBTASK if tool_name == SubtaskAbility.NAME else delegate_channel(tool_name)
+    channel, turn = child(db, kind, spawn_id)
     assert _input_rows(db, channel, turn) == [(_TASK, False, str(spawn_id))]
     assert [r["content"] for r in replies(db, spawn_id)] == [_ANSWER]
 
@@ -379,7 +379,7 @@ def test_a_message_the_chat_sends_a_working_subagent_tells_it_not_to_acknowledge
     acknowledge it; the stored row holds only the message."""
     held = Held(text(_DRAFT))
     route = "subtask" if tool_name == SubtaskAbility.NAME else tool_name
-    channel = _SUBTASK if tool_name == SubtaskAbility.NAME else delegate_channel(tool_name)
+    kind = _SUBTASK if tool_name == SubtaskAbility.NAME else delegate_channel(tool_name)
     start = (
         tool(tool_name, action="start", instructions=_TASK) if tool_name == SubtaskAbility.NAME
         else tool(tool_name, instructions=_TASK)
@@ -405,7 +405,7 @@ def test_a_message_the_chat_sends_a_working_subagent_tells_it_not_to_acknowledge
 
     assert held.opened and provider.unused() == {}
     [spawn] = calls_of(db, tool_name)
-    turn = child_turn(db, channel, cast("int", spawn["id"]))
+    channel, turn = child(db, kind, cast("int", spawn["id"]))
     read = provider.read(route)
     assert len(read) == 2
     assert SUBAGENT_NUDGE not in read[0]
@@ -519,7 +519,7 @@ def test_stopping_a_subagent_that_waits_for_a_reply_ends_its_wait_and_sends_noth
     assert [f for f in listener.frames if f.get("type") == "permission_request"] == []
     n = seen["n"]
     [spawn] = calls_of(db, _WEB)
-    turn = child_turn(db, _WEB_CHANNEL, cast("int", spawn["id"]))
+    searcher, turn = child(db, _WEB_CHANNEL, cast("int", spawn["id"]))
     [stopped] = calls_of(db, StopSubagentAbility.NAME)
     assert _answer(stopped) == ("success", None, f"Subagent {_WEB} #{n} stopped.")
     [asked] = calls_of(db, MessageParentAbility.NAME)
@@ -539,7 +539,7 @@ def test_stopping_a_subagent_that_waits_for_a_reply_ends_its_wait_and_sends_noth
     assert cast("Agent", Agent.by_id(n)).status == Agent.CANCELLED
     changed = [cast("dict[str, object]", f["agent"]) for f in listener.frames if f.get("type") == "agent_changed"]
     assert [a["status"] for a in changed if a["agent_id"] == n] == [Agent.RUNNING, Agent.CANCELLED]
-    ended = execution(_WEB_CHANNEL, turn)
+    ended = execution(searcher, turn)
     assert (ended.state, ended.stop_reason) == (TurnExecution.CANCELLED, STOP_REASON_PARENT_STOPPED)
     assert replies(db, cast("int", spawn["id"])) == []
 
@@ -684,19 +684,19 @@ def test_the_persons_stop_ends_the_wait_and_tells_the_chat(
         asking.gate.set()
         wait(reading.entered, "the chat's turn the message opened")
         [spawn] = calls_of(db, _WEB)
-        turn = child_turn(db, _WEB_CHANNEL, cast("int", spawn["id"]))
-        stop = client.delete(f"/api/threads/{turn}?channel={_WEB_CHANNEL}")
+        searcher, turn = child(db, _WEB_CHANNEL, cast("int", spawn["id"]))
+        stop = client.delete(f"/api/threads/{turn}?channel={searcher}")
         assert stop.status_code == 200 and (stop.get_json() or {})["result"]["cancelled"] is True
         cast("threading.Thread", asking.thread).join(timeout=WAIT_S)
         reading.gate.set()
 
     assert asking.opened and reading.opened and provider.unused() == {}
-    n = agent_number(_WEB, turn)
+    n = agent_number(searcher)
     [asked] = calls_of(db, MessageParentAbility.NAME)
     assert _answer(asked) == ("success", None, _WAIT_STOPPED)
     assert len(provider.read(_WEB)) == 1
     assert cast("Agent", Agent.by_id(n)).status == Agent.CANCELLED
-    assert execution(_WEB_CHANNEL, turn).state == TurnExecution.CANCELLED
+    assert execution(searcher, turn).state == TurnExecution.CANCELLED
 
     notice = f"This {_WEB} was stopped before it finished."
     [told] = replies(db, cast("int", spawn["id"]))
@@ -739,13 +739,13 @@ def test_the_persons_stop_of_the_chat_turn_a_message_opened_stops_the_subagent_w
     assert opened != chat.turn_id
     assert execution(_USER, opened).state == TurnExecution.CANCELLED
     [spawn] = calls_of(db, _WEB)
-    turn = child_turn(db, _WEB_CHANNEL, cast("int", spawn["id"]))
-    n = agent_number(_WEB, turn)
+    searcher, turn = child(db, _WEB_CHANNEL, cast("int", spawn["id"]))
+    n = agent_number(searcher)
     [asked] = calls_of(db, MessageParentAbility.NAME)
     assert _answer(asked) == ("success", None, _WAIT_STOPPED)
     assert len(provider.read(_WEB)) == 1
     assert cast("Agent", Agent.by_id(n)).status == Agent.CANCELLED
-    ended = execution(_WEB_CHANNEL, turn)
+    ended = execution(searcher, turn)
     assert (ended.state, ended.stop_reason) == (TurnExecution.CANCELLED, STOP_REASON_PARENT_STOPPED)
     assert replies(db, cast("int", spawn["id"])) == []
     assert f"Message from {_WEB} #{n}: {_QUESTION}\n{PARENT_NUDGE}" in provider.read("chat")[2]
@@ -788,11 +788,11 @@ def test_the_persons_stop_of_the_chat_turn_after_it_replied_leaves_the_subagent_
     assert asking.opened and noting.opened and finishing.opened and provider.unused() == {}
     assert execution(_USER, opened).state == TurnExecution.CANCELLED
     [spawn] = calls_of(db, _WEB)
-    turn = child_turn(db, _WEB_CHANNEL, cast("int", spawn["id"]))
-    assert agent_number(_WEB, turn) == n
+    searcher, turn = child(db, _WEB_CHANNEL, cast("int", spawn["id"]))
+    assert agent_number(searcher) == n
     assert cast("str", asked["result"]).split("\n")[1:-1] == [_REPLY, SUBAGENT_NUDGE]
     assert cast("Agent", Agent.by_id(n)).status == Agent.DONE
-    assert execution(_WEB_CHANNEL, turn).state == TurnExecution.COMPLETED
+    assert execution(searcher, turn).state == TurnExecution.COMPLETED
     assert [r["content"] for r in replies(db, cast("int", spawn["id"]))] == [_ANSWER]
 
 
@@ -832,9 +832,8 @@ def test_a_subagent_its_caller_waits_for_holds_no_message_parent(
     assert provider.unused() == {}
     assert [f for f in listener.frames if f.get("type") == "permission_request"] == []
     [spawn] = calls_of(db, tool_name)
-    channel = _SUBTASK if tool_name == SubtaskAbility.NAME else delegate_channel(tool_name)
-    turn = child_turn(db, channel, cast("int", spawn["id"]))
-    agent = cast("Agent", Agent.by_turn(tool_name, turn))
+    kind = _SUBTASK if tool_name == SubtaskAbility.NAME else delegate_channel(tool_name)
+    agent = cast("Agent", Agent.by_id(agent_number(child(db, kind, cast("int", spawn["id"])).channel)))
     spawner = _SCHEDULE if caller == "schedule" else Channel.for_external_agent(_AGENT)
     assert agent.spawned_by_channel == spawner
     if caller == "schedule":
@@ -884,8 +883,8 @@ def test_a_restart_while_a_subagent_posts_its_message_leaves_no_nudge_and_tells_
 
     assert died.is_set()
     [spawn] = calls_of(db, _WEB)
-    turn = child_turn(db, _WEB_CHANNEL, cast("int", spawn["id"]))
-    n = agent_number(_WEB, turn)
+    searcher, turn = child(db, _WEB_CHANNEL, cast("int", spawn["id"]))
+    n = agent_number(searcher)
     [asked] = calls_of(db, MessageParentAbility.NAME)
     assert asked["state"] == ToolCall.STARTED
     [message] = replies(db, cast("int", asked["id"]))
@@ -903,7 +902,7 @@ def test_a_restart_while_a_subagent_posts_its_message_leaves_no_nudge_and_tells_
     [asked] = calls_of(db, MessageParentAbility.NAME)
     assert asked["state"] == ToolCall.DONE
     assert cast("Agent", Agent.by_id(n)).status == Agent.FAILED
-    cut_off = execution(_WEB_CHANNEL, turn)
+    cut_off = execution(searcher, turn)
     assert (cut_off.state, cut_off.stop_reason) == (TurnExecution.CRASHED, STOP_REASON_PROCESS_DEATH)
     assert execution(_USER, message["turn_id"]).state == TurnExecution.CRASHED
     notice = f"This {_WEB} was cut off by a restart before it finished."
