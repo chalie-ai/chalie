@@ -284,8 +284,9 @@ class TurnExecutionService:
         'completed'/'crashed' state.
 
         A subagent's turn that this closes closes its ``agents`` row in the
-        same transaction — ``done`` with its final reply row, ``cancelled`` or
-        ``failed`` with the turn's last row (:meth:`_response_id`) — and that
+        same transaction — ``done``, or ``waiting`` when it ended on a message
+        to its caller, with its final reply row, ``cancelled`` or ``failed``
+        with the turn's last row (:meth:`_response_id`) — and that
         row's frame follows the lifecycle frame. A turn whose row :meth:`open`
         failed to write has no row to close, but its agent still ends here, so
         it is never left running."""

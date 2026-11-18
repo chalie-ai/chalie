@@ -177,8 +177,9 @@ export const useSessionStore = defineStore('session', {
         // Likewise the browser's tabs and their hand-offs: a reload or a drop
         // would otherwise miss the frames that announced them.
         void useBrowserStore().refresh();
-        // And the running subagents the Activity drawer lists: an agent that
-        // started or ended behind the dead socket sent a frame nobody got.
+        // And the running and waiting subagents the Activity drawer lists: an
+        // agent whose row changed behind the dead socket sent a frame nobody
+        // got.
         void useAgentsStore().refresh();
         // An open delegate panel froze with the socket and lost its live pills
         // on disconnect, and only a frame for its turn would re-read it.

@@ -3,11 +3,13 @@
  * Activity drawer — a slide-out panel with two lists, each under its own
  * title and shown only when it has rows: "Threads", the forked threads whose
  * reply has settled unseen, and under it "Agents", every subagent still
- * running, oldest first, from the agents store.
+ * running or waiting for a reply, oldest first, from the agents store.
  *
  * A subagent row is its type's icon and the one-line summary of the call that
  * started it — the type's name when the call has none, never the tool name or
- * number — and opens its transcript in the delegate panel under that title.
+ * number — then the pulsing dot while it runs, or the word "waiting" while it
+ * waits for a reply; it opens its transcript in the delegate panel under that
+ * title.
  *
  * The trigger button lives in PresenceBar.vue and shows only while either list
  * has rows; the slide-out shell (scrim, panel, close, transition choreography)
@@ -39,13 +41,14 @@ const { isOpen } = storeToRefs(tasks);
 const threadActivity = useThreadActivity();
 
 const agentRows = computed(() =>
-  agents.running.map((agent) => {
+  agents.active.map((agent) => {
     const kind = subagentKind(agent.type);
     return {
       delegate: { channel: agent.channel, turn_id: agent.turn_id },
       key: agent.agent_id,
       icon: kind.icon,
       title: agent.summary.trim() || kind.name,
+      waiting: agent.status === 'waiting',
     };
   }),
 );
@@ -115,7 +118,8 @@ watch(totalCount, (count) => {
       </button>
     </template>
 
-    <!-- Subagents still running. Clicking opens the subagent's transcript. -->
+    <!-- Subagents still running or waiting for a reply. Clicking opens the
+         subagent's transcript. -->
     <template v-if="agentRows.length">
       <h3 class="task-drawer__section">Agents</h3>
       <button
@@ -128,7 +132,8 @@ watch(totalCount, (count) => {
         <span class="drawer-row__top">
           <component :is="row.icon" class="drawer-row__icon" :size="16" aria-hidden="true" />
           <span class="drawer-row__label">{{ row.title }}</span>
-          <span class="thread-activity-dot working" aria-hidden="true" />
+          <span v-if="row.waiting" class="task-drawer__status">waiting</span>
+          <span v-else class="thread-activity-dot working" aria-hidden="true" />
         </span>
       </button>
     </template>
@@ -150,6 +155,16 @@ watch(totalCount, (count) => {
   font-weight: 400;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+  color: var(--muted);
+}
+
+// ── Agent status word ─────────────────────────────────────────────────────────
+// Stands in for the working dot while an agent waits for a reply, in the
+// section title's mono type.
+
+.task-drawer__status {
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
   color: var(--muted);
 }
 

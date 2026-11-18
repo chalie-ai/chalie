@@ -1,7 +1,8 @@
 import { api } from '@chalie/shared';
 
-/** How an agent stands: running, or how it ended. */
-export type AgentStatus = 'running' | 'done' | 'cancelled' | 'failed';
+/** How an agent stands: running, waiting for its caller's reply, or how it
+ *  ended. */
+export type AgentStatus = 'running' | 'waiting' | 'done' | 'cancelled' | 'failed';
 
 /**
  * One subagent some turn spawned, as the server sends it — the same fields on
@@ -34,10 +35,10 @@ const PAGE_LIMIT = 100;
 
 export const agents = {
   /**
-   * GET /api/agents/all — every agent still running, oldest first, read page
-   * by page until the listing's total is reached.
+   * GET /api/agents/all — every agent still running or waiting for a reply,
+   * oldest first, read page by page until the listing's total is reached.
    */
-  async running(): Promise<Agent[]> {
+  async active(): Promise<Agent[]> {
     const rows: Agent[] = [];
     for (let page = 1; ; page++) {
       const body = await api.get<ListingEnvelope<Agent>>(`/api/agents/all?page=${page}&limit=${PAGE_LIMIT}`);

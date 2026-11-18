@@ -72,7 +72,7 @@ from threading import Thread, get_ident
 from typing import TYPE_CHECKING, Protocol, cast
 
 from abilities._delegate import agent_config, replies_late, reply_to_caller, replying_tools
-from abilities.message_parent import MessageParentAbility, holds
+from abilities.message_parent import MessageParentAbility, holds, waiting_reminder
 from abilities.plan import PlanAbility, plans
 from abilities.recall import Recall
 from configs.channels.user import UserConfig
@@ -276,6 +276,10 @@ class MessageProcessor:
         # there, in the order the model saw it rather than the order it arrived).
         self._consumed_through: int = 0
         self.consumed_joins: dict[int, list[Transcript]] = {}
+        # The subagents waiting for this channel's reply when the turn opened,
+        # worked out once in _setup and read on every step's input line, so one
+        # answered mid-turn stays named until the turn ends; '' when none.
+        self.waiting_reminder: str = ""
         # Sends of frames pushed by one thread while it holds an ``_atomic``
         # block, made only once that block commits.
         self._held: tuple[int, list[Callable[[], None]]] | None = None
@@ -1167,11 +1171,15 @@ class MessageProcessor:
     # ── setup (on the drive thread, before the first send) ─────────────────────
 
     def _setup(self) -> None:
-        """Pre-loop setup: seed the always-available tools — and
-        ``message_parent`` on the turn of a subagent the chat spawned, the one
-        kind that holds it, which no config can tell — gate thinking on the
-        ``user`` channel, seed the turn-zero flashback + any attachments, ingest
-        the reply's parent gist on a fork, then plan the message."""
+        """Pre-loop setup: work out the waiting reminder once, before the
+        first prompt reads it — less the subagent whose own message opened
+        this turn (:func:`~abilities.message_parent.waiting_reminder`) — seed
+        the always-available tools — and ``message_parent`` on the turn of a
+        subagent the chat spawned, the one kind that holds it, which no config
+        can tell — gate thinking on the ``user`` channel, seed the turn-zero
+        flashback + any attachments, ingest the reply's parent gist on a fork,
+        then plan the message."""
+        self.waiting_reminder = waiting_reminder(self.channel, cast("int | None", self.metadata.get("tool_call_id")))
         self.active_tools = list(self.config.always_available or [])
         if holds(self.agent):
             self.active_tools.append(MessageParentAbility.NAME)

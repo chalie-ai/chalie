@@ -38,8 +38,10 @@ class Agent(Model):
     def get_table(cls) -> str:
         return "agents"
 
-    #: The ``status`` vocabulary — one non-terminal, three terminal (DB CHECK).
+    #: The ``status`` vocabulary — two non-terminal (running, and waiting for
+    #: its caller's reply), three terminal (DB CHECK).
     RUNNING: ClassVar[str] = "running"
+    WAITING: ClassVar[str] = "waiting"
     DONE: ClassVar[str] = "done"
     CANCELLED: ClassVar[str] = "cancelled"
     FAILED: ClassVar[str] = "failed"
@@ -82,24 +84,31 @@ class Agent(Model):
         return cls.filter("status", cls.RUNNING).order_by("agent_id ASC").get()
 
     @classmethod
+    def active(cls) -> Sequence[Agent]:
+        """Every agent running or waiting for its caller's reply, oldest
+        first."""
+        return cls.filter_in("status", (cls.RUNNING, cls.WAITING)).order_by("agent_id ASC").get()
+
+    @classmethod
     def resume(cls, agent_id: int, turn_id: int) -> bool:
-        """Move an agent that ended done onto its next turn, ``turn_id``, as
-        running again — in the transaction that opens that turn. Returns
-        whether it moved; a running, cancelled or failed agent never does."""
+        """Move an agent that ended done or waiting onto its next turn,
+        ``turn_id``, as running again — in the transaction that opens that
+        turn. Returns whether it moved; a running, cancelled or failed agent
+        never does."""
         moved = (
             cls.filter("agent_id", agent_id)
-            .filter("status", cls.DONE)
+            .filter_in("status", (cls.DONE, cls.WAITING))
             .update(status=cls.RUNNING, turn_id=turn_id)
         )
         return moved > 0
 
     @classmethod
     def end(cls, agent_id: int, turn_id: int, status: str, response_id: int | None) -> bool:
-        """Move a running agent to its terminal ``status`` from its current
-        turn, ``turn_id`` — each turn ends its agent once: a turn that already
-        ended it, or that is no longer its current turn, moves nothing, and
-        only a stop (:meth:`cancel`) ends it again. Returns whether it
-        moved."""
+        """Move a running agent to the ``status`` its current turn,
+        ``turn_id``, ended it with — each turn ends its agent once: a turn
+        that already ended it, or that is no longer its current turn, moves
+        nothing, and only a stop (:meth:`cancel`) ends it again. Returns
+        whether it moved."""
         moved = (
             cls.filter("agent_id", agent_id)
             .filter("turn_id", turn_id)

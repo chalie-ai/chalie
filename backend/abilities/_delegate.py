@@ -244,8 +244,10 @@ def reply_to_caller(channel: str, turn_id: int, answer: str) -> None:
     exactly the turn's answer, or a notice of how it ended: the same text
     :meth:`AgentService.last_output` gives for a subagent cancelled or
     crashed. Nothing is posted for a turn stopped by its caller, nor for one
-    that completed with ``message_parent`` as its last tool call — its
-    question has already reached the chat. A reply carrying an answer also
+    that completed with a delivered ``message_parent`` as its last tool call
+    (:func:`~abilities.message_parent.ended_on_message_parent`) — its
+    question has already reached the chat; one that ended on a refused or
+    failed ``message_parent`` sent nothing, so its answer is posted as usual. A reply carrying an answer also
     hands over that answer's row — this turn's newest settled row, read off
     the turn itself, never the agent's ``response_id``, which its next turn
     overwrites — so the chat turn the reply opens follows it with that
@@ -256,7 +258,7 @@ def reply_to_caller(channel: str, turn_id: int, answer: str) -> None:
     # Lazy: the turn-execution service imports the channel configs, which
     # import this module (through the abilities they pin or load); so do the
     # controller and message_parent.
-    from abilities.message_parent import MessageParentAbility, holds  # noqa: PLC0415
+    from abilities.message_parent import ended_on_message_parent, holds  # noqa: PLC0415
     from configs.channels import UserConfig  # noqa: PLC0415
     from controllers.message_processor import MessageProcessor  # noqa: PLC0415
     from services.turn_execution_service import STOP_REASON_PARENT_STOPPED  # noqa: PLC0415
@@ -274,8 +276,7 @@ def reply_to_caller(channel: str, turn_id: int, answer: str) -> None:
         raise RuntimeError(f"{name} #{agent.agent_id} turn {turn_id} ended without a closed turn execution")
     response_id: int | None = None
     if execution.state == TurnExecution.COMPLETED:
-        calls = ToolCall.by_turn(channel, turn_id)
-        if calls and calls[-1].tool_name == MessageParentAbility.NAME:
+        if ended_on_message_parent(channel, turn_id):
             logger.info("[DELEGATE] %s #%d turn %d: ended on a message to its caller, no reply",
                         name, agent.agent_id, turn_id)
             return

@@ -552,11 +552,16 @@ CREATE TABLE IF NOT EXISTS plan_tasks (
 -- opens on it.
 -- spawned_by_channel / spawned_in_turn name the caller's turn; prompt is the
 -- plain task it wrote. status leaves 'running' once per turn, when that turn
--- ends; a message to a 'done' agent opens its next turn and sets it running
--- again. response_id is the row its latest turn ended on: the final reply
--- when that turn ended 'done', the turn's last row when it ended 'cancelled'
--- or 'failed'. The retention sweep may delete that row; the agent is still
--- kept, so its reference is cleared rather than the agent deleted with it.
+-- ends: 'waiting' when it completed with a delivered message_parent as its
+-- last tool call (it asked its caller and stopped for the reply), 'done'
+-- when it completed any other way, 'cancelled' or 'failed' when it was stopped or
+-- crashed. An agent leaves 'waiting' when a message to it opens its next
+-- turn, which sets it running again, as it does for a 'done' one; a stop
+-- ends it 'cancelled' from any status. response_id is the row its latest
+-- turn ended on: the final reply when that turn ended 'done' or 'waiting',
+-- the turn's last row when it ended 'cancelled' or 'failed'. The retention
+-- sweep may delete that row; the agent is still kept, so its reference is
+-- cleared rather than the agent deleted with it.
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS agents (
     agent_id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -565,7 +570,7 @@ CREATE TABLE IF NOT EXISTS agents (
     type               TEXT    NOT NULL,
     prompt             TEXT    NOT NULL,
     status             TEXT    NOT NULL DEFAULT 'running'
-                       CHECK (status IN ('running', 'done', 'cancelled', 'failed')),
+                       CHECK (status IN ('running', 'waiting', 'done', 'cancelled', 'failed')),
     response_id        INTEGER REFERENCES transcript(id) ON DELETE SET NULL,
     turn_id            INTEGER NOT NULL
 );

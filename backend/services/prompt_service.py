@@ -37,7 +37,7 @@ from abilities._delegate import replies_late, reply_follow_up
 from abilities._registry import AbilityRegistry
 from abilities.code_agent import CodeAgentAbility
 from abilities.find_tools import FindToolsAbility
-from abilities.message_parent import parent_nudge, spawn_message, waiting_notice
+from abilities.message_parent import spawn_message
 from abilities.pim import PimAbility
 from abilities.plan import PlanAbility, plans
 from abilities.recall import Recall
@@ -344,15 +344,14 @@ class PromptService:
 
     # ── shared assembly fragments ────────────────────────────────────────────
 
-    def previous_messages(self, drop_oldest: int = 0, *, nudges: bool = False) -> str:
+    def previous_messages(self, drop_oldest: int = 0) -> str:
         """The ``## Previous Messages`` block body (no header): this turn's
         history view (``self.mp.transcript_service.read()``), each row formatted
         ``[local-ts] Role: content``. ``drop_oldest`` lets a caller (e.g. the history compactor, shrinking its
         own input) drop the N oldest rows — a genuine external count, not
-        mp-reachable. ``nudges`` follows a subagent's message that still waits
-        with the parent nudge (:func:`parent_nudge`): only the chat's own
-        prompt asks for it, since every other reader — the compactor, the
-        memory step, memory hygiene — writes what it reads into stored prose."""
+        mp-reachable. Each row is its stored content alone: the compactor, the
+        memory step and memory hygiene write what they read here into stored
+        prose, so nothing worked out per turn rides it."""
         rows = self.mp.transcript_service.read()[drop_oldest:]
         if not rows:
             return ""
@@ -360,8 +359,7 @@ class PromptService:
         for row in rows:
             fields = row.to_dict()
             raw_role = cast("str", fields.get("role") or "unknown")
-            nudge = parent_nudge(row) if nudges else ""
-            content = (cast("str", fields.get("content") or "") + nudge).replace("\n", " ").strip()
+            content = cast("str", fields.get("content") or "").replace("\n", " ").strip()
             ts = self._format_ts(cast("str | None", fields.get("created_at")))
             role_label = speaker(row) or ("Assistant" if raw_role == "assistant" else raw_role)
             lines.append(f"[{ts}] {role_label}: {content}")
@@ -423,9 +421,9 @@ class PromptService:
         follows that call's reply and tool results. A message taken in before
         a compaction still renders — the compaction folds earlier turns, never
         this exchange — and one not yet taken in does not. A joined message
-        the person sent is followed by the line naming every subagent still
-        waiting for a reply (:func:`waiting_notice`). With nothing joined the
-        trail is unchanged."""
+        renders its own text alone: the waiting reminder follows only this
+        turn's input line (:meth:`_user_prompt`). With nothing joined the trail
+        is unchanged."""
         calls = self.mp.tool_call_service.by_exchange()
         last_compaction = max(
             (cast("int", call.id) for call in calls if call.tool_name == "chat_history_compactor"),
@@ -465,13 +463,10 @@ class PromptService:
 
         def joined_after(tid: int) -> None:
             lead_in(tid)
-            for row in joins[tid]:
-                said = speaker(row)
-                waiting = waiting_notice(self.mp.channel) if said is None else ""
-                parts.append(
-                    f"[{self._format_ts(row.created_at)}] {said or 'user'}: "
-                    f"{row.content}{parent_nudge(row)}{waiting}"
-                )
+            parts.extend(
+                f"[{self._format_ts(row.created_at)}] {speaker(row) or 'user'}: {row.content}"
+                for row in joins[tid]
+            )
 
         # Traces anchored to rows that never got a call (an empty-completion
         # steer at the exchange input row) precede every call-bearing anchor
@@ -545,11 +540,11 @@ class PromptService:
         ``channel`` when unset (§2.5 — the one declarative routing field)."""
         return self.mp.config.prompt_channel or self.mp.config.channel
 
-    def _prev(self, *, nudges: bool = False) -> str:
+    def _prev(self) -> str:
         """:meth:`previous_messages`, guarded — a history-render hiccup must
         never crash the turn (the pre-rewrite builders each wrapped this)."""
         try:
-            return self.previous_messages(nudges=nudges)
+            return self.previous_messages()
         except Exception as exc:  # noqa: BLE001 — a history-render hiccup must not crash the turn
             logger.debug("[PromptService] previous_messages failed: %s", exc)
             return ""
@@ -603,16 +598,18 @@ class PromptService:
         the heartbeat never rides the user message — its locale line sits at
         the bottom of the system prompt. A delegate reply carrying an answer
         is followed by its tool's follow-up block, built from the answer row
-        this turn holds in its metadata (:func:`reply_follow_up`); a message
-        the person sent, by the line naming every subagent still waiting for
-        a reply (:func:`waiting_notice`)."""
+        this turn holds in its metadata (:func:`reply_follow_up`). On every
+        step the input line, whoever sent it, is followed by the waiting
+        reminder this turn worked out as it opened (``mp.waiting_reminder``,
+        :func:`~abilities.message_parent.waiting_reminder`) when it names any
+        subagent — read here alone, never stored."""
         parts: list[str] = []
 
         user_def = self.user_definition()
         if user_def:
             parts.append(user_def)
 
-        prev = self._prev(nudges=True)
+        prev = self._prev()
         if prev:
             parts.append(f"## Previous Messages\n{prev}")
 
@@ -625,12 +622,12 @@ class PromptService:
         anchor = self.mp.transcript_service.anchor_row()
         response_id = cast("int | None", self.mp.metadata.get("response_id"))
         label, follow_up = (
-            (speaker(anchor), reply_follow_up(anchor, response_id) + parent_nudge(anchor))
+            (speaker(anchor), reply_follow_up(anchor, response_id))
             if anchor is not None else (None, "")
         )
-        if label is None:
-            follow_up += waiting_notice(self.mp.channel)
         parts.append(f"[{self._input_stamp(anchor)}] {label or 'user'}: {self._task()}{follow_up}")
+        if self.mp.waiting_reminder:
+            parts.append(self.mp.waiting_reminder)
 
         trail = self._trail()
         if trail:

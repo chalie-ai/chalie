@@ -6,32 +6,39 @@ message, and the chat's reply opens the subagent's next turn.
   and ``message_parent`` is offered to it.
 * The call returns "Message sent." at once. On every later step of that turn
   the subagent reads that it is invoked again once the reply lands — never
-  stored — and the turn, ending on that call, posts nothing back. The message
-  opens a turn on the chat, labelled for the chat's model as a message from
-  that subagent and followed by a nudge to reply, with ``message_subagent``
+  stored — and the turn, ending on that call, posts nothing back and leaves
+  the subagent waiting. The message opens a turn on the chat, labelled for the
+  chat's model as a message from that subagent, with ``message_subagent``
   offered on that turn. The chat's reply opens the subagent's next turn on its
   own channel, which reads its earlier turn and the reply bare; its answer
-  comes back to the chat on a turn of its own. Once replied to, the nudge is
-  gone. What the person sees — the stored row, the thread read over HTTP and
-  every websocket frame — carries only the message's text and which subagent
-  sent it.
+  comes back to the chat on a turn of its own, and the subagent is done. What
+  the person sees — the stored row, the thread read over HTTP and every
+  websocket frame — carries only the message's text and which subagent sent
+  it.
 * A message sent while the chat's turn is still working queues behind it and
-  opens the chat's next turn once that turn ends; that turn reads it with the
-  nudge and is offered ``message_subagent``.
-* Stopping the subagent that waits for a reply — by the chat's
-  ``stop_subagent`` or by the person's stop of its turn — ends it cancelled;
-  the nudge is gone from the chat's next read. The chat's own stop sends
-  nothing back; the person's stop tells the chat the session was cancelled.
+  opens the chat's next turn once that turn ends; that turn reads it labelled
+  and is offered ``message_subagent``.
+* Any other chat turn that opens while the subagent waits reads the reminder
+  naming it right after its input line, on every step. The reminder is worked
+  out once as the turn opens, so a subagent the chat replies to mid-turn stays
+  named until that turn ends. Nothing keeps it: not the person's rows, the
+  thread read over HTTP, any frame, the chat's history or what the memory
+  step reads.
+* Stopping the subagent that asked — by the chat's ``stop_subagent`` or by the
+  person's stop of its turn — ends it cancelled, and the next turn's reminder
+  no longer names it. The chat's own stop sends nothing back; the person's
+  stop tells the chat the session was cancelled.
 * The person's stop of the chat turn the message opened leaves the subagent
-  waiting: it is still named after the person's next message. Once the chat
-  has replied in that turn, the same stop also stops the subagent turn the
-  reply opened, which ends cancelled with its caller and sends nothing back.
+  waiting: the person's next message reads the reminder naming it. Once the
+  chat has replied in that turn, the same stop also stops the subagent turn
+  the reply opened, which ends cancelled with its caller and sends nothing
+  back.
 * A ``web_search`` or a subtask a scheduled task or an outside agent spawned
   is waited for, so it holds no ``message_parent``: it reads that it should finish, is not offered
   the tool, and a call to it is refused as an unknown tool and posts nothing.
 * A restart while the subagent posts its message leaves it, and the chat turn
   its message opened, for the next boot: the sweep ends both, the chat is told
-  the session crashed, and no nudge is left behind.
+  the session crashed, and no reminder names the subagent.
 
 Drives real turns against the real, fully migrated SQLite DB, observed through
 the real socket registry and read back through the real Flask app. The only
@@ -53,7 +60,7 @@ from flask.testing import FlaskClient
 
 from abilities.code_agent import CodeAgentAbility
 from abilities.find_tools import FindToolsAbility
-from abilities.message_parent import PARENT_NUDGE, WAITING_NOTICE, MessageParentAbility
+from abilities.message_parent import WAITING_REMINDER, MessageParentAbility
 from abilities.message_subagent import MessageSubagentAbility
 from abilities.stop_subagent import StopSubagentAbility
 from abilities.subtask import SubtaskAbility
@@ -196,17 +203,27 @@ def _the_one(reads: list[str], said: str) -> int:
     return found[0]
 
 
+def _reminder(*agents: str) -> str:
+    """The waiting reminder naming *agents* (``"web_search #3"``), in order."""
+    return WAITING_REMINDER.format(agents=", ".join(agents))
+
+
+def _reminds(read: str) -> bool:
+    """Whether *read* carries the waiting reminder, whoever it names."""
+    return WAITING_REMINDER.split("{agents}")[0] in read
+
+
 def test_a_subagent_asks_the_chat_and_the_chats_reply_opens_its_next_turn(
     authed_client: tuple[FlaskClient, sqlite3.Connection, object],
 ) -> None:
     """The chat spawns a ``web_search`` and ends its turn. The search asks a
     question: the call returns at once, the search reads that it is invoked
-    again once the reply lands, and its turn ends posting nothing back. The
-    question opens a turn on the chat labelled as its message and nudging the
-    chat to reply; the chat replies with ``message_subagent``, offered on that
-    turn. The reply opens the search's next turn, which reads its first turn
-    and the reply bare and answers; the answer comes back to the chat on a
-    turn of its own."""
+    again once the reply lands, and its turn ends posting nothing back, the
+    search waiting. The question opens a turn on the chat labelled as its
+    message; the chat replies with ``message_subagent``, offered on that turn.
+    The reply opens the search's next turn, which reads its first turn and the
+    reply bare and answers; the answer comes back to the chat on a turn of its
+    own, and the search is done."""
     client, db, _store = authed_client
     asking = Held(_ask())
     seen: dict[str, int] = {}
@@ -259,23 +276,24 @@ def test_a_subagent_asks_the_chat_and_the_chats_reply_opens_its_next_turn(
     assert "Message from Chalie" not in read[2] and "You have been spawned" not in read[2]
     agent = cast("Agent", Agent.by_id(n))
     assert (agent.status, agent.turn_id) == (Agent.DONE, again.turn_id)
-    assert _statuses(listener.frames, n) == [Agent.RUNNING, Agent.DONE, Agent.RUNNING, Agent.DONE]
+    assert _statuses(listener.frames, n) == [Agent.RUNNING, Agent.WAITING, Agent.RUNNING, Agent.DONE]
 
     # The message opened a turn of its own on the chat, carrying its own call.
     [message] = replies(db, cast("int", asked["id"]))
     assert (message["content"], message["joined"]) == (_QUESTION, 0)
     assert message["turn_id"] != chat.turn_id
-    # The chat's model read it labelled, with the nudge, and was offered the
-    # tool to reply on that turn — never on the turn that spawned it.
+    # The chat's model read it labelled, and was offered the tool to reply on
+    # that turn — never on the turn that spawned it.
     chat_read = provider.read("chat")
     offered = provider.offered("chat")
     assert len(chat_read) == 5
     labelled = f"Message from {_WEB} #{n}: {_QUESTION}"
-    assert f"{labelled}\n{PARENT_NUDGE}" in chat_read[2]
+    assert labelled in chat_read[2]
     assert [MessageSubagentAbility.NAME in tools for tools in offered] == [False, False, True, True, False]
-    # Replied to, the label stays and the nudge is gone.
     assert labelled in chat_read[3] and _sent_to(n) in chat_read[3]
-    assert sum(PARENT_NUDGE in r for r in chat_read) == 1
+    # No read carries the waiting reminder: the only chat turn that could
+    # begin while the search waited is the one its own message opened.
+    assert not any(_reminds(r) for r in chat_read)
 
     # What the person sees carries only its text and which subagent sent it.
     opener = messages(block(client, f"/api/threads/{message['turn_id']}"))[0]
@@ -283,7 +301,7 @@ def test_a_subagent_asks_the_chat_and_the_chats_reply_opens_its_next_turn(
     assert opener["reply_from"] == {"tool_name": _WEB, "summary": _SUMMARY, "kind": "message"}
     assert opener.get("speaker") is None
     frames = json.dumps(listener.frames)
-    assert PARENT_NUDGE not in frames and f"Message from {_WEB}" not in frames
+    assert f"Message from {_WEB}" not in frames
     assert _FOLLOW_UP not in frames
 
     # Only the second turn's answer came back, on a chat turn of its own: the
@@ -330,9 +348,10 @@ def test_every_kind_of_subagent_the_chat_spawns_reads_that_it_may_message_the_ch
 def test_a_message_sent_while_the_chats_turn_works_queues_and_opens_its_next_turn(db: sqlite3.Connection) -> None:
     """The search asks while the chat's turn is still working, so the message
     waits in the chat's queue and opens the chat's next turn once that turn
-    ends. That turn reads it with the nudge and is offered
-    ``message_subagent``; the chat replies, the nudge is gone, and the
-    search's answer comes back on a turn of its own."""
+    ends. That turn reads it labelled and is offered ``message_subagent``; the
+    chat replies, and the search's answer comes back on a turn of its own.
+    Whether the reply lands before or after the search's asking turn ends, the
+    search goes from waiting back to running, and ends done."""
     seen: dict[str, int] = {}
     asked_for = threading.Event()
     asked = threading.Event()
@@ -385,24 +404,26 @@ def test_a_message_sent_while_the_chats_turn_works_queues_and_opens_its_next_tur
     assert len(chat_read) == 5
     labelled = f"Message from {_WEB} #{n}: {_QUESTION}"
     assert all(labelled not in r for r in chat_read[:2])
-    assert f"{labelled}\n{PARENT_NUDGE}" in chat_read[2]
+    assert labelled in chat_read[2]
     assert [MessageSubagentAbility.NAME in tools for tools in offered] == [False, False, True, True, False]
-    assert labelled in chat_read[3] and PARENT_NUDGE not in chat_read[3]
+    assert labelled in chat_read[3]
     assert f"Reply from {_WEB} #{n}: {_ANSWER}" in chat_read[4]
-    assert sum(PARENT_NUDGE in r for r in chat_read) == 1
+    assert not any(_reminds(r) for r in chat_read)
     assert cast("Agent", Agent.by_id(n)).status == Agent.DONE
+    assert _statuses(listener.frames, n) == [Agent.RUNNING, Agent.WAITING, Agent.RUNNING, Agent.DONE]
 
 
 def test_stopping_a_subagent_that_waits_for_a_reply_ends_it_and_sends_nothing_back(
     db: sqlite3.Connection, real_memory_step: None,
 ) -> None:
-    """The search asks and its turn ends; the chat's turn its message opened
-    ends without a reply, so the search still waits and the chat's next turn
-    reads the message, nudge and all, among its previous messages. The memory
-    step that turn's settle ran while the search waited read the message but
-    never the nudge, since what it reads goes into stored prose. The chat's
-    next turn stops the search: it ends cancelled, nothing is sent back, and
-    the chat's next read carries no nudge."""
+    """The search asks and its turn ends waiting; the chat's turn its message
+    opened ends without a reply, so the search still waits. The person's next
+    message opens a turn that reads the message bare among its previous
+    messages and the reminder naming the search after its input line, on
+    every step — the step after the stop too, since the turn began with the
+    search waiting. That turn stops the search: it ends cancelled and nothing
+    is sent back. The memory step read the message but never the reminder,
+    since what it reads goes into stored prose."""
     asking = Held(_ask())
     unanswered = Held(text("Let me think about that."))
     unanswered.gate.set()
@@ -441,32 +462,36 @@ def test_stopping_a_subagent_that_waits_for_a_reply_ends_it_and_sends_nothing_ba
     assert _answer(asked) == ("success", None, _SENT)
 
     chat_read = provider.read("chat")
-    # The chat's next turn read the unanswered message, nudge and all.
-    assert f"Message from {_WEB} #{n}: {_QUESTION} {PARENT_NUDGE}" in chat_read[3]
-    # Stopped, the message stays and the nudge is gone.
-    assert f"Message from {_WEB} #{n}: {_QUESTION}" in chat_read[5]
-    assert PARENT_NUDGE not in chat_read[5]
+    assert len(chat_read) == 6
+    # The stop turn read the unanswered message bare among its previous
+    # messages, and on each of its three steps the reminder after its input.
+    assert f"Message from {_WEB} #{n}: {_QUESTION}\n" in chat_read[3]
+    assert [i for i, r in enumerate(chat_read) if f"user: stop the search\n{_reminder(f'{_WEB} #{n}')}" in r] == [3, 4, 5]
+    assert [i for i, r in enumerate(chat_read) if _reminds(r)] == [3, 4, 5]
     remembered = provider.read("background")
     assert any(_QUESTION in r for r in remembered)
-    assert all(PARENT_NUDGE not in r for r in remembered)
+    assert not any(_reminds(r) for r in remembered)
 
     assert len(provider.read(_WEB)) == 2
     assert cast("Agent", Agent.by_id(n)).status == Agent.CANCELLED
-    assert _statuses(listener.frames, n) == [Agent.RUNNING, Agent.DONE, Agent.CANCELLED]
+    assert _statuses(listener.frames, n) == [Agent.RUNNING, Agent.WAITING, Agent.CANCELLED]
     assert execution(searcher, turn).state == TurnExecution.COMPLETED
     assert replies(db, cast("int", spawn["id"])) == []
 
 
-def test_a_message_the_person_sends_while_a_subagent_waits_is_followed_by_the_waiting_line(
+def test_every_step_of_a_turn_that_began_while_a_subagent_waits_reads_the_reminder_and_nothing_keeps_it(
     authed_client: tuple[FlaskClient, sqlite3.Connection, object], real_memory_step: None,
 ) -> None:
     """The search asks and the chat's turn its message opened ends without a
-    reply, so the search still waits. The person then says "Hi", and adds a
-    message that joins that turn while it works: the chat's model reads each
-    followed by the line naming the waiting search, while the stored rows, the
-    thread read over HTTP, every websocket frame and what the memory step
-    reads keep only the person's own text. Before the search asked, and once
-    it is stopped, the person's message reads with no line."""
+    reply, so the search waits. The person then says "Hi", and adds a message
+    that joins that turn while it works: both of the turn's steps read "Hi"
+    followed by the reminder naming the search, once — never after the joined
+    message — while the stored rows, the thread read over HTTP, every
+    websocket frame, the chat's history and what the memory step reads keep
+    only the person's own text. The next turn, which stops the search, reads
+    the reminder on every step, the one after the stop too; the person's
+    message after that reads none, as did every turn before the search
+    waited."""
     client, db, _store = authed_client
     asking = Held(_ask())
     unanswered = Held(text("Let me think about that."))
@@ -507,25 +532,21 @@ def test_a_message_the_person_sends_while_a_subagent_waits_is_followed_by_the_wa
 
     assert asking.opened and provider.unused() == {}
     n = seen["n"]
-    line = WAITING_NOTICE.format(agents=f"{_WEB} #{n}")
+    reminder = _reminder(f"{_WEB} #{n}")
     chat_read = provider.read("chat")
-    # Nobody waited yet when the person asked for the news.
-    assert "Subagents waiting" not in chat_read[0]
-    # "Hi" reads followed by the line, ending the person's message; only the
-    # turn's own blocks, such as recalled memory, come after it. The message
-    # that joined the turn reads followed by it too, on the turn's next step.
-    said_hi, read_joined = [i for i, r in enumerate(chat_read) if f"user: Hi\n{line}\n" in r]
-    assert chat_read[said_hi].count(line) == 1
-    assert _the_one(chat_read, f"user: one more thing\n{line}") == read_joined
-    assert chat_read[read_joined].count(line) == 2
-    # Every read of the stop turn's message carries it until the stop lands,
-    # and none after; the person's next message reads with no line.
+    # Both steps of the "Hi" turn read the reminder right after "Hi", and only
+    # there: the second step reads the message that joined it bare.
+    said_hi, read_joined = [i for i, r in enumerate(chat_read) if f"user: Hi\n{reminder}\n" in r]
+    assert "one more thing" not in chat_read[said_hi] and "user: one more thing" in chat_read[read_joined]
+    assert all(r.count(reminder) <= 1 for r in chat_read)
+    # From "Hi" through the stop turn's step after the stop, every read
+    # carries it; none before the search waited, and not the person's next
+    # message once the search is stopped.
     stopped = _the_one(chat_read, f"Subagent {_WEB} #{n} stopped.")
-    waited = [i for i, r in enumerate(chat_read) if "Subagents waiting" in r]
-    assert waited == list(range(said_hi, stopped))
-    assert chat_read[stopped - 1].count(f"user: stop the search\n{line}\n") == 1
+    assert [i for i, r in enumerate(chat_read) if _reminds(r)] == list(range(said_hi, stopped + 1))
+    assert f"user: stop the search\n{reminder}" in chat_read[stopped]
     hi_again = _the_one(chat_read, "user: Hi again")
-    assert "Subagents waiting" not in chat_read[hi_again]
+    assert hi_again == stopped + 1 and not _reminds(chat_read[hi_again])
 
     # What the person sees, and what the memory step stores, keep only "Hi".
     assert [r["content"] for r in db.execute(
@@ -534,16 +555,21 @@ def test_a_message_the_person_sends_while_a_subagent_waits_is_followed_by_the_wa
     )] == ["Hi", "one more thing"]
     thread = messages(block(client, f"/api/threads/{hi.turn_id}"))
     assert [m["content"] for m in thread if m["role"] == "user"] == ["Hi", "one more thing"]
-    assert "Subagents waiting" not in json.dumps(listener.frames)
-    assert all("Subagents waiting" not in r for r in provider.read("background"))
+    assert not _reminds(json.dumps(listener.frames))
+    assert not any(_reminds(r) for r in provider.read("background"))
     assert cast("Agent", Agent.by_id(n)).status == Agent.CANCELLED
+    assert _statuses(listener.frames, n) == [Agent.RUNNING, Agent.WAITING, Agent.CANCELLED]
 
 
-def test_the_waiting_line_is_gone_from_the_step_after_the_chat_replies(db: sqlite3.Connection) -> None:
-    """The search asks and still waits. The person tells the chat what to
-    answer: that message reads followed by the line, the chat replies with
-    ``message_subagent``, and its very next step reads no line — the reply has
-    opened the search's next turn. The search then answers with the reply."""
+def test_a_subagent_the_chat_replies_to_mid_turn_stays_in_the_reminder_until_the_turn_ends(
+    db: sqlite3.Connection,
+) -> None:
+    """The search asks and waits. The person tells the chat what to answer:
+    that message reads followed by the reminder, and the chat replies with
+    ``message_subagent``, which opens the search's next turn at once and moves
+    it to running. The turn's next step still reads the reminder — it names
+    who waited when the turn began. The search then answers with the reply
+    and is done, and the chat turn its answer opens reads no reminder."""
     asking = Held(_ask())
     unanswered = Held(text("Let me think about that."))
     unanswered.gate.set()
@@ -553,24 +579,31 @@ def test_the_waiting_line_is_gone_from_the_step_after_the_chat_replies(db: sqlit
         web_search=[asking, text(_WAITS), text(_ANSWER)],
     )
 
-    with patched(provider):
+    with listening() as listener, patched(provider):
         begin(UserConfig(), "find the bridge news").result()
         asking.gate.set()
         wait(unanswered.entered, "the chat's turn the message opened")
         cast("threading.Thread", unanswered.thread).join(timeout=WAIT_S)
         cast("threading.Thread", asking.thread).join(timeout=WAIT_S)
+        n = _the_search().agent_id
+        assert cast("Agent", Agent.by_id(n)).status == Agent.WAITING
         begin(UserConfig(), "tell it the old stone bridge").result()
         drain()
 
     assert asking.opened and provider.unused() == {}
-    n = seen["n"]
+    assert seen["n"] == n
     chat_read = provider.read("chat")
-    told = _the_one(chat_read, f"user: tell it the old stone bridge\n{WAITING_NOTICE.format(agents=f'{_WEB} #{n}')}\n")
-    assert [i for i, r in enumerate(chat_read) if "Subagents waiting" in r] == [told]
-    assert _sent_to(n) in chat_read[told + 1]
+    told = [
+        i for i, r in enumerate(chat_read)
+        if f"user: tell it the old stone bridge\n{_reminder(f'{_WEB} #{n}')}\n" in r
+    ]
+    assert len(told) == 2
+    assert [i for i, r in enumerate(chat_read) if _reminds(r)] == told
+    assert _sent_to(n) in chat_read[told[1]]
     [spawn] = calls_of(db, _WEB)
     assert [r["content"] for r in replies(db, cast("int", spawn["id"]))] == [_ANSWER]
     assert cast("Agent", Agent.by_id(n)).status == Agent.DONE
+    assert _statuses(listener.frames, n) == [Agent.RUNNING, Agent.WAITING, Agent.RUNNING, Agent.DONE]
 
 
 def test_the_persons_stop_of_the_waiting_subagent_tells_the_chat_it_was_cancelled(
@@ -578,8 +611,9 @@ def test_the_persons_stop_of_the_waiting_subagent_tells_the_chat_it_was_cancelle
 ) -> None:
     """While the chat's turn the message opened is working, and the search's
     turn is still on its step after asking, the person stops the search. It
-    ends cancelled, and the chat is told on its next turn that the session
-    was cancelled, with no nudge."""
+    ends cancelled — not waiting, though its last call was the message — and
+    the chat is told on its next turn that the session was cancelled; no
+    turn's reminder names it."""
     client, db, _store = authed_client
     asking = Held(_ask())
     after_asking = Held(text(_WAITS))
@@ -589,7 +623,7 @@ def test_the_persons_stop_of_the_waiting_subagent_tells_the_chat_it_was_cancelle
         web_search=[asking, after_asking],
     )
 
-    with listening(), patched(provider):
+    with listening() as listener, patched(provider):
         chat = begin(UserConfig(), "find the bridge news")
         chat.result()
         asking.gate.set()
@@ -609,6 +643,7 @@ def test_the_persons_stop_of_the_waiting_subagent_tells_the_chat_it_was_cancelle
     assert _answer(asked) == ("success", None, _SENT)
     assert len(provider.read(_WEB)) == 2
     assert cast("Agent", Agent.by_id(n)).status == Agent.CANCELLED
+    assert _statuses(listener.frames, n) == [Agent.RUNNING, Agent.CANCELLED]
     assert execution(searcher, turn).state == TurnExecution.CANCELLED
 
     [message] = replies(db, cast("int", asked["id"]))
@@ -617,9 +652,9 @@ def test_the_persons_stop_of_the_waiting_subagent_tells_the_chat_it_was_cancelle
     assert told["turn_id"] > message["turn_id"]
     chat_read = provider.read("chat")
     assert len(chat_read) == 4
-    assert f"Message from {_WEB} #{n}: {_QUESTION}\n{PARENT_NUDGE}" in chat_read[2]
+    assert f"Message from {_WEB} #{n}: {_QUESTION}" in chat_read[2]
     assert f"Reply from {_WEB} #{n}: {CANCELLED_TEXT}" in chat_read[3]
-    assert PARENT_NUDGE not in chat_read[3]
+    assert not any(_reminds(r) for r in chat_read)
 
 
 def test_the_persons_stop_of_the_chat_turn_a_message_opened_leaves_the_subagent_waiting(
@@ -627,9 +662,10 @@ def test_the_persons_stop_of_the_chat_turn_a_message_opened_leaves_the_subagent_
 ) -> None:
     """The chat's turn has ended when the search asks, so its message opens a
     chat turn of its own, and the search's turn ends. While that chat turn
-    works, the person stops it. The search is left alone: it stays done,
+    works, the person stops it. The search is left alone: it stays waiting,
     nothing is sent back, and the person's next message reads followed by the
-    line naming it as waiting."""
+    reminder naming it. The stopped turn, which its message opened, read no
+    reminder."""
     client, db, _store = authed_client
     asking = Held(_ask())
     reading = Held(text("Let me check."))
@@ -660,14 +696,14 @@ def test_the_persons_stop_of_the_chat_turn_a_message_opened_leaves_the_subagent_
     searcher, turn = child(db, _WEB_CHANNEL, cast("int", spawn["id"]))
     n = agent_number(searcher)
     assert _answer(asked) == ("success", None, _SENT)
-    assert cast("Agent", Agent.by_id(n)).status == Agent.DONE
-    assert _statuses(listener.frames, n) == [Agent.RUNNING, Agent.DONE]
+    assert cast("Agent", Agent.by_id(n)).status == Agent.WAITING
+    assert _statuses(listener.frames, n) == [Agent.RUNNING, Agent.WAITING]
     assert execution(searcher, turn).state == TurnExecution.COMPLETED
     assert replies(db, cast("int", spawn["id"])) == []
     chat_read = provider.read("chat")
     assert len(chat_read) == 4
-    assert f"Message from {_WEB} #{n}: {_QUESTION}\n{PARENT_NUDGE}" in chat_read[2]
-    assert f"user: Hi\n{WAITING_NOTICE.format(agents=f'{_WEB} #{n}')}" in chat_read[3]
+    assert f"Message from {_WEB} #{n}: {_QUESTION}" in chat_read[2] and not _reminds(chat_read[2])
+    assert f"user: Hi\n{_reminder(f'{_WEB} #{n}')}" in chat_read[3]
 
 
 def test_the_persons_stop_of_the_chat_turn_after_it_replied_stops_the_turn_its_reply_opened(
@@ -718,7 +754,7 @@ def test_the_persons_stop_of_the_chat_turn_after_it_replied_stops_the_turn_its_r
     ended = execution(searcher, again.turn_id)
     assert (ended.state, ended.stop_reason) == (TurnExecution.CANCELLED, STOP_REASON_PARENT_STOPPED)
     assert cast("Agent", Agent.by_id(n)).status == Agent.CANCELLED
-    assert _statuses(listener.frames, n) == [Agent.RUNNING, Agent.DONE, Agent.RUNNING, Agent.CANCELLED]
+    assert _statuses(listener.frames, n) == [Agent.RUNNING, Agent.WAITING, Agent.RUNNING, Agent.CANCELLED]
     assert replies(db, cast("int", spawn["id"])) == []
 
 
@@ -776,14 +812,14 @@ def test_a_subagent_its_caller_waits_for_holds_no_message_parent(
     assert agent.status == Agent.DONE
 
 
-def test_a_restart_while_a_subagent_posts_its_message_leaves_no_nudge_and_tells_the_chat(
+def test_a_restart_while_a_subagent_posts_its_message_leaves_no_reminder_and_tells_the_chat(
     db: sqlite3.Connection,
 ) -> None:
     """The process dies the moment the search's message has opened a turn on
     the chat, before that turn runs. The next boot's backfill, sweep and
     notices end the search failed and the chat's turn crashed, close the
-    ``message_parent`` call, and tell the chat the session crashed; the
-    chat's read of the message carries no nudge."""
+    ``message_parent`` call, and tell the chat the session crashed; no read
+    of the chat carries the reminder, since the search failed."""
     asking = Held(_ask())
     died = threading.Event()
 
@@ -836,4 +872,4 @@ def test_a_restart_while_a_subagent_posts_its_message_leaves_no_nudge_and_tells_
     chat_read = provider.read("chat")
     assert len(chat_read) == 3
     assert f"Reply from {_WEB} #{n}: {CRASHED_TEXT}" in chat_read[2]
-    assert all(PARENT_NUDGE not in r for r in chat_read)
+    assert not any(_reminds(r) for r in chat_read)

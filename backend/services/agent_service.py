@@ -9,10 +9,10 @@
 """AgentService — an ``agents`` row's end, and the plain data a surface draws
 it from.
 
-Every way a subagent's turn ends — it answers, it is stopped, it crashes, or
-the process died under it — closes the agent in the transaction that closes
-that turn, through :meth:`end`, or at boot through :meth:`fail_running`, and
-keeps the row the turn ended on. A stop ends one cancelled whatever its
+Every way a subagent's turn ends — it answers, it asks its caller and stops for
+the reply, it is stopped, it crashes, or the process died under it — closes the
+agent in the transaction that closes that turn, through :meth:`end`, or at boot
+through :meth:`fail_running`, and keeps the row the turn ended on. A stop ends one cancelled whatever its
 status: a running one with its stopped turn, through :meth:`end`, one that
 already ended through :meth:`cancel`. :meth:`last_output` is what the agent last
 gave, worked out on read; :meth:`archived` is whether an ended one is past
@@ -58,13 +58,23 @@ class AgentService:
     @classmethod
     def end(cls, channel: str, turn_id: int, state: str, response_id: int | None = None) -> Agent | None:
         """Close the agent whose current turn is ``turn_id`` on ``channel``, to
-        the status the turn's ending ``state`` maps to, keeping
-        ``response_id`` — the row the turn ended on: its final reply when it
-        answered, its last row when it was stopped or crashed. ``None`` when
+        the status the turn's ending ``state`` maps to — waiting rather than
+        done when it completed on a message to its caller
+        (:func:`~abilities.message_parent.ended_on_message_parent`) — keeping
+        ``response_id``, the row the turn ended on: its final reply when it
+        completed, its last row when it was stopped or crashed. ``None`` when
         nothing changed: the turn is not a subagent's current one, or its
         agent already ended — each turn ends its agent once."""
+        # Lazy: message_parent imports this module.
+        from abilities.message_parent import ended_on_message_parent  # noqa: PLC0415
+
         agent = cls.on_turn(channel, turn_id)
-        if agent is None or not Agent.end(agent.agent_id, turn_id, cls._STATUS[state], response_id):
+        if agent is None:
+            return None
+        status = cls._STATUS[state]
+        if state == TurnExecution.COMPLETED and ended_on_message_parent(channel, turn_id):
+            status = Agent.WAITING
+        if not Agent.end(agent.agent_id, turn_id, status, response_id):
             return None
         return Agent.by_id(agent.agent_id)
 
@@ -121,8 +131,9 @@ class AgentService:
 
     @staticmethod
     def archived(agent: Agent) -> bool:
-        """Whether ``agent`` is archived: never while it runs; once it ended,
-        when the row its latest turn ended on is gone — never kept (a NULL
+        """Whether ``agent`` is archived: never while it runs; once its latest
+        turn ended — waiting for a reply as much as done, cancelled or failed —
+        when the row that turn ended on is gone — never kept (a NULL
         ``response_id`` matches no row) or deleted — or is older than
         :data:`ARCHIVE_AFTER`. One primary-key read."""
         if agent.status == Agent.RUNNING:
