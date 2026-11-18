@@ -8,10 +8,16 @@ from __future__ import annotations
 import base64
 import io
 import sqlite3
+import threading
+import time
 from datetime import datetime, timezone
 from typing import cast
 
+from abilities.plan import PlanAbility
+from abilities.recall import Recall
 from configs.enums.policy_channel import PolicyChannel
+from models.provider_request import ProviderRequest
+from models.provider_response import ProviderResponse
 from services.processor_config import ProcessorConfig
 
 
@@ -185,3 +191,50 @@ def force_vision_provider(db: sqlite3.Connection, host: str = "http://127.0.0.1:
     db.commit()
     svc.set_vision_provider(pid)
     return pid
+
+
+# ─── The planning pre-pass, for turn-driving provider doubles ────────
+# Every turn on a config that pins the plan tool opens with a planning send
+# before its loop. A double scripting a test about something else answers it
+# with NO_PLAN — a model that makes no plan — so the pre-pass still runs for
+# real and the test's script is left whole for the loop.
+
+#: A reply with no tool call: it ends the pre-pass, and the loop starts with
+#: the instruction to create the plan.
+NO_PLAN = ProviderResponse(text="", model="scripted-no-plan", tool_calls=None)
+
+
+def is_planning_request(request: object) -> bool:
+    """Whether a provider request is a turn's planning pre-pass, recognised by
+    its tool set: the plan tool and nothing beyond ``recall``. Every step of a
+    turn's loop offers the config's other pinned tools as well."""
+    if not isinstance(request, ProviderRequest):
+        return False
+    names = {tool["name"] for tool in request.tools or []}
+    return PlanAbility.NAME in names and names <= {Recall.NAME, PlanAbility.NAME}
+
+
+# ─── The post-turn background turns ──────────────────────────────────
+# Every begun turn runs on its own daemon thread, and a finished user turn
+# starts more of them (skill suggestion, the thread gist). A test joins them
+# before it ends, so none runs on into the next test's database.
+
+_DRAIN_WAIT = 15.0  # seconds the background turns get to finish
+
+
+def drain_background_turns() -> None:
+    """Join the background turns a finished user turn starts; fails the test, naming
+    them, when any is still running after ``_DRAIN_WAIT`` s."""
+    deadline = time.monotonic() + _DRAIN_WAIT
+    while pending := [
+        t
+        for t in threading.enumerate()
+        if t.name in ("skill-suggest", "thread-gist") or t.name.startswith("turn-")
+    ]:
+        if time.monotonic() >= deadline:
+            names = sorted(t.name for t in pending)
+            raise AssertionError(
+                f"background turns still running after {_DRAIN_WAIT}s: {names}"
+            )
+        for t in pending:
+            t.join(timeout=max(0.0, deadline - time.monotonic()))

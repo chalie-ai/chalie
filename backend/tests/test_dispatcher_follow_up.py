@@ -96,7 +96,8 @@ def test_follow_up_block_absent_for_non_overriding_ability() -> None:
 # ``result`` envelope trailer references that span. The envelope is produced by
 # the real ``_render`` with a non-empty ``follow_up``; the unwrap
 # (``_SKILL_TAG_RE``) must still fire so the head (card payload JSON) parses to a
-# dict, and the follow-up text survives in the result body.
+# dict, and the follow-up text survives in the result body. A new row stores the
+# bare envelope; a row stored before that still carries the block.
 
 
 def _rich_env(tool_calls_row_result: str, span_tag: str) -> None:

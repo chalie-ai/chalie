@@ -25,7 +25,6 @@ from exceptions.exception import (
     ProviderError,
     ProviderResponseError,
     ProviderRetriesExhaustedError,
-    ProviderTimeoutError,
     RateLimitError,
     RateLimitException,
     ContextLimit,
@@ -33,6 +32,7 @@ from exceptions.exception import (
     SnapshotError,
     SourceIsImage,
     SystemPathBlocked,
+    TelegramApiError,
     UnroutedPromptChannel,
     VaultLockedError,
 )
@@ -54,7 +54,6 @@ __all__ = [
     "ProviderError",
     "ProviderResponseError",
     "ProviderRetriesExhaustedError",
-    "ProviderTimeoutError",
     "RateLimitError",
     "RateLimitException",
     "ContextLimit",
@@ -62,6 +61,7 @@ __all__ = [
     "SnapshotError",
     "SourceIsImage",
     "SystemPathBlocked",
+    "TelegramApiError",
     "UnroutedPromptChannel",
     "VaultLockedError",
 ]

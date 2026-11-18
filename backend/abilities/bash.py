@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import shlex
+import signal
 import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
@@ -305,28 +306,35 @@ def _check_destructive(command: str) -> str | None:
 
 
 def _run_command(command: str, timeout_s: int, env: dict[str, str]) -> ToolResult:
+    # The command runs as its own process group so a timeout kills everything it
+    # started: killing only bash orphans its children (a pipeline's grep, a
+    # backgrounded job), which then run on with no limit.
     try:
-        proc = subprocess.run(
+        with subprocess.Popen(
             ["bash", "-c", command],
-            capture_output=True,
-            timeout=timeout_s,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             cwd=str(_WORKING_DIR),
             env=env,
-        )
-    except subprocess.TimeoutExpired:
-        return ToolResult.err(
-            f"Command timed out after {timeout_s}s and was killed.",
-            code="command-timeout",
-            hint="raise timeout_s (max 300) or run a shorter command.",
-        )
+            start_new_session=True,
+        ) as proc:
+            try:
+                stdout_raw, stderr_raw = proc.communicate(timeout=timeout_s)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass  # the whole group exited between the timeout and the kill
+                return ToolResult.err(
+                    f"Command timed out after {timeout_s}s and was killed.",
+                    code="command-timeout",
+                    hint="raise timeout_s (max 300) or run a shorter command.",
+                )
     except OSError as exc:
         return ToolResult.err(
             f"Failed to execute command: {exc}",
             code="exec-failed",
         )
-
-    stdout_raw = proc.stdout or b""
-    stderr_raw = proc.stderr or b""
 
     if _is_binary(stdout_raw) or _is_binary(stderr_raw):
         return ToolResult.ok(

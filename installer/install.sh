@@ -28,23 +28,22 @@ _TAG=""
 # ─── Colours ────────────────────────────────────────────────────────────────
 _reset="\033[0m"
 _bold="\033[1m"
-_violet="\033[35m"
-_cyan="\033[36m"
-_green="\033[32m"
-_yellow="\033[33m"
-_red="\033[31m"
+_pink="\033[38;5;205m"
+_green="\033[38;5;85m"
+_yellow="\033[38;5;221m"
+_red="\033[38;5;203m"
 
-_info()    { printf "  ${_cyan}→${_reset}  %s\n" "$*"; }
+_info()    { printf "  ${_pink}→${_reset}  %s\n" "$*"; }
 _ok()      { printf "  ${_green}✓${_reset}  %s\n" "$*"; }
 _warn()    { printf "  ${_yellow}⚠${_reset}  %s\n" "$*"; }
 _error()   { printf "  ${_red}✗${_reset}  %s\n" "$*" >&2; }
-_section() { printf "\n${_bold}${_violet}%s${_reset}\n" "$*"; }
+_section() { printf "\n${_bold}${_pink}%s${_reset}\n" "$*"; }
 _banner() {
   printf "\n"
-  printf "${_violet}  ┌─────────────────────────────────────────────┐${_reset}\n"
-  printf "${_violet}  │${_reset}    ${_bold}Chalie Installer${_reset}                            ${_violet}│${_reset}\n"
-  printf "${_violet}  │${_reset}    ${_cyan}A personal intelligence layer${_reset}               ${_violet}│${_reset}\n"
-  printf "${_violet}  └─────────────────────────────────────────────┘${_reset}\n"
+  printf "${_pink}  ┌─────────────────────────────────────────────┐${_reset}\n"
+  printf "${_pink}  │${_reset}    ${_bold}Chalie Installer${_reset}                         ${_pink}│${_reset}\n"
+  printf "${_pink}  │${_reset}    Built for day 300.                       ${_pink}│${_reset}\n"
+  printf "${_pink}  └─────────────────────────────────────────────┘${_reset}\n"
   printf "\n"
 }
 
@@ -108,8 +107,9 @@ _detect_linux_distro() {
 # every Linux run.
 #
 # macOS: a macOS install needs root nowhere else (build deps are skipped and
-# Playwright installs unprivileged), so writing to /usr/local/bin would add a
-# sudo prompt for one file. Keep the CLI under $HOME and add a profile line.
+# the headless browser installs unprivileged), so writing to /usr/local/bin
+# would add a sudo prompt for one file. Keep the CLI under $HOME and add a
+# profile line.
 _cli_bin_dir() {
   if [[ "$(_detect_os)" == "linux" ]]; then
     echo "/usr/local/bin"
@@ -119,6 +119,12 @@ _cli_bin_dir() {
 }
 
 # ─── Python 3.11+ Check ─────────────────────────────────────────────────────
+# The interpreter the virtualenv is built from: the host's python3 when it is
+# new enough, otherwise the managed build uv fetches. Either way _choose_python
+# leaves a concrete interpreter path here before anything uses it.
+PYTHON=""
+_MANAGED_PYTHON="3.12"
+
 _python_version_ok() {
   local py="${1:-python3}"
   if ! command -v "$py" >/dev/null 2>&1; then
@@ -154,30 +160,10 @@ _run_privileged() {
   fi
 }
 
-_check_python() {
-  _section "Python"
-  if _python_version_ok python3; then
-    local ver
-    ver="$(python3 --version 2>&1)"
-    _ok "Found $ver"
-    PYTHON="$(command -v python3)"
-    return
-  fi
-
-  _error "Python 3.11+ is required but was not found."
-  _error "Please install Python 3.11+ and re-run the installer."
-  _error ""
-  _error "Install options:"
-  _error "  • macOS:         brew install python@3.12"
-  _error "  • Debian/Ubuntu: sudo apt-get install python3 python3-pip python3-venv"
-  _error "  • Fedora/RHEL:   sudo dnf install python3 python3-pip"
-  _error "  • Download:      https://www.python.org/downloads/"
-  exit 1
-}
-
 # ─── System Build Dependencies (Linux) ──────────────────────────────────────
 # Needed for native Python wheels (cryptography), sqlite-vec rebuild,
-# envsubst (sqlite-vec template), and curl.
+# envsubst (sqlite-vec template), curl, and the headless browser's system
+# libraries.
 _install_build_deps() {
   local os
   os="$(_detect_os)"
@@ -189,12 +175,43 @@ _install_build_deps() {
   case "$distro" in
     *debian*|*ubuntu*)
       _run_privileged apt-get update -qq
+      # The headless browser's shared libraries and fonts. Debian 13 and Ubuntu
+      # 24.04 renamed several libraries with a t64 suffix (64-bit time_t); the
+      # old name is then only a virtual package apt refuses to pick, so the t64
+      # name is taken wherever the archive has one.
+      local -a browser_pkgs=()
+      local pkg
+      for pkg in libasound2 libatk-bridge2.0-0 libatk1.0-0 libatspi2.0-0 libcairo2 \
+                 libcups2 libdbus-1-3 libdrm2 libgbm1 libglib2.0-0 libnspr4 libnss3 \
+                 libpango-1.0-0 libx11-6 libxcb1 libxcomposite1 libxdamage1 libxext6 \
+                 libxfixes3 libxkbcommon0 libxrandr2 libfontconfig1 libfreetype6 \
+                 fonts-liberation fonts-noto-color-emoji fonts-unifont fonts-ipafont-gothic \
+                 fonts-wqy-zenhei fonts-tlwg-loma-otf fonts-freefont-ttf; do
+        if apt-cache show "${pkg}t64" >/dev/null 2>&1; then
+          browser_pkgs+=("${pkg}t64")
+        else
+          browser_pkgs+=("$pkg")
+        fi
+      done
+      # libgl1: the OCR engine's OpenCV wheel links libGL.so.1 and fails to
+      # import without it.
       _run_privileged apt-get install -y --no-install-recommends \
         build-essential libffi-dev libsqlite3-dev gettext-base curl unzip \
-        python3-venv
+        python3-venv libgl1 "${browser_pkgs[@]}"
       ;;
     *fedora*|*rhel*|*centos*)
-      _run_privileged dnf install -y gcc gcc-c++ make libffi-devel sqlite-devel gettext curl unzip
+      # The headless browser's shared libraries and fonts: the base system's
+      # fonts cover Latin only, so CJK, Thai and emoji would screenshot as empty
+      # boxes. Every font name resolves on Fedora and the RHEL family alike.
+      # mesa-libGL: the OCR engine's OpenCV wheel links libGL.so.1.
+      _run_privileged dnf install -y gcc gcc-c++ make libffi-devel sqlite-devel \
+        gettext curl unzip mesa-libGL \
+        nss nspr atk at-spi2-atk at-spi2-core cups-libs libdrm libxkbcommon \
+        libXcomposite libXdamage libXrandr libXext libXfixes libX11 libxcb \
+        mesa-libgbm pango cairo alsa-lib \
+        liberation-sans-fonts liberation-serif-fonts liberation-mono-fonts \
+        google-noto-sans-cjk-ttc-fonts google-noto-sans-thai-fonts \
+        google-noto-emoji-color-fonts
       ;;
     *)
       # Refuse rather than continue. Carrying on installs a Chalie whose browser
@@ -212,6 +229,29 @@ _install_build_deps() {
       ;;
   esac
   _ok "Build dependencies ready"
+}
+
+# ─── Interpreter Decision ───────────────────────────────────────────────────
+# Deliberately runs AFTER the build deps: on Debian/Ubuntu that step installs
+# python3-venv, which supplies a python3 the host did not have, and a managed
+# download is worth skipping whenever a package manager already did the job.
+# Probing here and only here also keeps one answer on screen — a probe before
+# the build deps could only contradict itself afterwards. Desktop launches
+# inherit a minimal PATH whose only python3 is the system one (macOS ships 3.9),
+# so refusing here would make the supported install path unreachable.
+_choose_python() {
+  _section "Python"
+  if _python_version_ok python3; then
+    _ok "Found $(python3 --version 2>&1)"
+    PYTHON="$(command -v python3)"
+    return 0
+  fi
+  _info "No Python 3.11+ found; installing a managed Python $_MANAGED_PYTHON with uv"
+  # Swallow the uv failure so _install_managed_python can report the real
+  # problem: with no interpreter on the host, a missing uv is fatal rather
+  # than a fall back to pip.
+  _ensure_uv || true
+  _install_managed_python
 }
 
 # ─── Download Latest Release ────────────────────────────────────────────────
@@ -317,13 +357,55 @@ _ensure_uv() {
     return
   fi
   _info "Installing uv (fast Python package manager)…"
-  curl -LsSf https://astral.sh/uv/install.sh | sh
+  if ! curl -LsSf https://astral.sh/uv/install.sh | sh; then
+    _error "uv could not be installed — its installer from astral.sh failed to download or run."
+    return 1
+  fi
   export PATH="$HOME/.local/bin:$PATH"
   if ! command -v uv >/dev/null 2>&1; then
-    _error "uv installation failed. Falling back to pip."
+    _error "uv installation failed."
     return 1
   fi
   _ok "uv installed"
+}
+
+# Reached only when the host has no acceptable interpreter AND uv cannot supply
+# one. There is no pip fallback to take — pip needs a Python to run — so stop
+# with the guidance the version check used to print.
+_managed_python_unavailable() {
+  _error "$1"
+  _error "Python 3.11+ is required. Please install it and re-run the installer."
+  _error ""
+  _error "Install options:"
+  _error "  • macOS:         brew install python@3.12"
+  _error "  • Debian/Ubuntu: sudo apt-get install python3 python3-pip python3-venv"
+  _error "  • Fedora/RHEL:   sudo dnf install python3 python3-pip"
+  _error "  • Download:      https://www.python.org/downloads/"
+  exit 1
+}
+
+# Fetch uv's own build of Python for hosts without one. Idempotent: uv skips the
+# download when the version is already installed.
+_install_managed_python() {
+  if ! command -v uv >/dev/null 2>&1; then
+    _managed_python_unavailable "uv is unavailable, so a managed Python could not be installed."
+  fi
+  _info "Downloading Python $_MANAGED_PYTHON…"
+  if ! uv python install "$_MANAGED_PYTHON"; then
+    _managed_python_unavailable "uv could not download a managed Python $_MANAGED_PYTHON (an outdated uv on PATH is one cause: upgrade it with 'uv self update')."
+  fi
+  # Capture the interpreter by path, once. Handing "3.12" to `uv venv --python`
+  # later would re-resolve the request through the user's uv python-preference
+  # config, which can answer with a different 3.12 than the one just installed.
+  # --managed-python confines the lookup to uv's own builds; uv releases that
+  # predate the flag reject it, hence the retry with the older spelling of the
+  # same restriction.
+  PYTHON="$(uv python find --managed-python "$_MANAGED_PYTHON" 2>/dev/null \
+            || uv python find --python-preference only-managed "$_MANAGED_PYTHON" 2>/dev/null || true)"
+  if [[ -z "$PYTHON" ]] || [[ ! -x "$PYTHON" ]]; then
+    _managed_python_unavailable "uv installed Python $_MANAGED_PYTHON but reported no usable interpreter for it."
+  fi
+  _ok "Managed Python $_MANAGED_PYTHON ready ($PYTHON)"
 }
 
 _setup_venv() {
@@ -336,8 +418,11 @@ _setup_venv() {
   if [[ ! -d "$venv" ]]; then
     _info "Creating virtual environment…"
     if [[ "$use_uv" == "true" ]]; then
+      # Always a path — host or managed, _choose_python resolved it already, so
+      # uv is told which interpreter to use rather than asked to pick one.
       uv venv "$venv" --python "$PYTHON"
     else
+      [[ -n "$PYTHON" ]] || _managed_python_unavailable "uv is unavailable and the host has no Python 3.11+."
       "$PYTHON" -m venv "$venv"
     fi
   else
@@ -346,7 +431,10 @@ _setup_venv() {
 
   _info "Installing core dependencies (this may take a few minutes)…"
   if [[ "$use_uv" == "true" ]]; then
-    uv pip install --python "$venv/bin/python" -e "$CHALIE_HOME/app/backend"
+    # --exact also removes packages an earlier release needed and this one no
+    # longer does; upgrades reuse the venv, so nothing else would. pip has no
+    # equivalent, so the fallback below leaves them until a run with uv.
+    uv pip install --exact --python "$venv/bin/python" -e "$CHALIE_HOME/app/backend"
   else
     "$venv/bin/pip" install --upgrade pip
     "$venv/bin/pip" install -e "$CHALIE_HOME/app/backend"
@@ -356,38 +444,35 @@ _setup_venv() {
   _info "Note: The embedding model (~400 MB) downloads on first 'chalie start', not now"
 }
 
-# ─── Playwright Browser ─────────────────────────────────────────────────────
-# Chromium needs a set of system libraries to launch (nss, cups, gbm, X libs,
-# …). Playwright's `--with-deps` installs them, but it only knows apt package
-# names: on any non-apt distro it falls back to apt-get, which is absent, and
-# aborts the whole install. So install those libraries with the distro's own
-# package manager, then fetch the browser without `--with-deps`.
-_install_playwright() {
-  _section "Playwright Browser"
-  local pw="$CHALIE_HOME/venv/bin/playwright"
-  if [[ "$(_detect_os)" == "linux" ]]; then
-    local distro
-    distro="$(_detect_linux_distro)"
-    case "$distro" in
-      *debian*|*ubuntu*)
-        # apt path works — and `--with-deps` tracks apt package renames (e.g.
-        # Ubuntu 24.04's t64 transition) that a hand-listed set would miss.
-        _run_privileged "$pw" install --with-deps chromium
-        ;;
-      # No fallback branch: _install_build_deps already refused anything that is
-      # not apt or dnf, so by here the distro is one of these two.
-      *)
-        _run_privileged dnf install -y \
-          nss nspr atk at-spi2-atk at-spi2-core cups-libs libdrm libxkbcommon \
-          libXcomposite libXdamage libXrandr libXext libXfixes libX11 libxcb \
-          mesa-libgbm pango cairo alsa-lib
-        "$pw" install chromium
-        ;;
-    esac
-  else
-    "$pw" install chromium
-  fi
-  _ok "Playwright Chromium ready"
+# ─── Headless Browser ───────────────────────────────────────────────────────
+# Chalie ships its own browser: a pinned chrome-headless-shell build from
+# Google's Chrome for Testing, unpacked inside Chalie's install. Nothing else
+# on the machine supplies, shares, replaces or removes it, and it goes when
+# Chalie goes. Its system libraries come from _install_build_deps. resources/
+# is replaced on every upgrade, so each install fetches it again — the same as
+# the voice models.
+_BROWSER_VERSION="157.0.8103.38"
+
+_install_browser() {
+  _section "Headless Browser"
+  local platform
+  case "$(_detect_os)/$(_detect_arch)" in
+    darwin/arm64) platform="mac-arm64" ;;
+    linux/amd64)  platform="linux64" ;;
+    linux/arm64)  platform="linux-arm64" ;;
+  esac
+  local url="https://storage.googleapis.com/chrome-for-testing-public/$_BROWSER_VERSION/$platform/chrome-headless-shell-$platform.zip"
+  local dest="$CHALIE_HOME/app/resources/browser"
+  local tmpdir
+  tmpdir="$(mktemp -d)"
+  _info "Downloading the headless browser ($_BROWSER_VERSION, $platform)…"
+  curl -fL --progress-bar -o "$tmpdir/browser.zip" "$url"
+  unzip -q "$tmpdir/browser.zip" -d "$tmpdir"
+  rm -rf "$dest"
+  mkdir -p "$(dirname "$dest")"
+  mv "$tmpdir/chrome-headless-shell-$platform" "$dest"
+  rm -rf "$tmpdir"
+  _ok "Headless browser ready ($dest)"
 }
 
 # ─── Voice Models (Kokoro TTS, Moonshine STT, Silero VAD) ──────────────────
@@ -654,11 +739,11 @@ _print_success() {
   printf "${_green}${_bold}  ┌─────────────────────────────────────────────┐${_reset}\n"
   printf "${_green}${_bold}  │${_reset}  ${_bold}Chalie is installed!${_reset}                        ${_green}${_bold}│${_reset}\n"
   printf "${_green}${_bold}  │${_reset}                                             ${_green}${_bold}│${_reset}\n"
-  printf "${_green}${_bold}  │${_reset}    ${_cyan}chalie${_reset}              Start on port 31025${_green}${_bold}│${_reset}\n"
-  printf "${_green}${_bold}  │${_reset}    ${_cyan}chalie --port=9000${_reset}  Custom port           ${_green}${_bold}│${_reset}\n"
-  printf "${_green}${_bold}  │${_reset}    ${_cyan}chalie stop${_reset}         Stop                  ${_green}${_bold}│${_reset}\n"
-  printf "${_green}${_bold}  │${_reset}    ${_cyan}chalie update${_reset}       Update to latest      ${_green}${_bold}│${_reset}\n"
-  printf "${_green}${_bold}  │${_reset}    ${_cyan}chalie logs${_reset}         Follow logs           ${_green}${_bold}│${_reset}\n"
+  printf "${_green}${_bold}  │${_reset}    ${_pink}chalie${_reset}              Start on port 31025${_green}${_bold}│${_reset}\n"
+  printf "${_green}${_bold}  │${_reset}    ${_pink}chalie --port=9000${_reset}  Custom port           ${_green}${_bold}│${_reset}\n"
+  printf "${_green}${_bold}  │${_reset}    ${_pink}chalie stop${_reset}         Stop                  ${_green}${_bold}│${_reset}\n"
+  printf "${_green}${_bold}  │${_reset}    ${_pink}chalie update${_reset}       Update to latest      ${_green}${_bold}│${_reset}\n"
+  printf "${_green}${_bold}  │${_reset}    ${_pink}chalie logs${_reset}         Follow logs           ${_green}${_bold}│${_reset}\n"
   printf "${_green}${_bold}  └─────────────────────────────────────────────┘${_reset}\n"
   printf "\n"
 }
@@ -683,12 +768,11 @@ main() {
   _banner
   printf "  Platform: %s / %s\n\n" "$os" "$arch"
 
-  _check_python
   _install_build_deps
-  _ensure_uv
+  _choose_python
   _download_release
   _setup_venv
-  _install_playwright
+  _install_browser
   _download_voice_models
   _install_deno
   _install_cli

@@ -9,8 +9,8 @@
 """CodeAgentAbility — delegate a coding task to a focused agent with a scratch workspace.
 
 Mirrors WebSearchAbility/PimAbility structure-for-structure: an ability that
-builds its OWN ``ProcessorConfig`` subclass (``CodeAgentConfig``) inside
-``run()`` and calls ``MessageProcessor.process()``. The delegate works in a
+hands its OWN ``ProcessorConfig`` subclass (``CodeAgentConfig``) to
+``DelegateAbility.delegate()`` inside ``run()``. The delegate works in a
 scratch workspace (the conventional code_agent location — not a containment
 boundary) and can execute a written ``.ts`` file through ``run_script`` with
 full permissions — replacing the deleted ``code_eval`` one-shot stdin sandbox
@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from abilities._delegate import DelegateAbility, delegate_result
+from abilities._delegate import DelegateAbility
 from abilities._result import ToolResult
 from configs.channels.code_agent import CodeAgentConfig
 from configs.enums.param_key import Keys
@@ -100,25 +100,11 @@ class CodeAgentAbility(DelegateAbility[DelegateParamsBag]):
         return self._PARAMETERS
 
     def run(self, params: DelegateParamsBag) -> ToolResult:
-        from controllers.message_processor import MessageProcessor  # noqa: PLC0415
-
-        mp = self.mp
-        if mp is None:
-            raise RuntimeError("code_agent.run() dispatched without a bound MessageProcessor")
-
         # Ensure the scratch workspace exists before the delegate runs.
         FileMapperService.get_code_agent_workspace_path().mkdir(
             parents=True, exist_ok=True
         )
-
-        # A gated tool inside the delegate prompts on the CALLER's turn — the
-        # delegate's own turn has no surface a human could answer from.
-        agent_mp = MessageProcessor.process(
-            CodeAgentConfig(mp.config.policy_channel),
-            raw_input=params.instructions,
-            metadata={"origin": mp.origin},
-        )
-        return delegate_result(
-            agent_mp.result(),
+        return self.delegate(
+            CodeAgentConfig, params.instructions,
             hint="Break the task into smaller steps or clarify the requirements, then retry.",
         )

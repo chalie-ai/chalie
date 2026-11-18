@@ -11,7 +11,7 @@
  */
 import { conversation as convoApi } from '../api/conversation';
 import { clearLiveTurn } from './liveActTrail';
-import { removeTurn, setTurnWorking, upsertTurnToSurfaces } from './turnDom';
+import { nextTicket, removeTurn, setTurnWorking, upsertTurnToSurfaces } from './turnDom';
 
 const _inFlight = new Map<string, Promise<void>>();
 
@@ -56,6 +56,10 @@ export function reconcileCancelledTurn(turnId: number, type: string): Promise<vo
 }
 
 async function _reconcile(turnId: number, type: string): Promise<void> {
+  // Ticketed so a refetch sent before the cancel (on `updated`/`working`) that
+  // answers after this one can't repaint the turn as working, or bring a
+  // removed turn back (see turnDom's `UpsertOptions.ticket`).
+  const ticket = nextTicket();
   try {
     const block = await convoApi.thread(turnId, type);
     if (block.type !== type) {
@@ -65,9 +69,9 @@ async function _reconcile(turnId: number, type: string): Promise<void> {
       );
     }
     if (block.messages.length) {
-      upsertTurnToSurfaces(block, block.type, { force: true });
+      upsertTurnToSurfaces(block, block.type, { force: true, ticket });
     } else {
-      removeTurn(turnId, block.type);
+      removeTurn(turnId, block.type, ticket);
     }
   } catch {
     // Best-effort — leave whatever is rendered; a later refetch (panel open,

@@ -23,6 +23,7 @@ from typing import ClassVar
 
 from abilities.find_tools import FindToolsAbility
 from abilities.image_preview import ImagePreviewAbility
+from abilities.plan import PlanAbility
 from configs.channels._common import DEFAULT_ALWAYS_AVAILABLE
 from configs.enums.channels import Channel
 from configs.enums.config_type import ConfigTypeEnum
@@ -40,21 +41,20 @@ class ScheduledConfig(ProcessorConfig):
     BROADCASTS_STATE: ClassVar[bool] = True
     # The schedule thread is a rendered surface (its output is converted and
     # sanitized as HTML at persist time), so it carries the same HTML output
-    # contract as the user channel.
+    # contract and rich-media cards as the user channel.
     RENDERS_HTML: ClassVar[bool] = True
+    RENDERS_CARDS: ClassVar[bool] = True
 
     def __init__(self) -> None:
         super().__init__(
             channel=Channel.SCHEDULE.value,
             role="user",
             # CHAT, not SUBCONSCIOUS: a fired schedule is work the user queued on
-            # their own behalf, so it runs under the user's own policy rows —
-            # where web_search/web_browse are seeded allow — exactly as the
-            # tool-surface note above and the system prompt already promise.
-            # SUBCONSCIOUS is the silent-housekeeping family that seeds the web
-            # delegates deny; borrowing it here hard-blocked scheduled web work.
+            # their own behalf, so it runs under the user's own policy rows, and
+            # so does every tool a subagent it starts calls. SUBCONSCIOUS is the
+            # silent-housekeeping family, seeded with stricter rows.
             policy_channel=PolicyChannel.CHAT,
-            always_available=list(DEFAULT_ALWAYS_AVAILABLE),
+            always_available=[*DEFAULT_ALWAYS_AVAILABLE, PlanAbility.NAME],
             skip_transcript=False,
             skip_input_row=False,
             suppress_history=False,
@@ -62,7 +62,7 @@ class ScheduledConfig(ProcessorConfig):
             external_turn_id=True,
         )
 
-    def type(self) -> ConfigTypeEnum:
+    def type(self) -> ConfigTypeEnum | None:
         return ConfigTypeEnum.SCHEDULED
 
     @property

@@ -22,13 +22,14 @@ if TYPE_CHECKING:
     import ssl
 
     from boot_screen import BootScreen as _BootScreen
+    from models.turn_execution import TurnExecution
     from services.embedding_service import EmbeddingService
     from services.onnx_inference_service import OnnxInferenceService
     from consumer import WorkerManager as _WorkerManager
 
 
 def _parse_cli() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Chalie — personal intelligence layer")
+    parser = argparse.ArgumentParser(description="Chalie — built for day 300.")
     parser.add_argument("--port", type=int, default=31025, help="Server port (default: 31025)")
     parser.add_argument("--host", default="0.0.0.0", help="Bind address (default: 0.0.0.0)")
     return parser.parse_args()
@@ -65,19 +66,18 @@ if __name__ == "__main__":
         _boot_screen.serve_forever()
         sys.exit(1)
 
-# Force numpy/transformers to fully initialize before any background thread
+# Force numpy to fully initialize before any background thread
 # imports them. Python's import system isn't fully thread-safe for nested
 # imports — concurrent first-imports from multiple threads cause a circular
 # import in numpy._typing (NDArray not yet available from the
 # partially-initialized module), which poisons sys.modules and makes every
 # subsequent embedding call fail with "maximum recursion depth exceeded".
-# A failure here is not survivable: it means numpy/transformers is present but
+# A failure here is not survivable: it means numpy is present but
 # broken, and every embedding call downstream would fail with a recursion error
 # that reads nothing like its cause. Context is added and the error re-raised —
 # never swallowed into a warning that boots a broken process anyway.
 try:
     import numpy  # noqa: F401 — thread-safety warm-up
-    import transformers  # noqa: F401 — thread-safety warm-up
 except Exception as _e:
     print(f"[BOOT] CRITICAL: Chalie failed to load, core import failed: {_e}",
           file=sys.stderr, flush=True)
@@ -313,6 +313,24 @@ def _init_services() -> None:
     logger.info("[Startup] WriteQueueService started")
 
 
+def _reply_to_swept_delegates(swept: list["TurnExecution"]) -> None:
+    """Tell the caller of every delegate turn the boot sweep closed that a
+    restart cut it off — the reply the delegate's own end would have sent,
+    had its process lived. ``reply_to_caller`` settles, from the stored rows,
+    whether a swept turn has a caller that did not wait for it; any other
+    swept turn is skipped. One failed notice is logged and the rest still go
+    out: a caller missing its notice must never stop the boot."""
+    from abilities._delegate import reply_to_caller
+
+    for row in swept:
+        try:
+            reply_to_caller(row.channel, row.turn_id, "")
+        except Exception:
+            logger.exception(
+                "[Startup] %s turn %d: the restart notice to its caller failed", row.channel, row.turn_id,
+            )
+
+
 def _register_workers(manager: "_WorkerManager", host: str, port: int) -> None:
     """Register all service workers with the WorkerManager.
 
@@ -456,20 +474,30 @@ def main() -> None:
     # before this runs once, for the life of the process.
     Database().bind()
 
+    _run_startup_migrations()
+
     # Boot sweep: a turn_executions row still open (ended_at IS NULL) belonged
     # to a process that no longer exists — closing it as crashed keeps no
     # surface reading a stale "working" turn after a restart or a kill. Reads
     # through an inert MP (§7 G3: crash recovery has no live turn to construct
     # a real one for) so the sweep runs through the same
-    # TurnExecutionService.sweep_orphaned() every in-process turn would.
+    # TurnExecutionService.sweep_orphaned() every in-process turn would. After
+    # the migrations, because a swept subagent's turn also closes its agents
+    # row, and on a database that predates that table a migration creates it;
+    # before the services, so nothing starts against a stale "working" row.
     from controllers.message_processor import MessageProcessor
     _boot_mp = MessageProcessor(config_for(ConfigTypeEnum.USER))
-    _closed = _boot_mp.turn_execution_service.sweep_orphaned()
-    if _closed:
-        logger.info("[Startup] Closed %d orphaned turn_executions row(s)", _closed)
+    _swept = _boot_mp.turn_execution_service.sweep_orphaned()
+    if _swept:
+        logger.info("[Startup] Closed %d orphaned turn_executions row(s)", len(_swept))
 
-    _run_startup_migrations()
     _init_services()
+
+    # Only now, after the services, not at the sweep: each notice writes a row
+    # on the caller's thread and starts a turn whose own thread reads and
+    # writes the conversation tables, so it must run on the migrated schema,
+    # never alongside the transcript rebuild and backfills above.
+    _reply_to_swept_delegates(_swept)
 
     _check_asset_caches()
     _warmup_models()

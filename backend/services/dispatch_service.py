@@ -47,9 +47,11 @@ import json
 import logging
 from typing import TYPE_CHECKING, Callable, cast
 
+from abilities._ability import FOLLOW_UP_BLOCK
 from abilities._mcp_ability import _MCPAbility
 from services.key_healer import KeyHealer
 from abilities._registry import AbilityRegistry
+from abilities.browser import BrowserAbility
 from abilities.find_tools import FindToolsAbility
 from abilities._result import ToolResult
 from exceptions import VaultLockedError
@@ -90,32 +92,36 @@ class DispatchService:
         not retry a blocked tool forever. No cancel check — the loop guards
         should_stop() one line before calling this.
 
-        Appends a steering suffix to the persisted result when the same tool
+        Appends a steering suffix to what the model is shown when the same tool
         has already fired with identical params this turn, breaking the loop
-        before the hard runaway-kill threshold. The steer is persisted into the
-        tool_calls row so the model re-reads it on its next step (see
-        ``prompt_service`` rendering ``call.result``); the return value carries
-        the same string so callers see what the model will see."""
+        before the hard runaway-kill threshold. The steer and the tool's own
+        follow-up block are shown, never stored: the tool_calls row holds the
+        bare result, and the shown text lives on ``tool_call_service`` for the
+        rest of this exchange, so the model re-reads it on each later step
+        (``prompt_service`` renders ``tool_call_service.shown``). The return
+        value is the shown text, so callers see what the model will see."""
         params, act_summary, ability = self._prepare(tool_name, params)
         if ability is None:
             result_text = f"Unknown tool: {tool_name}"
             steer = self._repeat_error_steer(tool_name, result_text) or self._repeat_call_steer(tool_name, params)
             self.mp.tool_call_service.record(
-                tool_name=tool_name, params=params, result=result_text + steer,
+                tool_name=tool_name, params=params, result=result_text, shown=result_text + steer,
                 summary=act_summary, state=ToolCall.ERROR, emit=False,
             )
             return result_text + steer
 
-        result_text, call_id, state = self._dispatch_bound(tool_name, ability, params, act_summary)
+        result_text, shown, call_id, state = self._dispatch_bound(tool_name, ability, params, act_summary)
         steer = self._repeat_error_steer(tool_name, result_text) or self._repeat_call_steer(tool_name, params)
         if call_id is not None:
-            self.mp.tool_call_service.finish(call_id=call_id, result=result_text + steer, state=state)
+            self.mp.tool_call_service.finish(
+                call_id=call_id, result=result_text, shown=shown + steer, state=state,
+            )
         else:
             self.mp.tool_call_service.record(
-                tool_name=tool_name, params=params, result=result_text + steer,
+                tool_name=tool_name, params=params, result=result_text, shown=shown + steer,
                 summary=act_summary, state=state, emit=True,
             )
-        return result_text + steer
+        return shown + steer
 
     def _prepare(
         self, tool_name: str, params: dict[str, object],
@@ -188,18 +194,21 @@ class DispatchService:
         ability: "Ability",
         params: dict[str, object],
         act_summary: "str | None",
-    ) -> tuple[str, int | None, str]:
+    ) -> tuple[str, str, int | None, str]:
         """The ability-found path for ALREADY-canonicalised params (:meth:`_prepare`
         has sanitised the values, lifted ``act_summary``, and healed the keys):
-        ACTION_REQUIRED pre-gate → resolve permission → policy-gate ``_execute``.
-        Returns the rendered result, the tool_calls row id opened on the allow path
-        (``None`` when the call never executed), and the terminal state to write."""
-        if (pre := self._prevalidate(ability, params)) is not None:
-            # ACTION_REQUIRED pre-gate fires BEFORE the permission is formed: a
+        unknown-parameter refusal → ACTION_REQUIRED pre-gate → resolve permission →
+        policy-gate ``_execute``. Returns the rendered bare result, the text the
+        model is shown (the bare result plus any follow-up block), the tool_calls
+        row id opened on the allow path (``None`` when the call never executed),
+        and the terminal state to write."""
+        if (pre := self._refuse_unknown(ability, params) or self._prevalidate(ability, params)) is not None:
+            # Both pre-gates fire BEFORE the permission is formed: a
             # hallucinated action would otherwise lazily seed a bogus
             # '<tool>.<action>' ask row and freeze the turn waiting for human
             # approval. Malformed input never reaches the policy gate or run().
-            return self._render(tool_name, pre, None), None, ToolCall.ERROR
+            refused = self._render(tool_name, pre, None)
+            return refused, refused, None, ToolCall.ERROR
 
         # The risk class the gate keys on is derived from the inputs via the
         # ability's classify_action hook (default None), NOT trusted from a
@@ -212,9 +221,10 @@ class DispatchService:
 
         call_id: int | None = None
         state = ToolCall.ERROR
+        shown: str | None = None
 
         def _run_gated() -> str:
-            nonlocal call_id, state
+            nonlocal call_id, state, shown
             # The SAME resolved action feeds the permission and the
             # untrusted-content steer: one non-injectable classification, two
             # consumers. Keying the steer off the raw 'action' param instead
@@ -222,13 +232,13 @@ class DispatchService:
             # str HERE, not at the resolution above — a non-str action must keep
             # forming the permission exactly as before (a bogus '<tool>.<junk>'
             # ask row is the pre-gate's problem, not something to widen away).
-            text, call_id, state = self._execute(
+            text, shown, call_id, state = self._execute(
                 ability, params, act_summary, action if isinstance(action, str) else None,
             )
             return text
 
         result_text = self._authorize(permission, _run_gated, act_summary)
-        return result_text, call_id, state
+        return result_text, result_text if shown is None else shown, call_id, state
 
     def _repeat_error_steer(self, tool_name: str, result_text: str) -> str:
         """Steering suffix when this exact error already fired for an identical
@@ -315,13 +325,14 @@ class DispatchService:
     def _execute(
         self, ability: "Ability", params: dict[str, object], act_summary: "str | None" = None,
         action: "str | None" = None,
-    ) -> tuple[str, "int | None", str]:
+    ) -> tuple[str, str, "int | None", str]:
         """Open row (via ``tool_call_service.start`` — emits ``started``) →
         run → resolve terminal state → render. Called ONLY on the allow path
         (``_dispatch_bound`` passes this as the gate's callback). Returns the
-        rendered envelope STRING plus the opened row id and its resolved terminal
-        state, so ``_dispatch_bound`` can finish that same row instead of opening
-        a second one.
+        rendered bare envelope STRING (what is stored), the same envelope with
+        the ability's follow-up block (what the model is shown), and the opened
+        row id and its resolved terminal state, so ``_dispatch_bound`` can
+        finish that same row instead of opening a second one.
 
         Reads the bound parent off ``ability.mp`` (set by ``_bind()``).
         act_summary (popped from params by ``dispatch()``) is the live summary;
@@ -332,36 +343,54 @@ class DispatchService:
             tool_name=tool_name, params=params, summary=act_summary,
         )
 
-        tr = self._run(ability, params)
+        tr = self._run(ability, params, call_id)
 
         state = ToolCall.ERROR if tr.status == "error" else ToolCall.DONE
 
-        # Rich-media ordinal is assigned ONLY when the owning mp broadcasts to a
-        # live surface (``RENDERS_HTML`` — the user spine or a schedule
-        # thread). Background channels never get a card: their
-        # natural-language synthesis is consumed by the parent, so a span emitted
-        # at that hop has no tool_calls row paired to it. This is the single
-        # physical chokepoint that gates the entire card path.
+        # Rich-media ordinal is assigned ONLY on a channel whose reply the user
+        # reads in the feed (``RENDERS_CARDS`` — the user spine or a schedule
+        # thread). Every other channel never gets a card — subagent channels
+        # included, even though they render HTML: their answer is handed to the
+        # calling agent, so a span emitted at that hop would pair against the
+        # caller's own ordinals. This is the single physical chokepoint that
+        # gates the entire card path.
         ordinal = None
-        if tr.rich is not None and self.mp.config.RENDERS_HTML:
+        if tr.rich is not None and self.mp.config.RENDERS_CARDS:
             ordinal = self._next_ordinal(tool_name)
 
-        # The follow-up block fires only on a real SUCCESS: never on an error
-        # result. Empty => nothing appended, so a tool with neither a nudge nor
-        # untrusted output renders byte-identical to before.
-        #
-        # An action that brings outside content in adds ITS OWN steer to the same
-        # block, LAST — the closest instruction to the point of generation, and
-        # pressed against the payload it describes instead of sitting in a system
-        # prompt that a long result has buried. The steer is per action because
-        # `email.read` and `browser.scroll` are not the same warning, and a tool
-        # whose current action isn't in the map gets none.
-        follow_up = ""
-        if tr.status == "success":
-            follow_up = ability.get_follow_up(tr)
-            steer = ability.UNTRUSTED_CONTENT.get(action or "", "")
-            follow_up = f"{follow_up}\n\n{steer}".strip() if steer else follow_up
-        return self._render(tool_name, tr, ordinal, follow_up=follow_up), call_id, state
+        bare = self._render(tool_name, tr, ordinal)
+        follow_up = ability.follow_up(tr, action)
+        shown = self._render(tool_name, tr, ordinal, follow_up=follow_up) if follow_up else bare
+        return bare, shown, call_id, state
+
+    # ── Unknown-parameter refusal ──────────────────────────────────────────────
+
+    def _refuse_unknown(self, ability: "Ability", params: dict[str, object]) -> "ToolResult | None":
+        """Refuse the whole call when it names a parameter the tool does not
+        declare, so nothing runs. Read after healing, so an alias already rewritten
+        to its declared name passes. A dropped key would otherwise let the call do
+        something other than what was asked: a schedule sent ``cron`` lost it and
+        ran every minute.
+
+        Not checked: an outside (MCP) tool whose schema lists no parameters, which
+        leaves nothing to check against, and the turn-zero seed, whose params are
+        built by code and carry the framework's ``_auto`` marker. A built-in tool
+        that declares no parameters refuses every key."""
+        if self.mp.seeding_turn_zero:
+            return None
+        properties = ability.get_parameters().get("properties")
+        if not isinstance(properties, dict):
+            if isinstance(ability, _MCPAbility):
+                return None
+            properties = {}
+        unknown = [key for key in params if key not in properties]
+        if not unknown:
+            return None
+        return ToolResult.err(
+            f"Unknown parameter(s): {', '.join(unknown)}. Nothing was done.",
+            code="unknown-params",
+            valid=tuple(str(key) for key in properties),
+        )
 
     # ── Action pre-validation (ACTION_REQUIRED) ────────────────────────────────
 
@@ -409,10 +438,11 @@ class DispatchService:
 
     # ── The synchronous run primitive ─────────────────────────────────────────────
 
-    def _run(self, ability: "Ability", params: dict[str, object]) -> ToolResult:
+    def _run(self, ability: "Ability", params: dict[str, object], call_id: "int | None") -> ToolResult:
         """Execute ability.run() synchronously and enforce the ToolResult contract.
 
-        Loads the flattened client telemetry onto ``ability.telemetry`` just
+        Loads the flattened client telemetry onto ``ability.telemetry`` and the
+        call's own ``tool_calls`` row id onto ``ability.tool_call_id`` just
         before run(); the ability reads its parent off ``self.mp``.
 
         There is no wall-clock bound — an ability runs to completion. The
@@ -431,6 +461,7 @@ class DispatchService:
             ability.telemetry = ctx.as_dict() if ctx else None
         except Exception:  # noqa: BLE001
             ability.telemetry = None
+        ability.tool_call_id = call_id
 
         try:
             # The typed-input door: every first-party ability declares PARAMS,
@@ -529,9 +560,48 @@ class DispatchService:
             body_str = self._render_rich(tool_name, tr, ordinal)
 
         if follow_up:
-            body_str = f"{body_str}\n{_FOLLOW_UP_BLOCK.format(text=follow_up)}"
+            body_str = f"{body_str}\n{FOLLOW_UP_BLOCK.format(text=follow_up)}"
 
         return f"[{tool_name}({', '.join(head_parts)})]\n{body_str}\n[end:{tool_name}]"
+
+    @staticmethod
+    def read_browser_page(result: str) -> tuple[str, str]:
+        """The page a stored ``browser`` result names, read back from the
+        envelope :meth:`_render` wrote, as ``(url, title)`` — ``title`` is
+        ``""`` when the result gives none, and both are ``""`` when it names no
+        page.
+
+        A success names the page in the ``page`` object of its JSON body (the
+        line after the header). An error names it in the ``url=`` and
+        ``title=`` meta its header carries when the browser had a page open; a
+        url never holds a space, and the title is always the header's last
+        field, so the title is everything after the first ``, title=``.
+
+        Raises ValueError when *result* is not a browser envelope, or when its
+        body or header meta cannot be read."""
+        prefix = f"[{BrowserAbility.NAME}("
+        header, _, rest = result.partition("\n")
+        if not (header.startswith(prefix) and header.endswith(")]")):
+            raise ValueError("not a browser envelope")
+        meta = header[len(prefix):-2]
+        url: object
+        title: object
+        if meta.startswith("status=success"):
+            body = json.loads(rest.partition("\n")[0])
+            page = body.get("page") if isinstance(body, dict) else None
+            if not isinstance(page, dict):
+                raise ValueError("success body carries no page object")
+            url, title = page.get("url"), page.get("title")
+        elif meta.startswith("status=error"):
+            fields, _, title = meta.partition(", title=")
+            url = {key: value for key, _, value in (f.partition("=") for f in fields.split(", "))}.get("url")
+        else:
+            raise ValueError("header carries no status")
+        if not url:
+            return "", ""
+        if not isinstance(url, str):
+            raise ValueError("page url is not a string")
+        return url, title if isinstance(title, str) else ""
 
     def _render_rich(self, tool_name: str, tr: ToolResult, ordinal: int) -> str:
         """Build the rich-media block that REPLACES the tool body:
@@ -562,10 +632,6 @@ _RICH_INSTRUCTION = (
     "<span id='{tag}'>your synthesis here</span>. The span renders as a card; "
     "without it the user sees only plain text."
 )
-
-# A standing next-step nudge a tool appends to its OWN successful result. Placed
-# INSIDE the envelope (after any rich block, before ``[end:<tool>]``).
-_FOLLOW_UP_BLOCK = "[follow_up_instruction]\n{text}\n[end:follow_up_instruction]"
 
 # Appended to the SECOND (and later) identical error a tool returns in one turn,
 # to break a retry loop. Written plainly so smaller models act on it.

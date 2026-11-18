@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue';
+import { onBeforeUnmount, onMounted } from 'vue';
 import { RouterView } from 'vue-router';
 import { useTheme } from '@chalie/shared';
 import { useShellStore } from './stores/shell';
@@ -14,13 +14,9 @@ const { init: initTheme } = useTheme();
 const shell = useShellStore();
 const heartbeat = useHeartbeat();
 
-// Shell starts at opacity:0 (brain.scss); flip ready on mount so the fade-in runs.
-const ready = ref(false);
-
 onMounted(() => {
   initTheme();
   heartbeat.start();
-  ready.value = true;
 });
 
 onBeforeUnmount(() => {
@@ -29,15 +25,12 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="grain"></div>
-
   <div
     id="appShell"
     class="app-shell"
     :data-collapsed="shell.sidebarCollapsed || undefined"
     :data-mobile-open="shell.mobileOpen || undefined"
     :data-providers-only="shell.providersOnly || undefined"
-    :data-ready="ready || undefined"
   >
     <div id="mobileScrim" class="scrim" @click="shell.mobileOpen = false"></div>
 

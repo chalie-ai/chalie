@@ -9,10 +9,10 @@ Returns a sealed :class:`abilities._result.ToolResult` (never a wire envelope):
 """
 
 import shutil
-from pathlib import Path
 from typing import ClassVar
 
 from abilities._ability import Ability
+from abilities._paths import absolute_target
 from abilities._result import ToolResult
 from configs.enums.param_key import Keys
 from contracts.params.move_params_bag import MoveParamsBag
@@ -72,21 +72,12 @@ class MoveAbility(Ability[MoveParamsBag]):
         current_path_str = params.current_path
         new_path_str = params.new_path
 
-        if not Path(current_path_str).is_absolute():
-            return ToolResult.err(
-                f"current_path is not absolute: {current_path_str!r}.",
-                code="invalid-path",
-                hint="pass an absolute path (one starting from the filesystem root).",
-            )
-        if not Path(new_path_str).is_absolute():
-            return ToolResult.err(
-                f"new_path is not absolute: {new_path_str!r}.",
-                code="invalid-path",
-                hint="pass an absolute path (one starting from the filesystem root).",
-            )
-
-        src = Path(current_path_str).resolve()
-        dst = Path(new_path_str).resolve()
+        src = absolute_target(current_path_str, label="current_path")
+        if isinstance(src, ToolResult):
+            return src
+        dst = absolute_target(new_path_str, label="new_path")
+        if isinstance(dst, ToolResult):
+            return dst
 
         if not src.exists():
             return ToolResult.err(

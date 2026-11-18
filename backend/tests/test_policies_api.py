@@ -1,5 +1,6 @@
 import sqlite3
 from collections.abc import Generator
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -91,12 +92,12 @@ def test_put_single_upsert(client: "FlaskClient") -> None:
 
 
 def test_put_internal_tool_is_ignored(client: "FlaskClient") -> None:
-    # email is the pim delegate's INTERNAL inner surface — the manager rejects the
-    # upsert (rowcount 0), so the endpoint still 204s but no row lands in the table.
-    r = client.post("/api/policies/-1", json={"channel": "chat", "permission": "email.send", "setting": "deny"})
+    # Spawning a subagent is INTERNAL — the manager rejects the upsert
+    # (rowcount 0), so the endpoint still 204s but no row lands in the table.
+    r = client.post("/api/policies/-1", json={"channel": "chat", "permission": "subtask.start", "setting": "deny"})
     assert r.status_code == 204
     rows = client.get("/api/policies/all?limit=100").get_json()["result"]
-    assert not any(x["permission"] == "email.send" for x in rows)
+    assert not any(x["permission"] == "subtask.start" for x in rows)
 
 
 def test_blocked_log_returns_the_permission_name_verbatim(client: "FlaskClient") -> None:
@@ -194,12 +195,18 @@ class TestPendingListing:
         from services.policy_manager import _permission_gates
 
         rid = "0f3c9b6a-8d2e-4c1f-9a7b-2e5d6c4b8a10"
+        # The park instant the manager stamps on the frame — the test supplies
+        # its own so the endpoint's pass-through is asserted byte-for-byte.
+        asked_at = "2026-10-07T06:32:11+00:00"
+        parsed = datetime.fromisoformat(asked_at)
+        assert parsed.tzinfo is not None and parsed.utcoffset() == timedelta(0)
         frame: dict[str, object] = {
             "type": "permission_request",
             "request_id": rid,
-            "action_id": "pim",
-            "summary": "Check tomorrow's calendar",
+            "action_id": "email.read",
+            "summary": "Read the latest invoice email",
             "origin": {"type": "scheduled", "turn_id": 42, "forked": True},
+            "asked_at": asked_at,
         }
         _permission_gates[rid] = {"event": threading.Event(), "result": None, "frame": frame}
         try:
@@ -210,8 +217,9 @@ class TestPendingListing:
         body = resp.get_json()
         assert body["result"] == [{
             "request_id": rid,
-            "action_id": "pim",
-            "summary": "Check tomorrow's calendar",
+            "action_id": "email.read",
+            "summary": "Read the latest invoice email",
             "origin": {"type": "scheduled", "turn_id": 42, "forked": True},
+            "asked_at": asked_at,
         }]
         assert body["pagination"] == {"page": 1, "limit": 1, "total": 1}

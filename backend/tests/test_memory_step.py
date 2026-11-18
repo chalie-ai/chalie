@@ -46,6 +46,7 @@ from models.memory_graph import MemoryGraphRow
 from models.provider_request import ProviderRequest
 from models.provider_response import ProviderResponse
 from models.transcript import Transcript
+from models.turn_execution import TurnExecution
 from services.compaction_service import CompactionService
 from services.memory_step_service import (
     MemoryStepService,
@@ -282,6 +283,77 @@ def test_completed_step_does_not_fire_a_second_step(db: sqlite3.Connection) -> N
         (memory_turn,),
     ).fetchone()[0]
     assert assistant_count == 0, f"memory turn had {assistant_count} assistant rows"
+
+
+def test_tool_calling_turn_fires_the_step_once_after_its_execution_row_closes() -> None:
+    """A turn that runs tools across several provider calls fires exactly one
+    memory step, and that step only ever starts once the foreground turn is
+    over: no step request is served between the turn's own calls, the trigger
+    fires only after the turn's execution row has closed, and the turn's
+    ``result()`` returns while the step is still parked — the foreground never
+    waits on it. The step's own execution row belongs to a turn of its own, so
+    the foreground turn never reads as working again.
+
+    The turn script is two tool-calling steps (an unregistered tool, so the
+    dispatcher records the call and feeds an error back without any real
+    ability running) and then a prose answer; ``step_gate`` parks the step's
+    first request so the foreground can be inspected while the step is live.
+    The trigger is wrapped so the execution row is sampled at the exact moment
+    ``on_settle`` is entered — a trigger that still fires from inside the loop
+    finds its own row open here."""
+    gate = threading.Event()
+    provider = _ScriptedProvider(
+        turn_script=[
+            _Call("noop_probe", {"q": "first"}),
+            _Call("noop_probe", {"q": "second"}),
+            _Say("the answer"),
+        ],
+        step_script=[
+            _Call(SaveGraph.NAME, {"subject": "probe", "contents": "x"}),
+            _Say("done"),
+        ],
+        step_gate=gate,
+    )
+    row_open_at_trigger: dict[int, bool] = {}
+    real_on_settle = MemoryStepService.on_settle
+
+    def probing_on_settle(self: MemoryStepService, settling: MessageProcessor) -> None:
+        open_row = TurnExecution.open_turn(Channel.USER.value, settling.turn_id)
+        row_open_at_trigger[settling.turn_id] = open_row is not None
+        real_on_settle(self, settling)
+
+    with (
+        patch.object(MemoryStepService, "on_settle", probing_on_settle),
+        patch(_BUILD_CLIENT, return_value=provider),
+    ):
+        mp = _drive_turn("run the probes")
+        assert MemoryStepService.instance()._running == {Channel.USER.value}, (
+            "the step was not live when the turn's result() returned"
+        )
+        assert TurnExecution.open_turn(Channel.USER.value, mp.turn_id) is None, (
+            "the foreground execution row was still open after result()"
+        )
+        gate.set()
+        _await_step()
+
+    turn_indexes = [i for i, r in enumerate(provider.requests) if not _is_step_request(r)]
+    step_indexes = [i for i, r in enumerate(provider.requests) if _is_step_request(r)]
+    assert len(turn_indexes) == 3, f"expected 3 turn requests, got {len(turn_indexes)}"
+    assert len(step_indexes) == 2, (
+        f"expected one 2-iteration step run, got {len(step_indexes)} step requests"
+    )
+    assert min(step_indexes) > max(turn_indexes), (
+        "a step request was served while the turn was still iterating"
+    )
+    assert row_open_at_trigger[mp.turn_id] is False, (
+        "the memory step was triggered while the turn's execution row was still open"
+    )
+    step_rows = [
+        row for row in TurnExecution.filter("channel", Channel.USER.value).get()
+        if row.turn_id != mp.turn_id
+    ]
+    assert len(step_rows) == 1, f"expected the step's own execution row, got {len(step_rows)}"
+    assert step_rows[0].type is None and step_rows[0].ended_at is not None
 
 
 def test_rapid_settles_coalesce_into_at_most_two_runs() -> None:

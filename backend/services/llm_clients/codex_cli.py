@@ -27,6 +27,7 @@ import logging
 import os
 import subprocess
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import ClassVar, Optional, cast
@@ -37,10 +38,8 @@ from services.llm_clients.thinking_map import CODEX_REASONING_EFFORTS
 from exceptions import (
     ContextLimit,
     ProviderResponseError,
-    ProviderTimeoutError,
 )
 from services.provider_api import (
-    PROVIDER_CALL_TIMEOUT_S,
     ProviderApiRequest,
     ProviderApiResponse,
     is_token_limit_message,
@@ -254,6 +253,17 @@ class CodexCliClient(ProviderClient):
     def __init__(self, config: dict[str, object]) -> None:
         self._config = config
         self.model: Optional[str] = cast(Optional[str], config.get('model'))
+        self._lock = threading.Lock()
+        self._proc: Optional[subprocess.Popen[str]] = None
+        self._aborted = False
+
+    def abort(self) -> None:
+        """End this client's in-flight call from another thread."""
+        with self._lock:
+            self._aborted = True
+            proc = self._proc
+        if proc is not None:
+            proc.kill()
 
     def send(self, dto: ProviderApiRequest) -> ProviderApiResponse:
         """Transform DTO → ``codex exec`` subprocess → ProviderApiResponse."""
@@ -288,27 +298,25 @@ class CodexCliClient(ProviderClient):
 
         proc: Optional[subprocess.Popen[str]] = None
         try:
-            proc = subprocess.Popen(
-                argv,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                env=env,
-            )
-            stdout, stderr = proc.communicate(input=prompt, timeout=PROVIDER_CALL_TIMEOUT_S)
+            # Spawned under the lock so an abort() cannot slip between the
+            # check and the spawn and leave the process running unseen.
+            with self._lock:
+                if self._aborted:
+                    raise ProviderResponseError("codex exec aborted", response_code=0, provider='codex_cli')
+                proc = subprocess.Popen(
+                    argv,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    env=env,
+                )
+                self._proc = proc
+            stdout, stderr = proc.communicate(input=prompt)
         except FileNotFoundError as exc:
             raise ProviderResponseError(
                 "Codex CLI not found on PATH — install the codex CLI and run `codex login`",
                 response_code=0,
-                provider='codex_cli',
-            ) from exc
-        except subprocess.TimeoutExpired as exc:
-            if proc is not None:
-                proc.kill()
-                proc.communicate()
-            raise ProviderTimeoutError(
-                f"codex exec exceeded {PROVIDER_CALL_TIMEOUT_S}s timeout",
                 provider='codex_cli',
             ) from exc
 

@@ -10,6 +10,7 @@ import { ConfigType } from '@chalie/shared';
  * Parsing rules:
  *   - `data-turn-id`   → Number(value), or null when absent or not a valid number
  *   - `data-type`      → value, or ConfigType.USER when absent
+ *   - `data-channel`   → value, or null when absent (only a delegate turn carries it)
  *   - `data-transcript-row-id` → Number(value), or null when absent or not a valid number
  *   - `data-dock-scope` → Number(value), or null when absent or not a valid number
  *
@@ -19,15 +20,17 @@ import { ConfigType } from '@chalie/shared';
 export function readDomContext(el: HTMLElement | null): {
   turnId: number | null;
   type: string;
+  channel: string | null;
   transcriptRowId: number | null;
   dockScope: number | null;
 } {
   if (!el) {
-    return { turnId: null, type: ConfigType.USER, transcriptRowId: null, dockScope: null };
+    return { turnId: null, type: ConfigType.USER, channel: null, transcriptRowId: null, dockScope: null };
   }
 
   const turnIdEl = el.closest('[data-turn-id]');
   const typeEl = el.closest('[data-type]');
+  const channelEl = el.closest('[data-channel]');
   const transcriptRowEl = el.closest('[data-transcript-row-id]');
   const dockScopeEl = el.closest('[data-dock-scope]');
 
@@ -39,8 +42,9 @@ export function readDomContext(el: HTMLElement | null): {
 
   const turnId = parseTurnId(turnIdEl?.getAttribute('data-turn-id') ?? null);
   const type = typeEl?.getAttribute('data-type') ?? ConfigType.USER;
+  const channel = channelEl?.getAttribute('data-channel') ?? null;
   const transcriptRowId = parseTurnId(transcriptRowEl?.getAttribute('data-transcript-row-id') ?? null);
   const dockScope = parseTurnId(dockScopeEl?.getAttribute('data-dock-scope') ?? null);
 
-  return { turnId, type, transcriptRowId, dockScope };
+  return { turnId, type, channel, transcriptRowId, dockScope };
 }

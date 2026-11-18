@@ -3,20 +3,10 @@
 Holds ``self.mp`` and reaches ``models.compaction.Compaction`` for every
 read/write; no raw SQL, no WS emit (a checkpoint is prose folded into the next
 prompt, never a wire frame). The MAIN/FORK axis is never a parameter — it is
-the view the CURRENT turn is on, read straight off ``self.mp`` (``mp._forked``
-selects the axis; ``mp.turn_id`` is the FORK scope key; ``mp.config`` supplies
-the channel, split read/write aware) exactly as ``chat_history_compactor``
-already keys its own read/write pair.
-
-ESCALATION (open, not resolved by this file): ``mp._forked`` is not a member
-of the §4.3 public attribute contract table — that surface has no MAIN/FORK
-axis selector yet because it isn't derivable from any attribute the table
-does list (``turn_id`` resolves to a concrete int on both axes once
-``begin()`` allocates it, per §6.8). ``CompactionService`` cannot add the
-missing member itself — the contract is owned by F1 (``controllers/message_processor.py``,
-not yet built). Before Phase F wires this service in, F1 must add a public
-``is_forked: bool`` (or equivalent) to §4.3 and this file must be re-pointed
-at it in the same change.
+the view the CURRENT turn is on, read straight off ``self.mp``
+(``mp.fork_view`` selects the axis; ``mp.turn_id`` is the FORK scope key;
+``mp.config`` supplies the channel, split read/write aware) exactly as
+``chat_history_compactor`` and ``TranscriptService.read`` key theirs.
 """
 
 from __future__ import annotations
@@ -44,15 +34,14 @@ class CompactionService:
         is its own thread, and ``TranscriptService.read()`` scopes its FORK
         view the same way, so the id floor and the rows it cuts stay on one
         channel. Matches ``chat_history_compactor``'s own keying."""
-        if self.mp._forked:
+        if self.mp.fork_view:
             return self.mp.config.channel
         return self.mp.config.read_channel or self.mp.config.channel
 
     def _for_turn_id(self) -> int | None:
-        """The watermark axis selector: the current turn_id on a FORK reply,
-        ``None`` on the MAIN spine. Reads ``mp._forked`` — see the module
-        docstring's ESCALATION note: not yet a sanctioned §4.3 member."""
-        return cast("int | None", self.mp.turn_id) if self.mp._forked else None
+        """The watermark axis selector: the current turn_id on the FORK view,
+        ``None`` on the MAIN spine."""
+        return cast("int | None", self.mp.turn_id) if self.mp.fork_view else None
 
     def get(self) -> Compaction | None:
         """Latest checkpoint for the current view, or ``None``. MAIN

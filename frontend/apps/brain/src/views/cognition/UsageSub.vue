@@ -104,20 +104,25 @@ interface BarGeom {
   labelY: number;
 }
 
+// The SVG stretches its viewBox to the container width, so the viewBox width
+// stays fixed: sized from the data, one bar would scale up to fill the row.
+const CHART_W = 600;
+const MAX_BAR_W = 32;
+
 const chartGeom = computed(() => {
   const chart = chartData.value;
   if (chart.length === 0) return null;
   const maxVal = Math.max(...chart.map((d) => (d.input || 0) + (d.output || 0)), 1);
-  const barW = Math.max(16, Math.floor(600 / chart.length) - 4);
+  const slotW = CHART_W / chart.length;
+  const barW = Math.min(MAX_BAR_W, slotW * 0.8);
   const h = 160;
   const labelH = 40;
   const showEvery = chart.length > 20 ? Math.ceil(chart.length / 15) : 1;
-  const svgW = chart.length * (barW + 4);
 
   const bars: BarGeom[] = chart.map((d, i) => {
     const inputH = ((d.input || 0) / maxVal) * h;
     const outputH = ((d.output || 0) / maxVal) * h;
-    const x = i * (barW + 4);
+    const x = i * slotW + (slotW - barW) / 2;
     const showLabel = i % showEvery === 0;
     return {
       x,
@@ -133,7 +138,7 @@ const chartGeom = computed(() => {
     };
   });
 
-  return { bars, svgW, h, labelH };
+  return { bars, h, labelH };
 });
 </script>
 
@@ -178,7 +183,7 @@ const chartGeom = computed(() => {
         <!-- eslint-disable-next-line vue/html-self-closing -->
         <svg
           class="usage-chart"
-          :viewBox="`0 0 ${chartGeom.svgW} ${chartGeom.h + chartGeom.labelH}`"
+          :viewBox="`0 0 ${CHART_W} ${chartGeom.h + chartGeom.labelH}`"
           preserveAspectRatio="none"
         >
           <g v-for="bar in chartGeom.bars" :key="bar.label">

@@ -10,15 +10,15 @@ The seed file (policy_defaults.json) is the single source of truth for the
 policy table. ``apply_seed`` converges the table to the seed on every boot: it
 INSERT-OR-IGNOREs every seeded row, then DELETES every row whose permission is
 neither in the seed nor an MCP tool permission. Retiring an ability needs only
-a seed-file edit — never a migration. The seed is exhaustive (71 permissions ×
-3 channels = 213 rows), so matching on the permission column alone is correct
+a seed-file edit — never a migration. The seed is exhaustive (87 permissions ×
+3 channels = 261 rows), so matching on the permission column alone is correct
 and complete.
 
 A small set of tools (``INTERNAL``) ALWAYS bypass the gate regardless of channel
-or any seeded row — read-only / scratch / infrastructure tools, plus
-delegate-exclusive inner tools whose user-facing permission is the OUTER delegate
-tool (``pim`` covers email/calendar/contacts exactly as ``web_search`` covers
-search). They are never user-gated and carry no seed rows.
+or any seeded row — read-only / scratch / infrastructure tools, and the tools
+that spawn and manage subagents. They are never user-gated and carry no seed
+rows. A tool a subagent calls is gated on the channel of the agent at the top of
+the chain, since every subagent runs on its spawner's policy channel.
 
 The gate is dead simple: short-circuit INTERNAL tools, else SELECT the setting
 (lazily creating an 'ask' row on a miss), then run | block | prompt. The decision
@@ -49,22 +49,26 @@ CHANNEL = PolicyChannel
 VALID_CHANNELS = {c.value for c in CHANNEL}
 VALID_SETTINGS = {"internal", "allow", "ask", "deny"}
 
-# Tools that ALWAYS bypass the gate, on every channel, with no seed row. Two
+# Tools that ALWAYS bypass the gate, on every channel, with no seed row. Three
 # admission grounds: (1) read-only / scratch / infrastructure tools — never
-# user-gated; (2) delegate-exclusive inner tools (DISCOVERABLE=False, pinned on
-# one delegate config) — the user-facing permission is the OUTER delegate tool
-# (``web_search`` covers search/news, ``web_browse`` covers browser,
-# ``pim`` covers email/calendar/contacts, ``code_agent`` covers ``run_script``).
-# The mutating file primitives (write_file / edit_file / move / make_dir /
-# delete / set_permissions) are NOT here: they carry seeded ``allow`` rows, so
-# the user can tighten them per channel. ANY action on INTERNAL tools runs unconditionally;
+# user-gated; (2) the tools that spawn subagents — starting and managing
+# subagents is internal mechanics, never asked; (3) delegate-exclusive inner
+# tools of web_search and web_browse (search/news, browser), which have no
+# permission of their own. email / calendar / contacts are NOT here: they
+# carry seeded per-action rows, gated on the spawner's channel; nor is
+# code_agent's run_script, which carries one seeded row per channel. Nor are
+# the mutating file primitives (write_file /
+# edit_file / move / make_dir / delete / set_permissions): they carry seeded
+# ``allow`` rows, so the user can tighten them per channel. ANY action on
+# INTERNAL tools runs unconditionally;
 # they never appear in the Brain policy surface, and the reap pass removes any
 # stale rows for them so this frozenset stays the single source of truth.
 INTERNAL = frozenset({
-    "browser", "calendar", "chalie_docs", "chat_history_compactor", "contacts",
-    "delete_graph", "email", "find_skills", "find_tools", "image_preview", "mcp_tools", "news",
-    "read", "recall", "review_tool_calls", "review_transcript", "run_script", "save_graph",
-    "save_map", "save_synthesis", "search", "skill_manager", "web_fetch",
+    "browser", "chalie_docs", "chat_history_compactor", "code_agent",
+    "delete_graph", "find_skills", "find_tools", "image_preview", "mcp_tools", "news", "pim",
+    "plan", "read", "recall", "review_tool_calls", "review_transcript", "save_graph",
+    "save_map", "save_synthesis", "search", "skill_manager", "subtask", "web_browse", "web_fetch",
+    "web_search",
 })
 
 _BLOCK = "The {permission} action is not allowed. Do NOT retry."
@@ -159,6 +163,10 @@ class PolicyManager:
                 "action_id": permission,
                 "summary": summary,
                 "origin": origin,
+                # The instant the ask parked, ISO-8601 UTC with its offset:
+                # pending() returns this same frame over REST, so a client
+                # restoring after a reload can age its live line from here.
+                "asked_at": utc_now().isoformat(timespec="seconds"),
             }
             gate = _permission_gates[rid] = {"event": threading.Event(), "result": None, "frame": frame}
             Websocket.broadcast(WsMessage(**frame))

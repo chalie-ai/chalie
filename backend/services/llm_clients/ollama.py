@@ -23,20 +23,20 @@ from typing import ClassVar, Mapping, Optional, Sequence, TypeAlias, Union, cast
 from urllib.parse import urlparse
 from uuid import uuid4
 
+import httpx
 import requests
 
 from configs.enums.thinking_level import ThinkingLevel
 from contracts.provider_client import ProviderClient
 from services.llm_clients.context_window import DEFAULT_WINDOW
+from services.llm_clients.socket_abort import SocketAbort
 from services.llm_clients.thinking_map import OLLAMA_THINK
 from exceptions import (
     ContextLimit,
     ProviderResponseError,
-    ProviderTimeoutError,
     RateLimitError,
 )
 from services.provider_api import (
-    PROVIDER_CALL_TIMEOUT_S,
     ProviderApiRequest,
     ProviderApiResponse,
 )
@@ -175,6 +175,11 @@ class OllamaClient(ProviderClient):
         self.host: str = _validate_host(config.get('host'))
         self.model: str = _validate_model(config.get('model'))
         self._keep_alive: str = cast(str, config.get('keep_alive', '0'))
+        self._abort = SocketAbort()
+
+    def abort(self) -> None:
+        """End this client's in-flight call from another thread."""
+        self._abort.abort()
 
     def _user_agent(self) -> dict[str, str]:
         from services.llm_service import _app_user_agent  # noqa: PLC0415
@@ -256,8 +261,8 @@ class OllamaClient(ProviderClient):
                 )
         return payload
 
-    def _handle_http_error(self, exc: requests.exceptions.HTTPError) -> None:
-        status = exc.response.status_code if exc.response is not None else None
+    def _handle_http_error(self, exc: httpx.HTTPStatusError) -> None:
+        status = exc.response.status_code
         if status == 429:
             raise RateLimitError(str(exc), provider='ollama') from exc
         if status == 413:
@@ -265,7 +270,7 @@ class OllamaClient(ProviderClient):
                 f"Ollama rejected payload with HTTP 413 (model={self.model})",
                 provider='ollama',
             ) from exc
-        raise ProviderResponseError(str(exc), response_code=status or 0, provider='ollama') from exc
+        raise ProviderResponseError(str(exc), response_code=status, provider='ollama') from exc
 
     def send(self, dto: ProviderApiRequest) -> ProviderApiResponse:
         """Transform DTO → Ollama /api/chat → ProviderApiResponse."""
@@ -275,20 +280,15 @@ class OllamaClient(ProviderClient):
 
         start = time.time()
         try:
-            resp = requests.post(
-                url, json=cast("_Json", payload),
-                headers=self._user_agent(),
-                timeout=PROVIDER_CALL_TIMEOUT_S,
-            )
+            with httpx.Client(timeout=None, event_hooks=self._abort.hooks()) as http:
+                resp = http.post(url, json=cast("_Json", payload), headers=self._user_agent())
             resp.raise_for_status()
             parsed = _parse_chat_response(resp.json(), self.model)
             parsed.latency_ms = int((time.time() - start) * 1000)
             return parsed
-        except requests.exceptions.Timeout as exc:
-            raise ProviderTimeoutError(str(exc), provider='ollama') from exc
-        except requests.exceptions.ConnectionError as exc:
+        except httpx.TransportError as exc:
             raise ProviderResponseError(str(exc), response_code=0, provider='ollama') from exc
-        except requests.exceptions.HTTPError as exc:
+        except httpx.HTTPStatusError as exc:
             self._handle_http_error(exc)
             raise  # pragma: no cover — _handle_http_error always raises
 

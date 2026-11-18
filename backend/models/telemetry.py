@@ -56,11 +56,6 @@ class Telemetry:
         return self._dict_field("location")
 
     @property
-    def behavioral(self) -> dict[str, object] | None:
-        """Behavioral signals group, or None when absent."""
-        return self._dict_field("behavioral")
-
-    @property
     def location_name_stale(self) -> bool:
         """True while a failed geocode retry is pending (default False)."""
         return bool(self._ctx.get("_location_name_stale", False))

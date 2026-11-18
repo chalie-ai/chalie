@@ -346,6 +346,20 @@ class VoiceTranscriptService:
             return False
         return True
 
+    @classmethod
+    def speech_is_audible(cls, samples: object, sample_rate: int, audio_bytes: bytes) -> bool:
+        """Whether one :meth:`synthesize` result holds speech worth keeping:
+        samples above the silence floor, and an encoded blob that still decodes
+        to (nearly) their full length."""
+        import numpy as np
+
+        samples_arr = cast("np.ndarray[tuple[int], np.dtype[np.float32]]", samples)
+        return (
+            len(samples_arr) > 0
+            and float(np.max(np.abs(samples_arr))) > cls.SILENCE_PEAK_THRESHOLD
+            and cls._encoded_audio_survived(audio_bytes, len(samples_arr) / sample_rate)
+        )
+
     def synthesize(self, text: str) -> tuple[object, int, bytes]:
         """Synthesize *text* into speech.
 
@@ -419,8 +433,6 @@ class VoiceTranscriptService:
         terminal state. Retries up to 3 times on silent or failed synthesis,
         persists the WAV path on success or NULL on failure, and broadcasts
         the pipeline state transition."""
-        import numpy as np
-
         cls = type(self)
         with cls._synthesize_in_flight_lock:
             if transcript_id in cls._synthesize_in_flight:
@@ -447,16 +459,7 @@ class VoiceTranscriptService:
             for attempt in range(1, cls.MAX_SYNTHESIS_ATTEMPTS + 1):
                 try:
                     samples, sample_rate, audio_bytes = self.synthesize(text)
-                    samples_arr = cast(
-                        "np.ndarray[tuple[int], np.dtype[np.float32]]", samples,
-                    )
-                    if (
-                        len(samples_arr) > 0
-                        and float(np.max(np.abs(samples_arr))) > cls.SILENCE_PEAK_THRESHOLD
-                        and self._encoded_audio_survived(
-                            audio_bytes, len(samples_arr) / sample_rate,
-                        )
-                    ):
+                    if cls.speech_is_audible(samples, sample_rate, audio_bytes):
                         file_name = f"{transcript_id}.mp3"
                         path = FileMapperService.get_voice_path(file_name)
                         path.parent.mkdir(parents=True, exist_ok=True)

@@ -169,30 +169,30 @@ class OpenAIClient(OpenAICompatibleClient):
 
         import openai as openai_mod  # noqa: PLC0415
         try:
-            client = self._get_client()
-            create = cast(
-                "Callable[..., _openai_mod.types.chat.ChatCompletion]",
-                client.chat.completions.create,
-            )
-            try:
-                create(
-                    model=self.model,
-                    messages=[{"role": "user", "content": "."}],
-                    max_completion_tokens=_OVERFLOW_TOKENS,
+            with self._get_client() as client:
+                create = cast(
+                    "Callable[..., _openai_mod.types.chat.ChatCompletion]",
+                    client.chat.completions.create,
                 )
-            except openai_mod.APIStatusError as first_err:
-                extracted = _extract_window_from_error(first_err)
-                if extracted is not None:
-                    return extracted
-                # Older models reject max_completion_tokens but accept max_tokens — retry.
                 try:
                     create(
                         model=self.model,
                         messages=[{"role": "user", "content": "."}],
-                        max_tokens=_OVERFLOW_TOKENS,
+                        max_completion_tokens=_OVERFLOW_TOKENS,
                     )
-                except openai_mod.APIStatusError as second_err:
-                    return _extract_window_from_error(second_err)
+                except openai_mod.APIStatusError as first_err:
+                    extracted = _extract_window_from_error(first_err)
+                    if extracted is not None:
+                        return extracted
+                    # Older models reject max_completion_tokens but accept max_tokens — retry.
+                    try:
+                        create(
+                            model=self.model,
+                            messages=[{"role": "user", "content": "."}],
+                            max_tokens=_OVERFLOW_TOKENS,
+                        )
+                    except openai_mod.APIStatusError as second_err:
+                        return _extract_window_from_error(second_err)
         except Exception as exc:
             logger.warning(
                 "[%s] Overflow probe failed for model=%s: %s",

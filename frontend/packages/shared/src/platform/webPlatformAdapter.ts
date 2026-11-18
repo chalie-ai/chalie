@@ -59,7 +59,7 @@ export const webPlatformAdapter: PlatformAdapter = {
     }
   },
   openBrain: () => {
-    globalThis.open('/brain/', '_blank');
+    globalThis.location.assign('/brain/');
   },
   createWakeLock: (): WakeLockHandle => {
     // The Screen Wake Lock API auto-releases when the page becomes hidden
@@ -112,9 +112,4 @@ export const webPlatformAdapter: PlatformAdapter = {
       },
     };
   },
-
-  // Web has no native STT — reject so the caller falls back to the
-  // MediaRecorder -> POST /voice/transcribe path.
-  startSTT: () => Promise.reject(new Error('STT_UNSUPPORTED')),
-  stopSTT: () => Promise.resolve(),
 };

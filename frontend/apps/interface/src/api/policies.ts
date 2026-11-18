@@ -28,10 +28,12 @@ export interface PermissionOrigin {
 export interface PendingPermission {
   /** Opaque ID; resolves the gate on /api/policies/respond. */
   request_id: string;
-  /** Permission key the policy gated, e.g. "pim" or "email.send". */
+  /** Permission key the policy gated, e.g. "bash.modify_file" or "email.send". */
   action_id: string;
   /** The model's one-line summary of the gated action — the card's title. */
   summary: string;
+  /** The instant the ask parked (ISO-8601 UTC with offset) — the live line's "waiting" clock ages from it. */
+  asked_at: string;
   origin: PermissionOrigin;
 }
 

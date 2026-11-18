@@ -13,7 +13,7 @@ const { visible, pending, accept, cancel } = useConfirm();
         </div>
         <p class="modal-desc">{{ pending.desc }}</p>
         <div class="modal-actions">
-          <button class="btn btn-secondary" @click="cancel">Cancel</button>
+          <button class="btn" @click="cancel">Cancel</button>
           <button :class="['btn', pending.confirmClass || 'btn-primary']" @click="accept">
             {{ pending.confirmLabel || 'Confirm' }}
           </button>

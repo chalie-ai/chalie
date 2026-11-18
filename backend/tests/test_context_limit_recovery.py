@@ -41,8 +41,6 @@ Five claims, one per branch the recovery actually carries:
 """
 
 import sqlite3
-import threading
-import time
 from typing import cast
 from unittest.mock import patch
 
@@ -58,6 +56,7 @@ from models.turn_execution import TurnExecution
 from services.database import Database
 from services.provider_api import MAX_CONTEXT_WINDOW
 from services.provider_db_service import ProviderDbService
+from tests.helpers import drain_background_turns
 
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 
@@ -115,23 +114,6 @@ class _ReportingProvider:
         )
 
 
-def _drain_background_turns(timeout_s: float = 10.0) -> None:
-    """Join the fire-and-forget post-turn daemon turns a completed turn spawns
-    so they run to completion inside THIS test's provider patch and never leak
-    into the next — left running, each would call ``build_client`` while the
-    NEXT test holds the patch."""
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        pending = [
-            t for t in threading.enumerate()
-            if t.name in ("skill-suggest", "thread-gist") or t.name.startswith("turn-")
-        ]
-        if not pending:
-            return
-        for t in pending:
-            t.join(timeout=deadline - time.monotonic())
-
-
 def _terminal_state(mp: MessageProcessor) -> str:
     """The turn's stamped terminal state, read back off the real row — the same
     record the UI and the crash toast are driven from."""
@@ -147,7 +129,7 @@ def _run(provider: _ReportingProvider, raw_input: str) -> MessageProcessor:
     with patch(_BUILD_CLIENT, return_value=provider):
         mp.begin()
         mp.result()
-        _drain_background_turns()
+        drain_background_turns()
     return mp
 
 
@@ -157,17 +139,25 @@ def test_previous_reported_usage_at_the_line_compacts_the_next_turn(
     """A turn the provider reported at the 90% line gates the NEXT one: that
     request is withheld, the turn compacts, and the *retry* is what answers.
 
-    Two real turns on the same channel. The first is served normally and the
-    provider reports it at the cap — the number ``ProviderService`` writes to the
-    ledger. The second reads that ledger row before it sends anything, so it
-    compacts without ever measuring its own payload.
+    Three real turns on the same channel. An earlier one is reported well under
+    the line. The first is served normally and the provider reports it at the
+    cap — the number ``ProviderService`` writes to the ledger. The second reads
+    the newest ledger row before it sends anything, so it compacts without ever
+    measuring its own payload; the older, under-the-line row must not be the one
+    it reads.
 
     The gate is *reactive* by design: it can only know a request was too big
     after one came back. That is why the first turn completes untouched and the
-    second is the one that pays."""
-    assert db is not None  # fixture taken for its binding side effect (real DB gateway)
-    provider = _ReportingProvider(reports=[_OVER_CAP])
+    second is the one that pays.
 
+    A chat turn does not plan, so each turn answers in a single send: the
+    earlier turn's send is reported under the line, the first turn's at it.
+    Every later send reports under it, so the second turn's hand-over pass and
+    retry go through."""
+    assert db is not None  # fixture taken for its binding side effect (real DB gateway)
+    provider = _ReportingProvider(reports=[_UNDER_CAP, _OVER_CAP, _UNDER_CAP])
+
+    _run(provider, "an earlier turn reported well under the line")
     first = _run(provider, "a first turn the provider serves normally")
     assert _terminal_state(first) == TurnExecution.COMPLETED
     assert not first.turn_handover, "nothing should have compacted before any usage was reported"

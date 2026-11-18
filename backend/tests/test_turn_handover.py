@@ -35,8 +35,6 @@ when the provider refuses a request for length.
 """
 
 import sqlite3
-import threading
-import time
 from typing import cast
 from unittest.mock import patch
 
@@ -52,6 +50,7 @@ from models.provider_response import ProviderResponse
 from models.tool_call import ToolCall
 from models.transcript import Transcript
 from models.turn_execution import TurnExecution
+from tests.helpers import drain_background_turns
 
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 
@@ -152,23 +151,6 @@ class _HandoverProvider:
         )
 
 
-def _drain_background_turns(timeout_s: float = 10.0) -> None:
-    """Join the fire-and-forget post-turn daemon turns a completed turn spawns
-    so they run to completion inside THIS test's provider patch and never leak
-    into the next — left running, each would call ``build_client`` while the
-    NEXT test holds the patch."""
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        pending = [
-            t for t in threading.enumerate()
-            if t.name in ("skill-suggest", "thread-gist") or t.name.startswith("turn-")
-        ]
-        if not pending:
-            return
-        for t in pending:
-            t.join(timeout=deadline - time.monotonic())
-
-
 def _terminal_state(mp: MessageProcessor) -> str:
     """The turn's stamped terminal state, read back off the real row."""
     execution = mp.turn_execution_service.latest_for_turn()
@@ -183,7 +165,7 @@ def _run(provider: _HandoverProvider, raw_input: str) -> MessageProcessor:
     with patch(_BUILD_CLIENT, return_value=provider):
         mp.begin()
         mp.result()
-        _drain_background_turns()
+        drain_background_turns()
     return mp
 
 

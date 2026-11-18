@@ -175,6 +175,7 @@ class HomeAbility(CapabilityAbility):
                     "list_automations first if unsure."
                 ),
             },
+            Keys.limit: {"type": "integer", "description": "Max devices to list (default 50)"},
         },
         "required": [Keys.action],
     }

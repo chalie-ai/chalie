@@ -11,9 +11,10 @@ from configs.enums.config_type import ConfigTypeEnum
 # The task handed to the loop each tick — written as a user asking for a research
 # pass, grounded on the fresh main spine (DiscoveryConfig reads the ``user``
 # channel's history via ``read_channel="user"``). The system prompt is the
-# inherited UserConfig persona/voice prompt, unmodified; the user turn is the
-# research task only. Persisting what the pass found is the settle-triggered
-# memory step's job, never the pass's own.
+# inherited UserConfig persona/voice prompt, without the chat's section on
+# handing work to subagents (a pass waits for its subagents' answers); the user
+# turn is the research task only. Persisting what the pass found is the
+# settle-triggered memory step's job, never the pass's own.
 DISCOVERY_PROMPT = (
     f"Can you run a background research pass for me? Ground it in our recent "
     f"conversation above, then search the web and read the news for anything "
@@ -34,10 +35,12 @@ class DiscoveryConfig(UserConfig):
     A thin split of UserConfig: it **reads** the ``user`` channel's cross-turn
     history (so it sees exactly what a user turn sees) but **writes** its rows
     to the ``discovery`` channel. The system prompt is the inherited UserConfig
-    persona/voice prompt; the user turn is the research task only
-    (``DISCOVERY_PROMPT``). Only the routing identity, the tool surface, the
-    stable turn_id, and the silent-background-loop overrides differ from
-    UserConfig. Fired at most once every few hours by the subconscious worker.
+    persona/voice prompt, less the chat's section on handing work to subagents
+    (a pass waits for its subagents' answers); the user turn is the research
+    task only (``DISCOVERY_PROMPT``). Only the routing identity, the tool
+    surface, the stable turn_id, and the silent-background-loop overrides
+    differ from UserConfig. Fired at most once every few hours by the
+    subconscious worker.
 
     Memory: the pass itself only reads — ``recall`` grounds the research in
     what is already known; it never writes memory inline. Each settled fire
@@ -50,6 +53,7 @@ class DiscoveryConfig(UserConfig):
 
     BROADCASTS_STATE = False
     RENDERS_HTML = False
+    RENDERS_CARDS = False
     # Re-declared, NOT inherited. Subclassing UserConfig would otherwise bill this
     # loop's spend as "foreground" — but the user never asked for it and never sees it;
     # Chalie runs it on its own initiative, so it is background spend. Every override

@@ -32,7 +32,7 @@ RUN mkdir -p /root/.chalie/app/data
 VOLUME ["/root/.chalie/app/data"]
 EXPOSE 31025
 
-# Voice deps/models and the Playwright browser are installed above as part of
+# Voice deps/models and the headless browser are installed above as part of
 # install.sh's own run (no separate step here) — baked into the image, not
 # installed at runtime.
 ENTRYPOINT ["bash", "/root/.chalie/app/run.sh"]

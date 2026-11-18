@@ -23,6 +23,9 @@ from __future__ import annotations
 from enum import Enum
 
 
+_DELEGATE_PREFIX = "delegate:"
+
+
 class Channel(str, Enum):
     # ── User-facing spines ───────────────────────────────────────────────────
     USER          = "user"
@@ -44,6 +47,7 @@ class Channel(str, Enum):
     DELEGATE_WEB_SEARCH  = "delegate:web_search"
     DELEGATE_VISION      = "delegate:vision"
     DELEGATE_CODE_AGENT  = "delegate:code_agent"
+    DELEGATE_SUBTASK     = "delegate:subtask"
 
     # ── External agents (dynamic: external-agent:{name}) ─────────────────────
     EXTERNAL_AGENT = "external-agent"
@@ -52,3 +56,30 @@ class Channel(str, Enum):
     def for_external_agent(cls, name: str) -> str:
         """Build the dynamic ``external-agent:{name}`` channel string."""
         return f"{cls.EXTERNAL_AGENT.value}:{name}"
+
+    @classmethod
+    def for_delegate(cls, name: str) -> str:
+        """The channel the delegate tool ``name`` runs its child turns on."""
+        return f"{_DELEGATE_PREFIX}{name}"
+
+
+# The delegate turns a user may watch: the channels of the configs that each
+# DelegateAbility tool runs its child turn on — every one writes a transcript
+# of its own (vision and thread_gist write none, so there is nothing to show).
+# Their frames reach the wire addressed by channel, and the threads read
+# accepts no other channel — whether the caller waits for the child or not.
+WATCHABLE_DELEGATE_CHANNELS: frozenset[str] = frozenset({
+    Channel.DELEGATE_WEB_SEARCH.value,
+    Channel.DELEGATE_WEB_BROWSE.value,
+    Channel.DELEGATE_PIM.value,
+    Channel.DELEGATE_CODE_AGENT.value,
+    Channel.DELEGATE_SUBTASK.value,
+})
+
+
+def delegate_name(channel: str) -> str | None:
+    """The delegate tool whose child turns run on ``channel`` — the inverse of
+    :meth:`Channel.for_delegate` — or ``None`` for a channel no such tool owns."""
+    if channel not in WATCHABLE_DELEGATE_CHANNELS:
+        return None
+    return channel.removeprefix(_DELEGATE_PREFIX)

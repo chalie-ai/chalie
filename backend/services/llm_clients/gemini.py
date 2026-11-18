@@ -44,6 +44,8 @@ import time
 from typing import TYPE_CHECKING, ClassVar, Optional, cast
 from uuid import uuid4
 
+import httpx
+
 if TYPE_CHECKING:
     from typing import Protocol, TypedDict
 
@@ -99,10 +101,10 @@ from contracts.provider_client import ProviderClient
 from exceptions import (
     ContextLimit,
     ProviderResponseError,
-    ProviderTimeoutError,
     RateLimitError,
 )
 from services.llm_clients.context_window import DEFAULT_WINDOW
+from services.llm_clients.socket_abort import SocketAbort
 from services.llm_clients.thinking_map import GEMINI_NONE_FALLBACK_BUDGET, GEMINI_THINKING_BUDGETS
 from services.provider_api import (
     ProviderApiRequest,
@@ -205,6 +207,11 @@ class GeminiClient(ProviderClient):
         self._config = config
         self.model: str = cast(str, config.get('model', 'gemini-2.5-flash'))
         self._format: str = cast(str, config.get('format', 'text'))
+        self._abort = SocketAbort()
+
+    def abort(self) -> None:
+        """End this client's in-flight call from another thread."""
+        self._abort.abort()
 
     def _get_sdk(self) -> "_Genai":
         try:
@@ -215,16 +222,11 @@ class GeminiClient(ProviderClient):
                 "google-genai package is not installed. Run: pip install google-genai"
             )
 
-    def _get_client(self, genai: "_Genai") -> "_GenaiClient":
+    def _get_client(self, genai: "_Genai", http: httpx.Client) -> "_GenaiClient":
         from services.llm_service import _resolve_api_key, _app_user_agent  # noqa: PLC0415
-        from services.provider_api import PROVIDER_CALL_TIMEOUT_S  # noqa: PLC0415
         return genai.Client(
             api_key=_resolve_api_key(self._config),
-            # HttpOptions.timeout is in milliseconds.
-            http_options={
-                "timeout": PROVIDER_CALL_TIMEOUT_S * 1000,
-                "headers": {"User-Agent": _app_user_agent()},
-            },
+            http_options={"headers": {"User-Agent": _app_user_agent()}, "httpx_client": http},
         )
 
     def _thinking_native(self, genai: "_Genai", level: ThinkingLevel, cfg: "_GenCfg") -> None:
@@ -364,11 +366,6 @@ class GeminiClient(ProviderClient):
                 config=genai.types.GenerateContentConfig(**gen_cfg),
             )
         except Exception as exc:
-            # google-genai does not wrap transport errors — an httpx read/connect
-            # timeout propagates raw. Fail fast so the retry helper does not loop.
-            import httpx  # noqa: PLC0415
-            if isinstance(exc, httpx.TimeoutException):
-                raise ProviderTimeoutError(f"Gemini request timed out: {exc}", provider='gemini') from exc
             do_retry, retry_budget = self._classify_and_raise(exc, gen_cfg)
             if not do_retry:
                 raise
@@ -405,13 +402,13 @@ class GeminiClient(ProviderClient):
     def send(self, dto: ProviderApiRequest) -> ProviderApiResponse:
         """Transform DTO → Gemini generate_content API → ProviderApiResponse."""
         genai = self._get_sdk()
-        client = self._get_client(genai)
         start = time.time()
 
         contents = _gemini_convert_messages(dto.messages)
         gen_cfg = self._build_gen_config(genai, dto.system, dto.tools, dto.thinking_mode)
 
-        response = self._generate_with_fallback(client, genai, contents, gen_cfg)
+        with httpx.Client(timeout=None, event_hooks=self._abort.hooks()) as http:
+            response = self._generate_with_fallback(self._get_client(genai, http), genai, contents, gen_cfg)
         latency_ms = int((time.time() - start) * 1000)
         text, tool_calls, finish_reason, thinking_block = self._parse_response(cast("_GenResponse", response))
 

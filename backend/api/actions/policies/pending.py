@@ -39,6 +39,7 @@ class PendingAction(Action):
                 action_id=cast(str, frame["action_id"]),
                 summary=cast(str, frame["summary"]),
                 origin=PermissionOriginResponse.model_validate(frame["origin"]),
+                asked_at=cast(str, frame["asked_at"]),
             )
             for frame in self._service().pending()
         ]

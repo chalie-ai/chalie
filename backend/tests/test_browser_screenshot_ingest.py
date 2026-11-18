@@ -16,8 +16,10 @@ absolute filepath on the delegate channel.
 from __future__ import annotations
 
 import io
+import json
 import sqlite3
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -29,8 +31,7 @@ from services.file_mapper_service import FileMapperService
 from services.file_parser_service import FileParserService
 from services.provider_db_service import ProviderDbService
 from services.tmp_storage import new_tmp_path
-
-pytestmark = pytest.mark.unit
+from tests._browser_live import isolated_browser
 
 
 def _invoice_png_path() -> str:
@@ -56,20 +57,28 @@ def _invoice_png_path() -> str:
     return path
 
 
-def test_screenshot_ingest_lands_flat_in_screenshots_subdir_and_vision_reads_it(
-    db: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    ProviderDbService().set_vision_provider(None)
+def _isolated_documents(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Point the documents store and its index into ``tmp_path``, no vision provider.
 
-    # Hermetic isolation (same style as test_snapshot_docs_roundtrip.py's
-    # _redirect_snapshot_paths): both patched BEFORE FileParserService runs —
-    # FileIndexService()'s db_path is resolved at call time inside ingest(),
-    # so the classmethod patch must already be in place to reach it.
+    Hermetic isolation (same style as test_snapshot_docs_roundtrip.py's
+    _redirect_snapshot_paths): both patched BEFORE FileParserService runs —
+    FileIndexService()'s db_path is resolved at call time inside ingest(),
+    so the classmethod patch must already be in place to reach it.
+    """
+    ProviderDbService().set_vision_provider(None)
     documents_dir = tmp_path / "documents"
     monkeypatch.setattr(FileMapperService, "_DOCUMENTS_DIR", documents_dir)
     monkeypatch.setattr(
         FileMapperService, "get_file_index_db_path", lambda *_: tmp_path / "file_index.sqlite"
     )
+    return documents_dir
+
+
+@pytest.mark.unit
+def test_screenshot_ingest_lands_flat_in_screenshots_subdir_and_vision_reads_it(
+    db: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    documents_dir = _isolated_documents(tmp_path, monkeypatch)
 
     saved_path, text = FileParserService().ingest(
         _invoice_png_path(), name="screenshot-example.com.png", subdir="screenshots",
@@ -96,3 +105,26 @@ def test_screenshot_ingest_lands_flat_in_screenshots_subdir_and_vision_reads_it(
         "vision", {"image": saved_path, "query": "what text is in this image"}
     )
     assert "INVOICE" in str(out), out
+
+
+@pytest.mark.e2e
+def test_a_screenshot_of_a_real_page_is_stored_and_read_back(
+    db: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The ``screenshot`` verb captures the live headless-shell page and ingests it."""
+    documents_dir = _isolated_documents(tmp_path, monkeypatch)
+    mp = MessageProcessor(WebBrowseConfig(PolicyChannel.CHAT), raw_input="screenshot a page")
+    mp.active_tools = list(mp.config.always_available or [])
+    with isolated_browser(tmp_path, monkeypatch):  # a profile under tmp_path
+        mp.dispatch_service.dispatch(
+            "browser", {"action": "open", "url": "data:text/html,<h1 style='font-size:120px'>INVOICE</h1>"},
+        )
+        rendered = mp.dispatch_service.dispatch("browser", {"action": "screenshot"})
+
+    header, body = rendered.splitlines()[:2]
+    assert "status=success" in header, rendered
+    data = cast("dict[str, object]", json.loads(body)["data"])
+    # A data: URL has no host, so the file is named after the generic "page".
+    assert data["name"] == "screenshot-page.png", data
+    assert "INVOICE" in str(data["vision"]), data
+    assert (documents_dir / "screenshots" / "screenshot-page.png").is_file()

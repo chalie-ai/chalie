@@ -20,27 +20,45 @@ class UserConfig(ProcessorConfig):
     else) on the drive thread."""
 
     RENDERS_HTML: ClassVar[bool] = True
+    RENDERS_CARDS: ClassVar[bool] = True
     BROADCASTS_STATE = True
     USAGE_TYPE = "foreground"
 
     def __init__(self, metadata: dict[str, object] | None = None) -> None:
+        # Lazy: each subagent's ability module imports the channel configs.
+        from abilities.code_agent import CodeAgentAbility  # noqa: PLC0415
+        from abilities.pim import PimAbility  # noqa: PLC0415
+        from abilities.subtask import SubtaskAbility  # noqa: PLC0415
+        from abilities.web_browse import WebBrowseAbility  # noqa: PLC0415
+        from abilities.web_search import WebSearchAbility  # noqa: PLC0415
+
         _metadata = metadata or {}
         super().__init__(
             channel=Channel.USER.value,
             role="user",
             policy_channel=PolicyChannel.CHAT,
-            always_available=DEFAULT_ALWAYS_AVAILABLE,
+            always_available=[
+                *DEFAULT_ALWAYS_AVAILABLE,
+                SubtaskAbility.NAME,
+                CodeAgentAbility.NAME,
+                WebBrowseAbility.NAME,
+                WebSearchAbility.NAME,
+                PimAbility.NAME,
+            ],
             skip_transcript=False,
             skip_input_row=bool(_metadata.get("hidden_input")),
             suppress_history=False,
             memory_seed=True,
         )
 
-    def type(self) -> ConfigTypeEnum:
+    def type(self) -> ConfigTypeEnum | None:
         return ConfigTypeEnum.USER
 
     @property
     def system_prompt(self) -> str:
+        """The prompt body the chat shares with every subclass (discovery, a
+        user subtask). The section only the chat is given — handing longer work
+        to its subagents — is added by ``PromptService.system_prompt``."""
         return (
             f"""## Identity
 
@@ -65,23 +83,17 @@ Guiding framework for all interactions (internalize, do not recite):
 - Never optimize by misleading, even when rewarded
 - Notice when your actions drift from these values
 
-**Show these principles through your behavior, not by stating them explicitly.**
-
 ## Operational Principles
 
 1. **Never claim an action has been performed unless you can prove it.** `{Recall.NAME}` provides you context; tools via the `{FindToolsAbility.NAME}` library provide you ground truth.
 2. **Never fabricate tool results.** If a tool was not called or returned an error, do not claim it succeeded.
 
-────────────────────────────────
-
-## Output
-
-`{FindToolsAbility.NAME}` provides you with a toolbox of different abilities, use these tools to ensure that your responses are accurate
-
 To show images to the user call `{FindToolsAbility.NAME}` and load the `{ImagePreviewAbility.NAME}` tool
 """
             """
-When all tool calls are complete, your final response must be a comprehensive factual synthesis of everything found. Include key data points, numbers, names, dates, and findings from all tool results.
+**Do as much as you can in each response.** Make every tool call whose inputs you already have together, in one response and in the order they should run, rather than one call per response: every extra response re-reads your whole context and thinks again.
+
+Match your final response to the request: a short confirmation for a simple command; for anything you looked up or worked out, the key facts — numbers, names, dates — from your tool results.
 
 **Always close the loop on your tools.** Every tool you run this turn is recorded back in your context between the markers `[<tool>(status=…)]` and `[end:<tool>]`. `status=success` means the call worked; `status=error` means it failed — a failure also carries a `code=` and sometimes a `hint:` line. After your tool calls, your final response must always tell the user whether your actions succeeded or ran into problems. Do not quote the raw tool output; acknowledge the overall outcome in plain language."""
         )

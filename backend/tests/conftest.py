@@ -161,6 +161,28 @@ def chat_provider(db: sqlite3.Connection) -> sqlite3.Connection:
     return db
 
 
+@pytest.fixture
+def earlier_agents(db: sqlite3.Connection) -> None:
+    """Record ``EARLIER_AGENTS`` subagents that ran and ended before the test,
+    through the real model, so every agent the test spawns is numbered past
+    them while turn ids still count from 1 on each channel. A test that reads
+    a subagent's number therefore proves it came from the agents table, never
+    from the subagent's turn id."""
+    from abilities.web_search import WebSearchAbility
+    from configs.enums.channels import Channel
+    from models.agent import Agent
+    from services.database import Database
+    from tests._delegates import EARLIER_AGENTS
+
+    with Database.transaction():
+        for n in range(1, EARLIER_AGENTS + 1):
+            agent = Agent(
+                type=WebSearchAbility.NAME, prompt="an earlier search",
+                spawned_by_channel=Channel.SCHEDULE.value, spawned_in_turn=n, turn_id=100_000 + n,
+            ).insert()
+            Agent.end(agent.agent_id, Agent.DONE, None)
+
+
 # ── Vault backup isolation ────────────────────────────────────────
 # Any test that initialises the real vault (directly or via /auth/register)
 # writes a permanent vault_backup_*.json. Redirect the secure dir to a per-test

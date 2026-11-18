@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 from dataclasses import asdict
 from typing import TYPE_CHECKING, cast
 
@@ -57,20 +58,25 @@ _LLM_SENTINEL_PATTERNS = (
     re.compile(r'<\|[^|<>]*\|'),
 )
 
+# How often an in-flight call re-reads whether its turn was stopped. A polling
+# cadence, not a deadline: the call itself runs as long as the provider takes.
+_STOP_POLL_S = 1.0
+
 logger = logging.getLogger(__name__)
 
 
-def _window_of(config: dict[str, object]) -> int:
+def _window_of(config: dict[str, object], client: ProviderClient | None = None) -> int:
     """The context window for ``config`` — always ``providers.context_window``.
 
     A thin pass-through to :meth:`ProviderDbService.pin_context_window`, which
     self-heals the column (probe once, clamp, persist) and raises when the
     window cannot be determined. There is deliberately no fallback here: this
-    layer is a reader of that column, never a second opinion on it.
+    layer is a reader of that column, never a second opinion on it. ``client``,
+    when given, is the one a probe asks.
     """
     from services.provider_db_service import ProviderDbService  # noqa: PLC0415
 
-    return ProviderDbService().pin_context_window(config)
+    return ProviderDbService().pin_context_window(config, client)
 
 
 class ProviderService:
@@ -79,6 +85,8 @@ class ProviderService:
     def __init__(self, mp: MessageProcessor) -> None:
         self.mp = mp
         self._gate_armed: bool = True
+        # Set once a watcher aborts a call because the turn was stopped.
+        self.aborted = threading.Event()
 
     def send(self, request: ProviderRequest) -> ProviderResponse:
         """Cap check, call, log, report usage — the single provider chokepoint.
@@ -93,31 +101,43 @@ class ProviderService:
         (``window`` above, ``context_tokens`` below), and one call is exactly one
         move of it. A provider that reports no count is silent rather than zero —
         the surface hides a meter it has no reading for, and a fabricated 0 would
-        read as a real, empty context."""
+        read as a real, empty context.
+
+        The call carries no timeout; a watcher ends it if the turn is stopped
+        while it is in flight (:meth:`_abort_on_stop`). An unpinned row's window
+        probe goes out over the same client, so the watcher covers it too."""
         config = self._select(request.type)
-        window = _window_of(config)
-        # Stamp the DTO before the client ever sees it: a client that asked its
-        # own provider would be a second window for the same send.
-        request.context_window = window
         client = build_client(config)
-        if self._gate_applies(request):
-            measured = LlmLogService.last_context_tokens(self.mp.channel)
-            if measured >= int(0.90 * window):
-                self._gate_armed = False
-                raise ContextLimit(
-                    f"Request ({measured} tokens) reached 90% of the {window}-token context window",
-                    self.mp, window=window, measured=measured,
-                    provider=cast(str, config.get("platform") or ""),
-                    model=cast(str, config.get("model") or ""),
-                )
+        done = threading.Event()
+        threading.Thread(
+            target=self._abort_on_stop, args=(client, done),
+            name=f"provider-stop-{self.mp.turn_id}", daemon=True,
+        ).start()
         try:
-            api_reply = client.send(cast("ProviderApiRequest", request))
-        except ContextLimit as limit:
-            # The client knows the provider said "too long"; only this layer
-            # knows whose turn it was. Attach it so the handler can compact.
-            limit.mp = self.mp
-            limit.window = limit.window or window
-            raise
+            window = _window_of(config, client)
+            # Stamp the DTO before the client ever sees it: a client that asked its
+            # own provider would be a second window for the same send.
+            request.context_window = window
+            if self._gate_applies(request):
+                measured = LlmLogService.last_context_tokens(self.mp.channel)
+                if measured >= int(0.90 * window):
+                    self._gate_armed = False
+                    raise ContextLimit(
+                        f"Request ({measured} tokens) reached 90% of the {window}-token context window",
+                        self.mp, window=window, measured=measured,
+                        provider=cast(str, config.get("platform") or ""),
+                        model=cast(str, config.get("model") or ""),
+                    )
+            try:
+                api_reply = client.send(cast("ProviderApiRequest", request))
+            except ContextLimit as limit:
+                # The client knows the provider said "too long"; only this layer
+                # knows whose turn it was. Attach it so the handler can compact.
+                limit.mp = self.mp
+                limit.window = limit.window or window
+                raise
+        finally:
+            done.set()
         # Thin clients answer with the wire dataclass; the app runs on the
         # model. This chokepoint is the ONE conversion (field-for-field), and
         # it is what puts ``context_tokens`` — the occupancy read below and
@@ -130,6 +150,22 @@ class ProviderService:
                 TurnSignal.context_usage(self.mp, occupied, window),
             )
         return response
+
+    def _abort_on_stop(self, client: ProviderClient, done: threading.Event) -> None:
+        """Abort ``client``'s in-flight call once this turn is stopped.
+
+        Without a timeout a hung call would hold the turn forever; Stop is the
+        way out. The aborted ``send`` raises, and the MessageProcessor's retry
+        loop ends the turn instead of resending. It reads ``aborted``, set here
+        before the abort, so a stop flag that fails to re-read there cannot turn
+        the abort into a resend. One watcher per call: ``done`` is set the moment
+        that call returns or raises."""
+        while not done.wait(_STOP_POLL_S):
+            if self.mp.turn_execution_service.should_stop():
+                logger.info("[ProviderService] turn %s stopped — aborting its provider call", self.mp.turn_id)
+                self.aborted.set()
+                client.abort()
+                return
 
     def _gate_applies(self, request: ProviderRequest) -> bool:
         """Whether the previous request's reported usage may gate this one.

@@ -25,7 +25,7 @@ let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 // Scheduled turns don't render on the spine, so `threadPhase` reads DOM
 // contract state globally (any rendered copy, e.g. an open thread panel) —
-// bumped on every 'turn-state-changed' so the dock's dots/borders stay live.
+// bumped on every 'turn-state-changed' so the dock's dots stay live.
 const activityTick = ref(0);
 function bumpActivity(): void {
   activityTick.value++;
@@ -95,17 +95,16 @@ function cadence(turn: SchedulerTurn): string {
     title="Schedules"
     @close="session.closeSchedulerDock()"
   >
-    <p v-if="!turns.length" class="sched-dock__empty">No active schedules.</p>
+    <p v-if="!turns.length" class="drawer-empty">No active schedules.</p>
 
     <button
       v-for="turn in turns"
       :key="turn.turn_id"
-      class="sched-dock__row"
-      :class="phase(turn) ? `sched-dock__row--${phase(turn)}` : ''"
+      class="drawer-row"
       @click="openTurn(turn)"
     >
-      <span class="sched-dock__row-top">
-        <span class="sched-dock__row-label">{{ turn.gist || turn.preview }}</span>
+      <span class="drawer-row__top">
+        <span class="drawer-row__label">{{ turn.gist || turn.preview }}</span>
         <span
           v-if="phase(turn)"
           class="thread-activity-dot"
@@ -113,70 +112,7 @@ function cadence(turn: SchedulerTurn): string {
           aria-hidden="true"
         />
       </span>
-      <span class="sched-dock__row-sub">{{ cadence(turn) }}</span>
+      <span class="drawer-row__sub">{{ cadence(turn) }}</span>
     </button>
   </SideDrawer>
 </template>
-
-<style scoped lang="scss">
-// ── Empty state ───────────────────────────────────────────────────────────────
-
-.sched-dock__empty {
-  font-size: 13px;
-  color: var(--text-secondary);
-  padding: 10px 16px;
-  font-style: italic;
-  margin: 0;
-}
-
-// ── Row ───────────────────────────────────────────────────────────────────────
-
-.sched-dock__row {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  width: 100%;
-  text-align: left;
-  background: transparent;
-  border: none;
-  border-left: 2px solid transparent;
-  padding: 10px 16px;
-  cursor: pointer;
-
-  &:hover {
-    background: var(--surface-hover, rgba(128, 128, 128, 0.06));
-  }
-}
-
-.sched-dock__row--working {
-  border-left-color: var(--status-main);
-}
-.sched-dock__row--done {
-  border-left-color: var(--cyan);
-}
-
-.sched-dock__row-top {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.sched-dock__row-label {
-  flex: 1;
-  min-width: 0;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.sched-dock__row-sub {
-  font-size: 11.5px;
-  color: var(--text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-</style>

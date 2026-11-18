@@ -155,15 +155,6 @@ class RateLimitError(ProviderResponseError):
         super().__init__(message, response_code=429, provider=provider)
 
 
-class ProviderTimeoutError(ProviderResponseError):
-    """The provider call exceeded PROVIDER_CALL_TIMEOUT_S at the HTTP boundary.
-
-    Every thin client maps its SDK's native timeout to this type. The provider
-    layer never retries; this (like any provider error) bubbles up to the
-    MessageProcessor, which owns the resend policy.
-    """
-
-
 class ProviderRetriesExhaustedError(ProviderResponseError):
     """Raised by the MessageProcessor after every provider resend attempt failed.
 
@@ -280,6 +271,18 @@ class NewsFetchError(ChalieException):
 
     Per-feed RSS failures inside :meth:`NewsService._parse_feed` are NOT raised:
     a single dead feed in a multi-feed aggregate is normal and tolerated.
+    """
+
+
+# ── Telegram layer ────────────────────────────────────────────────────────────
+
+
+class TelegramApiError(ChalieException):
+    """A Telegram Bot API call failed: unreachable, an unreadable reply, or a
+    refusal.
+
+    The bot token is part of every Bot API URL, so the message is built to
+    never contain it — this exception logs itself on construction.
     """
 
 

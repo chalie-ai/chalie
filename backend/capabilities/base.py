@@ -197,6 +197,28 @@ class AbstractCapability(ABC):
                 exc_info=True,
             )
 
+    def unavailable_reason(self) -> str | None:
+        """Why this capability cannot work where Chalie runs, shown on its
+        card in place of setup; setup is refused while there is one. ``None``
+        when it is available."""
+        return None
+
+    def status_note(self) -> str | None:
+        """One plain line about this capability's state, shown on its card in
+        the Brain dashboard. ``None`` when there is nothing to add."""
+        return None
+
+    def setup_pending(self) -> bool:
+        """Whether a setup attempt is still being confirmed in the background,
+        so the capability is neither connected nor failed yet."""
+        return False
+
+    def setup_code(self) -> str | None:
+        """The code the user must send to finish a setup still being
+        confirmed, shown on its own beside :meth:`status_note`. ``None`` when
+        no setup waits for one."""
+        return None
+
     def is_connected(self) -> bool:
         """Return the current in-memory connection state.
 
