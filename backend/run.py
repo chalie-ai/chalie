@@ -493,6 +493,13 @@ def main() -> None:
 
     _init_services()
 
+    # A message queued behind a turn the restart cut off has no turn end left
+    # to open it, so each channel holding one opens its oldest now. After the
+    # services, as the notices below are, and ahead of them: it waited longer.
+    from models.queued_message import QueuedMessage
+    for channel in QueuedMessage.channels():
+        MessageProcessor.drain(channel)
+
     # Only now, after the services, not at the sweep: each notice writes a row
     # on the caller's thread and starts a turn whose own thread reads and
     # writes the conversation tables, so it must run on the migrated schema,

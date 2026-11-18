@@ -91,6 +91,7 @@ from exceptions import (
 from models.agent import Agent
 from models.plan_task import PlanTask
 from models.provider_request import ProviderRequest
+from models.queued_message import QueuedMessage
 from models.tool_call import ToolCall
 from models.turn_execution import TurnExecution
 from models.transcript import Transcript
@@ -163,6 +164,14 @@ def _without_echoed_calls(text: str, tool_calls: list[dict[str, object]]) -> str
     lines = (text or "").splitlines()
     kept = [line for line in lines if not ((match := _ECHOED_CALL.match(line.strip())) and match[1] in names)]
     return text if len(kept) == len(lines) else "\n".join(kept).strip()
+
+
+def _queued_config(channel: str) -> ProcessorConfig:
+    """The config the turn of a message queued on ``channel`` runs on. Only
+    the chat is wired: a message queued anywhere else cannot open its turn."""
+    if channel == Channel.USER:
+        return UserConfig()
+    raise ValueError(f"no config opens the turn of a message queued on {channel}")
 
 
 class _TurnCancelled(Exception):
@@ -412,6 +421,59 @@ class MessageProcessor:
             turn_id = -1
         return cls.process(config, text, metadata, turn_id).execution
 
+    @classmethod
+    def deliver(cls, config: ProcessorConfig, text: str, tool_call_id: int | None) -> MessageProcessor | None:
+        """Send an agent's message to ``config``'s channel as a turn of its
+        own — it never joins one. An idle channel opens the turn at once; a
+        channel with a turn working, or with a message already waiting, queues
+        it behind them, for a turn's end to open (:meth:`drain`). The check,
+        the queued row and the new turn's rows — its number, input row and
+        execution — share one ``BEGIN IMMEDIATE`` transaction with every other
+        deliver and drain, so a message either queues before the working
+        turn's end commits, and that end opens it, or finds the channel idle
+        after and opens at once. An agent's message carries no attachments,
+        so its execution opens inside that transaction too. Returns the
+        opened turn, or ``None`` when queued."""
+        mp = cls(config, raw_input=text, metadata={"tool_call_id": tool_call_id})
+        with mp._atomic():
+            if TurnExecution.open_on(mp.channel) is not None or QueuedMessage.oldest(mp.channel) is not None:
+                QueuedMessage(channel=mp.channel, text=text, tool_call_id=tool_call_id).save()
+                return None
+            mp._open_turn()
+            mp.turn_execution_service.open()
+        mp._start()
+        return mp
+
+    @classmethod
+    def drain(cls, channel: str) -> MessageProcessor | None:
+        """Open the turn of the message that has waited longest on
+        ``channel``, when one waits and no turn is working there — run as
+        every turn ends and, at boot, for every channel holding one. One
+        message per call: the turn it opens drains the next as it ends. The
+        check, the row's removal and the new turn's rows share one
+        ``BEGIN IMMEDIATE`` transaction with :meth:`deliver`. Never raises: a
+        failure is logged and rolled back, and the message waits for the
+        channel's next turn end or the next boot. Returns the opened turn, or
+        ``None``."""
+        try:
+            if QueuedMessage.oldest(channel) is None:
+                return None
+            mp = cls(_queued_config(channel))
+            with mp._atomic():
+                queued = None if TurnExecution.open_on(channel) is not None else QueuedMessage.oldest(channel)
+                if queued is None:
+                    return None
+                queued.delete()
+                mp.raw_input = queued.text
+                mp.metadata["tool_call_id"] = queued.tool_call_id
+                mp._open_turn()
+                mp.turn_execution_service.open()
+        except Exception:  # noqa: BLE001 — the message waits; log, never raise
+            logger.exception("[MessageProcessor] %s: opening the turn of its oldest queued message failed", channel)
+            return None
+        mp._start()
+        return mp
+
     def begin(self) -> None:
         """Synchronous turn setup, then hand off to the drive thread. The
         turn-id allocation, fork guard and input row land in one single-writer
@@ -431,31 +493,41 @@ class MessageProcessor:
         the thread starts. ``begin()`` never joins — it returns the instant the
         daemon is running."""
         with self.db.transaction():
-            agent = self.metadata.get("agent")
-            if isinstance(agent, Agent):
-                agent.turn_id = 1
-                self.agent = agent.insert()
-                self.config = self.config.on_channel(self.agent.channel)
-                self.channel = self.config.channel
-            self.turn_id = self.transcript_service.allocate_turn()
-            if self.agent is not None and self.turn_id != self.agent.turn_id:
-                raise RuntimeError(
-                    f"subagent {self.agent.agent_id}: its own channel {self.channel} "
-                    f"already holds turns; its first opened as turn {self.turn_id}"
-                )
-            if self.config.external_turn_id:
-                # turn_id came from a key space the caller owns (schedule id). Its first
-                # use opens a MAIN turn; a repeat appends as FORK. Derive forked-ness from
-                # existence, never reject — a fresh external key is legitimately new.
-                self._forked = self.transcript_service.turn_exists()
-            elif self._forked and not self.transcript_service.turn_exists():
-                raise ValueError("Invalid turn_id specified")
-            self.uid = self._open_input_row()
-            self.current_transcript_id = self.uid
-            if self.uid is not None:
-                self._consumed_through = self.uid
+            self._open_turn()
         self._land_attachments()
         self.turn_execution_service.open()
+        self._start()
+
+    def _open_turn(self) -> None:
+        """Write this turn's opening rows inside the caller's transaction: the
+        ``agents`` row a spawn carries, the allocated turn id, the fork guard
+        and the input row."""
+        agent = self.metadata.get("agent")
+        if isinstance(agent, Agent):
+            agent.turn_id = 1
+            self.agent = agent.insert()
+            self.config = self.config.on_channel(self.agent.channel)
+            self.channel = self.config.channel
+        self.turn_id = self.transcript_service.allocate_turn()
+        if self.agent is not None and self.turn_id != self.agent.turn_id:
+            raise RuntimeError(
+                f"subagent {self.agent.agent_id}: its own channel {self.channel} "
+                f"already holds turns; its first opened as turn {self.turn_id}"
+            )
+        if self.config.external_turn_id:
+            # turn_id came from a key space the caller owns (schedule id). Its first
+            # use opens a MAIN turn; a repeat appends as FORK. Derive forked-ness from
+            # existence, never reject — a fresh external key is legitimately new.
+            self._forked = self.transcript_service.turn_exists()
+        elif self._forked and not self.transcript_service.turn_exists():
+            raise ValueError("Invalid turn_id specified")
+        self.uid = self._open_input_row()
+        self.current_transcript_id = self.uid
+        if self.uid is not None:
+            self._consumed_through = self.uid
+
+    def _start(self) -> None:
+        """Record the allocated turn id and start the drive thread."""
         self.metadata["turn_id"] = self.turn_id
         self._thread = Thread(target=self._drive, daemon=True, name=f"turn-{self.turn_id}")
         self._thread.start()
@@ -520,7 +592,8 @@ class MessageProcessor:
         delegate's turn reports its outcome to a caller that did not wait for
         it, the reply carrying the model's raw final text — the reply is an
         input row on the caller's channel, and input rows are raw text —
-        rather than the HTML-formatted result."""
+        rather than the HTML-formatted result. Last, the message waiting
+        longest on this channel, if any, opens its turn (:meth:`drain`)."""
         answer = ""
         try:
             self._setup()
@@ -539,6 +612,7 @@ class MessageProcessor:
             self._offer_memory_step()
         self._close_browser_tab()
         self._report_to_caller(answer)
+        self.drain(self.channel)
 
     def _step(self) -> "ProviderResponse":
         """One provider step, recursing until the model stops calling tools,

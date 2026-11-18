@@ -73,6 +73,12 @@ class TurnExecution(Model):
         )
 
     @classmethod
+    def open_on(cls, channel: str) -> "TurnExecution | None":
+        """The execution still running on ``channel``, whichever turn it is,
+        or ``None`` when the channel is idle."""
+        return cls.filter("channel", channel).filter("ended_at", None, "IS").first()
+
+    @classmethod
     def joinable(cls, channel: str, turn_id: int, *, spine_only: bool) -> "TurnExecution | None":
         """The live execution a message sent to (channel, turn_id) joins
         instead of opening one of its own — :meth:`open_turn`'s row unless a

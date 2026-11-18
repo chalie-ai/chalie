@@ -615,6 +615,22 @@ CREATE INDEX IF NOT EXISTS idx_turn_executions_open
     ON turn_executions(channel, turn_id) WHERE ended_at IS NULL;
 
 -- ────────────────────────────────────────────────────────────────
+-- QUEUED MESSAGES — a message delivered to a channel while a turn there was
+-- still working, or while other messages already waited. Each turn end on
+-- the channel removes the oldest and opens its turn, one per turn end.
+-- tool_call_id is the tool_calls row that sent the message, if any.
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS queued_messages (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel      TEXT    NOT NULL,
+    text         TEXT    NOT NULL,
+    tool_call_id INTEGER,
+    created_at   TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_queued_messages_channel ON queued_messages(channel, id);
+
+-- ────────────────────────────────────────────────────────────────
 -- DATA GRAPH — research-informed knowledge graph (replaces knowledge)
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS data_graph (
