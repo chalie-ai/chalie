@@ -40,10 +40,7 @@ class ListAgentsAbility(AgentAbility[ListAgentsParams]):
     _PARAMETERS: ClassVar[dict[str, object]] = {"type": "object", "properties": {}}
 
     def get_summary(self) -> str:
-        return (
-            "List the subagents you spawned that are not archived, with each one's "
-            "agent_id, type, summary and status: running, waiting, done, cancelled or failed."
-        )
+        return "List the subagents you spawned."
 
     def get_examples(self) -> list[str]:
         return [
