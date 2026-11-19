@@ -562,6 +562,10 @@ CREATE TABLE IF NOT EXISTS plan_tasks (
 -- the turn's last row when it ended 'cancelled' or 'failed'. The retention
 -- sweep may delete that row; the agent is still kept, so its reference is
 -- cleared rather than the agent deleted with it.
+-- context_id is the first row of the caller's turn, its input row: the
+-- subagent's first turn reads it, by this id, as the context of its task.
+-- It is NULL when the caller's turn wrote no input row (a hidden-input
+-- turn), and that first turn then reads its task with no context.
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS agents (
     agent_id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -572,7 +576,8 @@ CREATE TABLE IF NOT EXISTS agents (
     status             TEXT    NOT NULL DEFAULT 'running'
                        CHECK (status IN ('running', 'waiting', 'done', 'cancelled', 'failed')),
     response_id        INTEGER REFERENCES transcript(id) ON DELETE SET NULL,
-    turn_id            INTEGER NOT NULL
+    turn_id            INTEGER NOT NULL,
+    context_id         INTEGER REFERENCES transcript(id) ON DELETE SET NULL
 );
 
 -- ────────────────────────────────────────────────────────────────

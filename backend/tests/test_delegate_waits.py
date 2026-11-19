@@ -30,6 +30,7 @@ from mcp.types import CallToolResult, TextContent
 from abilities._delegate import DelegateAbility
 from abilities._registry import AbilityRegistry
 from abilities._result import ToolResult
+from abilities.message_parent import SPAWN_CONTEXT
 from abilities.email import EmailAbility
 from configs.channels.discovery import DiscoveryConfig
 from configs.channels.scheduled import ScheduledConfig
@@ -47,6 +48,7 @@ from tests._delegates import (
     Entry,
     Held,
     Request,
+    _as_read,
     as_sent,
     assistant_texts,
     calls,
@@ -395,9 +397,10 @@ def test_an_outside_agents_subtask_runs_as_that_agent_with_a_clean_context_and_a
 
     The subtask runs as that agent and nothing more: its system prompt names
     the agent and the project; the outside agent's permissions refuse it the
-    device lookup the person's chat is allowed; it reads none of the agent's
-    conversation — not the codename, not the request; and it cannot start a
-    subtask of its own. The person is told about the exchange once, by the
+    device lookup the person's chat is allowed; it reads its task with only
+    the request that opened the agent's turn as context, and nothing from the
+    agent's earlier turns — never the codename; and it cannot start a subtask
+    of its own. The person is told about the exchange once, by the
     agent's own turn — the subtask's turn tells them nothing — and nothing is
     sent back as a reply."""
     asked = "find out the capital of France for the migration notes"
@@ -433,7 +436,10 @@ def test_an_outside_agents_subtask_runs_as_that_agent_with_a_clean_context_and_a
     assert provider.unused() == {}
     assert (first, second) == (["Noted."], ["Paris."])
 
-    agents_turn = [r for r in provider.requests if r.route == "chat" and _AGENT in r.system and asked in r.text]
+    agents_turn = [
+        r for r in provider.requests
+        if r.route == "chat" and _AGENT in r.system and asked in r.text and r not in seen
+    ]
     assert all("Bluebird" in r.text for r in agents_turn)
     before_discovery, *sent = [r.definition("subtask") for r in agents_turn]
     assert before_discovery is None
@@ -451,8 +457,8 @@ def test_an_outside_agents_subtask_runs_as_that_agent_with_a_clean_context_and_a
     assert len(seen) == 2
     for request in seen:
         assert _AGENT in request.system and _PROJECT in request.system
-        assert work in request.text
-        assert "Bluebird" not in request.text and asked not in request.text
+        assert f"## Task\n{work}\n\n{SPAWN_CONTEXT.format(context=asked)}## Instructions\n" in _as_read(request.text)
+        assert "Bluebird" not in request.text
 
     [device] = calls_of(db, "user_device")
     assert device["state"] == "error", device["result"]

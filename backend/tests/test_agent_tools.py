@@ -323,8 +323,10 @@ def test_a_message_to_a_working_subtask_opens_its_next_turn_and_both_replies_go_
 ) -> None:
     """The chat starts a subtask that is held on its first step, messages it
     and ends its turn. The message waits for the subtask's turn to end, then
-    opens its next turn, carrying the message's own call, read bare after the
-    first turn; each turn's reply goes back to the call that started it."""
+    opens its next turn, carrying the message's own call. Its turn before
+    asked nothing, so that turn reads the message word for word under the
+    plain label, after its first turn's task, bare; each turn's reply goes
+    back to the call that started it."""
     client, db, _store = authed_client
     _deny_agent_tools()
     held = Held(text(_DRAFT))
@@ -379,8 +381,8 @@ def test_a_message_to_a_working_subtask_opens_its_next_turn_and_both_replies_go_
     read = provider.read("subtask")
     assert len(read) == 2
     assert _MESSAGE not in read[0]
-    assert _MESSAGE in read[1] and "Message from Chalie" not in read[1]
-    assert _TASK in read[1] and _DRAFT in read[1]
+    assert f"user: {_MESSAGE}\n" in read[1] and "Message from Chalie" not in read[1]
+    assert f"Task from Chalie: {_TASK}\n" in read[1] and f"Assistant: {_DRAFT}\n" in read[1]
     for turn_id, shown in ((turn, (_TASK, "Task from Chalie")), (next_turn, (_MESSAGE, "Message from Chalie"))):
         thread = messages(block(client, f"/api/threads/{turn_id}?channel={subtask}"))
         assert [(m["content"], m["speaker"]) for m in thread if m["role"] == "user"] == [shown]

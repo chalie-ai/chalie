@@ -141,7 +141,7 @@ from tests.test_agent_tools import (
 from tests.test_agents_table import _last_row
 from tests.test_delegate_late_reply import _held_threads_end
 from tests.test_delegate_waits import _blocked, _reached
-from tests.test_message_parent import _QUESTION, _WAITS, _ask, _sent_to, _the_one, _the_search
+from tests.test_message_parent import _QUESTION, _WAITS, _ask, _from_subagent, _sent_to, _the_one, _the_search
 from tests.test_subagent_permissions import _CHAT, _FILE_WRITE, _origin
 from tests.test_subtask import _memory_turns
 
@@ -975,7 +975,7 @@ def test_a_question_waiting_on_the_chat_still_opens_a_chat_turn_after_the_chat_s
     assert execution(_USER, question["turn_id"]).state == TurnExecution.COMPLETED
     assert assistant_texts(db, _USER, question["turn_id"]) == ["Noted."]
     chat_read = provider.read("chat")
-    assert _the_one(chat_read, f"Message from {_WEB} #{n}: {_QUESTION}") == len(chat_read) - 1
+    assert _the_one(chat_read, f"Message from {_WEB} #{n}: {_from_subagent(n, _QUESTION)}\n") == len(chat_read) - 1
 
     # The search's turn was stopped by its caller: it ends cancelled and
     # sends nothing back.

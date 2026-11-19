@@ -13,8 +13,9 @@ there is **no** ``id`` column — so the base ``Model.save()``/``delete()``
 (id-centric) do not apply; ``__columns__`` omits ``id`` and this model carries
 its own :meth:`insert`. ``type`` is the spawn tool's name and ``turn_id`` the
 subagent's current turn on its own channel (:attr:`channel`) — its spawn turn
-first, then each turn a message opens (:meth:`resume`). Holds no mp, calls
-no service (Rule-3 depth).
+first, then each turn a message opens (:meth:`resume`). ``context_id`` is the
+caller's input row its first turn reads as context, ``None`` when the caller's
+turn wrote none. Holds no mp, calls no service (Rule-3 depth).
 """
 
 from __future__ import annotations
@@ -31,7 +32,7 @@ class Agent(Model):
 
     __columns__: ClassVar[tuple[str, ...]] = (
         "agent_id", "spawned_by_channel", "spawned_in_turn", "type", "prompt",
-        "status", "response_id", "turn_id",
+        "status", "response_id", "turn_id", "context_id",
     )
 
     @classmethod
@@ -54,6 +55,7 @@ class Agent(Model):
     status: str
     response_id: int | None
     turn_id: int
+    context_id: int | None
 
     @property
     def channel(self) -> str:
@@ -65,9 +67,12 @@ class Agent(Model):
         back. Never commits — the caller's ``Database.transaction()`` does."""
         self.status = self.RUNNING
         cursor = self._bound_connection().execute(
-            "INSERT INTO agents (spawned_by_channel, spawned_in_turn, type, prompt, status, turn_id) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (self.spawned_by_channel, self.spawned_in_turn, self.type, self.prompt, self.status, self.turn_id),
+            "INSERT INTO agents (spawned_by_channel, spawned_in_turn, type, prompt, status, turn_id, context_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                self.spawned_by_channel, self.spawned_in_turn, self.type, self.prompt, self.status,
+                self.turn_id, self.context_id,
+            ),
         )
         self.agent_id = cast("int", cursor.lastrowid)
         self.response_id = None

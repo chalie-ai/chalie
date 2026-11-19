@@ -88,16 +88,16 @@ class SubtaskAbility(DelegateAbility[DelegateParamsBag]):
         if self.mp is not None and not replies_late(self.mp.config.type()):
             return (
                 "Start a subtask: a turn with your own tools, settings and "
-                "permissions but a clean context — it sees none of this "
-                "conversation, so give it the whole task. The call waits for "
-                "it and returns its answer. Use it for longer work to keep "
-                "your context clean."
+                "permissions but a clean context — it sees only the message "
+                "that started this turn, so give it the whole task. The call "
+                "waits for it and returns its answer. Use it for longer work "
+                "to keep your context clean."
             )
         return (
             "Start a subtask: a background turn with your own tools, settings "
-            "and permissions but a clean context — it sees none of this "
-            "conversation, so give it the whole task. It returns at once with "
-            "the subtask's number and you keep working; its answer arrives "
+            "and permissions but a clean context — it sees only the message "
+            "that started this turn, so give it the whole task. It returns at "
+            "once with the subtask's number and you keep working; its answer arrives "
             'later as a new message labelled "Reply from subtask #N". Use it '
             "for longer work to keep your context clean."
         )

@@ -37,7 +37,7 @@ from abilities._delegate import replies_late, reply_follow_up
 from abilities._registry import AbilityRegistry
 from abilities.code_agent import CodeAgentAbility
 from abilities.find_tools import FindToolsAbility
-from abilities.message_parent import spawn_message
+from abilities.message_parent import chat_turn, first_turn, later_turn
 from abilities.pim import PimAbility
 from abilities.plan import PlanAbility, plans
 from abilities.recall import Recall
@@ -568,14 +568,28 @@ class PromptService:
     # ── UserConfig (channel="user") ──────────────────────────────────────────
 
     def _task(self) -> str:
-        """This turn's input as the model reads it: on the turn that spawned a
-        subagent, the task inside who spawned it and how its answer gets back
-        (:func:`spawn_message`); on every other turn, a subagent's later turns
-        included, the input itself. The stored row keeps the bare input."""
-        agent = self.mp.agent
-        if agent is None or not isinstance(self.mp.metadata.get("agent"), Agent):
-            return self.mp.raw_input
-        return spawn_message(agent, self.mp.raw_input)
+        """This turn's input as the model reads it — the one read of it every
+        builder goes through. The stored row always keeps the bare input, so
+        later history shows it alone; what wraps it is added here, on read:
+
+        * a subagent's first turn (a spawn's ``metadata["agent"]``): the task
+          in its first-turn template, with the first row of the turn that
+          spawned it as context (:func:`~abilities.message_parent.first_turn`);
+        * a subagent's later turn (``mp.previous_turn_id``, its turn before
+          this one): the chat's message beside what that turn last delivered
+          with ``message_parent``, or, when it delivered nothing, the message
+          word for word — a steer (:func:`~abilities.message_parent.later_turn`);
+        * a chat turn a subagent's ``message_parent`` message opened (its
+          ``metadata["tool_call_id"]`` is that call): the message in the
+          template asking for the reply
+          (:func:`~abilities.message_parent.chat_turn`);
+        * every other turn: the input itself."""
+        mp = self.mp
+        if mp.agent is not None and isinstance(mp.metadata.get("agent"), Agent):
+            return first_turn(mp.agent, mp.raw_input)
+        if mp.previous_turn_id is not None:
+            return later_turn(mp.channel, mp.previous_turn_id, mp.raw_input)
+        return chat_turn(cast("int | None", mp.metadata.get("tool_call_id")), mp.raw_input)
 
     def _user_system_prompt(self) -> str:
         """``UserConfig``: the voice line (cache-warm prefix) over the config's

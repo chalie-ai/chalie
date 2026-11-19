@@ -92,8 +92,13 @@ class DelegateAbility(Ability[B], ABC):
         without waiting. The child's input row carries this call's
         ``tool_calls`` id, written in the same transaction that opens the turn,
         so the parent's pill can be followed to the child's transcript; its
-        ``agents`` row — the caller's channel and turn, and the plain task —
-        is written in that transaction too. The
+        ``agents`` row — the caller's channel and turn, the plain task, and
+        the caller's input row as the task's context (``context_id``, the
+        caller's ``mp.uid``: ``None`` when the caller's turn wrote no input
+        row, a hidden-input turn) — is written in that transaction too. Only
+        the plain task is stored as the child's input row; its first turn
+        reads it inside the first-turn template, with that context, as the
+        prompt is built (:func:`~abilities.message_parent.first_turn`). The
         parent's frame is sent again once that row exists — the earlier
         ``started`` frame went out before there was a child turn to point at."""
         from controllers.message_processor import MessageProcessor  # noqa: PLC0415
@@ -113,6 +118,7 @@ class DelegateAbility(Ability[B], ABC):
                 "agent": Agent(
                     type=self.NAME, prompt=instructions,
                     spawned_by_channel=mp.channel, spawned_in_turn=mp.turn_id,
+                    context_id=mp.uid,
                 ),
             },
         )

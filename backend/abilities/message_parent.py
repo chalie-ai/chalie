@@ -23,10 +23,32 @@ turn. A turn whose last call is this one, delivered
 waiting for that answer; each chat turn,
 as it opens, names the subagents then waiting whose message has reached the
 chat (:func:`waiting_reminder`).
+
+Every text a subagent and its caller read each other's messages through lives
+here, one constant per text. None is ever stored. :data:`WAITING_REMINDER` is
+added after a chat turn's prompt
+(:meth:`~services.prompt_service.PromptService._user_prompt`); every other
+text only as a turn's input is read
+(:meth:`~services.prompt_service.PromptService._task`), the input row keeping
+the bare text, so later history shows it alone. There are four cases:
+
+1. A subagent's first turn reads its task in :data:`SPAWN_TASK`
+   (:func:`first_turn`): the task, the first row of the turn that spawned it as
+   context (:data:`SPAWN_CONTEXT`), and how its answer gets back —
+   :data:`SPAWN_INSTRUCTIONS_ASK` when it holds this tool,
+   :data:`SPAWN_INSTRUCTIONS_FINISH` when it does not.
+2. The chat turn a message sent with this tool opens reads that message in
+   :data:`SUBAGENT_MESSAGE`, which asks the chat to reply (:func:`chat_turn`).
+   Later chat history shows the message alone, under its speaker label.
+3. A subagent's later turn whose previous turn delivered a message with this
+   tool reads the chat's answer beside the last such message, in
+   :data:`PARENT_RESPONSE` (:func:`later_turn`).
+4. Any other later turn, a steer, reads the chat's message word for word.
 """
 
 from __future__ import annotations
 
+import json
 from typing import ClassVar
 
 from abilities._ability import UNKNOWN_TOOL, Ability
@@ -106,12 +128,52 @@ WAITING_REMINDER = (
     f"Reply with `{MessageSubagentAbility.NAME}` so they can continue."
 )
 
-_SPAWNED = "You have been spawned by agent {turn_id} to perform the task; {prompt}. "
-_ASK = (
-    f"You can ask for more context if needed by using `{MessageParentAbility.NAME}`. "
-    "This will send a message to the agent that spawned you; you are invoked again when its reply lands. Else, finish"
+#: A subagent's first turn: its task, the context it was spawned in
+#: (:data:`SPAWN_CONTEXT`, or nothing when there is none) and its instructions.
+SPAWN_TASK = "## Task\n{task}\n\n{context}## Instructions\n{instructions}"
+
+#: The first turn's Context section: the first row of the turn that spawned it.
+SPAWN_CONTEXT = (
+    "## Context\n"
+    "Below is a snippet of what the parent agent is working on so you can better orient yourself on this task;\n"
+    "{context}\n\n"
 )
-_FINISH = " the task naturally and your final output will be sent to the agent that spawned you automatically."
+
+#: The first turn's instructions for a subagent that holds ``message_parent``.
+SPAWN_INSTRUCTIONS_ASK = (
+    "You have been spawned by another agent to perform the `task` above. "
+    "Perform this ask to the best of your ability. "
+    f"If you need to ask questions or provide status updates use the `{MessageParentAbility.NAME}`. "
+    "Only provide updates and ask questions if you take decisions or change anything from the provided plan "
+    "of action. If the task is clear and you can complete it exactly as described simply finish it and your "
+    "response will automatically reach the agent that spawned you."
+)
+
+#: The first turn's instructions for a subagent that does not hold
+#: ``message_parent``.
+SPAWN_INSTRUCTIONS_FINISH = (
+    "You have been spawned by another agent to perform the `task` above. "
+    "Perform this ask to the best of your ability. "
+    "Simply finish it and your response will automatically reach the agent that spawned you."
+)
+
+#: A subagent's later turn when the chat answers what it sent.
+PARENT_RESPONSE = (
+    "## What you sent to the parent agent\n{sent}\n\n"
+    "## Parent response\n{response}\n\n"
+    "## Instructions\n"
+    "Use the response to continue your work if anything else is left pending. "
+    "Do not acknowledge the receipt of this message, simply carry on whatever is left if any. "
+    "Your final response will be delivered automatically to the parent agent."
+)
+
+#: The chat turn a subagent's ``message_parent`` message opens.
+SUBAGENT_MESSAGE = (
+    "Agent {agent_id} has sent the following message; {message}.\n---\n\n"
+    f"Reply to the agent by using the {MessageSubagentAbility.NAME} to acknowledge the receipt of this message. "
+    "If they have questions or you need to provide additional context, do so. "
+    "If everything is clear and no follow up is needed simply acknowledge receipt."
+)
 
 
 def holds(agent: Agent | None) -> bool:
@@ -121,12 +183,54 @@ def holds(agent: Agent | None) -> bool:
     return agent is not None and agent.spawned_by_channel == Channel.USER
 
 
-def spawn_message(agent: Agent, prompt: str) -> str:
-    """The task as the subagent ``agent`` reads it: who spawned it, the
-    ``prompt`` it was given, and how its answer gets back — with
-    ``message_parent`` offered only when it holds it (:func:`holds`)."""
-    ask = _ASK if holds(agent) else "Finish"
-    return _SPAWNED.format(turn_id=agent.spawned_in_turn, prompt=prompt) + ask + _FINISH
+def first_turn(agent: Agent, task: str) -> str:
+    """The ``task`` the subagent ``agent`` was spawned with, as its first turn
+    reads it (:data:`SPAWN_TASK`): with the first row of the turn that spawned
+    it as context, read by its id (``agent.context_id``), and how its answer
+    gets back — ``message_parent`` offered only when it holds it
+    (:func:`holds`). A spawning turn that wrote no input row (a hidden-input
+    turn, such as the one disclosing an outside agent's exchange) has no
+    context to give, so the Context section is left out."""
+    context = ""
+    if agent.context_id is not None:
+        row = Transcript.get(agent.context_id)
+        if row is None:
+            raise RuntimeError(f"subagent #{agent.agent_id}: its context row {agent.context_id} is gone")
+        context = SPAWN_CONTEXT.format(context=row.content)
+    instructions = SPAWN_INSTRUCTIONS_ASK if holds(agent) else SPAWN_INSTRUCTIONS_FINISH
+    return SPAWN_TASK.format(task=task, context=context, instructions=instructions)
+
+
+def later_turn(channel: str, previous_turn: int, message: str) -> str:
+    """The chat's ``message`` as the subagent on ``channel`` reads it on a
+    later turn, ``previous_turn`` being its turn before this one: beside the
+    last message that turn delivered with ``message_parent``
+    (:data:`PARENT_RESPONSE`), since the chat is answering it; or, when that
+    turn delivered none, word for word — a steer."""
+    sent = [
+        call
+        for call in ToolCall.by_turn(channel, previous_turn)
+        if call.tool_name == MessageParentAbility.NAME and call.state == ToolCall.DONE
+    ]
+    if not sent:
+        return message
+    return PARENT_RESPONSE.format(sent=json.loads(sent[-1].params)[Keys.message], response=message)
+
+
+def chat_turn(opener: int | None, message: str) -> str:
+    """``message`` as the chat reads it on the turn it opened, ``opener``
+    being the ``tool_calls`` id its input row is linked to: a subagent's
+    ``message_parent`` message in :data:`SUBAGENT_MESSAGE`, naming the
+    sender's ``agent_id`` (:func:`sender`) and asking for the reply; any other
+    message — the person's own, or a delegate's late reply — as it is."""
+    call = (
+        None
+        if opener is None
+        else ToolCall.filter("id", opener).filter("tool_name", MessageParentAbility.NAME).first()
+    )
+    if call is None:
+        return message
+    return SUBAGENT_MESSAGE.format(agent_id=sender(call).agent_id, message=message)
 
 
 def _origin(call: ToolCall) -> Transcript:

@@ -2,19 +2,21 @@
 message, and the chat's reply opens the subagent's next turn.
 
 * Every kind of subagent the chat spawns — a subtask, a ``web_search``, a
-  ``web_browse``, a ``code_agent`` — reads who spawned it and that it may ask,
-  and ``message_parent`` is offered to it.
+  ``web_browse``, a ``code_agent`` — reads its task, the person's message as
+  context and that it may ask, and ``message_parent`` is offered to it.
 * The call returns "Message sent." at once. On every later step of that turn
   the subagent reads that it is invoked again once the reply lands — never
   stored — and the turn, ending on that call, posts nothing back and leaves
   the subagent waiting. The message opens a turn on the chat, labelled for the
-  chat's model as a message from that subagent, with ``message_subagent``
-  offered on that turn. The chat's reply opens the subagent's next turn on its
-  own channel, which reads its earlier turn and the reply bare; its answer
-  comes back to the chat on a turn of its own, and the subagent is done. What
-  the person sees — the stored row, the thread read over HTTP and every
-  websocket frame — carries only the message's text and which subagent sent
-  it.
+  chat's model as a message from that subagent and asking for a reply, with
+  ``message_subagent`` offered on that turn; later chat turns read it bare.
+  The chat's reply opens the subagent's next turn on its own channel, which
+  reads its earlier turn bare and the reply beside the question it sent; its
+  answer comes back to the chat on a turn of its own, and the subagent is
+  done. A message the chat sends a subagent whose turn before asked nothing
+  is read word for word. What the person sees — the stored row, the thread
+  read over HTTP and every websocket frame — carries only the message's text
+  and which subagent sent it.
 * A message sent while the chat's turn is still working queues behind it and
   opens the chat's next turn once that turn ends; that turn reads it labelled
   and is offered ``message_subagent``.
@@ -34,8 +36,9 @@ message, and the chat's reply opens the subagent's next turn.
   the reply opened, which ends cancelled with its caller and sends nothing
   back.
 * A ``web_search`` or a subtask a scheduled task or an outside agent spawned
-  is waited for, so it holds no ``message_parent``: it reads that it should finish, is not offered
-  the tool, and a call to it is refused as an unknown tool and posts nothing.
+  is waited for, so it holds no ``message_parent``: it reads its task, its
+  caller's message as context and that it should finish, is not offered the
+  tool, and a call to it is refused as an unknown tool and posts nothing.
 * A restart while the subagent posts its message leaves it, and the chat turn
   its message opened, for the next boot: the sweep ends both, the chat is told
   the session crashed, and no reminder names the subagent.
@@ -105,7 +108,7 @@ from tests._delegates import (
     turn_threads,
     wait,
 )
-from tests.test_agent_tools import _answer, _executions, _input_rows, _statuses
+from tests.test_agent_tools import _answer, _executions, _find_agent_tools, _input_rows, _statuses
 from tests.test_delegate_waits import _AGENT, _blocked, _talk
 
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider", "earlier_agents")]
@@ -123,12 +126,20 @@ _QUESTION = "Which bridge do you mean, the old one or the new one?"
 _WAITS = "I need to know which bridge first."
 _REPLY = "the old stone bridge"
 _ANSWER = "The old stone bridge reopened in March."
+_ONE_MORE = "is the new one open yet?"
+_ANSWER_AGAIN = "The new bridge opens in June."
 
 _ASKS = (
-    f"You can ask for more context if needed by using `{MessageParentAbility.NAME}`. "
-    "This will send a message to the agent that spawned you; you are invoked again when its reply lands. Else, finish"
+    "You have been spawned by another agent to perform the `task` above. Perform this ask to the best of your "
+    f"ability. If you need to ask questions or provide status updates use the `{MessageParentAbility.NAME}`. "
+    "Only provide updates and ask questions if you take decisions or change anything from the provided plan of "
+    "action. If the task is clear and you can complete it exactly as described simply finish it and your "
+    "response will automatically reach the agent that spawned you."
 )
-_FINISH = " the task naturally and your final output will be sent to the agent that spawned you automatically."
+_FINISH = (
+    "You have been spawned by another agent to perform the `task` above. Perform this ask to the best of your "
+    "ability. Simply finish it and your response will automatically reach the agent that spawned you."
+)
 _SENT = "Message sent."
 _FOLLOW_UP = (
     "You'll be invoked again once the reply lands. "
@@ -136,12 +147,41 @@ _FOLLOW_UP = (
 )
 
 
-def _spawned(turn_id: int, *, asks: bool) -> str:
-    """The task as a subagent of any kind reads it, spawned by turn *turn_id*
-    — told it may ask, or only to finish."""
-    return f"You have been spawned by agent {turn_id} to perform the task; {_TASK}. " + (
-        _ASKS if asks else "Finish"
-    ) + _FINISH
+def _first_turn(task: str, context: str, *, asks: bool) -> str:
+    """*task* as a subagent reads it on its first turn: with *context*, the
+    first row of the turn that spawned it, and told it may ask, or only to
+    finish."""
+    return (
+        f"## Task\n{task}\n\n"
+        "## Context\n"
+        "Below is a snippet of what the parent agent is working on so you can better orient yourself on this task;\n"
+        f"{context}\n\n"
+        f"## Instructions\n{_ASKS if asks else _FINISH}"
+    )
+
+
+def _answered(sent: str, response: str) -> str:
+    """The chat's *response* as a subagent reads it on the turn it opens,
+    beside what the subagent last *sent* the chat."""
+    return (
+        f"## What you sent to the parent agent\n{sent}\n\n"
+        f"## Parent response\n{response}\n\n"
+        "## Instructions\n"
+        "Use the response to continue your work if anything else is left pending. Do not acknowledge the receipt "
+        "of this message, simply carry on whatever is left if any. Your final response will be delivered "
+        "automatically to the parent agent."
+    )
+
+
+def _from_subagent(n: int, message: str) -> str:
+    """The *message* subagent *n* sent, as the chat reads it on the turn it
+    opens."""
+    return (
+        f"Agent {n} has sent the following message; {message}.\n---\n\n"
+        f"Reply to the agent by using the {MessageSubagentAbility.NAME} to acknowledge the receipt of this message. "
+        "If they have questions or you need to provide additional context, do so. If everything is clear and no "
+        "follow up is needed simply acknowledge receipt."
+    )
 
 
 def _sent_to(n: int) -> str:
@@ -216,20 +256,29 @@ def _reminds(read: str) -> bool:
 def test_a_subagent_asks_the_chat_and_the_chats_reply_opens_its_next_turn(
     authed_client: tuple[FlaskClient, sqlite3.Connection, object],
 ) -> None:
-    """The chat spawns a ``web_search`` and ends its turn. The search asks a
+    """The chat spawns a ``web_search`` and ends its turn. The search reads its
+    task with the person's message as context and that it may ask. It asks a
     question: the call returns at once, the search reads that it is invoked
     again once the reply lands, and its turn ends posting nothing back, the
-    search waiting. The question opens a turn on the chat labelled as its
-    message; the chat replies with ``message_subagent``, offered on that turn.
-    The reply opens the search's next turn, which reads its first turn and the
-    reply bare and answers; the answer comes back to the chat on a turn of its
-    own, and the search is done."""
+    search waiting. The question opens a turn on the chat, which reads it
+    labelled and asking for a reply; the chat replies with
+    ``message_subagent``, offered on that turn. The reply opens the search's
+    next turn, which reads its first turn bare and the reply beside the
+    question it sent, and answers; the answer comes back to the chat on a turn
+    of its own, which reads the question bare among its previous messages.
+    Messaged once more, the search reads that message word for word — its turn
+    before sent the chat nothing — after its task and the reply, bare. Every
+    stored row keeps the bare text."""
     client, db, _store = authed_client
     asking = Held(_ask())
     seen: dict[str, int] = {}
     provider = ChannelProvider(
-        chat=[_spawn(), text("Started."), lambda: _reply_to_it(seen), text("Told it."), text("Noted.")],
-        web_search=[asking, text(_WAITS), text(_ANSWER)],
+        chat=[
+            _spawn(), text("Started."), lambda: _reply_to_it(seen), text("Told it."), _find_agent_tools(),
+            lambda: calls(tool(MessageSubagentAbility.NAME, agent_id=seen["n"], message=_ONE_MORE)),
+            text("Asked it."), text("Noted."),
+        ],
+        web_search=[asking, text(_WAITS), text(_ANSWER), text(_ANSWER_AGAIN)],
     )
 
     with listening() as listener, patched(provider):
@@ -247,50 +296,64 @@ def test_a_subagent_asks_the_chat_and_the_chats_reply_opens_its_next_turn(
     assert agent_number(searcher) == n
     [asked] = calls_of(db, MessageParentAbility.NAME)
     assert _answer(asked) == ("success", None, _SENT)
-    [sent] = calls_of(db, MessageSubagentAbility.NAME)
+    sent, steered = calls_of(db, MessageSubagentAbility.NAME)
     sent_id = cast("int", sent["id"])
-    assert _answer(sent) == ("success", None, _sent_to(n))
+    steered_id = cast("int", steered["id"])
+    assert _answer(sent) == _answer(steered) == ("success", None, _sent_to(n))
 
-    # The search read who spawned it and that it may ask, with the tool to;
-    # after asking, and only on that turn's later step, it read when it runs
-    # again — never stored with the call's result.
+    # The search read its task with the person's message as context and that
+    # it may ask, with the tool to; after asking, and only on that turn's later
+    # step, it read when it runs again — never stored with the call's result.
     read = provider.read(_WEB)
-    assert len(read) == 3
-    assert _spawned(chat.turn_id, asks=True) in read[0]
+    assert len(read) == 4
+    assert f"Research query:\n{_first_turn(_TASK, 'find the bridge news', asks=True)}\n" in read[0]
     assert MessageParentAbility.NAME in provider.offered(_WEB)[0]
-    assert [_FOLLOW_UP in r for r in read] == [False, True, False]
+    assert [_FOLLOW_UP in r for r in read] == [False, True, False, False]
     assert _FOLLOW_UP not in cast("str", asked["result"])
     assert _input_rows(db, searcher, turn) == [(_TASK, False, str(spawn_id))]
     assert execution(searcher, turn).state == TurnExecution.COMPLETED
 
     # The reply opened the search's next turn on its own channel: the row
-    # carries the chat's call and the reply alone, and the search read its
-    # first turn and then the reply, bare.
+    # carries the chat's call and the reply alone. The search read its first
+    # turn bare, then the reply beside the question it had sent.
     again = child(db, _WEB_CHANNEL, sent_id)
     assert again.channel == searcher and again.turn_id > turn
     assert _input_rows(db, searcher, again.turn_id) == [(_REPLY, False, str(sent_id))]
     assert _executions(searcher, again.turn_id) == 1
     assert execution(searcher, again.turn_id).state == TurnExecution.COMPLETED
     assert f"{_WEB}: {_TASK}\n" in read[2] and f"Assistant: {_WAITS}\n" in read[2]
-    assert f"Research query:\n{_REPLY}\n" in read[2]
+    assert f"Research query:\n{_answered(_QUESTION, _REPLY)}\n" in read[2]
     assert "Message from Chalie" not in read[2] and "You have been spawned" not in read[2]
+
+    # The message after its answer opened its third turn, which read it word
+    # for word — that turn's previous one sent the chat nothing — after its
+    # task and the reply, both bare.
+    last = child(db, _WEB_CHANNEL, steered_id)
+    assert last.channel == searcher and last.turn_id > again.turn_id
+    assert _input_rows(db, searcher, last.turn_id) == [(_ONE_MORE, False, str(steered_id))]
+    assert f"Research query:\n{_ONE_MORE}\n" in read[3]
+    assert f"{_WEB}: {_TASK}\n" in read[3] and f"{_WEB}: {_REPLY}\n" in read[3]
     agent = cast("Agent", Agent.by_id(n))
-    assert (agent.status, agent.turn_id) == (Agent.DONE, again.turn_id)
-    assert _statuses(listener.frames, n) == [Agent.RUNNING, Agent.WAITING, Agent.RUNNING, Agent.DONE]
+    assert (agent.status, agent.turn_id) == (Agent.DONE, last.turn_id)
+    assert _statuses(listener.frames, n) == [
+        Agent.RUNNING, Agent.WAITING, Agent.RUNNING, Agent.DONE, Agent.RUNNING, Agent.DONE,
+    ]
 
     # The message opened a turn of its own on the chat, carrying its own call.
     [message] = replies(db, cast("int", asked["id"]))
     assert (message["content"], message["joined"]) == (_QUESTION, 0)
     assert message["turn_id"] != chat.turn_id
-    # The chat's model read it labelled, and was offered the tool to reply on
-    # that turn — never on the turn that spawned it.
+    # The chat's model read it labelled and asking for a reply, and was offered
+    # the tool to reply on that turn — never on the turn that spawned it.
     chat_read = provider.read("chat")
     offered = provider.offered("chat")
-    assert len(chat_read) == 5
-    labelled = f"Message from {_WEB} #{n}: {_QUESTION}"
-    assert labelled in chat_read[2]
-    assert [MessageSubagentAbility.NAME in tools for tools in offered] == [False, False, True, True, False]
-    assert labelled in chat_read[3] and _sent_to(n) in chat_read[3]
+    assert len(chat_read) == 8
+    asks_for_a_reply = f"Message from {_WEB} #{n}: {_from_subagent(n, _QUESTION)}\n"
+    assert asks_for_a_reply in chat_read[2]
+    assert [MessageSubagentAbility.NAME in tools for tools in offered] == [
+        False, False, True, True, False, True, True, False,
+    ]
+    assert asks_for_a_reply in chat_read[3] and _sent_to(n) in chat_read[3]
     # No read carries the waiting reminder: the only chat turn that could
     # begin while the search waited is the one its own message opened.
     assert not any(_reminds(r) for r in chat_read)
@@ -304,12 +367,17 @@ def test_a_subagent_asks_the_chat_and_the_chats_reply_opens_its_next_turn(
     assert f"Message from {_WEB}" not in frames
     assert _FOLLOW_UP not in frames
 
-    # Only the second turn's answer came back, on a chat turn of its own: the
-    # first turn ended on its question and posted nothing.
-    [answer] = replies(db, spawn_id)
+    # Only the later turns' answers came back, each on a chat turn of its own:
+    # the first turn ended on its question and posted nothing. The chat turn
+    # the first answer opened read the question bare among its previous
+    # messages.
+    answer, answer_again = replies(db, spawn_id)
     assert (answer["content"], answer["joined"]) == (_ANSWER, 0)
+    assert (answer_again["content"], answer_again["joined"]) == (_ANSWER_AGAIN, 0)
     assert answer["turn_id"] not in (chat.turn_id, message["turn_id"])
     assert f"Reply from {_WEB} #{n}: {_ANSWER}" in chat_read[4]
+    assert f"Message from {_WEB} #{n}: {_QUESTION}\n" in chat_read[4]
+    assert f"Reply from {_WEB} #{n}: {_ANSWER_AGAIN}" in chat_read[7]
 
 
 @pytest.mark.parametrize(
@@ -334,7 +402,7 @@ def test_every_kind_of_subagent_the_chat_spawns_reads_that_it_may_message_the_ch
 
     assert provider.unused() == {}
     [read] = provider.read(route)
-    assert _spawned(chat.turn_id, asks=True) in read
+    assert _first_turn(_TASK, "look into the bridge news", asks=True) in read
     [offered] = provider.offered(route)
     assert MessageParentAbility.NAME in offered
     [spawn] = calls_of(db, tool_name)
@@ -402,11 +470,11 @@ def test_a_message_sent_while_the_chats_turn_works_queues_and_opens_its_next_tur
     chat_read = provider.read("chat")
     offered = provider.offered("chat")
     assert len(chat_read) == 5
-    labelled = f"Message from {_WEB} #{n}: {_QUESTION}"
-    assert all(labelled not in r for r in chat_read[:2])
-    assert labelled in chat_read[2]
+    assert all(f"Message from {_WEB} #{n}" not in r for r in chat_read[:2])
+    asks_for_a_reply = f"Message from {_WEB} #{n}: {_from_subagent(n, _QUESTION)}\n"
+    assert asks_for_a_reply in chat_read[2]
     assert [MessageSubagentAbility.NAME in tools for tools in offered] == [False, False, True, True, False]
-    assert labelled in chat_read[3]
+    assert asks_for_a_reply in chat_read[3]
     assert f"Reply from {_WEB} #{n}: {_ANSWER}" in chat_read[4]
     assert not any(_reminds(r) for r in chat_read)
     assert cast("Agent", Agent.by_id(n)).status == Agent.DONE
@@ -652,7 +720,7 @@ def test_the_persons_stop_of_the_waiting_subagent_tells_the_chat_it_was_cancelle
     assert told["turn_id"] > message["turn_id"]
     chat_read = provider.read("chat")
     assert len(chat_read) == 4
-    assert f"Message from {_WEB} #{n}: {_QUESTION}" in chat_read[2]
+    assert f"Message from {_WEB} #{n}: {_from_subagent(n, _QUESTION)}\n" in chat_read[2]
     assert f"Reply from {_WEB} #{n}: {CANCELLED_TEXT}" in chat_read[3]
     assert not any(_reminds(r) for r in chat_read)
 
@@ -702,7 +770,7 @@ def test_the_persons_stop_of_the_chat_turn_a_message_opened_leaves_the_subagent_
     assert replies(db, cast("int", spawn["id"])) == []
     chat_read = provider.read("chat")
     assert len(chat_read) == 4
-    assert f"Message from {_WEB} #{n}: {_QUESTION}" in chat_read[2] and not _reminds(chat_read[2])
+    assert f"Message from {_WEB} #{n}: {_from_subagent(n, _QUESTION)}\n" in chat_read[2] and not _reminds(chat_read[2])
     assert f"user: Hi\n{_reminder(f'{_WEB} #{n}')}" in chat_read[3]
 
 
@@ -771,7 +839,8 @@ def test_a_subagent_its_caller_waits_for_holds_no_message_parent(
     db: sqlite3.Connection, caller: str, tool_name: str,
 ) -> None:
     """A ``web_search`` or a subtask a scheduled task or an outside agent
-    spawned is waited for. It reads only that it should finish, is not offered
+    spawned is waited for. It reads its task with its caller's message as
+    context and only that it should finish, is not offered
     ``message_parent``, and a call to it is refused as an unknown tool, posting
     nothing anywhere; its answer reaches its caller as the call's result. (An
     outside agent's subtask is answered from the chat's script: its prompt
@@ -802,7 +871,7 @@ def test_a_subagent_its_caller_waits_for_holds_no_message_parent(
         assert agent.spawned_in_turn == _SCHEDULE_ID
 
     first = 1 if shared else 0
-    assert _spawned(agent.spawned_in_turn, asks=False) in provider.read(route)[first]
+    assert _first_turn(_TASK, "check the bridge news", asks=False) in provider.read(route)[first]
     assert MessageParentAbility.NAME not in provider.offered(route)[first]
     [asked] = calls_of(db, MessageParentAbility.NAME)
     assert _answer(asked) == ("error", "unknown-tool", f"Unknown tool: {MessageParentAbility.NAME}")

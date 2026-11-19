@@ -230,6 +230,9 @@ class MessageProcessor:
         self.execution: TurnExecution | None = None
         # The ``agents`` row this turn runs as, when a spawn opened it.
         self.agent: Agent | None = None
+        # That subagent's turn before this one, when a message opened this
+        # turn on its channel (_resume); kept in memory only, never stored.
+        self.previous_turn_id: int | None = None
         self.active_tools: list[str] = []
         self.thinking_level: str = "low"
         self.thinking_override: str | None = None
@@ -587,9 +590,18 @@ class MessageProcessor:
         then announces the row. A subagent that ended cancelled or failed is
         never resumed: :meth:`deliver` and :meth:`drain` turn one away in that
         same transaction before reaching here, so a move that fails here is a
-        broken invariant — it raises, and the transaction rolls back."""
+        broken invariant — it raises, and the transaction rolls back.
+
+        ``agent`` still holds the turn it last ran, so before the move that
+        turn is kept as :attr:`previous_turn_id`, in memory only: this turn's
+        input is read against it (:meth:`PromptService._task`) — beside the
+        last message it delivered with ``message_parent``, which this message
+        answers, or, when it delivered none, word for word, a steer. It cannot
+        be read back later as the latest turn before this one: other turns
+        share the subagent's channel."""
         if agent is None:
             return
+        self.previous_turn_id = agent.turn_id
         if not Agent.resume(agent.agent_id, self.turn_id):
             current = Agent.by_id(agent.agent_id)
             status = current.status if current is not None else "gone"
