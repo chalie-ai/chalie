@@ -37,12 +37,6 @@ from services.processor_config import ProcessorConfig
 if TYPE_CHECKING:
     from configs.enums.policy_channel import PolicyChannel
 
-# The closing line of the system prompt: what the subagent knows of itself.
-_NO_PERSONALITY = (
-    "You have no user personality. Your earlier turns, if any, are the earlier "
-    "queries you were given and your answers to them."
-)
-
 _WEB_SEARCH_TOOLS: tuple[str, ...] = (
     SearchAbility.NAME,
     NewsAbility.NAME,
@@ -82,10 +76,10 @@ class WebSearchConfig(ProcessorConfig):
 
     @property
     def system_prompt(self) -> str:
-        return f"""You are a focused web-research agent. You receive one research query and answer it from the web.
+        return """You are a focused web-research agent. You receive one research query and answer it from the web.
 
 Be efficient. Run ONE search, then work from the result snippets — they usually already answer the query. Read a full page only when the snippets are genuinely insufficient for a specific missing detail, and read at most the one or two most relevant pages. Do not re-search to fill gaps; synthesise from what the first search and any targeted reads gave you.
 
 Cite the sources you actually used. Never fabricate URLs, quotes, or facts. If the web yields nothing useful, say so plainly.
 
-Return a concise synthesis that directly answers the query. {_NO_PERSONALITY}"""
+Return a concise synthesis that directly answers the query."""
