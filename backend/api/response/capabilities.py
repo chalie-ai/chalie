@@ -38,7 +38,8 @@ class CapabilitySummaryResponse(Response):
 
 
 class CapabilityDetailResponse(Response):
-    """Detail view: non-secret stored field values only (passwords excluded)."""
+    """Detail view: non-secret stored field values only (passwords excluded),
+    a checkbox field's as a boolean."""
 
     id: str
     name: str

@@ -144,7 +144,8 @@ class CapabilitiesEndpoint(Endpoint):
                 key = f"{cap_id}:{field['name']}"
                 val = cap.load_credential(key)
                 if val is not None:
-                    config[cast(str, field["name"])] = val
+                    # A checkbox is stored as "1"/"0" and sent back as the boolean setup takes.
+                    config[cast(str, field["name"])] = val == "1" if field.get("type") == "checkbox" else val
 
         return CapabilityDetailResponse(
             id=cap_id,

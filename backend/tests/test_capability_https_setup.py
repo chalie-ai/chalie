@@ -4,8 +4,9 @@ The UniFi console is a real HTTPS server on loopback that answers the UniFi OS
 sign-in the way a console does: the right username and password get a session
 cookie and a CSRF token, any other pair gets 403 with the console's own
 "invalid username or password" body, and the API answers only a request that
-carries the session cookie. It presents a certificate this machine does not
-trust and records every request it receives.
+carries the session cookie. The Home Assistant server answers its API only for
+the right access token. Both present a certificate this machine does not trust
+unless a test says it does, and both record every request they receive.
 
 The setup, status and detail endpoints, the vault and the database are the real
 ones, so each test drives the same path the Brain's capability form does:
@@ -43,6 +44,9 @@ _PASSWORD = "correct horse battery staple"
 _SESSION_TOKEN = "console-session-1"
 _CSRF_TOKEN = "console-csrf-1"
 _REJECTED = {"code": "AUTHENTICATION_FAILED_INVALID_CREDENTIALS", "message": "Invalid username or password"}
+
+_HA_TOKEN = "home-assistant-long-lived-token"
+
 
 @dataclass(frozen=True)
 class _Seen:
@@ -112,6 +116,17 @@ class _UnifiHandler(_Handler):
             self._send(200, {"hardware": {"shortname": "UDMPRO"}})
 
 
+class _HomeAssistantHandler(_Handler):
+    def do_GET(self) -> None:  # noqa: N802 — http.server contract
+        self._record()
+        if self.path != "/api/":
+            self._send(404, {})
+        elif self.headers.get("Authorization") != f"Bearer {_HA_TOKEN}":
+            self._send(401, {"message": "Unauthorized"})
+        else:
+            self._send(200, {"message": "API running."})
+
+
 # ── Fixtures ─────────────────────────────────────────────────────────────────
 
 
@@ -158,6 +173,18 @@ def unifi(certificate: tuple[Path, Path]) -> Iterator[_Console]:
 
 
 @pytest.fixture()
+def home_assistant(certificate: tuple[Path, Path]) -> Iterator[_Console]:
+    with _serve(_HomeAssistantHandler, certificate) as console:
+        yield console
+
+
+@pytest.fixture()
+def trusted(certificate: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+    """This machine trusts the consoles' certificate, as if its owner installed it."""
+    monkeypatch.setenv("REQUESTS_CA_BUNDLE", str(certificate[0]))
+
+
+@pytest.fixture()
 def client(authed_client: tuple[FlaskClient, object, MemoryStore]) -> Iterator[FlaskClient]:
     """The real app with an unlocked vault and a capability registry of its own."""
     _vault_state.dek = None
@@ -182,6 +209,12 @@ def _set_up_unifi(client: FlaskClient, url: str, *, password: str = _PASSWORD, v
     return client.post("/api/capabilities/setup/ubiquiti", json={
         "url": url, "auth_method": "credentials", "username": _USERNAME,
         "password": password, "site": "default", "verify_ssl": verify_ssl,
+    }).status_code
+
+
+def _set_up_home(client: FlaskClient, url: str, *, verify_ssl: bool) -> int:
+    return client.post("/api/capabilities/setup/home", json={
+        "url": url, "token": _HA_TOKEN, "verify_ssl": verify_ssl,
     }).status_code
 
 
@@ -225,3 +258,22 @@ def test_with_the_certificate_check_on_an_untrusted_console_never_gets_the_passw
     assert _set_up_unifi(client, unifi.url, verify_ssl=True) == 422
     assert not _connected(client, "ubiquiti")
     assert unifi.requests() == []
+
+
+# ── The certificate check reads back as it was saved ────────────────────────
+
+
+@pytest.mark.usefixtures("trusted")
+@pytest.mark.parametrize("checked", [False, True])
+def test_unifi_certificate_check_reads_back_as_saved(client: FlaskClient, unifi: _Console, checked: bool) -> None:
+    assert _set_up_unifi(client, unifi.url, verify_ssl=checked) == 204
+    assert _saved_settings(client, "ubiquiti")["verify_ssl"] is checked
+
+
+@pytest.mark.usefixtures("trusted")
+@pytest.mark.parametrize("checked", [False, True])
+def test_home_certificate_check_reads_back_as_saved(
+    client: FlaskClient, home_assistant: _Console, checked: bool,
+) -> None:
+    assert _set_up_home(client, home_assistant.url, verify_ssl=checked) == 204
+    assert _saved_settings(client, "home")["verify_ssl"] is checked
