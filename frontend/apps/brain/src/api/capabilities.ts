@@ -8,7 +8,8 @@
  *   GET  /api/capabilities/status/<id>         → result CapabilityStatus (pending while setup is
  *                                                still being confirmed in the background).
  *   POST /api/capabilities/setup/<id>          configure a capability → 204 empty body, also
- *                                                while its setup is still being confirmed.
+ *                                                while its setup is still being confirmed;
+ *                                                422 { error, reason? } when its settings fail.
  *   POST /api/capabilities/disconnect/<id>     disconnect a capability → 204 empty body.
  */
 import { api } from '@chalie/shared';
@@ -58,6 +59,9 @@ export interface CapabilityStatus {
   setup_code?: string | null;
   last_sync_at?: string | null;
 }
+
+/** Why a capability's settings failed — the 422 body's plain `reason`, worded by the Brain. */
+export type SetupFailureReason = 'credentials_rejected' | 'certificate_untrusted' | 'unreachable' | 'invalid_configuration';
 
 interface SingleEnvelope<T> {
   success: true;

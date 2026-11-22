@@ -16,6 +16,7 @@ save the settings, then read them back to draw the form again.
 from __future__ import annotations
 
 import json
+import socket
 import ssl
 import subprocess
 import threading
@@ -28,6 +29,7 @@ from typing import cast
 
 import pytest
 from flask.testing import FlaskClient
+from werkzeug.test import TestResponse
 
 import capabilities
 import services.vault_service as vault_module
@@ -147,14 +149,16 @@ def certificate(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
 
 
 @contextmanager
-def _serve(handler: type[_Handler], certificate: tuple[Path, Path]) -> Iterator[_Console]:
+def _serve(handler: type[_Handler], certificate: tuple[Path, Path] | None) -> Iterator[_Console]:
+    """Serve ``handler`` over HTTPS with ``certificate``, or over plain HTTP without one."""
     console = _Console()
     bound = cast("type[_Handler]", type("Bound", (handler,), {"console": console}))
     server = ThreadingHTTPServer(("127.0.0.1", 0), bound)
-    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    context.load_cert_chain(*certificate)
-    server.socket = context.wrap_socket(server.socket, server_side=True)
-    console.url = f"https://127.0.0.1:{server.server_address[1]}"
+    if certificate is not None:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(*certificate)
+        server.socket = context.wrap_socket(server.socket, server_side=True)
+    console.url = f"{'https' if certificate else 'http'}://127.0.0.1:{server.server_address[1]}"
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -205,17 +209,25 @@ def client(authed_client: tuple[FlaskClient, object, MemoryStore]) -> Iterator[F
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
-def _set_up_unifi(client: FlaskClient, url: str, *, password: str = _PASSWORD, verify_ssl: bool = False) -> int:
+def _set_up_unifi(
+    client: FlaskClient, url: str, *, password: str = _PASSWORD, verify_ssl: bool = False,
+) -> TestResponse:
     return client.post("/api/capabilities/setup/ubiquiti", json={
         "url": url, "auth_method": "credentials", "username": _USERNAME,
         "password": password, "site": "default", "verify_ssl": verify_ssl,
-    }).status_code
+    })
 
 
-def _set_up_home(client: FlaskClient, url: str, *, verify_ssl: bool) -> int:
+def _set_up_home(client: FlaskClient, url: str, *, token: str = _HA_TOKEN, verify_ssl: bool) -> TestResponse:
     return client.post("/api/capabilities/setup/home", json={
-        "url": url, "token": _HA_TOKEN, "verify_ssl": verify_ssl,
-    }).status_code
+        "url": url, "token": token, "verify_ssl": verify_ssl,
+    })
+
+
+def _refusal(resp: TestResponse) -> object:
+    """The plain reason a refused setup gives, which the Brain words for the reader."""
+    assert resp.status_code == 422
+    return cast("dict[str, object]", resp.get_json()).get("reason")
 
 
 def _connected(client: FlaskClient, cap_id: str) -> bool:
@@ -235,7 +247,7 @@ def _saved_settings(client: FlaskClient, cap_id: str) -> dict[str, object]:
 
 
 def test_a_console_user_signs_in_and_unifi_connects(client: FlaskClient, unifi: _Console) -> None:
-    assert _set_up_unifi(client, unifi.url) == 204
+    assert _set_up_unifi(client, unifi.url).status_code == 204
     assert _connected(client, "ubiquiti")
 
     login, probe = unifi.requests()[:2]
@@ -246,7 +258,7 @@ def test_a_console_user_signs_in_and_unifi_connects(client: FlaskClient, unifi: 
 
 
 def test_a_wrong_password_is_refused_and_unifi_stays_unconnected(client: FlaskClient, unifi: _Console) -> None:
-    assert _set_up_unifi(client, unifi.url, password="not the password") == 422
+    assert _refusal(_set_up_unifi(client, unifi.url, password="not the password")) == "credentials_rejected"
     assert not _connected(client, "ubiquiti")
     assert [(r.method, r.path) for r in unifi.requests()] == [("POST", "/api/auth/login")]
     assert _saved_settings(client, "ubiquiti") == {}
@@ -255,9 +267,40 @@ def test_a_wrong_password_is_refused_and_unifi_stays_unconnected(client: FlaskCl
 def test_with_the_certificate_check_on_an_untrusted_console_never_gets_the_password(
     client: FlaskClient, unifi: _Console,
 ) -> None:
-    assert _set_up_unifi(client, unifi.url, verify_ssl=True) == 422
+    assert _refusal(_set_up_unifi(client, unifi.url, verify_ssl=True)) == "certificate_untrusted"
     assert not _connected(client, "ubiquiti")
     assert unifi.requests() == []
+
+
+def test_a_console_that_does_not_answer_is_unreachable(client: FlaskClient) -> None:
+    with socket.socket() as spare:
+        spare.bind(("127.0.0.1", 0))
+        closed_port = spare.getsockname()[1]
+    assert _refusal(_set_up_unifi(client, f"https://127.0.0.1:{closed_port}")) == "unreachable"
+    assert not _connected(client, "ubiquiti")
+
+
+def test_a_console_that_never_answers_is_unreachable(client: FlaskClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(unifi_rest_handler, "_TIMEOUT", 0.5)
+    with socket.socket() as silent:
+        silent.bind(("127.0.0.1", 0))
+        silent.listen()
+        assert _refusal(_set_up_unifi(client, f"http://127.0.0.1:{silent.getsockname()[1]}")) == "unreachable"
+    assert not _connected(client, "ubiquiti")
+
+
+def test_an_https_address_for_a_plain_http_console_is_not_a_certificate_problem(client: FlaskClient) -> None:
+    with _serve(_UnifiHandler, None) as plain:
+        https_url = plain.url.replace("http://", "https://")
+        assert _refusal(_set_up_unifi(client, https_url)) == "unreachable"
+    assert not _connected(client, "ubiquiti")
+
+
+def test_a_server_that_is_not_a_console_is_not_a_credentials_problem(
+    client: FlaskClient, home_assistant: _Console,
+) -> None:
+    assert _refusal(_set_up_unifi(client, home_assistant.url)) == "invalid_configuration"
+    assert not _connected(client, "ubiquiti")
 
 
 # ── The certificate check reads back as it was saved ────────────────────────
@@ -266,7 +309,7 @@ def test_with_the_certificate_check_on_an_untrusted_console_never_gets_the_passw
 @pytest.mark.usefixtures("trusted")
 @pytest.mark.parametrize("checked", [False, True])
 def test_unifi_certificate_check_reads_back_as_saved(client: FlaskClient, unifi: _Console, checked: bool) -> None:
-    assert _set_up_unifi(client, unifi.url, verify_ssl=checked) == 204
+    assert _set_up_unifi(client, unifi.url, verify_ssl=checked).status_code == 204
     assert _saved_settings(client, "ubiquiti")["verify_ssl"] is checked
 
 
@@ -275,5 +318,15 @@ def test_unifi_certificate_check_reads_back_as_saved(client: FlaskClient, unifi:
 def test_home_certificate_check_reads_back_as_saved(
     client: FlaskClient, home_assistant: _Console, checked: bool,
 ) -> None:
-    assert _set_up_home(client, home_assistant.url, verify_ssl=checked) == 204
+    assert _set_up_home(client, home_assistant.url, verify_ssl=checked).status_code == 204
     assert _saved_settings(client, "home")["verify_ssl"] is checked
+
+
+# ── Home Assistant sign-in ───────────────────────────────────────────────────
+
+
+@pytest.mark.usefixtures("trusted")
+def test_a_wrong_home_assistant_token_is_refused_as_rejected(client: FlaskClient, home_assistant: _Console) -> None:
+    resp = _set_up_home(client, home_assistant.url, token="not the token", verify_ssl=True)
+    assert _refusal(resp) == "credentials_rejected"
+    assert not _connected(client, "home")
