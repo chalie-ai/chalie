@@ -12,6 +12,7 @@ from exceptions.chalie_exception import ChalieException
 from exceptions.exception import (
     AgentStopped,
     AuthenticatorCodeRefused,
+    AuthenticatorKeyInvalid,
     AuthenticatorKeyMissing,
     ConflictError,
     DownloadTooLarge,
@@ -44,6 +45,7 @@ from exceptions.exception import (
 __all__ = [
     "AgentStopped",
     "AuthenticatorCodeRefused",
+    "AuthenticatorKeyInvalid",
     "AuthenticatorKeyMissing",
     "ChalieException",
     "ConflictError",

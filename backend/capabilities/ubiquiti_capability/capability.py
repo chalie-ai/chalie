@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, cast
 from capabilities.base import AbstractCapability
 from capabilities.ubiquiti_capability import authenticator
 from capabilities.ubiquiti_capability import unifi_rest_handler as rest
+from exceptions import AuthenticatorKeyInvalid
 from services.file_mapper_service import FileMapperService
 
 if TYPE_CHECKING:
@@ -135,12 +136,15 @@ class UbiquitiCapability(AbstractCapability):
         UI.com shows a setup key only once, so an edit that leaves the field empty keeps it.
 
         Raises:
-            ValueError: the key is not one an authenticator app takes.
+            ValueError: the key is not one an authenticator app takes, raised from the refusal.
         """
         raw = cast(str, credentials.get("totp_key")) or ""
-        if raw.strip():
+        if not raw.strip():
+            return self.load_credential(_K_TOTP_KEY) or None
+        try:
             return authenticator.setup_key(raw)
-        return self.load_credential(_K_TOTP_KEY) or None
+        except AuthenticatorKeyInvalid as exc:
+            raise ValueError(f"[ubiquiti] {exc}") from exc
 
     def connect(self) -> bool:
         url = self.load_credential(_K_URL)

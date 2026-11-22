@@ -12,6 +12,8 @@ import hmac
 import struct
 from urllib.parse import parse_qs, urlsplit
 
+from exceptions import AuthenticatorKeyInvalid
+
 _DIGITS = 6
 _STEP = 30
 _LINK_SCHEME = "otpauth://"
@@ -25,7 +27,7 @@ def setup_key(raw: str) -> str:
     than the 6-digit, 30-second SHA1 one is refused.
 
     Raises:
-        ValueError: the key is not base32, or the link is not for these codes.
+        AuthenticatorKeyInvalid: the key is not base32, or the link is not for these codes.
             The message never contains the key.
     """
     text = raw.strip()
@@ -38,7 +40,7 @@ def setup_key(raw: str) -> str:
             or query.get("digits", [str(_DIGITS)])[0] != str(_DIGITS)
             or query.get("period", [str(_STEP)])[0] != str(_STEP)
         ):
-            raise ValueError("The authenticator link is not for 6-digit codes that change every 30 seconds")
+            raise AuthenticatorKeyInvalid("The authenticator link is not for 6-digit codes that change every 30 seconds")
         text = query.get("secret", [""])[0]
     key = "".join(text.split()).upper().rstrip("=")
     key += "=" * (-len(key) % 8)
@@ -47,7 +49,7 @@ def setup_key(raw: str) -> str:
     except binascii.Error:
         decoded = b""
     if not decoded:
-        raise ValueError("The authenticator setup key is not a valid key")
+        raise AuthenticatorKeyInvalid("The authenticator setup key is not a valid key")
     return key
 
 

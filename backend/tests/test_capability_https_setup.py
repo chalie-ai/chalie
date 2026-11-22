@@ -497,7 +497,7 @@ def test_a_setup_key_is_read_however_it_was_copied(
 def test_a_setup_key_that_is_not_one_is_refused_before_the_console_is_asked(
     client: FlaskClient, ui_account: _Console, typed: str,
 ) -> None:
-    assert _refusal(_set_up_ui_account(client, ui_account.url, typed)) == "invalid_configuration"
+    assert _refusal(_set_up_ui_account(client, ui_account.url, typed)) == "authenticator_key_invalid"
     assert ui_account.requests() == []
     assert not _connected(client, "ubiquiti")
 

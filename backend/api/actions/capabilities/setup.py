@@ -21,7 +21,9 @@ reader, read from the request error the capability raised it from:
 ``certificate_untrusted`` (its certificate failed verification),
 ``unreachable`` (no answer, or no secure connection),
 ``authenticator_key_missing`` (the account asks for an authenticator code and
-no setup key was given), ``authenticator_code_refused`` (the code made from
+no setup key was given), ``authenticator_key_invalid`` (the setup key given is
+not one an authenticator app takes; refused before the server is asked),
+``authenticator_code_refused`` (the code made from
 the setup key was refused), ``too_many_attempts`` (the account is blocked from
 signing in for now), or ``invalid_configuration`` (anything else).
 """
@@ -43,6 +45,7 @@ from api.request.capabilities import CapabilitySetupRequest
 from api.response.response import Response
 from exceptions import (
     AuthenticatorCodeRefused,
+    AuthenticatorKeyInvalid,
     AuthenticatorKeyMissing,
     NotFoundError,
     TooManySignInAttempts,
@@ -62,6 +65,7 @@ SetupFailureReason = Literal[
     "certificate_untrusted",
     "unreachable",
     "authenticator_key_missing",
+    "authenticator_key_invalid",
     "authenticator_code_refused",
     "too_many_attempts",
     "invalid_configuration",
@@ -79,6 +83,8 @@ def _failure_reason(exc: ValueError) -> SetupFailureReason:
         return "unreachable"
     if isinstance(cause, AuthenticatorKeyMissing):
         return "authenticator_key_missing"
+    if isinstance(cause, AuthenticatorKeyInvalid):
+        return "authenticator_key_invalid"
     if isinstance(cause, AuthenticatorCodeRefused):
         return "authenticator_code_refused"
     if isinstance(cause, TooManySignInAttempts):

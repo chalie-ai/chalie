@@ -312,6 +312,13 @@ class AuthenticatorKeyMissing(ChalieException):
     """A UniFi sign-in asked for an authenticator code, and no setup key was given."""
 
 
+class AuthenticatorKeyInvalid(ChalieException):
+    """A setup key that no authenticator app takes: not base32, or a link for another kind of code.
+
+    The message never contains the key.
+    """
+
+
 class AuthenticatorCodeRefused(ChalieException):
     """A UniFi sign-in refused the code made from the setup key: a wrong key, or a wrong clock."""
 

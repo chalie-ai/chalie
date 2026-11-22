@@ -126,17 +126,26 @@ const SETUP_FAILURES: Record<SetupFailureReason, string> = {
   unreachable: "Couldn't reach the server. Check the URL and that the server is on.",
   authenticator_key_missing:
     'This UI.com account asks for a code from an authenticator app. Add its setup key and try again.',
+  authenticator_key_invalid:
+    "This setup key isn't one an authenticator app accepts. Copy it again from your UI.com account.",
   authenticator_code_refused:
     "The UI.com account didn't accept the code made from this setup key. Check the key, and that this computer's clock is right.",
   too_many_attempts: 'UI.com has blocked sign-ins for now after too many attempts. Wait a few minutes, then try again.',
   invalid_configuration: "These settings weren't accepted. Check each field and try again.",
 };
 
+// The setup key field shows only on the UI.com account choice, so on Username & Password the reader is told where it is.
+const KEY_ON_UI_ACCOUNT = 'Choose UI.com account below to add it.';
+
 // Why the settings failed, as the server's reason for it says, when it gives one.
 function setupFailure(e: unknown): string | null {
   if (!(e instanceof HttpError)) return null;
   const reason = (e.body as { reason?: string } | null | undefined)?.reason;
-  return reason !== undefined && Object.hasOwn(SETUP_FAILURES, reason) ? SETUP_FAILURES[reason as SetupFailureReason] : null;
+  if (reason === undefined || !Object.hasOwn(SETUP_FAILURES, reason)) return null;
+  const text = SETUP_FAILURES[reason as SetupFailureReason];
+  return reason === 'authenticator_key_missing' && textValues.auth_method === 'credentials'
+    ? `${text} ${KEY_ON_UI_ACCOUNT}`
+    : text;
 }
 
 async function submit(): Promise<void> {

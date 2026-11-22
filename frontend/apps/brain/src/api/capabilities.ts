@@ -69,6 +69,7 @@ export type SetupFailureReason =
   | 'certificate_untrusted'
   | 'unreachable'
   | 'authenticator_key_missing'
+  | 'authenticator_key_invalid'
   | 'authenticator_code_refused'
   | 'too_many_attempts'
   | 'invalid_configuration';
