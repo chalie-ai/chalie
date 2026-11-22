@@ -48,6 +48,11 @@ _ACT_SUMMARY_PROPERTY: dict[str, object] = {
 # or after a delegate's late reply in the prompt of the exchange answering it.
 FOLLOW_UP_BLOCK = "[follow_up_instruction]\n{text}\n[end:follow_up_instruction]"
 
+# What a call to a tool its caller does not hold gets back: the dispatcher's
+# answer for a name with no ability, and the refusal of a tool held only by
+# some callers.
+UNKNOWN_TOOL = "Unknown tool: {tool_name}"
+
 # What run() receives: the ability's typed ParamBag. Every first-party ability
 # declares ``Ability[ItsParamsBag]`` and mypy then enforces that its run()
 # accepts exactly that bag. The PEP 696 default keeps bare ``Ability``
@@ -70,7 +75,9 @@ class Ability(ABC, Generic[B]):
     (``ProcessorConfig.always_available``), or — if the ability is
     ``DISCOVERABLE`` — the processor discovers it through ``find_tools`` (which
     the processor only carries when ``find_tools`` is in its always_available).
-    There is no per-config discoverable/blocked allow-list.
+    The one exception is ``message_parent``, which the processor offers itself
+    on the turn of a subagent the chat spawned: the same config runs a subagent
+    whoever spawned it. There is no per-config discoverable/blocked allow-list.
     """
 
     # Global discovery flag. True (the default) means find_tools may surface this

@@ -181,7 +181,9 @@ def test_recent_threads_search_matches_thread_gist_label_not_just_user_content(
     plain_turn_id = 8502
 
     _open_exchange(gisted_turn_id, "Send an email to Jane about the invoice.", "Sent.")
-    ThreadGist(channel=_CHANNEL, turn_id=gisted_turn_id, gist="Testing and Debugging", created_at="").upsert()
+    opening_id = Transcript.first_id(_CHANNEL, gisted_turn_id)
+    assert opening_id is not None
+    ThreadGist(opening_id=opening_id, gist="Testing and Debugging").upsert()
 
     _open_exchange(plain_turn_id, "What's the weather tomorrow?", "Sunny, 22C.")
 

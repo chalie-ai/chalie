@@ -338,7 +338,7 @@ describe('what an opened call shows, by its kind', () => {
     expect(await shown('Scrolling down')).toEqual({ heading: 'scroll', fields: [], pages: [] });
   });
 
-  it('a delegate shows what it was asked — a browsing one also the pages it visited, in order — and "Open transcript" opens its transcript; a delegate call without a transcript has no way in', async () => {
+  it('a delegate shows what it was asked — a browsing one also the pages it visited, in order — and "Open transcript" opens its transcript; a delegate call without a transcript has no way in, nor has a message sent into a running subagent, which shows its arguments', async () => {
     const w = await makeWorld();
     const browsing = { channel: 'delegate:web_browse', turn_id: 21 };
     const searching = { channel: 'delegate:web_search', turn_id: 22 };
@@ -352,8 +352,9 @@ describe('what an opened call shows, by its kind', () => {
         ],
       }),
       call(6302, 'web_search', 'Searching for ferry strikes', { instructions: 'Search for Gozo ferry strikes this week' }, { delegate: searching }),
-      call(6303, 'subtask', 'Messaging the booking subtask', { action: 'message', subtask: 'booking', message: 'Also check the return times' }, { delegate: subtask }),
+      call(6303, 'subtask', 'Booking the return ferry', { action: 'start', instructions: 'Also check the return times' }, { delegate: subtask }),
       call(6304, 'code_agent', 'Fixing the fare parser', { instructions: 'Refactor the fare parser' }),
+      call(6305, 'message_subagent', 'Asking the booking subtask for times', { agent_id: 7, message: 'Only morning crossings' }),
     );
 
     const browse = await open(rowNamed(w.el, 'Comparing ferry fares'));
@@ -364,13 +365,17 @@ describe('what an opened call shows, by its kind', () => {
     ]);
     const search = await open(rowNamed(w.el, 'Searching for ferry strikes'));
     expect(fields(search)).toEqual([['Instructions', 'Search for Gozo ferry strikes this week']]);
-    const message = await open(rowNamed(w.el, 'Messaging the booking subtask'));
-    expect(fields(message)).toEqual([['Message', 'Also check the return times']]);
+    const started = await open(rowNamed(w.el, 'Booking the return ferry'));
+    expect(fields(started)).toEqual([['Instructions', 'Also check the return times']]);
     const unlinked = await open(rowNamed(w.el, 'Fixing the fare parser'));
     expect(fields(unlinked)).toEqual([['Instructions', 'Refactor the fare parser']]);
     expect(transcriptButtons(unlinked)).toHaveLength(0);
+    const message = await open(rowNamed(w.el, 'Asking the booking subtask for times'));
+    expect(heading(message)).toBeNull();
+    expect(fields(message)).toEqual([['Agent id', '7'], ['Message', 'Only morning crossings']]);
+    expect(transcriptButtons(message)).toHaveLength(0);
 
-    for (const [d, ref] of [[browse, browsing], [search, searching], [message, subtask]] as const) {
+    for (const [d, ref] of [[browse, browsing], [search, searching], [started, subtask]] as const) {
       const buttons = transcriptButtons(d);
       expect(buttons).toHaveLength(1);
       buttons[0]!.click();

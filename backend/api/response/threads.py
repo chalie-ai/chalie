@@ -96,6 +96,7 @@ class TurnExecution(Response):
     cancel_requested: bool
     state: str
     stop_reason: str | None
+    input_id: int | None
 
 
 class TurnStopResult(Response):

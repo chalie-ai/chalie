@@ -211,14 +211,14 @@ class TestSystemAPI:
                          created_at: str, compacted_up_to: int = 42) -> int:
         """Seed a compaction the way production does: the real
         ``Compaction.write`` writer appends a row to the dedicated ``compactions``
-        table on the MAIN axis (``for_turn_id`` NULL). The table default fills
+        table on the MAIN axis (``opening_id`` NULL). The table default fills
         ``created_at``; we then pin the known timestamp under test so the API's
         date-formatting asserts against a fixed value. Returns ``compacted_up_to``
-        — the turn_id watermark the endpoint surfaces as ``compacted_up_to_id``."""
+        — the row-id watermark the endpoint surfaces as ``compacted_up_to_id``."""
         Compaction.write(channel, None, compacted_up_to, summary)
         db.execute(
             "UPDATE compactions SET created_at = ? WHERE id = "
-            "(SELECT MAX(id) FROM compactions WHERE channel = ? AND for_turn_id IS NULL)",
+            "(SELECT MAX(id) FROM compactions WHERE channel = ? AND opening_id IS NULL)",
             (created_at, channel),
         )
         db.commit()
@@ -243,7 +243,7 @@ class TestSystemAPI:
         comp = resp.get_json()['compaction']
         assert comp is not None
         assert comp['summary'] == 'Earlier turns condensed here.'
-        # compacted_up_to_id surfaces the stored turn_id watermark.
+        # compacted_up_to_id surfaces the stored row-id watermark.
         assert comp['compacted_up_to_id'] == watermark
         # Timestamp is pre-formatted server-side; tests have no telemetry → UTC.
         assert comp['compacted_at'] == '2026-01-01 00:00'

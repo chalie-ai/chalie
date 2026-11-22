@@ -29,7 +29,7 @@ export interface WsTurnSignal {
   /** ConfigType — the ProcessorConfig identity the FE routes by. Absent on a
    *  delegate turn's frames, which are addressed by `channel` instead. */
   type?: string | null;
-  /** Delegate turns only: the full transcript channel (`delegate:<name>`). */
+  /** Delegate turns only: the full transcript channel (`delegate:<name>:<agent_id>`). */
   channel?: string;
   turn_id?: number | null;
   /** `context_usage` only — tokens the sent request measured, and the window it
@@ -63,7 +63,7 @@ export interface WsToolCallEvent {
   /** ConfigType — the ProcessorConfig identity the FE routes by. Absent on a
    *  delegate turn's frames, which are addressed by `channel` instead. */
   type?: string | null;
-  /** Delegate turns only: the full transcript channel (`delegate:<name>`). */
+  /** Delegate turns only: the full transcript channel (`delegate:<name>:<agent_id>`). */
   channel?: string;
   turn_id: number | null;
   /** The transcript row this call anchors to. */
@@ -74,7 +74,7 @@ export interface WsToolCallEvent {
 
 /** Address of one delegate (subagent) turn. A delegate's turn_id is allocated
  *  per channel, so it collides with user turn ids — the full channel
- *  (`delegate:<name>`) is part of the identity, never optional. */
+ *  (`delegate:<name>:<agent_id>`) is part of the identity, never optional. */
 export interface DelegateRef {
   channel: string;
   turn_id: number;
@@ -101,7 +101,7 @@ export type TurnExecutionState = 'working' | 'completed' | 'cancelled' | 'crashe
 export interface WsTurnExecutionEvent {
   id: number;
   /** The transcript channel the turn runs on (`user`, a scheduled channel, or
-   *  `delegate:<name>` for a delegate turn). */
+   *  `delegate:<name>:<agent_id>` for a delegate turn). */
   channel: string;
   /** ConfigType — the ProcessorConfig identity the FE routes by. Absent on a
    *  delegate turn's frames, which are addressed by `channel` instead. */

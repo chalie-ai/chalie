@@ -1,13 +1,13 @@
 /**
- * Agents store — every subagent still running, keyed by its `agent_id`: what
- * the Activity drawer lists under "Agents", and part of what shows the top
- * bar's Activity button.
+ * Agents store — every subagent still running or waiting for its caller's
+ * reply, keyed by its `agent_id`: what the Activity drawer lists under
+ * "Agents", and part of what shows the top bar's Activity button.
  *
  * Read in full over REST on every WS connect (`refresh()`), first load and
  * reconnect alike, then kept current by the `agent_changed` frame the server
- * sends each time a row is written (`apply()`): a running agent is added or
- * updated, one that ended is removed. A frame that lands while a read is in
- * flight wins over that read, so a read sent before an agent ended never
+ * sends each time a row is written (`apply()`): a running or waiting agent is
+ * added or updated, one that ended is removed. A frame that lands while a read
+ * is in flight wins over that read, so a read sent before an agent ended never
  * brings it back; only the newest read applies.
  */
 import { defineStore } from 'pinia';
@@ -21,9 +21,10 @@ let refreshSeq = 0;
  *  read when it lands. Null while no read is in flight. */
 let framedSinceRead: Map<number, Agent> | null = null;
 
-/** Put `agent` in `byId` while it runs; take it out once it ended. */
+/** Put `agent` in `byId` while it runs or waits for a reply; take it out
+ *  once it ended. */
 function place(byId: Map<number, Agent>, agent: Agent): void {
-  if (agent.status === 'running') byId.set(agent.agent_id, agent);
+  if (agent.status === 'running' || agent.status === 'waiting') byId.set(agent.agent_id, agent);
   else byId.delete(agent.agent_id);
 }
 
@@ -33,8 +34,8 @@ export const useAgentsStore = defineStore('agents', {
   }),
 
   getters: {
-    /** The running agents, oldest first. */
-    running(state): Agent[] {
+    /** The running and waiting agents, oldest first. */
+    active(state): Agent[] {
       return [...state.byId.values()].sort((a, b) => a.agent_id - b.agent_id);
     },
   },
@@ -47,8 +48,8 @@ export const useAgentsStore = defineStore('agents', {
     },
 
     /**
-     * Re-read every running agent. Best-effort: a failed read leaves the
-     * list as it was; the next connect retries.
+     * Re-read every running and waiting agent. Best-effort: a failed read
+     * leaves the list as it was; the next connect retries.
      */
     async refresh(): Promise<void> {
       const seq = ++refreshSeq;
@@ -56,9 +57,9 @@ export const useAgentsStore = defineStore('agents', {
       framedSinceRead = framed;
       let rows: Agent[];
       try {
-        rows = await agentsApi.running();
+        rows = await agentsApi.active();
       } catch (err) {
-        console.warn('[agents] running agents fetch failed:', err);
+        console.warn('[agents] active agents fetch failed:', err);
         if (seq === refreshSeq) framedSinceRead = null;
         return;
       }

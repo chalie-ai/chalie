@@ -38,18 +38,17 @@ logger = logging.getLogger(__name__)
 def _in_scope(channel: str) -> bool:
     """Return True when *channel* is in-scope for memory stepping.
 
-    Covers the four fixed channels (user, schedule, discovery, subtask) and
-    the dynamic external-agent prefix, whose concrete values are
-    ``external-agent:<name>``.
+    Covers the three fixed channels (user, schedule, discovery) and two
+    dynamic prefixes: each subtask's own ``delegate:subtask:<agent_id>`` and
+    each outside agent's ``external-agent:<name>``.
     """
     if channel in (
         Channel.USER.value,
         Channel.SCHEDULE.value,
         Channel.DISCOVERY.value,
-        Channel.DELEGATE_SUBTASK.value,
     ):
         return True
-    return channel.startswith(Channel.EXTERNAL_AGENT.value + ":")
+    return channel.startswith((Channel.DELEGATE_SUBTASK.value + ":", Channel.EXTERNAL_AGENT.value + ":"))
 
 
 def memory_step_config(

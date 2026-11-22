@@ -44,7 +44,7 @@ from configs.channels.code_agent import CodeAgentConfig
 from configs.channels.pim import PimConfig
 from configs.channels.web_browse import WebBrowseConfig
 from configs.channels.web_search import WebSearchConfig
-from configs.enums.channels import Channel
+from configs.enums.channels import Channel, delegate_agent_id
 from configs.enums.policy_channel import PolicyChannel
 from controllers.message_processor import MessageProcessor
 from models.agent import Agent
@@ -81,7 +81,8 @@ ROUTES = ("chat", "subtask", "background", *_DELEGATE_CONFIGS)
 
 
 def delegate_channel(tool_name: str) -> str:
-    """The channel a subagent's own turn runs on."""
+    """The bare channel of the *tool_name* subagent kind, which each of its
+    subagents' own channels is spelled under."""
     return _DELEGATE_CONFIGS[tool_name](PolicyChannel.CHAT).channel
 
 
@@ -536,23 +537,44 @@ def calls_of(db: sqlite3.Connection, tool_name: str) -> list[sqlite3.Row]:
     ).fetchall()
 
 
-def child_turn(db: sqlite3.Connection, channel: str, call_id: int) -> int:
-    """The subagent turn on *channel* the call *call_id* started — read off the
-    turn's first input row, which carries the call's id."""
-    row = db.execute(
-        "SELECT turn_id FROM transcript WHERE channel = ? AND tool_call_id = ? ORDER BY id LIMIT 1",
-        (channel, str(call_id)),
-    ).fetchone()
-    assert row is not None, f"no {channel} turn carries call {call_id}"
-    return cast("int", row["turn_id"])
+class Child(NamedTuple):
+    """The turn a subagent runs: the channel of its own, and its turn there."""
+
+    channel: str
+    turn_id: int
 
 
-def agent_number(tool_name: str, turn_id: int) -> int:
-    """The number the model knows the *tool_name* subagent by whose own turn
-    is *turn_id* — its row's ``agent_id``, which must exist. Read on the
-    calling thread's own connection, so a provider entry may call it."""
-    agent = Agent.by_turn(tool_name, turn_id)
-    assert agent is not None, f"no agents row for {tool_name} turn {turn_id}"
+def child(db: sqlite3.Connection, kind: str, call_id: int) -> Child:
+    """The turn of the subagent the call *call_id* started — read off the
+    turn's first input row, which carries the call's id, on the own channel of
+    a subagent of *kind* (that kind's bare channel)."""
+    rows = db.execute(
+        "SELECT channel, turn_id FROM transcript WHERE tool_call_id = ? ORDER BY id", (str(call_id),),
+    ).fetchall()
+    found = next(
+        (r for r in rows if delegate_agent_id(r["channel"]) is not None and r["channel"].rpartition(":")[0] == kind),
+        None,
+    )
+    assert found is not None, f"no {kind} subagent's turn carries call {call_id}"
+    return Child(cast("str", found["channel"]), cast("int", found["turn_id"]))
+
+
+def kind_rows(db: sqlite3.Connection, kind: str) -> int:
+    """How many transcript rows the subagents of *kind* (that kind's bare
+    channel) wrote, each on its own channel, all told."""
+    return cast("int", db.execute(
+        "SELECT COUNT(*) FROM transcript WHERE channel >= ? AND channel < ?", (f"{kind}:", f"{kind};"),
+    ).fetchone()[0])
+
+
+def agent_number(channel: str) -> int:
+    """The number the model knows the subagent running on *channel* by — its
+    row's ``agent_id``; the row must exist, with *channel* as its own. Read on
+    the calling thread's own connection, so a provider entry may call it."""
+    agent_id = delegate_agent_id(channel)
+    assert agent_id is not None, f"{channel} is no subagent's own channel"
+    agent = Agent.by_id(agent_id)
+    assert agent is not None and agent.channel == channel, f"no agents row runs on {channel}"
     return agent.agent_id
 
 

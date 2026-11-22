@@ -99,6 +99,22 @@ def _join_named_thread(name: str, timeout: float = _JOIN_TIMEOUT) -> bool:
     return False
 
 
+def _label_the_first_fire(db: sqlite3.Connection, gist: str) -> None:
+    """Store the label of the thread a schedule's first fire opens, before it
+    fires, so no fire launches a label-writing turn of its own
+    (``MessageProcessor._maybe_fire_gist``) that would outlive the provider
+    patch. A label is found by its thread's opening row id, and the first
+    fire's input row is the next transcript row written."""
+    seq = db.execute("SELECT seq FROM sqlite_sequence WHERE name = 'transcript'").fetchone()
+    ThreadGist(opening_id=(int(seq[0]) if seq else 0) + 1, gist=gist).upsert()
+    db.commit()
+
+
+def _assert_labelled(item_id: int, gist: str) -> None:
+    """The label stored before the first fire sits on the thread it opened."""
+    assert ThreadGist.bulk_get(Channel.SCHEDULE.value, [item_id]) == {item_id: gist}
+
+
 def _schedule_turn_rows(turn_id: int) -> list[dict[str, object]]:
     rows = Transcript.filter("channel", Channel.SCHEDULE.value).filter("turn_id", turn_id).get()
     return [r.to_dict() for r in rows]
@@ -176,22 +192,17 @@ def test_first_fire_opens_main_turn_second_fire_forks_the_same_turn(
     _seed_timezone(db, "UTC")
     item_id = insert_scheduled_item(db, message="Water the plants")
 
-    # Pre-seed the turn's gist so BOTH fires' best-effort ingest
-    # (`MessageProcessor._maybe_fire_gist`) short-circuits instead of spawning
-    # its own nested, unpatched background MessageProcessor for gisting. The
-    # schedule channel generates on the first fire, so this has to land before
-    # it — otherwise that daemon outlives the patch below and runs unprovidered.
-    # This test is about turn threading; the gist is isolated scaffolding.
-    ThreadGist(
-        channel=Channel.SCHEDULE.value, turn_id=item_id, gist="Watering reminder",
-        created_at=utc_now().isoformat(),
-    ).upsert()
-    db.commit()
+    # Label the thread before its first fire so neither fire's best-effort
+    # label ingest spawns its own background turn. The schedule channel labels
+    # on the first fire, so this has to land before it. This test is about turn
+    # threading; the label is isolated scaffolding.
+    _label_the_first_fire(db, "Watering reminder")
 
     with patch(_BUILD_CLIENT, return_value=_RecordingProvider("first response")):
         _DISPATCHER._fire_item(item_id, "Water the plants")
         assert _join_named_thread(f"scheduled-work-{item_id}")
         assert _join_named_thread(f"turn-{item_id}")
+    _assert_labelled(item_id, "Watering reminder")
 
     first_rows = _schedule_turn_rows(item_id)
     assert first_rows, "the first fire must open a MAIN turn on (channel='schedule', turn_id=item_id)"
@@ -257,13 +268,9 @@ def test_every_minute_schedule_skips_fires_while_its_run_is_still_going(
     thread."""
     _seed_timezone(db, "UTC")
     item_id = insert_scheduled_item(db, message="Daily bloat check")
-    # Pre-seed the gist so no fire spawns its own background gisting turn (see
-    # the fork test above); this test is about overlap, not gisting.
-    ThreadGist(
-        channel=Channel.SCHEDULE.value, turn_id=item_id, gist="Bloat check",
-        created_at=utc_now().isoformat(),
-    ).upsert()
-    db.commit()
+    # Label the thread up front so no fire spawns its own background labelling
+    # turn (see the fork test above); this test is about overlap, not labels.
+    _label_the_first_fire(db, "Bloat check")
     caplog.set_level(logging.INFO, logger="cron.jobs.scheduled_items")
     provider = _GatedProvider()
 
@@ -275,6 +282,7 @@ def test_every_minute_schedule_skips_fires_while_its_run_is_still_going(
 
             [first] = _schedule_executions(item_id)
             assert first.state == TurnExecution.WORKING and first.ended_at is None
+            _assert_labelled(item_id, "Bloat check")
 
             for _ in range(3):
                 assert _DISPATCHER._run() == "fired 0 of 1 due row(s)"
@@ -338,17 +346,14 @@ def test_a_run_a_restart_cut_off_blocks_fires_until_the_boot_sweep_ends_it(
     same thread."""
     _seed_timezone(db, "UTC")
     item_id = insert_scheduled_item(db, message="Daily bloat check")
-    ThreadGist(
-        channel=Channel.SCHEDULE.value, turn_id=item_id, gist="Bloat check",
-        created_at=utc_now().isoformat(),
-    ).upsert()
-    db.commit()
+    _label_the_first_fire(db, "Bloat check")
     caplog.set_level(logging.INFO, logger="cron.jobs.scheduled_items")
 
     with patch(_BUILD_CLIENT, return_value=_DyingProvider()), process_deaths_expected():
         assert _DISPATCHER._run() == "fired 1 of 1 due row(s)"
         assert _join_named_thread(f"scheduled-work-{item_id}")
         assert _join_named_thread(f"turn-{item_id}")
+    _assert_labelled(item_id, "Bloat check")
 
     [cut] = _schedule_executions(item_id)
     assert cut.state == TurnExecution.WORKING and cut.ended_at is None, (
@@ -390,17 +395,14 @@ def test_a_reply_running_in_the_schedules_thread_blocks_its_fires(
     client, _db, _store = authed_client
     _seed_timezone(db, "UTC")
     item_id = insert_scheduled_item(db, message="Daily bloat check")
-    ThreadGist(
-        channel=Channel.SCHEDULE.value, turn_id=item_id, gist="Bloat check",
-        created_at=utc_now().isoformat(),
-    ).upsert()
-    db.commit()
+    _label_the_first_fire(db, "Bloat check")
     caplog.set_level(logging.INFO, logger="cron.jobs.scheduled_items")
 
     with patch(_BUILD_CLIENT, return_value=_RecordingProvider("checked")):
         assert _DISPATCHER._run() == "fired 1 of 1 due row(s)"
         assert _join_named_thread(f"scheduled-work-{item_id}")
         assert _join_named_thread(f"turn-{item_id}")
+    _assert_labelled(item_id, "Bloat check")
 
     provider = _GatedProvider()
     with patch(_BUILD_CLIENT, return_value=provider):

@@ -10,7 +10,8 @@
 
 Pairs with a typed ``ProcessorConfig`` subclass (``WebBrowseConfig``, in
 ``configs/channels/web_browse.py`` with the other channel configs).  Replaces the browsing role the former ``web_surfer`` subagent performed,
-scoped down to a clean-context agent that drives the raw ``browser`` tool
+scoped down to an agent on its own channel, given only its task plus the message
+that started the spawning turn, that drives the raw ``browser`` tool
 (open / read / find / click / fill / select / scroll / back / screenshot) and reads what it finds.
 
 Named ``web_browse`` (not ``browser``) to avoid a flat-registry collision with
@@ -29,7 +30,7 @@ run's turn ends — completed, crashed or stopped; the turn itself closes it.
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from abilities._delegate import DelegateAbility
 from abilities.web_fetch import WebFetchAbility
@@ -39,6 +40,10 @@ from configs.channels.web_browse import WebBrowseConfig
 from contracts.params.param_bag import ParamBag
 from contracts.params.delegate_params_bag import DelegateParamsBag
 from configs.enums.ability_category import AbilityCategory
+
+
+if TYPE_CHECKING:
+    from services.processor_config import ProcessorConfig
 
 
 class WebBrowseAbility(DelegateAbility[DelegateParamsBag]):
@@ -106,8 +111,12 @@ class WebBrowseAbility(DelegateAbility[DelegateParamsBag]):
     def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
+    @classmethod
+    def child_config(cls, caller: "ProcessorConfig") -> WebBrowseConfig:
+        return WebBrowseConfig(caller.policy_channel)
+
     def run(self, params: DelegateParamsBag) -> ToolResult:
         return self.delegate(
-            WebBrowseConfig, params.instructions,
+            params.instructions,
             hint="Restate the goal more concretely or break it into steps, then retry.",
         )

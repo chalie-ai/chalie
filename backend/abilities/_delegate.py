@@ -17,9 +17,9 @@ delegate tool running its child turn through :meth:`DelegateAbility.spawn`
 inherits. That runner opens the child linked to the parent's tool call and
 returns it at once. Who waits for the child is settled by the caller's kind
 alone (:func:`replies_late`): the person's chat never waits — the call returns
-the child's number, and the child's outcome arrives later in the chat as a
-message of its own (:func:`reply_to_caller`), sent at the end of the child's
-turn however it ended; every other caller — a scheduled task, a subagent's own
+the child's number, and the outcome of each of the child's turns arrives
+later in the chat as a message of its own (:func:`reply_to_caller`), sent at
+the end of that turn however it ended; every other caller — a scheduled task, a subagent's own
 turn, discovery, an outside agent — waits for the answer and gets it as the
 call's result (:meth:`DelegateAbility.wait_for`). A DelegateAbility's call is
 exactly one whose child turn can be watched. Each ``run()`` still owns its pre-flight
@@ -31,22 +31,19 @@ exactly one whose child turn can be watched. Each ``run()`` still owns its pre-f
 from __future__ import annotations
 
 import logging
-from abc import ABC
+from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, ClassVar, cast
 
 from abilities._ability import FOLLOW_UP_BLOCK, Ability, B
 from abilities._result import ToolResult
-from configs.enums.channels import WATCHABLE_DELEGATE_CHANNELS
 from configs.enums.config_type import ConfigTypeEnum
 from models.agent import Agent
 from models.tool_call import ToolCall
 from models.transcript import Transcript
 from models.turn_execution import TurnExecution
+from services.agent_service import CANCELLED_TEXT, CRASHED_TEXT, AgentService
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
-    from configs.enums.policy_channel import PolicyChannel
     from controllers.message_processor import MessageProcessor
     from services.processor_config import ProcessorConfig
 
@@ -82,13 +79,26 @@ class DelegateAbility(Ability[B], ABC):
     #: the delegate itself, on the turn that answers its late reply.
     FOLLOW_UP_TOOLS: ClassVar[tuple[str, ...]] = ()
 
+    @classmethod
+    @abstractmethod
+    def child_config(cls, caller: "ProcessorConfig") -> "ProcessorConfig | None":
+        """The config this delegate's child turn runs on when ``caller``
+        starts it, or ``None`` when ``caller`` may not start one — the one
+        place it is chosen, read when the child is spawned and each time a
+        message opens its next turn (:func:`agent_config`)."""
+
     def spawn(self, config: "ProcessorConfig", instructions: str) -> "MessageProcessor":
         """Open ``instructions`` as a child turn on ``config`` and return it
         without waiting. The child's input row carries this call's
         ``tool_calls`` id, written in the same transaction that opens the turn,
         so the parent's pill can be followed to the child's transcript; its
-        ``agents`` row — the caller's channel and turn, and the plain task —
-        is written in that transaction too. The
+        ``agents`` row — the caller's channel and turn, the plain task, and
+        the caller's input row as the task's context (``context_id``, the
+        caller's ``mp.uid``: ``None`` when the caller's turn wrote no input
+        row, a hidden-input turn) — is written in that transaction too. Only
+        the plain task is stored as the child's input row; its first turn
+        reads it inside the first-turn template, with that context, as the
+        prompt is built (:func:`~abilities.message_parent.first_turn`). The
         parent's frame is sent again once that row exists — the earlier
         ``started`` frame went out before there was a child turn to point at."""
         from controllers.message_processor import MessageProcessor  # noqa: PLC0415
@@ -108,17 +118,16 @@ class DelegateAbility(Ability[B], ABC):
                 "agent": Agent(
                     type=self.NAME, prompt=instructions,
                     spawned_by_channel=mp.channel, spawned_in_turn=mp.turn_id,
+                    context_id=mp.uid,
                 ),
             },
         )
         mp.tool_call_service.reemit(self.tool_call_id)
         return child
 
-    def delegate(
-        self, config: "Callable[[PolicyChannel], ProcessorConfig]", instructions: str, *, hint: str,
-    ) -> ToolResult:
-        """Run ``instructions`` as a child turn on ``config`` (built for the
-        caller's policy channel) through :meth:`spawn`.
+    def delegate(self, instructions: str, *, hint: str) -> ToolResult:
+        """Run ``instructions`` as a child turn on :meth:`child_config` of
+        the caller's config, through :meth:`spawn`.
 
         A caller that is replied to late (:func:`replies_late`) gets the
         child's number at once (:meth:`started`); any other caller waits for
@@ -126,7 +135,10 @@ class DelegateAbility(Ability[B], ABC):
         mp = self.mp
         if mp is None:
             raise RuntimeError(f"{self.NAME}.run() dispatched without a bound MessageProcessor")
-        child = self.spawn(config(mp.config.policy_channel), instructions)
+        config = self.child_config(mp.config)
+        if config is None:
+            raise RuntimeError(f"{self.NAME}.run() reached delegate() for a caller that may not start one")
+        child = self.spawn(config, instructions)
         if replies_late(mp.config.type()):
             return self.started(child)
         return self.wait_for(child, hint=hint)
@@ -163,9 +175,10 @@ class DelegateAbility(Ability[B], ABC):
         )
 
     def follow_up(self, tr: ToolResult, action: "str | None") -> str:
-        """None on a call that returned at once — it carries no answer yet; the
-        turn answering the child's late reply gets the follow-up after the
-        reply instead (:func:`reply_follow_up`)."""
+        """Empty on a call that returned at once — it carries no answer yet;
+        each late reply carrying one of the child's answers is followed by the
+        follow-up of that answer instead, in the prompt of the turn the reply
+        opens (:func:`reply_follow_up`)."""
         if self.mp is not None and replies_late(self.mp.config.type()):
             return ""
         return super().follow_up(tr, action)
@@ -188,146 +201,144 @@ def replying_tools(tool_name: str) -> tuple[str, ...]:
     """The tools a turn answering a late reply from ``tool_name`` needs active
     beyond its pinned ones: those the delegate's follow-up instruction names.
     The delegate itself is already pinned on the chat, the only kind replied to
-    late. Empty for any other tool."""
+    late. A message a subagent sent with ``message_parent`` needs the tool
+    that replies to it. Empty for any other tool."""
     # Lazy: the registry imports this module.
     from abilities._registry import AbilityRegistry  # noqa: PLC0415
 
+    # Lazy: these abilities import this module.
+    from abilities.message_parent import MessageParentAbility  # noqa: PLC0415
+    from abilities.message_subagent import MessageSubagentAbility  # noqa: PLC0415
+
+    if tool_name == MessageParentAbility.NAME:
+        return (MessageSubagentAbility.NAME,)
     if not AbilityRegistry.is_watchable_delegate(tool_name):
         return ()
     return cast("DelegateAbility", AbilityRegistry.get(tool_name)).FOLLOW_UP_TOOLS
 
 
+def agent_config(agent: Agent) -> "ProcessorConfig":
+    """The config every later turn of ``agent`` runs on: its delegate's
+    :meth:`DelegateAbility.child_config` for the chat — the one caller that
+    messages a subagent — on the subagent's own channel."""
+    # Lazy: the registry and the channel configs import this module (through
+    # the abilities they load or pin).
+    from abilities._registry import AbilityRegistry  # noqa: PLC0415
+    from configs.channels import UserConfig  # noqa: PLC0415
+
+    delegate = AbilityRegistry.get(agent.type)
+    if not isinstance(delegate, DelegateAbility):
+        raise RuntimeError(f"subagent #{agent.agent_id}: {agent.type} is not a delegate")
+    config = delegate.child_config(UserConfig())
+    if config is None:
+        raise RuntimeError(f"subagent #{agent.agent_id}: {agent.type} runs no turn for the chat")
+    return config.on_channel(agent.channel)
+
+
 def reply_to_caller(channel: str, turn_id: int, answer: str) -> None:
-    """Send the outcome of the delegate child turn ``(channel, turn_id)`` to the
-    turn whose tool call started it, when that caller did not wait for it.
+    """Send the outcome of the subagent turn ``(channel, turn_id)`` to the
+    channel that spawned it, when that caller did not wait for it — only the
+    person's chat (:func:`~abilities.message_parent.holds`). The reply of
+    each of the subagent's turns is linked to the call that spawned it
+    (:meth:`AgentService.spawn_call_id`), so each lands labelled with the
+    subagent's number; the memory step's turn on its channel has no caller.
 
     Asked of every turn once it has ended — by the end-of-turn hook, and by the
-    boot sweep for a turn a restart cut off — so it first settles, from stored
-    rows alone, whether there is anyone to reply to: only a watchable delegate's
-    turn has a caller; the memory step's turn on a delegate channel (its first
-    row carries the ``memory`` role) has none; and a caller that waited
-    (:func:`replies_late`) got the answer as its call's result. So the caller
-    replied to is always the person's chat.
-
-    The outcome is read from the child's own execution row, never from a
-    MessageProcessor — a cancel lands on another thread, and the boot sweep has
-    no MP at all. The reply's text is exactly the child's answer, or a notice
-    of how it ended; the follow-up an answer carries reaches the model only
-    while the reply is being answered (:func:`reply_follow_up`). The reply
-    joins the caller's turn while it works; otherwise a reply to the main
-    exchange gets a new turn, and a thread reply is continued — always through
-    :meth:`MessageProcessor.send`, the one input function every channel uses.
+    boot sweep for a turn a restart cut off. The outcome is read from the
+    turn's own execution row, never from a MessageProcessor — a cancel lands
+    on another thread, and the boot sweep has no MP at all. The reply's text is
+    exactly the turn's answer, or a notice of how it ended: the same text
+    :meth:`AgentService.last_output` gives for a subagent cancelled or
+    crashed. Nothing is posted for a turn stopped by its caller, nor for one
+    that completed with a delivered ``message_parent`` as its last tool call
+    (:func:`~abilities.message_parent.ended_on_message_parent`) — its
+    question has already reached the chat; one that ended on a refused or
+    failed ``message_parent`` sent nothing, so its answer is posted as usual. A reply carrying an answer also
+    hands over that answer's row — this turn's newest settled row, read off
+    the turn itself, never the agent's ``response_id``, which its next turn
+    overwrites — so the chat turn the reply opens follows it with that
+    answer's follow-up block (:func:`reply_follow_up`); a notice hands over
+    none. It is sent through :meth:`MessageProcessor.deliver`: a chat turn
+    of its own, now or queued.
     """
-    # Lazy: the channel configs and the controller import this module (through
-    # the abilities they pin or load).
+    # Lazy: the turn-execution service imports the channel configs, which
+    # import this module (through the abilities they pin or load); so do the
+    # controller and message_parent.
+    from abilities.message_parent import ended_on_message_parent, holds  # noqa: PLC0415
     from configs.channels import UserConfig  # noqa: PLC0415
     from controllers.message_processor import MessageProcessor  # noqa: PLC0415
-    from services.turn_execution_service import (  # noqa: PLC0415
-        STOP_REASON_PARENT_STOPPED,
-        STOP_REASON_PROCESS_DEATH,
-    )
+    from services.turn_execution_service import STOP_REASON_PARENT_STOPPED  # noqa: PLC0415
 
-    if channel not in WATCHABLE_DELEGATE_CHANNELS:
+    agent = AgentService.of_channel(channel)
+    if agent is None or not holds(agent):
         return
     rows = Transcript.by_turn(channel, turn_id)
     if rows and rows[0]["role"] == "memory":
         return
 
-    # The child's input rows carry the sender's tool_calls id (the stamp
-    # DelegateAbility.spawn writes when it opens the turn) — walk back from
-    # the LAST linked row to the row that asked for the call, then to the
-    # caller's turn; a follow-up message re-points the reply at the turn that
-    # sent it.
-    link = next((row for row in reversed(rows) if row["tool_call_id"] is not None), None)
-    if link is None:
-        raise RuntimeError(f"{channel} turn {turn_id}: no row of its turn carries the caller's tool_call_id")
-    call = ToolCall.get(int(cast("str", link["tool_call_id"])))
-    if call is None:
-        raise RuntimeError(f"{channel} turn {turn_id}: its caller's tool call no longer exists")
-    caller = Transcript.get(call.transcript_id)
-    if caller is None or caller.turn_id is None:
-        raise RuntimeError(
-            f"{channel} turn {turn_id}: the caller's transcript row {call.transcript_id} "
-            "no longer exists or carries no turn"
-        )
-    caller_execution = TurnExecution.latest(caller.channel, caller.turn_id)
-    if caller_execution is None:
-        raise RuntimeError(
-            f"{channel} turn {turn_id}: caller {caller.channel} turn {caller.turn_id} "
-            "has no turn execution to reply into"
-        )
-    if not replies_late(caller_execution.type):
-        return
-
-    name = call.tool_name
+    name = agent.type
     execution = TurnExecution.latest(channel, turn_id)
     if execution is None or execution.ended_at is None:
-        raise RuntimeError(f"{name} #{turn_id} ended without a closed turn execution")
+        raise RuntimeError(f"{name} #{agent.agent_id} turn {turn_id} ended without a closed turn execution")
+    response_id: int | None = None
     if execution.state == TurnExecution.COMPLETED:
-        text = answer if answer.strip() else f"This {name} finished without an answer."
+        if ended_on_message_parent(channel, turn_id):
+            logger.info("[DELEGATE] %s #%d turn %d: ended on a message to its caller, no reply",
+                        name, agent.agent_id, turn_id)
+            return
+        if answer.strip():
+            text = answer
+            response_id = Transcript.last_answer_id(channel, turn_id)
+            if response_id is None:
+                raise RuntimeError(f"{name} #{agent.agent_id} turn {turn_id} answered without a settled row")
+        else:
+            text = f"This {name} finished without an answer."
     elif execution.state == TurnExecution.CANCELLED:
         if execution.stop_reason == STOP_REASON_PARENT_STOPPED:
-            # Stopped by its caller's own stop: the caller never gets an
-            # answer, so there is no one to reply to.
-            logger.info("[DELEGATE] %s #%d: stopped with its caller, no reply", name, turn_id)
+            # Stopped by its caller: there is no one to reply to.
+            logger.info("[DELEGATE] %s #%d turn %d: stopped by its caller, no reply", name, agent.agent_id, turn_id)
             return
-        text = f"This {name} was stopped before it finished."
+        text = CANCELLED_TEXT
     elif execution.state == TurnExecution.CRASHED:
-        if execution.stop_reason == STOP_REASON_PROCESS_DEATH:
-            text = f"This {name} was cut off by a restart before it finished."
-        else:
-            text = f"This {name} crashed: {execution.stop_reason}"
+        text = CRASHED_TEXT
     else:
-        raise RuntimeError(f"{name} #{turn_id} ended in unexpected state {execution.state!r}")
+        raise RuntimeError(f"{name} #{agent.agent_id} turn {turn_id} ended in unexpected state {execution.state!r}")
 
-    # The caller's row sits in the turn's main exchange (no settle yet, or at
-    # or before its first settled assistant row); a reply there must land on
-    # the spine, never inside a running follow-up reply.
-    settle0 = Transcript.settle0(caller.channel, caller.turn_id)
-    spine_only = settle0 is None or cast("int", caller.id) <= settle0
-
-    result = MessageProcessor.send(
-        UserConfig(), text, metadata={"tool_call_id": call.id}, turn_id=caller.turn_id, spine_only=spine_only,
-    )
-    if result is None:
-        raise RuntimeError(
-            f"{name} #{turn_id}: the reply to {caller.channel} turn {caller.turn_id} failed to open"
-        )
+    call_id = AgentService.spawn_call_id(agent)
+    if call_id is None:
+        raise RuntimeError(f"{name} #{agent.agent_id}: the call that spawned it no longer exists")
+    opened = MessageProcessor.deliver(UserConfig(), text, call_id, response_id=response_id)
     logger.info(
-        "[DELEGATE] %s #%d: reply sent to %s turn %d (caller turn %d, execution %s)",
-        name, turn_id, caller.channel, result.turn_id, caller.turn_id, result.id,
+        "[DELEGATE] %s #%d turn %d: reply sent to %s (%s)", name, agent.agent_id, turn_id,
+        agent.spawned_by_channel, f"turn {opened.turn_id}" if opened is not None else "queued",
     )
 
 
-def reply_follow_up(row: Transcript) -> str:
-    """What follows a delegate's late reply ``row`` in the prompt of the
-    exchange answering it: a newline and the follow-up block its tool's result
-    would have carried (:meth:`Ability.follow_up`), or ``''`` for any other row.
-
-    Only a reply carrying an answer has one — its child turn's latest execution
-    COMPLETED on a non-empty answer; a notice (no answer, stopped, crashed, cut
-    off by a restart) has none. Derived from stored rows on every read, never
-    stored, so the reply's own content stays exactly what the delegate said and
-    every later exchange reads it bare."""
+def reply_follow_up(row: Transcript, response_id: int | None) -> str:
+    """What follows a delegate's late reply ``row`` in the prompt of the turn
+    it opened: a newline and the follow-up block its tool's result would have
+    carried (:meth:`Ability.follow_up`), built from the content of
+    ``response_id`` — the row of the answer the reply carries, which the turn
+    holds in its metadata (:meth:`MessageProcessor.deliver`) — or ``''`` when
+    the turn holds none: a notice (no answer, stopped, crashed) or any
+    message that is not a reply. The block follows that answer whichever turn
+    the subagent is on by now. ``row`` only finds the delegate call that
+    spawned the subagent, and with it the tool whose follow-up applies; a
+    reply carrying an answer always has one, so a row that does not raises.
+    Shown only to the turn the reply opened, never stored, so the reply's own
+    content stays exactly what the delegate said and every later turn reads
+    it bare."""
     # Lazy: the registry imports this module.
     from abilities._registry import AbilityRegistry  # noqa: PLC0415
 
+    if response_id is None:
+        return ""
     link = row.tool_call_id
-    if link is None or not link.isdecimal():
-        return ""
-    call = ToolCall.get(int(link))
+    call = ToolCall.get(int(link)) if link is not None and link.isdecimal() else None
     if call is None or not AbilityRegistry.is_watchable_delegate(call.tool_name):
-        return ""
-    call_id = cast("int", call.id)
-    child = Transcript.delegate_turns({call_id: (call.created_at, call.ended_at)}).get(call_id)
-    if child is None:
-        return ""
-    channel, turn_id = cast("str", child["channel"]), cast("int", child["turn_id"])
-    execution = TurnExecution.latest(channel, turn_id)
-    if execution is None or execution.state != TurnExecution.COMPLETED:
-        return ""
-    answer = Transcript.last_answer(channel, turn_id) or ""
-    if not answer.strip():
-        return ""
-    follow_up = AbilityRegistry.get(call.tool_name).follow_up(ToolResult.ok(answer), None)
+        raise RuntimeError(f"transcript row {row.id} carries answer row {response_id} but no delegate call")
+    answer = Transcript.get(response_id)
+    if answer is None:
+        raise RuntimeError(f"transcript row {row.id} carries answer row {response_id}, which does not exist")
+    follow_up = AbilityRegistry.get(call.tool_name).follow_up(ToolResult.ok(answer.content), None)
     return f"\n{FOLLOW_UP_BLOCK.format(text=follow_up)}" if follow_up else ""

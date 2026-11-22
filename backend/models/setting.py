@@ -4,7 +4,7 @@ vault-sealed.
 Active-record row-model (Rule 5 / §4.1). ``key`` is the natural identifier
 callers reach through (``get_value``/``set``/``delete_key`` take a ``key``, not
 the ``id`` PK), so — like :class:`~models.thread_gist.ThreadGist` and its
-``for_turn`` — the read/write verbs are bespoke, distinctly-named
+``bulk_get`` — the read/write verbs are bespoke, distinctly-named
 ``@classmethod``\\ s rather than shadowing the base's id-centric
 ``get``/``save``/``delete`` (which would violate LSP), ported verbatim from the
 dissolved ``SettingsService`` (owner ruling: settings need no service).

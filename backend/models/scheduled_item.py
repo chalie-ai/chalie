@@ -39,9 +39,9 @@ class ScheduledItem(Model):
     )
 
     # The channel a schedule's thread lives on: its integer ``id`` IS the
-    # ``turn_id`` on this channel (§13.1), so its :class:`ThreadGist` is keyed
-    # ``(SCHEDULE_CHANNEL, id)``. Distinct from the ``channel`` column, which
-    # records the channel a schedule was *created from*.
+    # ``turn_id`` on this channel (§13.1); its :class:`ThreadGist` is found by
+    # that thread's opening transcript row id. Distinct from the ``channel``
+    # column, which records the channel a schedule was *created from*.
     SCHEDULE_CHANNEL: ClassVar[str] = "schedule"
 
     @classmethod

@@ -314,9 +314,9 @@ def _init_services() -> None:
 
 
 def _reply_to_swept_delegates(swept: list["TurnExecution"]) -> None:
-    """Tell the caller of every delegate turn the boot sweep closed that a
-    restart cut it off — the reply the delegate's own end would have sent,
-    had its process lived. ``reply_to_caller`` settles, from the stored rows,
+    """Tell the caller of every delegate turn the boot sweep closed that it
+    crashed — the reply the delegate's own end would have sent, had its
+    process lived. ``reply_to_caller`` settles, from the stored rows,
     whether a swept turn has a caller that did not wait for it; any other
     swept turn is skipped. One failed notice is logged and the rest still go
     out: a caller missing its notice must never stop the boot."""
@@ -492,6 +492,13 @@ def main() -> None:
         logger.info("[Startup] Closed %d orphaned turn_executions row(s)", len(_swept))
 
     _init_services()
+
+    # A message queued behind a turn the restart cut off has no turn end left
+    # to open it, so each channel holding one opens its oldest now. After the
+    # services, as the notices below are, and ahead of them: it waited longer.
+    from models.queued_message import QueuedMessage
+    for channel in QueuedMessage.channels():
+        MessageProcessor.drain(channel)
 
     # Only now, after the services, not at the sweep: each notice writes a row
     # on the caller's thread and starts a turn whose own thread reads and

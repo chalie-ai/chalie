@@ -47,7 +47,7 @@ import json
 import logging
 from typing import TYPE_CHECKING, Callable, cast
 
-from abilities._ability import FOLLOW_UP_BLOCK
+from abilities._ability import FOLLOW_UP_BLOCK, UNKNOWN_TOOL
 from abilities._mcp_ability import _MCPAbility
 from services.key_healer import KeyHealer
 from abilities._registry import AbilityRegistry
@@ -102,7 +102,7 @@ class DispatchService:
         value is the shown text, so callers see what the model will see."""
         params, act_summary, ability = self._prepare(tool_name, params)
         if ability is None:
-            result_text = f"Unknown tool: {tool_name}"
+            result_text = UNKNOWN_TOOL.format(tool_name=tool_name)
             steer = self._repeat_error_steer(tool_name, result_text) or self._repeat_call_steer(tool_name, params)
             self.mp.tool_call_service.record(
                 tool_name=tool_name, params=params, result=result_text, shown=result_text + steer,

@@ -8,15 +8,15 @@
 
 """PimAbility — delegate personal-information tasks to a focused agent.
 
-Mirrors WebSearchAbility structure-for-structure: an ability that hands its OWN
-``ProcessorConfig`` subclass (``PimConfig``) to ``DelegateAbility.delegate()``
-inside ``run()``. The delegate fetches live data from email, calendar,
-contacts, and memory.
+Mirrors WebSearchAbility structure-for-structure: an ability whose
+``child_config()`` names its OWN ``ProcessorConfig`` subclass (``PimConfig``)
+and whose ``run()`` calls ``DelegateAbility.delegate()``. The delegate fetches
+live data from email, calendar, contacts, and memory.
 """
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from abilities._delegate import DelegateAbility
 from configs.enums.param_key import Keys
@@ -25,6 +25,10 @@ from configs.channels.pim import PimConfig
 from contracts.params.param_bag import ParamBag
 from contracts.params.delegate_params_bag import DelegateParamsBag
 from configs.enums.ability_category import AbilityCategory
+
+
+if TYPE_CHECKING:
+    from services.processor_config import ProcessorConfig
 
 
 class PimAbility(DelegateAbility[DelegateParamsBag]):
@@ -84,6 +88,10 @@ class PimAbility(DelegateAbility[DelegateParamsBag]):
     def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
+    @classmethod
+    def child_config(cls, caller: "ProcessorConfig") -> PimConfig:
+        return PimConfig(caller.policy_channel)
+
     def run(self, params: DelegateParamsBag) -> ToolResult:
         from capabilities import load_capabilities  # noqa: PLC0415
 
@@ -101,6 +109,6 @@ class PimAbility(DelegateAbility[DelegateParamsBag]):
             )
 
         return self.delegate(
-            PimConfig, params.instructions,
+            params.instructions,
             hint="Rephrase the instruction or split it into smaller PIM tasks, then retry.",
         )

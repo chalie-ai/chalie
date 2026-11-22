@@ -14,9 +14,13 @@ export function isDelegateChannel(channel: unknown): channel is string {
   return typeof channel === 'string' && channel.startsWith(DELEGATE_CHANNEL_PREFIX);
 }
 
-/** The subagent a delegate channel belongs to (`delegate:web_search` → `web_search`). */
+/**
+ * The kind of subagent a delegate channel belongs to. Each subagent runs on a
+ * channel of its own, numbered by the subagent (`delegate:web_search:12` →
+ * `web_search`); a bare kind channel (`delegate:web_search`) reads the same.
+ */
 export function delegateName(channel: string): string {
-  return channel.slice(DELEGATE_CHANNEL_PREFIX.length);
+  return channel.slice(DELEGATE_CHANNEL_PREFIX.length).replace(/:\d+$/, '');
 }
 
 /** What the person reads for a kind of subagent: its type in words, and its icon. */

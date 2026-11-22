@@ -144,9 +144,10 @@ def _apply_user_fields(msg: dict[str, object], r: dict[str, object], attachments
     attachments = attachments_by_id.get(cast("int", r['id']))
     if attachments:
         msg["attachments"] = attachments
-    # A late reply carries only which subagent it came from — its tool and the
-    # summary of the call that started it — and the interface words it; the
-    # label the prompt shows ("Reply from subtask #N") is the model's alone.
+    # A late reply or a subagent's mid-run message carries only which subagent
+    # it came from — its tool, the summary of the call that started it, and
+    # which of the two it is — and the interface words it; the label the
+    # prompt shows ("Reply from subtask #N") is the model's alone.
     # Any other row a tool call caused carries that label ("Task from
     # Chalie"); ordinary input carries neither.
     row = Transcript(**r)
@@ -154,7 +155,7 @@ def _apply_user_fields(msg: dict[str, object], r: dict[str, object], attachments
     if origin is not None:
         msg["reply_from"] = origin
         return
-    label = speaker(row)
+    label = speaker(row, interface=True)
     if label is not None:
         msg["speaker"] = label
 

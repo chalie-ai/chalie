@@ -53,7 +53,7 @@ from tests._delegates import (
     begin,
     calls,
     calls_of,
-    child_turn,
+    child,
     delegate_channel,
     drain,
     execution,
@@ -69,7 +69,7 @@ from tools.browser.tabs import Tab
 pytest_plugins = ("tests._browser_live",)
 pytestmark = [pytest.mark.e2e, pytest.mark.usefixtures("chat_provider", "earlier_agents")]
 
-_RUN_CHANNEL = delegate_channel(WebBrowseAbility.NAME)
+_RUN_KIND = delegate_channel(WebBrowseAbility.NAME)
 _SCHEDULE_ID = 7
 _RUN_WAIT_S = 60.0  # a first page load launches the browser
 _ANSWER = "The page is titled Page A."
@@ -163,8 +163,7 @@ def test_a_browsing_run_started_from_the_chat_answers_later_and_its_tab_closes_w
 
     assert held.opened and provider.unused() == {}
     [call] = calls_of(db, WebBrowseAbility.NAME)
-    n = child_turn(db, _RUN_CHANNEL, call["id"])
-    number = agent_number(WebBrowseAbility.NAME, n)
+    number = agent_number(child(db, _RUN_KIND, call["id"]).channel)
     assert call["state"] == "done", call["result"]
     assert f"Reply from {WebBrowseAbility.NAME} #{number}" in call["result"]
     assert _ANSWER not in call["result"]
@@ -209,8 +208,8 @@ def test_the_person_stops_a_browsing_run_waiting_on_them_from_its_panel_and_the_
             _assert_owned_by(client, {"type": "user", "turn_id": parent.turn_id, "forked": False})
 
             [call] = calls_of(db, WebBrowseAbility.NAME)
-            n = child_turn(db, _RUN_CHANNEL, call["id"])
-            stopped = client.delete(f"/api/threads/{n}?channel={_RUN_CHANNEL}")
+            channel, n = child(db, _RUN_KIND, call["id"])
+            stopped = client.delete(f"/api/threads/{n}?channel={channel}")
             assert stopped.status_code == 200, stopped.data
             assert (stopped.get_json() or {})["result"]["cancelled"] is True
             tab = run.open()
@@ -219,7 +218,7 @@ def test_the_person_stops_a_browsing_run_waiting_on_them_from_its_panel_and_the_
             close_sessions()  # frees a run still waiting, so its turn can end
 
     assert provider.unused() == {}
-    assert execution(_RUN_CHANNEL, n).state == TurnExecution.CANCELLED
+    assert execution(channel, n).state == TurnExecution.CANCELLED
     assert _hand_off_ended(db)
     _assert_closed(client, tab)
 
@@ -227,7 +226,7 @@ def test_the_person_stops_a_browsing_run_waiting_on_them_from_its_panel_and_the_
     assert reply["content"] == "This web_browse was stopped before it finished."
     assert execution(USER, reply["turn_id"]).state == TurnExecution.COMPLETED
     assert assistant_texts(db, USER, reply["turn_id"]) == ["It was stopped before signing in."]
-    assert f"Reply from {WebBrowseAbility.NAME} #{agent_number(WebBrowseAbility.NAME, n)}" in provider.texts("chat")[-1]
+    assert f"Reply from {WebBrowseAbility.NAME} #{agent_number(channel)}" in provider.texts("chat")[-1]
 
 
 def test_stopping_a_scheduled_task_stops_the_browsing_run_it_waits_on_and_nobody_is_replied_to(
@@ -266,8 +265,7 @@ def test_stopping_a_scheduled_task_stops_the_browsing_run_it_waits_on_and_nobody
     assert provider.unused() == {}
     assert execution(schedule, _SCHEDULE_ID).state == TurnExecution.CANCELLED
     [call] = calls_of(db, WebBrowseAbility.NAME)
-    n = child_turn(db, _RUN_CHANNEL, call["id"])
-    ended = execution(_RUN_CHANNEL, n)
+    ended = execution(*child(db, _RUN_KIND, call["id"]))
     assert (ended.state, ended.stop_reason) == (TurnExecution.CANCELLED, STOP_REASON_PARENT_STOPPED)
     assert _hand_off_ended(db)
     _assert_closed(client, tab)

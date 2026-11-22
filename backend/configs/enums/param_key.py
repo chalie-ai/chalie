@@ -54,6 +54,7 @@ class Keys(StrEnum):
 
     action = "action"
     active_only = "active_only"
+    agent_id = "agent_id"
     area = "area"
     args = "args"
     attachments = "attachments"
@@ -141,7 +142,6 @@ class Keys(StrEnum):
     start_line = "start_line"
     status = "status"
     subject = "subject"
-    subtask = "subtask"
     subtitle = "subtitle"
     summary = "summary"
     tags = "tags"

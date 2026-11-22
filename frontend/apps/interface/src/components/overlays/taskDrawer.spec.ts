@@ -4,23 +4,26 @@
  *
  * The drawer holds two lists, each under its own title and shown only when it
  * has rows: "Threads", the forked threads whose reply settled unseen, newest
- * first, and under it "Agents", every subagent still running, oldest first.
- * The header draws its Activity button — the bot icon, pink — only while
- * either list has a row; with neither, there is no button at all.
+ * first, and under it "Agents", every subagent still running or waiting for
+ * its caller's reply, oldest first. The header draws its Activity button — the
+ * bot icon, pink — only while either list has a row; with neither, there is no
+ * button at all.
  *
  * A subagent call (`subtask`, `web_search`, `web_browse`, `pim`, `code_agent`)
  * writes one `agents` row, and the row keeps running after the call — often
  * after the whole turn that started it settled. Its row in the drawer is its
  * type's icon and the one-line summary of the call that started it — its
- * type's plain name when the call has none, never the tool name or a number.
- * Picking a row opens its transcript in the thread panel, headed by the row's
+ * type's plain name when the call has none, never the tool name or a number —
+ * then the working dot while it runs, or the word "waiting" while it waits for
+ * a reply. Picking a row opens its transcript in the thread panel, headed by the row's
  * title, and closes the drawer; the drawer closes itself once the last row of
  * both lists clears.
  *
  * The agents list is the agents table: read in full over `GET /api/agents/all`
  * on load, then kept current by each `agent_changed` frame, driven here
  * through the real dispatcher (`dispatchDrift`), the same entry point the
- * WebSocket feeds. A running row is added or updated; an ended one is removed.
+ * WebSocket feeds. A running or waiting row is added or updated; an ended one
+ * is removed.
  * The threads list is read off the chat's rendered turns, stamped done through
  * the real `setTurnDone`, as a settled reply stamps them.
  *
@@ -154,8 +157,15 @@ async function send(row: Agent): Promise<void> {
   await flushPromises();
 }
 
-const ended = (row: Agent, status: Exclude<AgentStatus, 'running'>): Agent =>
+const ended = (row: Agent, status: Exclude<AgentStatus, 'running' | 'waiting'>): Agent =>
   ({ ...row, status, response_id: status === 'done' ? 5000 + row.agent_id : null });
+
+/** `row` as its turn left it when that turn ended on a message to its caller:
+ *  waiting for the reply, keeping the row the turn ended on. */
+const waiting = (row: Agent): Agent => ({ ...row, status: 'waiting', response_id: 5000 + row.agent_id });
+
+/** `row` running again, on the next turn its caller's reply opened. */
+const resumed = (row: Agent): Agent => ({ ...row, status: 'running', response_id: null, turn_id: row.turn_id + 1 });
 
 const headerButton = (): HTMLButtonElement | null => document.querySelector<HTMLButtonElement>('#taskDrawerBtn');
 const drawer = (): HTMLElement => document.querySelector<HTMLElement>('aside[aria-label="Activity"]')!;
@@ -184,6 +194,18 @@ function agentRows(): (string | undefined)[][] {
   return rowButtons().map((r) => {
     expect(r.querySelector('.drawer-row__sub')).toBeNull();
     return [r.querySelector('.drawer-row__label')!.textContent!.trim(), iconOf(r.querySelector('.drawer-row__icon'))];
+  });
+}
+
+/** Each agent row, in order, as [its title, what stands after it]: `waiting`
+ *  when it shows that word, `working` when it shows the working dot. A row
+ *  shows exactly one of them. */
+function agentStates(): string[][] {
+  return rowButtons().map((r) => {
+    const word = r.querySelector('.task-drawer__status')?.textContent?.trim();
+    const dot = r.querySelector('.thread-activity-dot.working') !== null;
+    expect(word === undefined ? dot : !dot).toBe(true);
+    return [r.querySelector('.drawer-row__label')!.textContent!.trim(), word ?? 'working'];
   });
 }
 
@@ -379,6 +401,42 @@ describe('the Activity drawer\'s agents', () => {
     expect(agentRows()).toEqual([['museum prices', 'lucide-search']]);
   });
 
+  it('keeps an agent whose frame says it waits for a reply, the word "waiting" in place of its working dot, until its next turn runs', async () => {
+    served = [HOURS, PRICES];
+    await loadApp();
+    expect(agentStates()).toEqual([['compare museum hours', 'working'], ['museum prices', 'working']]);
+
+    await send(waiting(HOURS));
+    expect(agentStates()).toEqual([['compare museum hours', 'waiting'], ['museum prices', 'working']]);
+
+    await send(resumed(HOURS));
+    expect(agentStates()).toEqual([['compare museum hours', 'working'], ['museum prices', 'working']]);
+  });
+
+  it.each([
+    ['stopped while it waits', [ended(waiting(HOURS), 'cancelled')]],
+    ['done once the turn its reply opened ends', [resumed(HOURS), ended(resumed(HOURS), 'done')]],
+  ] as const)('takes out a waiting agent once it ended — %s — and keeps the rest', async (_how, frames) => {
+    served = [HOURS, PRICES];
+    await loadApp();
+    await send(waiting(HOURS));
+    expect(agentStates()).toEqual([['compare museum hours', 'waiting'], ['museum prices', 'working']]);
+
+    for (const frame of frames) await send(frame);
+    expect(agentStates()).toEqual([['museum prices', 'working']]);
+  });
+
+  it('keeps the Activity button, and the agent in the drawer, while the only agent waits for a reply', async () => {
+    served = [HOURS];
+    await loadApp();
+
+    await send(waiting(HOURS));
+    expect(headerButton()?.classList.contains('has-activity')).toBe(true);
+    await openDrawer();
+    expect(layout()).toEqual(['# Agents', 'agent: compare museum hours']);
+    expect(agentStates()).toEqual([['compare museum hours', 'waiting']]);
+  });
+
   it('updates a listed agent in place from a later frame for the same agent, never as a second row', async () => {
     served = [HOURS, PRICES];
     await loadApp();
@@ -528,6 +586,6 @@ describe('a read and frames that cross it', () => {
     await flushPromises();
 
     expect(agentRows()).toEqual([['compare museum hours', 'lucide-bot']]);
-    expect(warn).toHaveBeenCalledWith('[agents] running agents fetch failed:', expect.anything());
+    expect(warn).toHaveBeenCalledWith('[agents] active agents fetch failed:', expect.anything());
   });
 });

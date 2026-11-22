@@ -72,18 +72,32 @@ class ParamBag(ABC):
         ability's ``run()`` annotation; the instance is always a leaf."""
 
     @staticmethod
+    def _missing(params: dict[str, object], key: str) -> ToolResult:
+        """The ``missing-params`` error for a mandatory *key*, echoing the keys
+        the model did send."""
+        received = "|".join(params.keys()) or "none"
+        return ToolResult.err(
+            f"Required parameter '{key}' is missing.",
+            code="missing-params",
+            hint=f"pass '{key}' (received: {received})",
+            valid=(key,),
+        )
+
+    @staticmethod
     def require_str(params: dict[str, object], key: str) -> str | ToolResult:
         """Mandatory non-blank string → the stripped value, or ``missing-params``."""
         value = params.get(key)
         if not isinstance(value, str) or not value.strip():
-            received = "|".join(params.keys()) or "none"
-            return ToolResult.err(
-                f"Required parameter '{key}' is missing.",
-                code="missing-params",
-                hint=f"pass '{key}' (received: {received})",
-                valid=(key,),
-            )
+            return ParamBag._missing(params, key)
         return value.strip()
+
+    @staticmethod
+    def require_int(params: dict[str, object], key: str, *, lo: int) -> int | ToolResult:
+        """Mandatory integer with a floor → the value; ``missing-params`` when
+        absent (as :meth:`require_str`), else :meth:`opt_int`'s strict
+        ``invalid-param``."""
+        value = ParamBag.opt_int(params, key, lo=lo)
+        return ParamBag._missing(params, key) if value is None else value
 
     @staticmethod
     def require_str_list(params: dict[str, object], key: str) -> list[str] | ToolResult:

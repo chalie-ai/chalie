@@ -19,5 +19,6 @@ class AgentResponse(Response):
     status: str
     response_id: int | None
     turn_id: int
+    context_id: int | None
     channel: str
     summary: str

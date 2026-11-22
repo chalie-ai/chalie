@@ -39,7 +39,7 @@ from tests._delegates import (
     block,
     calls,
     calls_of,
-    child_turn,
+    child,
     delegate_channel,
     drain,
     execution,
@@ -88,9 +88,9 @@ def _provider(search: list[Entry], subtask_answer: str) -> ChannelProvider:
 def _assert_subtask_completed_with_its_answer(db: sqlite3.Connection, answer: str) -> None:
     """The subtask that waited for the search finished its own turn, its
     answer the last thing it said."""
-    subtask = child_turn(db, _SUBTASK, calls_of(db, "subtask")[0]["id"])
-    assert execution(_SUBTASK, subtask).state == TurnExecution.COMPLETED
-    assert assistant_texts(db, _SUBTASK, subtask) == ["", answer]
+    subtask = child(db, _SUBTASK, calls_of(db, "subtask")[0]["id"])
+    assert execution(*subtask).state == TurnExecution.COMPLETED
+    assert assistant_texts(db, *subtask) == ["", answer]
 
 
 def test_stopped_subagent_is_reported_as_stopped_and_its_caller_still_answers(
@@ -110,23 +110,24 @@ def test_stopped_subagent_is_reported_as_stopped_and_its_caller_still_answers(
     with listening() as listener, patched(provider):
         chat = begin(UserConfig(), _QUESTION)
         wait(held.entered, "the search to reach its model call")
-        searching = db.execute(
-            "SELECT turn_id FROM turn_executions WHERE channel = ? AND ended_at IS NULL", (_SEARCH,),
-        ).fetchone()["turn_id"]
-        stop = client.delete(f"/api/threads/{searching}?channel={_SEARCH}")
+        [(channel, searching)] = db.execute(
+            "SELECT channel, turn_id FROM turn_executions WHERE channel >= ? AND channel < ? AND ended_at IS NULL",
+            (f"{_SEARCH}:", f"{_SEARCH};"),
+        ).fetchall()
+        stop = client.delete(f"/api/threads/{searching}?channel={channel}")
         held.gate.set()
         chat.result()
         drain()
 
     assert stop.status_code == 200 and (stop.get_json() or {})["result"]["cancelled"] is True
     assert held.opened
-    assert execution(_SEARCH, searching).state == TurnExecution.CANCELLED
+    assert execution(channel, searching).state == TurnExecution.CANCELLED
     assert db.execute(
-        "SELECT COUNT(*) FROM transcript WHERE channel = ? AND role = 'assistant'", (_SEARCH,),
+        "SELECT COUNT(*) FROM transcript WHERE channel = ? AND role = 'assistant'", (channel,),
     ).fetchone()[0] == 0
-    lifecycle = [f for f in listener.frames if f.get("channel") == _SEARCH and "tool_name" not in f]
+    lifecycle = [f for f in listener.frames if f.get("channel") == channel and "tool_name" not in f]
     assert lifecycle and lifecycle[-1]["state"] == TurnExecution.CANCELLED
-    thread = block(client, f"/api/threads/{searching}?channel={_SEARCH}")
+    thread = block(client, f"/api/threads/{searching}?channel={channel}")
     assert (thread["cancelled"], thread["crashed"], thread["working"]) == (True, False, False)
     assert [m["content"] for m in messages(thread)] == [_INSTRUCTIONS]
     call = calls_of(db, "web_search")[0]
@@ -150,7 +151,7 @@ def test_subagent_that_finishes_without_an_answer_still_reports_no_answer_with_i
         drain()
 
     call = calls_of(db, "web_search")[0]
-    assert execution(_SEARCH, child_turn(db, _SEARCH, call["id"])).state == TurnExecution.COMPLETED
+    assert execution(*child(db, _SEARCH, call["id"])).state == TurnExecution.COMPLETED
     assert call["state"] == "error"
     assert _error_code(call["result"]) == "delegate-no-answer"
     assert _HINT_LINE.search(call["result"])

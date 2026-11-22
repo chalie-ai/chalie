@@ -37,6 +37,7 @@ from abilities._delegate import replies_late, reply_follow_up
 from abilities._registry import AbilityRegistry
 from abilities.code_agent import CodeAgentAbility
 from abilities.find_tools import FindToolsAbility
+from abilities.message_parent import chat_turn, first_turn, later_turn
 from abilities.pim import PimAbility
 from abilities.plan import PlanAbility, plans
 from abilities.recall import Recall
@@ -46,8 +47,9 @@ from abilities.web_search import WebSearchAbility
 from configs.channels.external_agent import EAMPConfig
 from configs.channels.memory_step import PROMPT_CHANNEL as MEMORY_STEP_PROMPT_CHANNEL
 from configs.channels.user import UserConfig
-from configs.enums.channels import WATCHABLE_DELEGATE_CHANNELS, Channel
+from configs.enums.channels import Channel, delegate_type
 from exceptions import UnroutedPromptChannel
+from models.agent import Agent
 from models.plan_task import PlanTask
 from models.tool_call import ToolCall
 from models.transcript import Transcript
@@ -221,7 +223,7 @@ class PromptService:
         if replies_late(self.mp.config.type()):
             base += _KEEPING_THE_CHAT_MOVING
         if self.mp.config.RENDERS_HTML:
-            subagent = self.mp.config.channel in WATCHABLE_DELEGATE_CHANNELS
+            subagent = delegate_type(self.mp.config.channel) is not None
             base += _PLAIN_TEXT_REPLY if subagent else _RESPONSE_FORMAT
         if locale := self.locale_line():
             base += f"\n\n{locale}"
@@ -347,7 +349,9 @@ class PromptService:
         history view (``self.mp.transcript_service.read()``), each row formatted
         ``[local-ts] Role: content``. ``drop_oldest`` lets a caller (e.g. the history compactor, shrinking its
         own input) drop the N oldest rows — a genuine external count, not
-        mp-reachable."""
+        mp-reachable. Each row is its stored content alone: the compactor, the
+        memory step and memory hygiene write what they read here into stored
+        prose, so nothing worked out per turn rides it."""
         rows = self.mp.transcript_service.read()[drop_oldest:]
         if not rows:
             return ""
@@ -416,10 +420,10 @@ class PromptService:
         the order they arrived: a message sent while a call was in flight
         follows that call's reply and tool results. A message taken in before
         a compaction still renders — the compaction folds earlier turns, never
-        this exchange — and one not yet taken in does not. A joined delegate
-        reply carrying an answer is followed by its tool's follow-up block
-        (:func:`reply_follow_up`). With nothing joined the trail is
-        unchanged."""
+        this exchange — and one not yet taken in does not. A joined message
+        renders its own text alone: the waiting reminder follows only this
+        turn's input line (:meth:`_user_prompt`). With nothing joined the trail
+        is unchanged."""
         calls = self.mp.tool_call_service.by_exchange()
         last_compaction = max(
             (cast("int", call.id) for call in calls if call.tool_name == "chat_history_compactor"),
@@ -460,8 +464,7 @@ class PromptService:
         def joined_after(tid: int) -> None:
             lead_in(tid)
             parts.extend(
-                f"[{self._format_ts(row.created_at)}] {speaker(row) or 'user'}: "
-                f"{row.content}{reply_follow_up(row)}"
+                f"[{self._format_ts(row.created_at)}] {speaker(row) or 'user'}: {row.content}"
                 for row in joins[tid]
             )
 
@@ -564,6 +567,30 @@ class PromptService:
 
     # ── UserConfig (channel="user") ──────────────────────────────────────────
 
+    def _task(self) -> str:
+        """This turn's input as the model reads it — the one read of it every
+        builder goes through. The stored row always keeps the bare input, so
+        later history shows it alone; what wraps it is added here, on read:
+
+        * a subagent's first turn (a spawn's ``metadata["agent"]``): the task
+          in its first-turn template, with the first row of the turn that
+          spawned it as context (:func:`~abilities.message_parent.first_turn`);
+        * a subagent's later turn (``mp.previous_turn_id``, its turn before
+          this one): the chat's message beside what that turn last delivered
+          with ``message_parent``, or, when it delivered nothing, the message
+          word for word — a steer (:func:`~abilities.message_parent.later_turn`);
+        * a chat turn a subagent's ``message_parent`` message opened (its
+          ``metadata["tool_call_id"]`` is that call): the message in the
+          template asking for the reply
+          (:func:`~abilities.message_parent.chat_turn`);
+        * every other turn: the input itself."""
+        mp = self.mp
+        if mp.agent is not None and isinstance(mp.metadata.get("agent"), Agent):
+            return first_turn(mp.agent, mp.raw_input)
+        if mp.previous_turn_id is not None:
+            return later_turn(mp.channel, mp.previous_turn_id, mp.raw_input)
+        return chat_turn(cast("int | None", mp.metadata.get("tool_call_id")), mp.raw_input)
+
     def _user_system_prompt(self) -> str:
         """``UserConfig``: the voice line (cache-warm prefix) over the config's
         ``system_prompt`` base literal. Runs for ``UserConfig`` and every
@@ -584,7 +611,12 @@ class PromptService:
         input line carries the turn's stamp (the model's only time source);
         the heartbeat never rides the user message — its locale line sits at
         the bottom of the system prompt. A delegate reply carrying an answer
-        is followed by its tool's follow-up block (:func:`reply_follow_up`)."""
+        is followed by its tool's follow-up block, built from the answer row
+        this turn holds in its metadata (:func:`reply_follow_up`). On every
+        step the input line, whoever sent it, is followed by the waiting
+        reminder this turn worked out as it opened (``mp.waiting_reminder``,
+        :func:`~abilities.message_parent.waiting_reminder`) when it names any
+        subagent — read here alone, never stored."""
         parts: list[str] = []
 
         user_def = self.user_definition()
@@ -602,8 +634,14 @@ class PromptService:
             parts.append(handover)
 
         anchor = self.mp.transcript_service.anchor_row()
-        label, follow_up = (speaker(anchor), reply_follow_up(anchor)) if anchor is not None else (None, "")
-        parts.append(f"[{self._input_stamp(anchor)}] {label or 'user'}: {self.mp.raw_input}{follow_up}")
+        response_id = cast("int | None", self.mp.metadata.get("response_id"))
+        label, follow_up = (
+            (speaker(anchor), reply_follow_up(anchor, response_id))
+            if anchor is not None else (None, "")
+        )
+        parts.append(f"[{self._input_stamp(anchor)}] {label or 'user'}: {self._task()}{follow_up}")
+        if self.mp.waiting_reminder:
+            parts.append(self.mp.waiting_reminder)
 
         trail = self._trail()
         if trail:
@@ -639,7 +677,7 @@ class PromptService:
             parts.append(handover)
         anchor = self.mp.transcript_service.anchor_row()
         label = speaker(anchor) if anchor is not None else None
-        parts.append(f"[{self._input_stamp(anchor)}] {label or 'Scheduled task'}:\n{self.mp.raw_input}")
+        parts.append(f"[{self._input_stamp(anchor)}] {label or 'Scheduled task'}:\n{self._task()}")
         trail = self._trail()
         if trail:
             parts.append(trail)
@@ -735,60 +773,61 @@ class PromptService:
             lines.append(f"[{ts}] {content}")
         return "\n".join(lines)
 
-    # ── WebBrowseConfig (channel="delegate:web_browse") ──────────────────────
+    # ── typed subagents (web_browse, web_search, pim, code_agent) ────────────
+
+    def _delegate_prompt(self, heading: str) -> str:
+        """A typed subagent's prompt: its own earlier turns under ``## Previous
+        Messages`` (the guarded history read, so compaction and the context
+        limit apply), the stamped input under ``heading``, then this turn's act
+        trail — joined by blank lines. The stamped line is the subagent's only
+        clock."""
+        parts: list[str] = []
+        prev = self._prev()
+        if prev:
+            parts.append(f"## Previous Messages\n{prev}")
+        parts.append(f"[{self._input_stamp()}] {heading}:\n{self._task()}")
+        trail = self._trail()
+        if trail:
+            parts.append(trail)
+        return "\n\n".join(parts)
+
+    # ── WebBrowseConfig (channel="delegate:web_browse:{agent_id}", prompt_channel="delegate:web_browse") ──
 
     def _web_browse_prompt(self) -> str:
-        """``WebBrowseConfig.get_user_prompt``: the (stamped) browsing goal
-        then this turn's act trail."""
-        parts = [f"[{self._input_stamp()}] Browsing goal:\n{self.mp.raw_input}"]
-        trail = self._trail()
-        if trail:
-            parts.append(trail)
-        return "\n\n".join(parts)
+        """``WebBrowseConfig.get_user_prompt``: :meth:`_delegate_prompt` under
+        the browsing goal."""
+        return self._delegate_prompt("Browsing goal")
 
-    # ── WebSearchConfig (channel="delegate:web_search") ──────────────────────
+    # ── WebSearchConfig (channel="delegate:web_search:{agent_id}", prompt_channel="delegate:web_search") ──
 
     def _web_search_prompt(self) -> str:
-        """``WebSearchConfig.get_user_prompt``: the (stamped) research query
-        then this turn's act trail."""
-        parts = [f"[{self._input_stamp()}] Research query:\n{self.mp.raw_input}"]
-        trail = self._trail()
-        if trail:
-            parts.append(trail)
-        return "\n\n".join(parts)
+        """``WebSearchConfig.get_user_prompt``: :meth:`_delegate_prompt` under
+        the research query."""
+        return self._delegate_prompt("Research query")
 
-    # ── PimConfig (channel="delegate:pim") ───────────────────────────────────
+    # ── PimConfig (channel="delegate:pim:{agent_id}", prompt_channel="delegate:pim") ──
 
     def _pim_prompt(self) -> str:
-        """``PimConfig.get_user_prompt``: the (stamped) personal-information
-        instruction then this turn's act trail."""
-        parts = [f"[{self._input_stamp()}] Instruction:\n{self.mp.raw_input}"]
-        trail = self._trail()
-        if trail:
-            parts.append(trail)
-        return "\n\n".join(parts)
+        """``PimConfig.get_user_prompt``: :meth:`_delegate_prompt` under the
+        personal-information instruction."""
+        return self._delegate_prompt("Instruction")
 
-    # ── CodeAgentConfig (channel="delegate:code_agent") ──────────────────────
+    # ── CodeAgentConfig (channel="delegate:code_agent:{agent_id}", prompt_channel="delegate:code_agent") ──
 
     def _code_agent_prompt(self) -> str:
-        """``CodeAgentConfig.get_user_prompt``: the (stamped) coding task, then
-        this turn's act trail.
+        """``CodeAgentConfig.get_user_prompt``: :meth:`_delegate_prompt` under
+        the coding task.
 
-        ``suppress_history=True`` makes this string the delegate's ENTIRE input,
-        and the stamped Task line is its only clock: the World State block no
-        longer rides along (the input stamp is the model's only time source),
-        and a coding agent that cannot date its own work writes wrong dates
-        into the files it creates. Kept as its own builder rather than remapped
-        onto the user channel through ``prompt_channel`` — a task is a
-        hand-off, not a user utterance, and that assembly would also inject the
-        user-identity synthesis and a post-compaction banner naming a tool this
-        channel does not pin."""
-        parts: list[str] = []
-        parts.append(f"[{self._input_stamp()}] Task:\n{self.mp.raw_input}")
-        trail = self._trail()
-        if trail:
-            parts.append(trail)
-        return "\n\n".join(parts)
+        This string is the delegate's ENTIRE input — its own earlier turns,
+        the task, its trail — and the stamped Task line is its only clock: the
+        World State block no longer rides along (the input stamp is the model's
+        only time source), and a coding agent that cannot date its own work
+        writes wrong dates into the files it creates. Kept as its own builder
+        rather than remapped onto the user channel through ``prompt_channel`` —
+        a task is a hand-off, not a user utterance, and that assembly would
+        also inject the user-identity synthesis and a post-compaction banner
+        naming a tool this channel does not pin."""
+        return self._delegate_prompt("Task")
 
     # ── EAMPConfig (channel="external-agent:{name}", prompt_channel="external_agent") ──
 
@@ -835,7 +874,7 @@ class PromptService:
         if prev:
             parts.append(f"## Previous Messages\n{prev}")
         parts.append("")
-        parts.append(f"[{self._input_stamp()}] user: {self.mp.raw_input}")
+        parts.append(f"[{self._input_stamp()}] user: {self._task()}")
         trail = self._trail()
         if trail:
             parts.append(trail)

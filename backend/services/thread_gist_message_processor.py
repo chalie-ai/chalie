@@ -83,8 +83,7 @@ def _persist_gist(trigger_channel: str, trigger_turn_id: int, raw_gist: str) -> 
     # Inert construction only (I2) — no .process(), purely to reach
     # gist_service for the upsert.
     inert = MessageProcessor(ThreadGistConfig())
-    inert.gist_service.upsert(trigger_channel, trigger_turn_id, label)
-    return True
+    return inert.gist_service.upsert(trigger_channel, trigger_turn_id, label)
 
 
 def _run_gist_processor(
