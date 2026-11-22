@@ -28,6 +28,11 @@ A hand-off parks a browsing run on its tab until the user says they are done
 (:func:`hand_off`, :func:`finish_handoff`), the way a permission ask parks a
 tool call: the run's thread waits, the browser stays up. The list is the one
 announcement of a hand-off: its tab lists it until it ends.
+
+A page refused for its certificate leaves the tab where it was, and the tab
+lists the refusal — the site, the browser's error code and the url — until
+the tab commits another page or the user goes back. The interface shows it as
+a warning page; only the user's choice there lets the browser proceed.
 """
 
 from __future__ import annotations
@@ -42,7 +47,7 @@ from typing import TYPE_CHECKING, Callable, Literal
 from models.ws_message import WsMessage
 from services.time_utils import utc_now
 from services.websocket import Websocket
-from tools.browser.cdp import Browser, BrowserError, Event, get_dict
+from tools.browser.cdp import Browser, BrowserError, Event, get_dict, site
 
 if TYPE_CHECKING:
     from tools.browser.session import PageSession
@@ -73,6 +78,21 @@ class Handoff:
 
     def to_dict(self) -> dict[str, object]:
         return {"id": self.id, "reason": self.reason, "origin": self.origin, "asked_at": self.asked_at}
+
+
+@dataclass(frozen=True)
+class CertBlock:
+    """The page a tab was sent to, refused for its certificate: the site, the browser's error
+    code (``ERR_CERT_…``), the url refused and the loader of the navigation it ended."""
+
+    host: str
+    port: int
+    error: str
+    url: str
+    loader: str
+
+    def to_dict(self) -> dict[str, object]:
+        return {"host": self.host, "port": self.port, "error": self.error, "url": self.url}
 
 
 class Tab:
@@ -106,6 +126,11 @@ class Tab:
         self.committed = ""
         self.cause: str | None = None
         self.acting: str | None = None
+        # The main frame's newest document request (loader id, url, following redirects) — what tells
+        # a certificate error for the page apart from one for what it loads — and the refusal the tab
+        # shows, if any. The reader thread writes both; going back clears the refusal from the pool.
+        self.document = ("", "")
+        self.blocked: CertBlock | None = None
 
     @property
     def live(self) -> bool:
@@ -136,6 +161,12 @@ class Tab:
             self.metas += 1
             self.changed.notify_all()
         return True
+
+    def unblock(self) -> None:
+        """Stop showing the refusal, if any: the tab shows the page it stayed on."""
+        if self.blocked is not None:
+            self.blocked = None
+            announce()
 
     def expect(self, cause: str) -> None:
         """Put the main frame's next commit down to *cause*: the driver is about to navigate."""
@@ -174,6 +205,15 @@ class Tab:
             frame = params.get("frame")
             if isinstance(frame, dict) and frame.get("id") == self.id:
                 self._committed(frame)
+                self.unblock()
+            return
+        if event.method == "Network.requestWillBeSent":
+            request = params.get("request")
+            if params.get("type") == "Document" and params.get("frameId") == self.id and isinstance(request, dict):
+                self.document = (str(params.get("loaderId", "")), str(request.get("url", "")))
+            return
+        if event.method == "Security.certificateError":
+            self._refused(str(params.get("requestURL", "")), str(params.get("errorType", "")))
             return
         info = params.get("targetInfo")
         if event.method == "Target.targetInfoChanged" and isinstance(info, dict) and info.get("targetId") == self.id:
@@ -193,6 +233,16 @@ class Tab:
             by = f"{by} during verb {self.acting}"
         logger.info("[BROWSER] navigation tab=%s from=%s to=%s by=%s", self.id, self.committed, to, by)
         self.committed, self.cause = to, None
+
+    def _refused(self, url: str, error: str) -> None:
+        """A certificate error: when it is for the page itself and the browser refused it, list the refusal."""
+        loader, document = self.document
+        where = site(url)
+        if url != document or self.browser.allows(where):
+            return
+        self.blocked = CertBlock(where[0], where[1], error, url, loader)
+        logger.info("[BROWSER] certificate refused tab=%s url=%s error=%s", self.id, url, error)
+        announce()
 
     def _refresh(self) -> None:
         """Re-read the url and title: the browser reports a new url as a target change, but not
@@ -216,6 +266,7 @@ class Tab:
             "opener": self.opener,
             "origin": self.origin,
             "handoff": handoff.to_dict() if handoff is not None and not handoff.done.is_set() else None,
+            "certificate_error": blocked.to_dict() if (blocked := self.blocked) is not None else None,
         }
 
 

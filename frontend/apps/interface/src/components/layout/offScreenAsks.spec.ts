@@ -132,6 +132,7 @@ describe('an ask no live line shows', () => {
     backend.tabs = [{
       id: 'run', url: 'https://example.com/login', title: 'Sign in', opener: 'chalie', origin: ON_CHAT,
       handoff: { id: 'h1', reason: 'Please sign in', origin: ON_CHAT, asked_at: new Date().toISOString() },
+      certificate_error: null,
     }];
     const browser = useBrowserStore();
     await browser.refresh();

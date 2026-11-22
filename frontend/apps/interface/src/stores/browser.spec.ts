@@ -31,11 +31,11 @@ function ask(id: string, origin: PermissionOrigin): BrowserHandoff {
 }
 
 function usersTab(id: string): BrowserTab {
-  return { id, url: `https://example.com/${id}`, title: id, opener: 'user', origin: null, handoff: null };
+  return { id, url: `https://example.com/${id}`, title: id, opener: 'user', origin: null, handoff: null, certificate_error: null };
 }
 
 function chaliesTab(id: string, origin: PermissionOrigin, handoff: BrowserHandoff | null = null): BrowserTab {
-  return { id, url: `https://example.com/${id}`, title: id, opener: 'chalie', origin, handoff };
+  return { id, url: `https://example.com/${id}`, title: id, opener: 'chalie', origin, handoff, certificate_error: null };
 }
 
 /** A page load: a fresh store module whose reads go over the network stand-in. */

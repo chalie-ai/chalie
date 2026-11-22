@@ -74,8 +74,13 @@ def test_an_external_agent_with_a_valid_token_cannot_reach_the_users_browser(
             "/api/browser/history/any-tab", json={"action": "back"}, headers=bearer
         ),
         agent.post("/api/browser/handoffs/any-handoff", headers=bearer),
+        agent.post(
+            "/api/browser/proceed/any-tab",
+            json={"host": "127.0.0.1", "port": 443},
+            headers=bearer,
+        ),
     ]
-    assert [r.status_code for r in refused] == [403] * 6, [r.data for r in refused]
+    assert [r.status_code for r in refused] == [403] * 7, [r.data for r in refused]
 
     client, _token = signed_in(app)
     assert listed(client) == []  # the same list is the user's to read

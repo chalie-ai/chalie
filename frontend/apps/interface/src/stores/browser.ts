@@ -245,6 +245,25 @@ export const useBrowserStore = defineStore('browser', {
       }
     },
 
+    /**
+     * The user chose to proceed past the certificate warning: drop the warning
+     * at once, then re-read the tabs, which brings it back if the server did
+     * not take it. A read already in flight was taken before, so it is dropped.
+     */
+    async proceed(tabId: string): Promise<void> {
+      const tab = this.tabs.find((t) => t.id === tabId);
+      const refused = tab?.certificate_error;
+      if (!tab || !refused) return;
+      refreshSeq++;
+      tab.certificate_error = null;
+      try {
+        await browserApi.proceed(tabId, refused.host, refused.port);
+      } catch (err) {
+        reportFailure('open the site', err);
+      }
+      void this.refresh();
+    },
+
     /** Mirror the live stream's address and title onto the tab strip. */
     patchTab(tabId: string, url: string, title: string): void {
       const tab = this.tabs.find((t) => t.id === tabId);

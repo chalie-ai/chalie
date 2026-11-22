@@ -36,7 +36,7 @@ import re
 import time
 from collections.abc import Callable
 from functools import partial
-from typing import cast
+from typing import TypeVar, cast
 
 from tools.browser import tabs
 from tools.browser.cdp import CLOSED, COMMAND_TIMEOUT, Browser, BrowserError, Event, get, get_dict, get_objects
@@ -64,6 +64,12 @@ _WHITESPACE_RE = re.compile(r"\n{3,}")
 
 # Re-resolves the target: (how many elements match, handles of the first few).
 _Finder = Callable[[], tuple[int, list[str]]]
+
+_R = TypeVar("_R")
+
+# What a run's verbs may still do on a tab showing a certificate refusal: load another page, or go
+# back, which leaves the refusal. Every other verb would act on the page underneath it.
+_PAST_REFUSAL = frozenset({"open", "back"})
 
 
 class PageLoadError(BrowserError):
@@ -121,15 +127,27 @@ def navigate_tab(tab_id: str, url: str) -> None:
 
 
 def history_tab(tab_id: str, action: str) -> None:
-    """Go ``back``, ``forward`` or ``reload`` in the tab *tab_id*, without waiting for the load. Raises LookupError."""
+    """Go ``back``, ``forward`` or ``reload`` in the tab *tab_id*, without waiting for the load. Raises LookupError.
+
+    On a certificate refusal, back leaves the refusal for the page the tab stayed on, and reload tries the refused url again."""
     _on_tab(_history_tab, tab_id, action)
 
 
-def _on_tab(fn: Callable[..., None], tab_id: str, *args: str) -> None:
+def proceed_tab(tab_id: str, host: str, port: int) -> bool:
+    """The user's choice on the warning page: load *host*:*port* despite its certificate, in every tab until the
+    browser closes, and send the tab *tab_id* to the url refused there, without waiting for the load; the tab
+    stops listing the refusal at once. False, and nothing allowed, when the tab no longer shows a refusal for that
+    site. Raises LookupError.
+
+    Only the user's own click may lead here: no verb a run sends reaches it."""
+    return _on_tab(_proceed_tab, tab_id, host, port)
+
+
+def _on_tab(fn: Callable[..., _R], tab_id: str, *args: object) -> _R:
     """Run *fn* on the pool for an open tab — never launching a browser for a tab that is not there."""
     _live_tab(tab_id)
     from tools.browser.pool import get_pool  # noqa: PLC0415
-    get_pool().execute(fn, tab_id, *args, timeout=_POOL_TIMEOUT)
+    return cast("_R", get_pool().execute(fn, tab_id, *args, timeout=_POOL_TIMEOUT))
 
 
 def error_envelope(message: str) -> dict[str, object]:
@@ -139,6 +157,11 @@ def error_envelope(message: str) -> dict[str, object]:
 
 def _no_change() -> dict[str, object]:
     return {"navigated": False, "dialog": None, "popup": None, "summary": ""}
+
+
+def _not_loaded(url: str) -> dict[str, object]:
+    """The envelope of a tab whose page never loaded: the browser's error page or a certificate refusal stands there."""
+    return cast("dict[str, object]", _trim(error_envelope(f"No page is open: {url} did not load.")))
 
 
 # ── Pool-thread internals ────────────────────────────────────────────────────
@@ -156,6 +179,8 @@ def _dispatch(browser: Browser, key: int, verb: str, kwargs: dict[str, object],
             _SESSIONS[key] = session
     elif session is None:
         return error_envelope("No page is open. Use action='open' with a url first.")
+    if verb not in _PAST_REFUSAL and (blocked := session.tab.blocked) is not None:
+        return _not_loaded(blocked.url)
     # A navigation the page makes while a verb runs is logged as happening during that verb.
     session.tab.acting = verb
     try:
@@ -208,6 +233,14 @@ def _navigate_tab(browser: Browser, tab_id: str, url: str) -> None:
 def _history_tab(browser: Browser, tab_id: str, action: str) -> None:
     tab = _live_tab(tab_id)
     session_id = tab.session_id
+    blocked = tab.blocked
+    if blocked is not None and action == "back":
+        tab.unblock()
+        return
+    if blocked is not None and action == "reload":
+        tab.expect(f"history {action}")
+        browser.post("Page.navigate", {"url": blocked.url}, session_id=session_id)
+        return
     if action == "reload":
         tab.expect(f"history {action}")
         browser.post("Page.reload", session_id=session_id)
@@ -218,6 +251,18 @@ def _history_tab(browser: Browser, tab_id: str, action: str) -> None:
     if 0 <= index < len(entries):
         tab.expect(f"history {action}")
         browser.post("Page.navigateToHistoryEntry", {"entryId": get(entries[index], "id", int)}, session_id=session_id)
+
+
+def _proceed_tab(browser: Browser, tab_id: str, host: str, port: int) -> bool:
+    tab = _live_tab(tab_id)
+    blocked = tab.blocked
+    if blocked is None or (blocked.host, blocked.port) != (host, port):
+        return False
+    browser.allow(host, port)
+    tab.unblock()
+    tab.expect("proceed button")
+    browser.post("Page.navigate", {"url": blocked.url}, session_id=tab.session_id)
+    return True
 
 
 def _trim(value: object, cap: int = READ_CAP) -> object:
@@ -278,6 +323,11 @@ class PageSession:
             self._send("Emulation.setDeviceMetricsOverride", {"width": self.tab.width, "height": self.tab.height,
                                                               "deviceScaleFactor": self.tab.scale, "mobile": False})
             self._send("Emulation.setFocusEmulationEnabled", {"enabled": True})
+            # Untrusted certificates are this tab's to answer (cdp.py refuses them unless the user proceeded to
+            # the site), and its main-document requests tell the page's own refusal from that of what it loads.
+            self._send("Network.enable", {"maxTotalBufferSize": 0, "maxResourceBufferSize": 0})
+            self._send("Security.enable")
+            self._send("Security.setOverrideCertificateErrors", {"override": True})
             info = get_dict(browser.send("Target.getTargetInfo", {"targetId": self._target}), "targetInfo")
             url = str(info.get("url", ""))
             self.tab.describe(url, str(info.get("title", "")))
@@ -358,6 +408,10 @@ class PageSession:
         if nav.get("isDownload"):
             raise BrowserError("Download is starting")
         if nav.get("errorText"):
+            # A refused certificate ends the navigation as aborted: name the browser's reason instead.
+            blocked = self.tab.blocked
+            if blocked is not None and blocked.loader == nav.get("loaderId"):
+                raise PageLoadError(f"net::{blocked.error} at {url}")
             raise PageLoadError(f"{nav['errorText']} at {url}")
         loader = nav.get("loaderId")
         if loader:
@@ -437,6 +491,9 @@ class PageSession:
         return self._envelope(data=position)
 
     def back(self) -> dict[str, object]:
+        if self.tab.blocked is not None:  # as in any browser, back from the warning is the page the tab stayed on
+            self.tab.unblock()
+            return self._envelope(data=self._read_view())
         before = self._observe()
         start = self._commits
         history = self._send("Page.getNavigationHistory")
@@ -720,8 +777,11 @@ class PageSession:
     def _envelope(self, data: object = None, changed: dict[str, object] | None = None,
                   status: int | None = None, error: str | None = None) -> dict[str, object]:
         self._pump()
-        if self._unreachable:  # the browser's own error page stands where the page never loaded: no page to name
-            return cast("dict[str, object]", _trim(error_envelope(f"No page is open: {self._unreachable} did not load.")))
+        # The browser's own error page, or a certificate refusal, stands where the page never loaded: no page to name.
+        if self._unreachable:
+            return _not_loaded(self._unreachable)
+        if (blocked := self.tab.blocked) is not None:
+            return _not_loaded(blocked.url)
         try:
             page: object = {"url": self._url, "title": self._title(), "status": status}
         except BrowserError:

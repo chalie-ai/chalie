@@ -27,6 +27,7 @@ from pkgutil import walk_packages
 from .actions.browser.handoffs import BrowserHandoffs
 from .actions.browser.history import BrowserHistory
 from .actions.browser.navigate import BrowserNavigate
+from .actions.browser.proceed import BrowserProceed
 from .actions.browser.tabs import BrowserTabs
 from .actions.capabilities.disconnect import CapabilitiesDisconnect
 from .actions.capabilities.setup import CapabilitiesSetup
@@ -79,6 +80,7 @@ ROUTES: tuple[Endpoint, ...] = (
     BrowserHandoffs("browser", "handoffs"),
     BrowserHistory("browser", "history"),
     BrowserNavigate("browser", "navigate"),
+    BrowserProceed("browser", "proceed"),
     BrowserTabs("browser", "tabs"),
 
     CapabilitiesEndpoint("capabilities"),

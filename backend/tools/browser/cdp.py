@@ -12,9 +12,11 @@ The browser runs with ``--remote-debugging-pipe``: it reads commands on fd 3
 and writes replies and events on fd 4, each message one NUL-terminated JSON
 object. One reader thread owns fd 4. It resolves pending replies, dismisses a
 JavaScript dialog the moment it opens (an open dialog blocks every other
-command on its page), hands a watched session's screencast frames and target
-lifecycle events to its listener, and queues each attached session's other
-events for the pool thread to drain.
+command on its page), answers a page's untrusted certificate (refused, unless
+the user chose to proceed to that site since the browser started), hands a
+watched session's screencast frames, target lifecycle events and main-document
+requests to its listener, and queues each attached session's other page events
+for the pool thread to drain.
 
 The browser keeps one persistent profile under the data directory, so cookies
 and logins outlive both a run and a relaunch.
@@ -32,6 +34,7 @@ import signal
 import threading
 import time
 from typing import Callable, NamedTuple, TypeVar
+from urllib.parse import urlsplit
 
 from services.file_mapper_service import FileMapperService
 
@@ -110,12 +113,20 @@ _LAUNCH_ARGS = (
     "--disable-translate",
 )
 
+# Domains whose events only the reader thread and the listener act on; the pool never drains them.
+_UNQUEUED = ("Network.", "Security.")
+
 _T = TypeVar("_T", str, int, float, bool)
 
-# What a session's listener receives instead of (frames) or as well as (the
-# rest) the pool-thread queue: enough to stream the page, keep its tab's
-# url, title and liveness current, and log its navigations.
+Site = tuple[str, int]   # (host, port): what a certificate exception covers, as in any browser
+
+# What a session's listener receives instead of (frames, requests, certificate
+# errors) or as well as (the rest) the pool-thread queue: enough to stream the
+# page, keep its tab's url, title and liveness current, log its navigations,
+# and notice the page it was sent to being refused for its certificate.
 _WATCHED = frozenset({
+    "Network.requestWillBeSent",
+    "Security.certificateError",
     "Page.screencastFrame",
     "Page.domContentEventFired",
     "Page.loadEventFired",
@@ -174,6 +185,12 @@ def get_objects(payload: dict[str, object], key: str) -> list[dict[str, object]]
     if len(objects) != len(items):
         raise BrowserError(f"Protocol error: non-object in {key!r} of {str(payload)[:200]}")
     return objects
+
+
+def site(url: str) -> Site:
+    """The site *url* is on: its host and port, the port defaulting to TLS's own."""
+    parts = urlsplit(url)
+    return parts.hostname or "", parts.port or 443
 
 
 # ── Executable discovery ─────────────────────────────────────────────────────
@@ -244,6 +261,7 @@ class Browser:
         self._queues: dict[str, collections.deque[Event]] = {}
         self._targets: dict[str, str] = {}      # attached target id -> session id
         self._listeners: dict[str, Listener] = {}
+        self._allowed: frozenset[Site] = frozenset()  # sites the user proceeded to despite their certificate
         self._connected = True
         self._closed = False
         self._reader = threading.Thread(target=self._read_loop, name="browser-cdp-reader", daemon=True)
@@ -300,6 +318,17 @@ class Browser:
             self._write(msg_id, method, params, session_id)
         except OSError:
             pass  # the pipe is gone; the reader's EOF marks us disconnected
+
+    def allow(self, host: str, port: int) -> None:
+        """Load *host*:*port* despite its certificate, in every tab, until this browser closes.
+
+        Only the user's own choice on the warning page may call this."""
+        with self._cv:
+            self._allowed |= {(host, port)}
+
+    def allows(self, where: Site) -> bool:
+        """Whether the user chose to proceed to the site *where* despite its certificate."""
+        return where in self._allowed
 
     def attach(self, target_id: str, *, queue: bool = True) -> str:
         """Attach to *target_id* as a flat session; *queue* keeps its events for :meth:`events`."""
@@ -433,6 +462,13 @@ class Browser:
                 self._write(next(self._ids), "Page.handleJavaScriptDialog", {"accept": False}, session_id)
             except OSError:
                 pass  # the browser is gone; the EOF that follows marks us disconnected
+        elif method == "Security.certificateError" and isinstance(session_id, str):
+            action = "continue" if self.allows(site(str(params.get("requestURL", "")))) else "cancel"
+            try:
+                self._write(next(self._ids), "Security.handleCertificateError",
+                            {"eventId": params.get("eventId"), "action": action}, session_id)
+            except OSError:
+                pass  # the browser is gone; the EOF that follows marks us disconnected
         event = Event(method, params, time.monotonic())
         listeners: list[Listener] = []
         with self._cv:
@@ -447,7 +483,8 @@ class Browser:
                 listeners = [self._listeners[s] for s in dict.fromkeys((owner, subject))
                              if s is not None and s in self._listeners]
             queue = self._queues.get(owner) if owner else None
-            if queue is not None and not (listeners and method == "Page.screencastFrame"):
+            if (queue is not None and not (listeners and method == "Page.screencastFrame")
+                    and not method.startswith(_UNQUEUED)):
                 queue.append(event)
                 self._cv.notify_all()
         for listener in listeners:

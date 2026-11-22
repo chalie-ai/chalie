@@ -11,6 +11,7 @@ from .request import Request
 _URL_MAX = 8192
 _TEXT_MAX = 4096
 _KEY_MAX = 64
+_HOST_MAX = 253
 
 _Coordinate = Annotated[float, Field(ge=-100_000, le=100_000, allow_inf_nan=False)]
 _Modifiers = Annotated[int, Field(ge=0, le=15)]   # Alt=1, Ctrl=2, Meta=4, Shift=8
@@ -32,6 +33,13 @@ class BrowserHistoryRequest(Request):
     """Inbound body moving a tab through its history."""
 
     action: Literal["back", "forward", "reload"]
+
+
+class BrowserProceedRequest(Request):
+    """Inbound body proceeding to the site a tab's certificate warning names."""
+
+    host: str = Field(..., min_length=1, max_length=_HOST_MAX)
+    port: int = Field(..., ge=1, le=65_535)
 
 
 class BrowserMouseInput(Request):

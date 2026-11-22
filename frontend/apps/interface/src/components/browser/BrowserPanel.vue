@@ -1,9 +1,10 @@
 <!-- Slide-over browser panel: the server browser's tabs, one shown live, with
      an address bar and back, forward and reload. Chalie and the user act on a
      tab freely; when Chalie hands one over (a login, a captcha) a bar says why
-     and Done gives it back. Escape closes the panel, except while the page
-     has the keys; F6 moves the focus between the page and the toolbar, and
-     Tab stays inside the panel. -->
+     and Done gives it back. A page refused for its certificate shows a warning
+     in place of the tab's page until the user goes back or proceeds. Escape
+     closes the panel, except while the page has the keys; F6 moves the focus
+     between the page and the toolbar, and Tab stays inside the panel. -->
 <script setup lang="ts">
 import { computed, nextTick, onUpdated, ref, watch } from 'vue';
 import { ArrowLeft, ArrowRight, Keyboard, Plus, RotateCw, X } from '@lucide/vue';
@@ -11,6 +12,7 @@ import { useBrowserStore } from '../../stores/browser';
 import type { BrowserTab } from '../../api/browser';
 import { withScheme, type StreamMeta } from '../../utils/browserInput';
 import BrowserView from './BrowserView.vue';
+import CertificateWarning from './CertificateWarning.vue';
 
 const browser = useBrowserStore();
 
@@ -31,9 +33,15 @@ let editingAddress = false;
 
 const tab = computed(() => browser.selectedTab);
 
-/** A blank tab reports 'about:blank' as its url and title. */
+/** A blank tab reports 'about:blank' as its url and title; a refused page has neither. */
 function tabName(t: BrowserTab): string {
+  if (t.certificate_error) return 'Certificate warning';
   return t.url === 'about:blank' ? 'New tab' : t.title || t.url;
+}
+
+/** Where the tab is: the refused url while it warns, as a browser's address bar shows it. */
+function tabAddress(t: BrowserTab | null): string | undefined {
+  return t?.certificate_error?.url ?? t?.url;
 }
 
 /** A blank tab shows an empty address field, as a new tab does in any browser. */
@@ -67,6 +75,14 @@ watch(
   },
 );
 
+// The warning replaces the page's view, and the on-screen keyboard with it.
+watch(
+  () => tab.value?.certificate_error != null,
+  () => {
+    keyboard.value = false;
+  },
+);
+
 // A control that had the focus went away (Done, a tab's close, the tab
 // itself): the focus stays in the panel rather than falling to the page
 // behind, where Escape would close what is open under it.
@@ -76,7 +92,7 @@ onUpdated(() => {
 
 // The address bar follows the page, but never over what the user is typing.
 watch(
-  () => shownAddress(tab.value?.url),
+  () => shownAddress(tabAddress(tab.value)),
   (url) => {
     if (!editingAddress) address.value = url;
   },
@@ -94,7 +110,7 @@ function onAddressFocus(): void {
 
 function resetAddress(): void {
   editingAddress = false;
-  address.value = shownAddress(tab.value?.url);
+  address.value = shownAddress(tabAddress(tab.value));
 }
 
 function go(): void {
@@ -239,7 +255,7 @@ function onKeydown(e: KeyboardEvent): void {
           class="btn-icon browser-panel__nav"
           aria-label="Back"
           title="Back"
-          :disabled="!canGo.back"
+          :disabled="!canGo.back && !tab.certificate_error"
           @click="browser.goHistory(tab.id, 'back')"
         >
           <ArrowLeft :size="16" aria-hidden="true" />
@@ -301,7 +317,13 @@ function onKeydown(e: KeyboardEvent): void {
       </div>
 
       <div ref="bodyRef" class="browser-panel__body">
-        <BrowserView v-if="tab" ref="viewRef" :key="tab.id" :tab-id="tab.id" @meta="onMeta" />
+        <CertificateWarning
+          v-if="tab?.certificate_error"
+          :refused="tab.certificate_error"
+          @proceed="browser.proceed(tab.id)"
+          @back="browser.goHistory(tab.id, 'back')"
+        />
+        <BrowserView v-else-if="tab" ref="viewRef" :key="tab.id" :tab-id="tab.id" @meta="onMeta" />
         <form v-else class="browser-panel__empty" @submit.prevent="openFirst">
           <p class="browser-panel__empty-title">No tabs open</p>
           <div class="browser-panel__empty-row">

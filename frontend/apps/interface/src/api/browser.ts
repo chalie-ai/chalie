@@ -14,6 +14,16 @@ export interface BrowserHandoff {
   asked_at: string;
 }
 
+/** A page the browser refused for its certificate; the tab stays on the page it had. */
+export interface BrowserCertificateError {
+  host: string;
+  port: number;
+  /** The browser's reason, e.g. 'ERR_CERT_AUTHORITY_INVALID'. */
+  error: string;
+  /** The url refused: where proceeding goes. */
+  url: string;
+}
+
 /** One open tab in the server's browser. */
 export interface BrowserTab {
   id: string;
@@ -25,6 +35,8 @@ export interface BrowserTab {
   /** The turn of the run the tab belongs to (its page, or a popup kept from it); null for the user's own tabs. */
   origin: PermissionOrigin | null;
   handoff: BrowserHandoff | null;
+  /** Set while the tab shows the certificate warning, until it loads another page or the user goes back. */
+  certificate_error: BrowserCertificateError | null;
 }
 
 export type BrowserHistoryAction = 'back' | 'forward' | 'reload';
@@ -62,6 +74,15 @@ export const browser = {
   /** POST /api/browser/history/<id> — back, forward or reload. */
   async history(tabId: string, action: BrowserHistoryAction): Promise<void> {
     await api.post(`/api/browser/history/${encodeURIComponent(tabId)}`, { action });
+  },
+
+  /**
+   * POST /api/browser/proceed/<id> — the user chose to proceed on the warning:
+   * the site opens in every tab until the browser restarts. 409 once the tab
+   * no longer warns about that site.
+   */
+  async proceed(tabId: string, host: string, port: number): Promise<void> {
+    await api.post(`/api/browser/proceed/${encodeURIComponent(tabId)}`, { host, port });
   },
 
   /** POST /api/browser/handoffs/<id> — the user is done; Chalie carries on. 404 once it is already done. */
