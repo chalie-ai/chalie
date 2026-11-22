@@ -73,7 +73,7 @@ class UbiquitiCapability(AbstractCapability):
         auth_method = (cast(str, credentials.get("auth_method")) or "api_key").strip()
         api_key = (cast(str, credentials.get("api_key")) or "").strip() or None
         username = (cast(str, credentials.get("username")) or "").strip() or None
-        password = (cast(str, credentials.get("password")) or "").strip() or None
+        password = cast(str, credentials.get("password")) or None
         site = (cast(str, credentials.get("site")) or "default").strip() or "default"
 
         verify_ssl = credentials.get("verify_ssl", False)

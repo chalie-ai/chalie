@@ -136,7 +136,10 @@ async function submit(): Promise<void> {
   if (!cap) return;
   const body: Record<string, unknown> = {};
   for (const f of formFields.value) {
-    body[f.name] = f.type === 'checkbox' ? !!boolValues[f.name] : (textValues[f.name] ?? '').trim();
+    const text = textValues[f.name] ?? '';
+    // A password goes exactly as typed: spaces at its ends can be part of it.
+    if (f.type === 'checkbox') body[f.name] = !!boolValues[f.name];
+    else body[f.name] = f.type === 'password' ? text : text.trim();
   }
   formError.value = null;
   try {

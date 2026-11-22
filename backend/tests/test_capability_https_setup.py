@@ -1,8 +1,8 @@
 """Feature tests: setting up a capability against a console that serves HTTPS.
 
 The UniFi console is a real HTTPS server on loopback that answers the UniFi OS
-sign-in the way a console does: the right username and password get a session
-cookie and a CSRF token, any other pair gets 403 with the console's own
+sign-in the way a console does: the right username and password, compared
+exactly as typed, get a session cookie and a CSRF token, any other pair gets 403 with the console's own
 "invalid username or password" body, and the API answers only a request that
 carries the session cookie. The Home Assistant server answers its API only for
 the right access token. Both present a certificate this machine does not trust
@@ -63,6 +63,7 @@ class _Console:
     """A running HTTPS server and every request it has received."""
 
     url: str = ""
+    password: str = _PASSWORD
     seen: list[_Seen] = field(default_factory=list)
     lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -100,7 +101,7 @@ class _UnifiHandler(_Handler):
         if self.path != "/api/auth/login":
             self._send(404, {})
             return
-        if json.loads(body or b"{}") == {"username": _USERNAME, "password": _PASSWORD, "rememberMe": True}:
+        if json.loads(body or b"{}") == {"username": _USERNAME, "password": self.console.password, "rememberMe": True}:
             self._send(200, {"username": _USERNAME}, (
                 ("Set-Cookie", f"TOKEN={_SESSION_TOKEN}; path=/; samesite=none; secure; httponly"),
                 ("X-CSRF-Token", _CSRF_TOKEN),
@@ -255,6 +256,13 @@ def test_a_console_user_signs_in_and_unifi_connects(client: FlaskClient, unifi: 
     assert json.loads(login.body) == {"username": _USERNAME, "password": _PASSWORD, "rememberMe": True}
     assert (probe.method, probe.path) == ("GET", "/api/")
     assert f"TOKEN={_SESSION_TOKEN}" in probe.headers.get("Cookie", "")
+
+
+def test_a_password_with_spaces_at_its_ends_is_sent_as_typed(client: FlaskClient, unifi: _Console) -> None:
+    unifi.password = f"  {_PASSWORD} "
+    assert _set_up_unifi(client, unifi.url, password=unifi.password).status_code == 204
+    assert _connected(client, "ubiquiti")
+    assert json.loads(unifi.requests()[0].body)["password"] == unifi.password
 
 
 def test_a_wrong_password_is_refused_and_unifi_stays_unconnected(client: FlaskClient, unifi: _Console) -> None:
