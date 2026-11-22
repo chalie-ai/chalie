@@ -15,7 +15,8 @@ logger = logging.getLogger(__name__)
 _TIMEOUT = 15
 
 _session_lock = threading.Lock()
-_session_cache: dict[tuple[str, str], dict[str, object]] = {}
+# A session belongs to the exact sign-in that made it, so a changed password signs in again.
+_session_cache: dict[tuple[str, str, str], dict[str, object]] = {}
 
 
 # ── Auth helpers ─────────────────────────────────────────────────────────────
@@ -29,7 +30,7 @@ def _auth_headers(api_key: str | None) -> dict[str, str]:
 
 
 def _get_session(url: str, username: str, password: str, verify_ssl: bool) -> tuple[requests.Session, str]:
-    key = (url, username)
+    key = (url, username, password)
     with _session_lock:
         cached = _session_cache.get(key)
         if cached:
@@ -52,9 +53,9 @@ def _get_session(url: str, username: str, password: str, verify_ssl: bool) -> tu
     return session, csrf
 
 
-def _invalidate_session(url: str, username: str = "") -> None:
+def _invalidate_session(url: str, username: str, password: str) -> None:
     with _session_lock:
-        _session_cache.pop((url, username), None)
+        _session_cache.pop((url, username, password), None)
 
 
 # ── Core request helper ──────────────────────────────────────────────────────
@@ -94,7 +95,7 @@ def _request(
     resp = _session_call(session, csrf)
 
     if resp.status_code == 401:
-        _invalidate_session(url, uname)
+        _invalidate_session(url, uname, password or "")
         session, csrf = _get_session(url, uname, password or "", verify_ssl)
         resp = _session_call(session, csrf)
 

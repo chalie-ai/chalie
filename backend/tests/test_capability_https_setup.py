@@ -272,6 +272,13 @@ def test_a_wrong_password_is_refused_and_unifi_stays_unconnected(client: FlaskCl
     assert _saved_settings(client, "ubiquiti") == {}
 
 
+def test_saving_a_changed_password_signs_in_again_with_it(client: FlaskClient, unifi: _Console) -> None:
+    assert _set_up_unifi(client, unifi.url).status_code == 204
+    assert _refusal(_set_up_unifi(client, unifi.url, password="not the password")) == "credentials_rejected"
+    sign_ins = [json.loads(r.body)["password"] for r in unifi.requests() if r.path == "/api/auth/login"]
+    assert sign_ins == [_PASSWORD, "not the password"]
+
+
 def test_with_the_certificate_check_on_an_untrusted_console_never_gets_the_password(
     client: FlaskClient, unifi: _Console,
 ) -> None:
