@@ -15,7 +15,8 @@ logger = logging.getLogger(__name__)
 _TIMEOUT = 15
 
 _session_lock = threading.Lock()
-_session_cache: dict[tuple[str, str], dict[str, object]] = {}
+# A session belongs to the exact sign-in that made it, so a changed password signs in again.
+_session_cache: dict[tuple[str, str, str], dict[str, object]] = {}
 
 
 # ── Auth helpers ─────────────────────────────────────────────────────────────
@@ -29,7 +30,7 @@ def _auth_headers(api_key: str | None) -> dict[str, str]:
 
 
 def _get_session(url: str, username: str, password: str, verify_ssl: bool) -> tuple[requests.Session, str]:
-    key = (url, username)
+    key = (url, username, password)
     with _session_lock:
         cached = _session_cache.get(key)
         if cached:
@@ -52,9 +53,9 @@ def _get_session(url: str, username: str, password: str, verify_ssl: bool) -> tu
     return session, csrf
 
 
-def _invalidate_session(url: str, username: str = "") -> None:
+def _invalidate_session(url: str, username: str, password: str) -> None:
     with _session_lock:
-        _session_cache.pop((url, username), None)
+        _session_cache.pop((url, username, password), None)
 
 
 # ── Core request helper ──────────────────────────────────────────────────────
@@ -83,18 +84,15 @@ def _request(
 
     uname = username or ""
     session, csrf = _get_session(url, uname, password or "", verify_ssl)
-    needs_csrf = method in ("post", "put")
 
     def _session_call(sess: requests.Session, tok: str) -> requests.Response:
-        headers: dict[str, str] = {"Content-Type": "application/json"}
-        if needs_csrf:
-            headers["X-CSRF-Token"] = tok
+        headers = {"Content-Type": "application/json", "X-CSRF-Token": tok}
         return cast("Callable[..., requests.Response]", getattr(sess, method))(full_url, headers=headers, verify=verify_ssl, **kwargs)
 
     resp = _session_call(session, csrf)
 
     if resp.status_code == 401:
-        _invalidate_session(url, uname)
+        _invalidate_session(url, uname, password or "")
         session, csrf = _get_session(url, uname, password or "", verify_ssl)
         resp = _session_call(session, csrf)
 

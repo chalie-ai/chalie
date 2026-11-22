@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onUnmounted, reactive, ref } from 'vue';
-import type { Capability, CapabilityField, CapabilityStatus } from '../api/capabilities';
+import type { Capability, CapabilityField, CapabilityStatus, SetupFailureReason } from '../api/capabilities';
 import { capabilities } from '../api/capabilities';
 import { apiErrorMessage } from '../api/http';
 import { HttpError } from '@chalie/shared';
@@ -116,18 +116,36 @@ async function failureNote(id: string): Promise<string | null> {
   }
 }
 
+// What the reader is told for each reason the server gives for failed settings.
+const SETUP_FAILURES: Record<SetupFailureReason, string> = {
+  credentials_rejected: 'The server rejected these credentials. Check them and try again.',
+  certificate_untrusted: "The server's certificate isn't trusted. If it uses a self-signed certificate, turn off Verify SSL.",
+  unreachable: "Couldn't reach the server. Check the URL and that the server is on.",
+  invalid_configuration: "These settings weren't accepted. Check each field and try again.",
+};
+
+// Why the settings failed, as the server's reason for it says, when it gives one.
+function setupFailure(e: unknown): string | null {
+  if (!(e instanceof HttpError)) return null;
+  const reason = (e.body as { reason?: string } | null | undefined)?.reason;
+  return reason !== undefined && Object.hasOwn(SETUP_FAILURES, reason) ? SETUP_FAILURES[reason as SetupFailureReason] : null;
+}
+
 async function submit(): Promise<void> {
   const cap = formCap.value;
   if (!cap) return;
   const body: Record<string, unknown> = {};
   for (const f of formFields.value) {
-    body[f.name] = f.type === 'checkbox' ? !!boolValues[f.name] : (textValues[f.name] ?? '').trim();
+    const text = textValues[f.name] ?? '';
+    // A password goes exactly as typed: spaces at its ends can be part of it.
+    if (f.type === 'checkbox') body[f.name] = !!boolValues[f.name];
+    else body[f.name] = f.type === 'password' ? text : text.trim();
   }
   formError.value = null;
   try {
     await capabilities.setup(cap.id, body);
   } catch (e) {
-    formError.value = (await failureNote(cap.id)) ?? apiErrorMessage(e, 'Setup failed');
+    formError.value = (await failureNote(cap.id)) ?? setupFailure(e) ?? apiErrorMessage(e, 'Setup failed');
     clearSecrets();
     return;
   }

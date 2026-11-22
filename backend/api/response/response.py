@@ -48,10 +48,14 @@ class Response(DTO):
         }
 
     @staticmethod
-    def failure(message: str) -> dict[str, object]:
-        """Build an error envelope with the given message."""
-        return {
+    def failure(message: str, reason: str | None = None) -> dict[str, object]:
+        """Build an error envelope with the given message, and with ``reason``
+        when given: a plain code saying why, which a client words for itself."""
+        envelope: dict[str, object] = {
             "success": False,
             "result": [],
             "error": message,
         }
+        if reason is not None:
+            envelope["reason"] = reason
+        return envelope

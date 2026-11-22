@@ -14,14 +14,22 @@ fails with 403 (raised by ``_load_caps``/``configure``/``is_connected``,
 caught around the whole handler body, matching the legacy module). On
 success an initial sync runs on a daemon thread — the response returns
 before the sync completes.
+
+A ``configure()`` failure carries a plain ``reason`` the Brain words for the
+reader, read from the request error the capability raised it from:
+``credentials_rejected`` (the server answered 401/403),
+``certificate_untrusted`` (its certificate failed verification),
+``unreachable`` (no answer, or no secure connection), or
+``invalid_configuration`` (anything else).
 """
 
 from __future__ import annotations
 
 import logging
 import threading
-from typing import TYPE_CHECKING, ClassVar, cast
+from typing import TYPE_CHECKING, ClassVar, Literal, cast
 
+import requests
 from flask.typing import ResponseReturnValue
 
 from api.action import Action
@@ -39,6 +47,20 @@ logger = logging.getLogger(__name__)
 
 _ERR_VAULT = "Vault is locked — please log out and log back in"
 _ERR_CONNECTION = "Connection failed — check credentials and try again"
+
+SetupFailureReason = Literal["credentials_rejected", "certificate_untrusted", "unreachable", "invalid_configuration"]
+
+
+def _failure_reason(exc: ValueError) -> SetupFailureReason:
+    """Why ``configure()`` failed, from the request error it was raised from."""
+    cause = exc.__cause__
+    if isinstance(cause, requests.HTTPError) and cause.response is not None and cause.response.status_code in (401, 403):
+        return "credentials_rejected"
+    if isinstance(cause, requests.exceptions.SSLError) and "CERTIFICATE_VERIFY_FAILED" in str(cause):
+        return "certificate_untrusted"
+    if isinstance(cause, requests.ConnectionError | requests.Timeout):
+        return "unreachable"
+    return "invalid_configuration"
 
 
 class CapabilitiesSetup(Action):
@@ -64,8 +86,9 @@ class CapabilitiesSetup(Action):
         Returns:
             "", 204 on success or while the setup is still being confirmed;
             422 on a capability unavailable where Chalie runs, on invalid
-            configuration, or on a capability neither connected nor confirming
-            after ``configure()``; 403 if the vault is locked.
+            configuration (with its ``reason``), or on a capability neither
+            connected nor confirming after ``configure()``; 403 if the vault
+            is locked.
         """
         cap_id = cast(str, id)
         dto = cast(CapabilitySetupRequest, data)
@@ -83,7 +106,7 @@ class CapabilitiesSetup(Action):
                 cap.configure(dto.model_dump(exclude_none=True))
             except ValueError as exc:
                 logger.warning("[capabilities] setup '%s' configure failed: %s", cap_id, exc)
-                return Response.failure("Invalid capability configuration"), 422
+                return Response.failure("Invalid capability configuration", _failure_reason(exc)), 422
 
             if not cap.is_connected() and not cap.setup_pending():
                 return Response.failure(_ERR_CONNECTION), 422
