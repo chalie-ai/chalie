@@ -323,7 +323,9 @@ class BrowserAbility(Ability[BrowserParamsBag]):
             if "ERR_CERT_" in str(e):
                 return {"_code": "certificate-error",
                         "_hint": "The site's certificate is not trusted, so the browser refused to "
-                                 "load it, as any browser would. Do not retry; say so in your answer.",
+                                 "load it, as any browser would. Do not retry. If the person may know "
+                                 "the site, use action='handoff' so they can choose to proceed in the "
+                                 "browser panel; otherwise say so in your answer.",
                         "error": str(e)}
             return {"_code": "page-load-failed",
                     "_hint": "The browser could not load the site; the error names why. Check the "
