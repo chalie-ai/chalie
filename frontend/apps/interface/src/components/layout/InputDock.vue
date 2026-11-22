@@ -71,10 +71,6 @@ const THINKING_ITEMS = [
   { level: 'high', label: 'High' },
 ] as const;
 
-/** Union of every attachable kind — one field, images and documents alike. */
-const ATTACH_ACCEPT =
-  'image/jpeg,image/png,image/webp,image/gif,.pdf,.docx,.pptx,.html,.htm,.txt,.md,.csv,.json,.xml';
-
 const textareaRef = ref<HTMLTextAreaElement | null>(null);
 const sendBtnRef = ref<HTMLButtonElement | null>(null);
 const text = ref('');
@@ -394,13 +390,13 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <!-- No capture attr: lets mobile show the standard OS picker (library +
+    <!-- No accept attr: any file may be attached, the same as dropping one.
+         No capture attr: lets mobile show the standard OS picker (library +
          take-photo), WhatsApp-style. -->
     <input
       id="attachFileInput"
       ref="fileInputRef"
       type="file"
-      :accept="ATTACH_ACCEPT"
       aria-label="Attach file"
       multiple
       hidden
