@@ -68,18 +68,20 @@ async function onToggle(item: ListItem): Promise<void> {
     </div>
 
     <div class="list-card__items">
-      <div
+      <button
         v-for="(item, index) in items"
         :key="index"
+        type="button"
         class="list-card__item"
         :class="{ 'list-card__item--done': item.checked }"
+        :aria-pressed="item.checked"
         @click="onToggle(item)"
       >
         <span class="list-card__check" aria-hidden="true">
           <Check :stroke-width="3.5" />
         </span>
-        <div class="list-card__text">{{ item.content }}</div>
-      </div>
+        <span class="list-card__text">{{ item.content }}</span>
+      </button>
     </div>
   </div>
 </template>
@@ -135,8 +137,11 @@ async function onToggle(item: ListItem): Promise<void> {
   grid-template-columns: 22px 1fr;
   gap: 12px;
   align-items: flex-start;
+  width: 100%;
+  margin: 0;
   padding: 10px 0;
-  cursor: pointer;
+  background: none;
+  text-align: left;
   transition: background-color var(--dur-1) var(--ease-out);
 
   &:hover {

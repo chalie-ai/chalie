@@ -525,32 +525,38 @@ onBeforeUnmount(() => {
           </template>
         </div>
       </div>
-      <div
-        v-if="percentUsed != null"
-        id="contextDisplay"
-        class="context-ring"
-        :class="{ 'context-ring--open': percentShown }"
-        role="meter"
-        aria-label="Context used"
-        aria-valuemin="0"
-        aria-valuemax="100"
-        :aria-valuenow="percentUsed"
-        tabindex="0"
-        @click="percentShown = !percentShown"
-      >
-        <svg class="context-ring__dial" viewBox="0 0 36 36" aria-hidden="true">
-          <circle class="context-ring__track" cx="18" cy="18" r="14" />
-          <circle
-            class="context-ring__fill"
-            cx="18"
-            cy="18"
-            r="14"
-            pathLength="100"
-            stroke-dasharray="100"
-            :stroke-dashoffset="100 - percentUsed"
-          />
-        </svg>
-        <span class="context-ring__label">{{ percentUsed }}%</span>
+      <div v-if="percentUsed != null" class="context-ring">
+        <div
+          id="contextDisplay"
+          class="context-ring__meter"
+          :class="{ 'context-ring--open': percentShown }"
+          role="meter"
+          aria-label="Context used"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          :aria-valuenow="percentUsed"
+        >
+          <svg class="context-ring__dial" viewBox="0 0 36 36" aria-hidden="true">
+            <circle class="context-ring__track" cx="18" cy="18" r="14" />
+            <circle
+              class="context-ring__fill"
+              cx="18"
+              cy="18"
+              r="14"
+              pathLength="100"
+              stroke-dasharray="100"
+              :stroke-dashoffset="100 - percentUsed"
+            />
+          </svg>
+          <span class="context-ring__label">{{ percentUsed }}%</span>
+        </div>
+        <button
+          type="button"
+          class="context-ring__toggle"
+          aria-label="Show the percentage"
+          :aria-pressed="percentShown"
+          @click="percentShown = !percentShown"
+        />
       </div>
     </div>
 

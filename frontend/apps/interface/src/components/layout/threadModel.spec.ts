@@ -456,9 +456,12 @@ describe('the context ring', () => {
     await pushUsage(12, 50_000, 200_000);
     expect(ring(dock).classes('context-ring--open')).toBe(false);
 
-    await ring(dock).trigger('click');
+    const toggle = dock.get('.context-ring__toggle');
+    await toggle.trigger('click');
     expect(ring(dock).classes('context-ring--open')).toBe(true);
-    await ring(dock).trigger('click');
+    expect(toggle.attributes('aria-pressed')).toBe('true');
+    await toggle.trigger('click');
     expect(ring(dock).classes('context-ring--open')).toBe(false);
+    expect(toggle.attributes('aria-pressed')).toBe('false');
   });
 });

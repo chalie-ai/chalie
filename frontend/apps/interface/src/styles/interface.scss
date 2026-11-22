@@ -541,12 +541,25 @@ body {
 // How full the thread's context window is. The percentage shows on hover,
 // keyboard focus, or a tap (which toggles it, for touch screens).
 .context-ring {
+  position: relative;
   margin-left: auto;
-  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.context-ring__meter {
+  display: flex;
   align-items: center;
   gap: 6px;
-  flex-shrink: 0;
-  cursor: pointer;
+}
+
+// A button may not contain the meter, nor the meter a button (assistive tech
+// reads neither one's insides), so the toggle sits over the meter instead.
+.context-ring__toggle {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  padding: 0;
+  background: none;
 }
 
 .context-ring__dial {
@@ -577,7 +590,7 @@ body {
 }
 
 .context-ring:hover .context-ring__label,
-.context-ring:focus-visible .context-ring__label,
+.context-ring:has(.context-ring__toggle:focus-visible) .context-ring__label,
 .context-ring--open .context-ring__label {
   display: inline;
 }
