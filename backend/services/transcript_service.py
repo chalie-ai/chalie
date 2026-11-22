@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, cast
 
+from models.thread import Thread
 from models.transcript import Transcript
 from models.turn_execution import TurnExecution
 from models.turn_signal import TurnSignal
@@ -267,11 +268,13 @@ class TranscriptService:
         self, content: str, *, role: str, settled: int,
         thinking_level: str | None = None, tool_call_id: str | None = None, joined: bool = False,
     ) -> int:
-        """Write one transcript row for this turn and return its id."""
+        """Write one transcript row for this turn and return its id. The row
+        points at its thread, which the turn's first row creates."""
         loc = self._location()
         row = Transcript(
             channel=self.mp.channel, role=role, content=content,
-            turn_id=self.mp.turn_id, settled=settled, xml_migrated=1,
+            turn_id=self.mp.turn_id, thread_id=Thread.ensure(self.mp.channel, self.mp.turn_id),
+            settled=settled, xml_migrated=1,
             deliberation_score=0.0,
             location_lat=loc.get("lat"), location_lon=loc.get("lon"),
             location_name=loc.get("name"),

@@ -66,7 +66,6 @@ CREATE VIRTUAL TABLE IF NOT EXISTS episodes_fts USING fts5(
 
 -- identity_vectors + identity_events removed — personality dimensions ripped out.
 
--- threads table removed — dropped by migration 035_channel_migration.sql
 -- thread_exchanges table removed — dropped by migration 035_channel_migration.sql
 
 -- ────────────────────────────────────────────────────────────────
@@ -395,6 +394,19 @@ CREATE INDEX IF NOT EXISTS idx_mcp_client_servers_enabled
     ON mcp_client_servers(enabled);
 
 -- ────────────────────────────────────────────────────────────────
+-- THREADS — one row per conversation thread: a channel's turn. Every
+-- transcript row the thread holds points at it. The transcript writer
+-- creates it with the thread's first row.
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS threads (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel  TEXT NOT NULL,
+    turn_id  INTEGER NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_threads_channel_turn ON threads(channel, turn_id);
+
+-- ────────────────────────────────────────────────────────────────
 -- TRANSCRIPT — persistent, channel-scoped conversation record
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS transcript (
@@ -429,7 +441,10 @@ CREATE TABLE IF NOT EXISTS transcript (
     -- 1 on a user row sent into the turn while it was still working: the
     -- running exchange reads it at its next boundary instead of a new
     -- exchange opening for it.
-    joined      INTEGER NOT NULL DEFAULT 0
+    joined      INTEGER NOT NULL DEFAULT 0,
+    -- The thread this row belongs to. NULL only on a row copied forward from
+    -- a release that predates turns (its turn_id is NULL too).
+    thread_id   INTEGER REFERENCES threads(id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_transcript_channel ON transcript(channel, created_at);

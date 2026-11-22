@@ -46,7 +46,7 @@ class Transcript(Model):
         "id", "channel", "role", "content", "tool_call_id", "tool_name",
         "internal", "deliberation_score", "created_at", "xml_migrated",
         "location_lat", "location_lon", "location_name", "turn_id", "settled",
-        "thinking_level", "joined",
+        "thinking_level", "joined", "thread_id",
     )
 
     @classmethod
@@ -69,6 +69,7 @@ class Transcript(Model):
     settled: int
     thinking_level: str | None
     joined: int
+    thread_id: int | None
 
     # settle0 — the FIRST assistant row of a turn with settled=1: the boundary
     # between a turn's main exchange and its fork continuation. Each provider

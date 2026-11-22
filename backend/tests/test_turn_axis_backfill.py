@@ -1,16 +1,19 @@
-"""Feature tests: a 1.3.1 database keeps its checkpoints and thread labels on upgrade.
+"""Feature tests: a 1.3.1 database keeps its checkpoints, threads and labels on upgrade.
 
 1.3.1 found a checkpoint and a thread label by turn number: ``compactions``
 carried ``for_turn_id`` and ``compacted_up_to`` (a turn number on the spine,
 a row id in a thread), and ``thread_gist`` was keyed by ``(channel, turn_id)``.
 The running release finds both by transcript row id. Copy-forward computes the
 new columns from the old database's transcript, so the first turn after the
-upgrade sees the conversation 1.3.1 showed.
+upgrade sees the conversation 1.3.1 showed. A thread was only the turn number
+its rows shared; it is now a row of its own every transcript row points at, so
+copy-forward makes one per turn and points each row at it.
 
 Each old database is built the way 1.3.1 built its own: the real
-``provision()`` under the old version, then ``compactions`` and
-``thread_gist`` recreated with 1.3.1's DDL (frozen history, copied verbatim
-from that release's ``schema.sql``) and filled with raw rows. The upgrade is
+``provision()`` under the old version, then ``transcript``, ``compactions``
+and ``thread_gist`` recreated with 1.3.1's DDL (frozen history, copied
+verbatim from that release's ``schema.sql``), the threads table it did not
+have dropped, and the tables filled with raw rows. The upgrade is
 the real ``provision()`` under the running version, and every assertion reads
 through the production readers: the history read, the checkpoint envelope and
 the thread label lookup. The only redirection is ``FileMapperService``'s
@@ -27,6 +30,7 @@ import shutil
 import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -34,7 +38,9 @@ from configs.channels.user import UserConfig
 from controllers.message_processor import MessageProcessor
 from models.compaction import Compaction
 from models.scheduled_item import ScheduledItem
+from models.thread import Thread
 from models.thread_gist import ThreadGist
+from models.transcript import Transcript
 from services.app_version import get_version, version_sort_key
 from services.database import Database
 from services.file_mapper_service import FileMapperService
@@ -48,6 +54,29 @@ pytestmark = pytest.mark.unit
 _RUNNING_VERSION = get_version()
 _LEGACY_VERSION = "1.3.1-beta"
 
+_LEGACY_TRANSCRIPT = """
+CREATE TABLE IF NOT EXISTS transcript (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel     TEXT NOT NULL,
+    role        TEXT NOT NULL,
+    content     TEXT NOT NULL,
+    tool_call_id TEXT,
+    tool_name   TEXT,
+    internal    INTEGER DEFAULT 0,
+    deliberation_score REAL,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    xml_migrated INTEGER NOT NULL DEFAULT 0,
+    location_lat  REAL,
+    location_lon  REAL,
+    location_name TEXT,
+    turn_id     INTEGER,
+    settled     INTEGER NOT NULL DEFAULT 0,
+    thinking_level TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_transcript_channel ON transcript(channel, created_at);
+CREATE INDEX IF NOT EXISTS idx_transcript_channel_created_desc ON transcript(channel, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_transcript_channel_turn ON transcript(channel, turn_id);
+"""
 _LEGACY_THREAD_GIST = """
 CREATE TABLE IF NOT EXISTS thread_gist (
     channel     TEXT NOT NULL,
@@ -120,6 +149,19 @@ _GISTS: list[tuple[str, int, str]] = [
     (_SCHEDULE, 3, "Morning Briefing"),
 ]
 
+# The threads after the upgrade: one per (channel, turn_id), numbered in the
+# order the threads began — the schedule channel's turn 3 is a thread apart from
+# the chat's.
+_THREADS = {
+    (_CHAT, 1): 1, (_CHAT, 2): 2, (_CHAT, 3): 3, (_CHAT, 4): 4, (_CHAT, 5): 5,
+    (_CHAT, 6): 6, (_CHAT, 7): 7, (_SCHEDULE, 3): 8,
+}
+# The thread each row points at, by row id; none for the row with no turn.
+_THREAD_OF_ROW = {
+    1: 1, 2: 1, 3: 2, 4: 3, 5: 2, 6: 4, 7: 4, 8: None, 9: 5,
+    10: 6, 11: 6, 12: 6, 13: 6, 14: 6, 15: 6, 16: 7, 17: 8, 18: 8,
+}
+
 # 1.3.1's spine read with its checkpoint at turn 2: turns 4, 6 and 7 (3 and 5
 # hold only memory rows), turn 6 cut at its first settled answer (row 11),
 # turn 7 never settled and so read whole, and the row with no turn left out.
@@ -184,7 +226,8 @@ def _legacy_install(
     conn = _connect(path)
     try:
         conn.executescript(
-            "DROP TABLE thread_gist; DROP TABLE compactions;"
+            "DROP TABLE thread_gist; DROP TABLE compactions; DROP TABLE transcript; DROP TABLE threads;"
+            + _LEGACY_TRANSCRIPT
             + _LEGACY_THREAD_GIST
             + _LEGACY_COMPACTIONS
         )
@@ -241,6 +284,11 @@ def _assert_conversation_reads_as_1_3_1_showed() -> None:
     assert ThreadGist.bulk_get(_SCHEDULE, [3]) == {3: "Morning Briefing"}, (
         "the schedule thread lost its label"
     )
+
+    threads = {(t.channel, t.turn_id): t.id for t in Thread.all().get()}
+    assert threads == _THREADS, "not one thread per turn, numbered in the order the threads began"
+    rows = {cast("int", r.id): r.thread_id for r in Transcript.all().get()}
+    assert rows == _THREAD_OF_ROW, "a row does not point at its own turn's thread"
 
     orphan = Compaction.filter("content", _ORPHAN_SUMMARY).first()
     assert orphan is not None, "the checkpoint of a thread with no rows was not carried forward"

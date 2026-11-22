@@ -23,6 +23,11 @@ its thread labels, and losing them silently would change what the person's
 conversation shows. The old database is only read, so it stays intact, and the
 next boot rebuilds from it.
 
+A source from before threads had rows of their own gets them the same way:
+one thread per channel and turn number its transcript holds, and every
+transcript row pointed at its thread. That too stops provisioning on failure —
+a row that lost its thread would drop out of the conversation it belongs to.
+
 Boot order (``run.py``): the snapshot restore swaps artifacts in, then
 :meth:`VersionedDatabaseService.provision` runs BEFORE the first
 ``Database.conn()`` — nothing may open the main database ahead of it.
@@ -138,6 +143,29 @@ _TURN_AXIS_BACKFILLS: dict[str, tuple[str, str]] = {
         f"FROM {_SOURCE_SCHEMA}.thread_gist g",
     ),
 }
+
+# A thread used to be only the (channel, turn_id) pair its transcript rows
+# share; it is now a row of its own that every transcript row points at. A source
+# whose transcript has no thread column gets one thread per pair the copied rows
+# hold, numbered in the order the threads began, and each row is pointed at its
+# thread. A row with no turn number was written before turns existed and belongs
+# to no thread. Run in order, each as one autocommit statement, after every table
+# has been copied.
+_THREAD_LINK_COLUMN = "thread_id"
+_THREAD_BACKFILLS: tuple[tuple[str, str], ...] = (
+    (
+        "threads",
+        "INSERT INTO main.threads (channel, turn_id) "
+        "SELECT channel, turn_id FROM main.transcript WHERE turn_id IS NOT NULL "
+        "GROUP BY channel, turn_id ORDER BY MIN(id)",
+    ),
+    (
+        "transcript",
+        "UPDATE main.transcript SET thread_id = (SELECT th.id FROM main.threads th "
+        "WHERE th.channel = transcript.channel AND th.turn_id = transcript.turn_id) "
+        "WHERE turn_id IS NOT NULL",
+    ),
+)
 
 # The implicit rowid, named explicitly in every copy: it is the join key between a
 # content table and its vec0/FTS5 sidecars, and no declared column carries it on
@@ -381,8 +409,10 @@ class VersionedDatabaseService:
         inherited from SQLite's default: tables copy in whatever order they
         appear, so a child would otherwise be rejected ahead of its parent.
 
-        A table the source still holds in its turn-axis shape is carried by
-        :meth:`_backfill_table`, which raises rather than returning a failure.
+        A table the source still holds in its turn-axis shape, and the threads
+        of a source from before they had rows (:data:`_THREAD_BACKFILLS`), are
+        carried by :meth:`_backfill_table`, which raises rather than returning
+        a failure.
         """
         conn.execute("PRAGMA foreign_keys=OFF")
         conn.execute(f"ATTACH DATABASE ? AS {_SOURCE_SCHEMA}", (str(source),))
@@ -397,6 +427,11 @@ class VersionedDatabaseService:
                     self._backfill_table(conn, table, backfill, source)
                 elif not self._copy_table(conn, table):
                     failed.append(table)
+            if "transcript" in source_tables and _THREAD_LINK_COLUMN not in self._columns(
+                conn, _SOURCE_SCHEMA, "transcript"
+            ):
+                for table, statement in _THREAD_BACKFILLS:
+                    self._backfill_table(conn, table, statement, source)
             for table, module in self._virtual_tables(conn, "main").items():
                 if module == _FTS5_MODULE and not self._rebuild_index(conn, table):
                     failed.append(table)
@@ -473,8 +508,8 @@ class VersionedDatabaseService:
 
         One autocommit statement, so a failure writes none of the table's rows.
         Unlike :meth:`_copy_table` it is not recorded and passed over: these
-        rows are the conversation's checkpoints and its thread labels, and
-        losing them silently would change what the person's conversation
+        rows are the conversation's checkpoints, its threads and their labels,
+        and losing them silently would change what the person's conversation
         shows. The error is logged before it is raised, so it reaches the log
         file and not only the console. No lineage row is written, so the next
         boot sets this file aside and rebuilds it from the same source.
