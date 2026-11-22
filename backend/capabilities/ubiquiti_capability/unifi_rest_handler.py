@@ -84,12 +84,9 @@ def _request(
 
     uname = username or ""
     session, csrf = _get_session(url, uname, password or "", verify_ssl)
-    needs_csrf = method in ("post", "put")
 
     def _session_call(sess: requests.Session, tok: str) -> requests.Response:
-        headers: dict[str, str] = {"Content-Type": "application/json"}
-        if needs_csrf:
-            headers["X-CSRF-Token"] = tok
+        headers = {"Content-Type": "application/json", "X-CSRF-Token": tok}
         return cast("Callable[..., requests.Response]", getattr(sess, method))(full_url, headers=headers, verify=verify_ssl, **kwargs)
 
     resp = _session_call(session, csrf)

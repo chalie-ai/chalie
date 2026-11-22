@@ -23,6 +23,7 @@ import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from email.message import Message
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import cast
@@ -54,7 +55,7 @@ _HA_TOKEN = "home-assistant-long-lived-token"
 class _Seen:
     method: str
     path: str
-    headers: dict[str, str]
+    headers: Message[str, str]  # looked up by name in any case, as HTTP header names are
     body: bytes
 
 
@@ -78,7 +79,7 @@ class _Handler(BaseHTTPRequestHandler):
     def _record(self) -> bytes:
         body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
         with self.console.lock:
-            self.console.seen.append(_Seen(self.command, self.path, dict(self.headers.items()), body))
+            self.console.seen.append(_Seen(self.command, self.path, self.headers, body))
         return body
 
     def _send(self, status: int, payload: object, headers: tuple[tuple[str, str], ...] = ()) -> None:
@@ -270,6 +271,13 @@ def test_a_wrong_password_is_refused_and_unifi_stays_unconnected(client: FlaskCl
     assert not _connected(client, "ubiquiti")
     assert [(r.method, r.path) for r in unifi.requests()] == [("POST", "/api/auth/login")]
     assert _saved_settings(client, "ubiquiti") == {}
+
+
+def test_every_request_after_sign_in_carries_the_csrf_token(client: FlaskClient, unifi: _Console) -> None:
+    assert _set_up_unifi(client, unifi.url).status_code == 204
+    after_sign_in = [r for r in unifi.requests() if r.path != "/api/auth/login"]
+    assert after_sign_in
+    assert [r.headers.get("X-CSRF-Token") for r in after_sign_in] == [_CSRF_TOKEN] * len(after_sign_in)
 
 
 def test_saving_a_changed_password_signs_in_again_with_it(client: FlaskClient, unifi: _Console) -> None:
