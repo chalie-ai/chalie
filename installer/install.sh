@@ -357,7 +357,7 @@ _ensure_uv() {
     return
   fi
   _info "Installing uv (fast Python package manager)…"
-  if ! curl -LsSf https://astral.sh/uv/install.sh | sh; then
+  if ! curl --proto "=https" --proto-redir "=https" -LsSf https://astral.sh/uv/install.sh | sh; then
     _error "uv could not be installed — its installer from astral.sh failed to download or run."
     return 1
   fi
@@ -466,7 +466,7 @@ _install_browser() {
   local tmpdir
   tmpdir="$(mktemp -d)"
   _info "Downloading the headless browser ($_BROWSER_VERSION, $platform)…"
-  curl -fL --progress-bar -o "$tmpdir/browser.zip" "$url"
+  curl --proto "=https" --proto-redir "=https" -fL --progress-bar -o "$tmpdir/browser.zip" "$url"
   unzip -q "$tmpdir/browser.zip" -d "$tmpdir"
   rm -rf "$dest"
   mkdir -p "$(dirname "$dest")"

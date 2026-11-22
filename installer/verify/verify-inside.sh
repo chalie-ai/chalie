@@ -96,7 +96,7 @@ say "prerequisite: distro stock python3 ($STOCK_PYTHON)"
 # Every row runs on a native-arch runner, so a row that cannot install its
 # distro's stock python has a real problem, not an emulation artefact: fail
 # rather than excuse it.
-if [ "$STOCK_PYTHON" = "none" ]; then
+if [[ "$STOCK_PYTHON" = "none" ]]; then
   echo "SKIPPED by matrix — this row runs the installer on a host with NO python3"
 elif ! _ensure_stock_python; then
   result "reason=stock-python-prereq-unavailable"
@@ -110,7 +110,7 @@ echo "python3=$py_ver  bash=$(command -v bash || echo ABSENT)  curl=$(command -v
 result "python=$py_ver"
 # A `none` row that finds a python3 anyway would silently turn into a copy of
 # its stock-python sibling while still printing "NO python3" into the CI log.
-if [ "$STOCK_PYTHON" = "none" ] && [ "$py_ver" != "none" ]; then
+if [[ "$STOCK_PYTHON" = "none" ]] && [[ "$py_ver" != "none" ]]; then
   result "reason=nopython-row-but-python3-present($py_ver)"
   echo "VERDICT=FAIL $NAME"
   exit 0
@@ -134,7 +134,7 @@ result "installer_rc=$inst_rc"
 # resolved symlink of the venv's python says where the interpreter LIVES (uv's
 # own store, not /usr), and sys.version_info says WHICH series it is.
 managed_ok=1
-if [ "$EXPECT" = "pass-managed-python" ]; then
+if [[ "$EXPECT" = "pass-managed-python" ]]; then
   say "expectation: venv built from a uv-managed CPython $MANAGED_SERIES"
   managed_ok=0
   uv_root="${XDG_DATA_HOME:-$HOME/.local/share}/uv/python"
@@ -147,7 +147,7 @@ if [ "$EXPECT" = "pass-managed-python" ]; then
   case "$venv_py" in
     "$uv_root"/*) case "$venv_ver" in "$MANAGED_SERIES".*) managed_ok=1 ;; esac ;;
   esac
-  result "managed_python=$([ "$managed_ok" = "1" ] && echo ok || echo fail)"
+  result "managed_python=$([[ "$managed_ok" = "1" ]] && echo ok || echo fail)"
 fi
 
 # ── Dependency audit ─────────────────────────────────────────────────────────
@@ -155,7 +155,7 @@ VENV="$HOME/.chalie/venv"
 APP="$HOME/.chalie/app"
 ort_ok=0
 ready=0
-if [ -x "$VENV/bin/python" ]; then
+if [[ -x "$VENV/bin/python" ]]; then
   say "dependency audit — python imports"
   "$VENV/bin/python" - <<'PY'
 import sys
@@ -178,7 +178,7 @@ for m in ("numpy", "tokenizers", "soundfile", "kokoro_onnx", "moonshine_onnx"):
 sys.exit(0 if hard_ok else 3)
 PY
   audit_rc=$?
-  [ "$audit_rc" -eq 0 ] && ort_ok=1
+  [[ "$audit_rc" -eq 0 ]] && ort_ok=1
   result "dep_audit_rc=$audit_rc"
 
   say "dependency audit — installer-managed artifacts on disk"
@@ -186,7 +186,7 @@ PY
   for f in kokoro/kokoro-v1.0.onnx kokoro/voices-v1.0.bin \
            moonshine/base/encoder_model.onnx moonshine/base/decoder_model_merged.onnx \
            silero_vad.onnx; do
-    if [ -s "$vm/$f" ]; then
+    if [[ -s "$vm/$f" ]]; then
       echo "voice-model-ok   $f ($(stat -c%s "$vm/$f" 2>/dev/null || stat -f%z "$vm/$f" 2>/dev/null) bytes)"
     else
       echo "voice-model-MISS $f"
@@ -195,7 +195,7 @@ PY
   deno_v="$("$HOME/.local/bin/deno" --version 2>/dev/null | head -1 || echo ABSENT)"
   echo "deno=$deno_v"
   browser="$APP/resources/browser/chrome-headless-shell"
-  [ -x "$browser" ] && echo "browser-ok   $browser" || echo "browser-MISS $browser"
+  [[ -x "$browser" ]] && echo "browser-ok   $browser" || echo "browser-MISS $browser"
   cli_path="$(_chalie_cli)"
   cli_v="$("$cli_path" version 2>/dev/null || echo ABSENT)"
   echo "chalie-cli=$cli_v (resolved: $cli_path)"
@@ -216,7 +216,7 @@ fi
 # tested, "a user can use it" is.
 web_ok=0; chromium_ok=0; voice_ok=0; deno_ok=0
 
-if [ "$ort_ok" = "1" ]; then
+if [[ "$ort_ok" = "1" ]]; then
   say "boot"
   "$(_chalie_cli)" start
 
@@ -230,23 +230,23 @@ if [ "$ort_ok" = "1" ]; then
     # not yet listening — so a trailing `|| echo 000` would double-print it.
     body="$(curl -s -w '\n%{http_code}' "http://localhost:$PORT/ready" 2>/dev/null)"
     code="$(printf '%s' "$body" | tail -n1)"
-    [ -n "$code" ] || code="000"
+    [[ -n "$code" ]] || code="000"
     echo "poll $i: /ready -> $code"
-    if [ "$code" = "200" ]; then
+    if [[ "$code" = "200" ]]; then
       ready=1
       echo "  components: $(printf '%s' "$body" | head -n1)"
       break
     fi
     sleep 8
   done
-  result "ready_http=$([ "$ready" = "1" ] && echo 200 || echo timeout)"
-  if [ "$ready" != "1" ]; then
+  result "ready_http=$([[ "$ready" = "1" ]] && echo 200 || echo timeout)"
+  if [[ "$ready" != "1" ]]; then
     echo "--- last /ready body ---"; printf '%s\n' "$body" | head -n1
     echo "--- chalie.log (tail) ---"; tail -n 60 "$HOME/.chalie/chalie.log" 2>/dev/null
   fi
 fi
 
-if [ "$ready" = "1" ]; then
+if [[ "$ready" = "1" ]]; then
   # ── webserver: the interface bundle is actually served, not just the API ───
   say "probe: webserver"
   idx="$(curl -s -w '\n%{http_code}' "http://localhost:$PORT/" 2>/dev/null)"
@@ -254,12 +254,12 @@ if [ "$ready" = "1" ]; then
   # An index.html that exists but is a stub would still 200, so require the
   # document element too — that is the difference between "a file was returned"
   # and "the built frontend was returned".
-  if [ "$idx_code" = "200" ] && printf '%s' "$idx" | grep -qi '<html'; then
+  if [[ "$idx_code" = "200" ]] && printf '%s' "$idx" | grep -qi '<html'; then
     web_ok=1
   else
     echo "GET / -> $idx_code, body head:"; printf '%s' "$idx" | head -c 400
   fi
-  result "webserver=$([ "$web_ok" = "1" ] && echo ok || echo fail)"
+  result "webserver=$([[ "$web_ok" = "1" ]] && echo ok || echo fail)"
 
   # ── chromium: drive the LIVE instance, not an empty browser ───────────────
   # Goes through Chalie's own browser session — the path the browsing ability
@@ -276,8 +276,8 @@ assert not env["error"], env["error"]
 print("chromium navigated, title=%r" % env["page"]["title"])
 PY
   )
-  [ $? -eq 0 ] && chromium_ok=1
-  result "chromium=$([ "$chromium_ok" = "1" ] && echo ok || echo fail)"
+  [[ $? -eq 0 ]] && chromium_ok=1
+  result "chromium=$([[ "$chromium_ok" = "1" ]] && echo ok || echo fail)"
 
   # ── voice: a real round trip, not an import check ─────────────────────────
   # Kokoro synthesises speech; that audio is fed straight back through Moonshine
@@ -310,8 +310,8 @@ assert text.strip(), "Moonshine returned empty text for synthesized speech"
 print("moonshine transcribed: %r" % text)
 PY
   )
-  [ $? -eq 0 ] && voice_ok=1
-  result "voice=$([ "$voice_ok" = "1" ] && echo ok || echo fail)"
+  [[ $? -eq 0 ]] && voice_ok=1
+  result "voice=$([[ "$voice_ok" = "1" ]] && echo ok || echo fail)"
 
   # ── deno: the bundled runtime executes, which is what code execution needs ─
   say "probe: deno"
@@ -320,7 +320,7 @@ PY
   if "$HOME/.local/bin/deno" run --no-config -A "$deno_script" 2>&1 | grep -q 'deno-probe-ok'; then
     deno_ok=1
   fi
-  result "deno=$([ "$deno_ok" = "1" ] && echo ok || echo fail)"
+  result "deno=$([[ "$deno_ok" = "1" ]] && echo ok || echo fail)"
 
   # Measured, not estimated — the counterpart to the disk footprint above, and
   # taken HERE on purpose: by this point the daemon has warmed its voice and
@@ -332,11 +332,11 @@ PY
   # from "cannot measure" is worse than none, hence the explicit UNAVAILABLE.
   say "resident memory after all probes"
   rss_kb=0; rss_n=0
-  if [ -d /proc ]; then
+  if [[ -d /proc ]]; then
     for _p in /proc/[0-9]*; do
       tr '\0' ' ' < "$_p/cmdline" 2>/dev/null | grep -q "$HOME/.chalie" || continue
       _r="$(awk '/^VmRSS:/{print $2}' "$_p/status" 2>/dev/null)"
-      [ -n "$_r" ] && { rss_kb=$((rss_kb + _r)); rss_n=$((rss_n + 1)); }
+      [[ -n "$_r" ]] && { rss_kb=$((rss_kb + _r)); rss_n=$((rss_n + 1)); }
     done
   else
     # macOS has no /proc, but ps is always present there.
@@ -344,7 +344,7 @@ PY
     rss_kb="$(printf '%s' "$_ps" | awk '{s+=$1} END {print s+0}')"
     rss_n="$(printf '%s\n' "$_ps" | grep -c .)"
   fi
-  if [ "$rss_n" -gt 0 ]; then
+  if [[ "$rss_n" -gt 0 ]]; then
     echo "chalie RSS total: $((rss_kb / 1024)) MB across $rss_n process(es)"
   else
     echo "chalie RSS UNAVAILABLE — no process matched $HOME/.chalie"
@@ -353,10 +353,10 @@ fi
 
 # ── Verdict ──────────────────────────────────────────────────────────────────
 say "verdict"
-if [ "$inst_rc" = "0" ] && [ "$ort_ok" = "1" ] && [ "$ready" = "1" ] \
-   && [ "$web_ok" = "1" ] && [ "$chromium_ok" = "1" ] \
-   && [ "$voice_ok" = "1" ] && [ "$deno_ok" = "1" ] \
-   && [ "$managed_ok" = "1" ]; then
+if [[ "$inst_rc" = "0" ]] && [[ "$ort_ok" = "1" ]] && [[ "$ready" = "1" ]] \
+   && [[ "$web_ok" = "1" ]] && [[ "$chromium_ok" = "1" ]] \
+   && [[ "$voice_ok" = "1" ]] && [[ "$deno_ok" = "1" ]] \
+   && [[ "$managed_ok" = "1" ]]; then
   echo "VERDICT=PASS $NAME"
 else
   echo "VERDICT=FAIL $NAME"
