@@ -19,9 +19,9 @@ export interface ReadyStatus {
 // a 401 there means the session expired → redirect to /login/.
 const NO_REDIRECT = { redirectOnAuthError: false } as const;
 
-interface ThinkingLevelEnvelope {
+interface ThreadSettingsEnvelope {
   success: true;
-  result: { level: string };
+  result: { thinking_level: string };
 }
 
 export const system = {
@@ -47,8 +47,8 @@ export const system = {
     return api.post('/health', payload, NO_REDIRECT);
   },
 
-  /** GET /api/threads/thinking-level/<turnId>?type= — the sender's last-chosen thinking level for this thread. */
+  /** GET /api/threads/settings/<turnId>?type= — the thinking level this thread runs at. */
   thinkingLevel(type: string, turnId: number): Promise<{ level: string }> {
-    return api.get<ThinkingLevelEnvelope>(`/api/threads/thinking-level/${turnId}?type=${type}`).then((body) => body.result);
+    return api.get<ThreadSettingsEnvelope>(`/api/threads/settings/${turnId}?type=${type}`).then((body) => ({ level: body.result.thinking_level }));
   },
 };

@@ -168,8 +168,8 @@ def test_send_cannot_be_addressed_by_channel(
 
 @pytest.mark.parametrize(
     ("path", "joiner"),
-    [("/api/threads/all", "?"), (f"/api/threads/batch?id[]={_TURN}", "&"), (f"/api/threads/thinking-level/{_TURN}", "?")],
-    ids=["feed", "batch", "thinking-level"],
+    [("/api/threads/all", "?"), (f"/api/threads/batch?id[]={_TURN}", "&"), ("/api/threads/settings/-1", "?")],
+    ids=["feed", "batch", "settings"],
 )
 def test_feed_and_per_turn_actions_cannot_be_addressed_by_channel(
     authed_client: tuple[FlaskClient, sqlite3.Connection, object], path: str, joiner: str,

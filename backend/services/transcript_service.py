@@ -203,21 +203,18 @@ class TranscriptService:
     # ── writes ───────────────────────────────────────────────────────────────
 
     def append_input(
-        self, content: str, *, thinking_level: str | None = None, tool_call_id: int | None = None,
-        joined: bool = False,
+        self, content: str, *, tool_call_id: int | None = None, joined: bool = False,
     ) -> int:
         """Write an input row (settled=0) for this turn and return its id.
-        ``thinking_level`` is persisted only when one of {auto, medium, high};
-        otherwise NULL is stored. Plain, it is the exchange's anchoring row,
-        announced by the ``working`` frame its execution opens with.
+        Plain, it is the exchange's anchoring row, announced by the ``working``
+        frame its execution opens with.
         ``tool_call_id`` is the caller's ``tool_calls`` row when this turn is a
         delegate's — stored on the row as the link from the caller's tool call to
         this turn. ``joined`` marks a message sent into the turn while it is
         still working: no frame announces that one, so it pokes every open
         surface to refetch the turn block itself."""
-        valid = thinking_level if thinking_level in {"auto", "medium", "high"} else None
         row_id = self._append(
-            content, role=self.mp.config.role, settled=0, thinking_level=valid,
+            content, role=self.mp.config.role, settled=0,
             tool_call_id=str(tool_call_id) if tool_call_id is not None else None, joined=joined,
         )
         if joined:
@@ -266,7 +263,7 @@ class TranscriptService:
 
     def _append(
         self, content: str, *, role: str, settled: int,
-        thinking_level: str | None = None, tool_call_id: str | None = None, joined: bool = False,
+        tool_call_id: str | None = None, joined: bool = False,
     ) -> int:
         """Write one transcript row for this turn and return its id. The row
         points at its thread, which the turn's first row creates."""
@@ -278,7 +275,7 @@ class TranscriptService:
             deliberation_score=0.0,
             location_lat=loc.get("lat"), location_lon=loc.get("lon"),
             location_name=loc.get("name"),
-            thinking_level=thinking_level, tool_call_id=tool_call_id, joined=int(joined),
+            tool_call_id=tool_call_id, joined=int(joined),
         ).save()
         return cast("int", row.id)
 

@@ -56,7 +56,7 @@ from .actions.skills.toggle import SkillToggle
 from .actions.snapshot.export import SnapshotExportAction
 from .actions.snapshot.import_ import SnapshotImportAction
 from .actions.threads.batch import ThreadsBatch
-from .actions.threads.thinking_level import ThreadsThinkingLevel
+from .actions.threads.settings import ThreadsSettings
 from .actions.voice.health import VoiceHealthAction
 from .actions.voice.transcribe import VoiceTranscribeAction
 from .actions.voice.transcript import VoiceTranscriptAction
@@ -131,7 +131,7 @@ ROUTES: tuple[Endpoint, ...] = (
 
     ThreadsEndpoint("threads"),
     ThreadsBatch("threads", "batch"),
-    ThreadsThinkingLevel("threads", "thinking-level"),
+    ThreadsSettings("threads", "settings"),
 
     ToolCallsEndpoint("tool-calls"),
 

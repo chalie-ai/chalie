@@ -47,11 +47,11 @@ function json(body: unknown, status = 200): Response {
 }
 
 /** The backend, at the network boundary: the thread read and the dock's
- *  thinking-level read, nothing else. */
+ *  thread-settings read, nothing else. */
 async function fakeBackend(input: RequestInfo | URL): Promise<Response> {
   const url = new URL(String(input), 'http://chalie.test');
-  if (url.pathname.startsWith('/api/threads/thinking-level/')) {
-    return json({ success: true, result: { level: 'auto' } });
+  if (url.pathname.startsWith('/api/threads/settings/')) {
+    return json({ success: true, result: { provider_id: 1, thinking_level: 'auto', turn_id: null } });
   }
   const match = /^\/api\/threads\/(\d+)$/.exec(url.pathname);
   if (!match) return json({ error: 'unrouted' }, 404);

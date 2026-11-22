@@ -46,7 +46,7 @@ class Transcript(Model):
         "id", "channel", "role", "content", "tool_call_id", "tool_name",
         "internal", "deliberation_score", "created_at", "xml_migrated",
         "location_lat", "location_lon", "location_name", "turn_id", "settled",
-        "thinking_level", "joined", "thread_id",
+        "joined", "thread_id",
     )
 
     @classmethod
@@ -67,7 +67,6 @@ class Transcript(Model):
     location_name: str | None
     turn_id: int | None
     settled: int
-    thinking_level: str | None
     joined: int
     thread_id: int | None
 
@@ -174,26 +173,6 @@ class Transcript(Model):
             .order_by("id ASC")
             .get()
         )
-
-    @classmethod
-    def latest_thinking_level(cls, channel: str, turn_id: int | None = None) -> str | None:
-        """``thinking_level`` of the most recent row (highest id) for ``channel``
-        that has a non-NULL ``thinking_level``. When ``turn_id`` is given, also
-        filter on it — used to read back the level written onto the current
-        turn's input row; when ``turn_id`` is None, span every turn of the
-        channel (the spine's "latest level for this type"). Returns None when
-        no such row exists (legacy/empty channel)."""
-        sql = (
-            "SELECT thinking_level FROM transcript WHERE channel = ? "
-            "AND thinking_level IS NOT NULL"
-        )
-        params: list[object] = [channel]
-        if turn_id is not None:
-            sql += " AND turn_id = ?"
-            params.append(turn_id)
-        sql += " ORDER BY id DESC LIMIT 1"
-        row = cls._bound_connection().execute(sql, tuple(params)).fetchone()
-        return row[0] if row and row[0] is not None else None
 
     def set_deliberation_score(self, score: float) -> Self:
         """Persist this row's per-turn deliberation score — the value that

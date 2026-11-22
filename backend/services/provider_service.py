@@ -251,11 +251,7 @@ class ProviderService:
             raise ProviderError(f"Unsupported provider type for send: {provider_type}")
 
         from services.provider_cache_service import ProviderCacheService  # noqa: PLC0415
-        selected = ProviderCacheService.get_selected_provider()
-        if selected:
-            return dict(selected)
-        providers = ProviderCacheService.get_providers()
-        return dict(next(iter(providers.values()))) if providers else {}
+        return dict(ProviderCacheService.chat_provider(self.mp.provider_id))
 
     def _resolve(self, provider_type: ProviderType) -> ProviderClient:
         """Build the thin transport client for ``provider_type``'s selected config."""

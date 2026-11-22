@@ -10,7 +10,9 @@
 
 Active-record row-model. A thread is named by its ``(channel, turn_id)`` pair,
 which is unique; every transcript row the thread holds points at its ``id``.
-It carries what is stored once per thread: its topical label (``summary``).
+It carries what is stored once per thread: its topical label (``summary``),
+and the model (``provider_id``) and thinking level its turns run on. A new
+thread starts with the model and level of its channel's latest thread.
 Holds no mp, calls no service (Rule-3 depth).
 """
 
@@ -24,7 +26,9 @@ from models.model import Model
 class Thread(Model):
     """One conversation thread, keyed by its channel and turn number."""
 
-    __columns__: ClassVar[tuple[str, ...]] = ("id", "channel", "turn_id", "summary")
+    __columns__: ClassVar[tuple[str, ...]] = (
+        "id", "channel", "turn_id", "summary", "provider_id", "thinking_level",
+    )
 
     @classmethod
     def get_table(cls) -> str:
@@ -33,24 +37,51 @@ class Thread(Model):
     channel: str
     turn_id: int
     summary: str | None
+    provider_id: int | None
+    thinking_level: str
 
     @classmethod
     def ensure(cls, channel: str, turn_id: int) -> int:
         """The id of the thread for ``(channel, turn_id)``, created if it has none.
 
-        Idempotent: a second call for the same pair — another writer on the
-        same turn — returns the same id."""
+        A thread it creates takes the model and thinking level of the channel's
+        latest thread; the channel's first thread has no model, which means the
+        default. Idempotent: a second call for the same pair — another writer on
+        the same turn — returns the same id."""
         connection = cls._bound_connection()
         connection.execute(
-            "INSERT INTO threads (channel, turn_id) VALUES (?, ?) "
+            "INSERT INTO threads (channel, turn_id, provider_id, thinking_level) VALUES (?, ?, "
+            "(SELECT provider_id FROM threads WHERE channel = ? ORDER BY turn_id DESC LIMIT 1), "
+            "COALESCE((SELECT thinking_level FROM threads WHERE channel = ? ORDER BY turn_id DESC LIMIT 1), 'auto')) "
             "ON CONFLICT(channel, turn_id) DO NOTHING",
-            (channel, turn_id),
+            (channel, turn_id, channel, channel),
         )
         row = connection.execute(
             "SELECT id FROM threads WHERE channel = ? AND turn_id = ?",
             (channel, turn_id),
         ).fetchone()
         return int(row[0])
+
+    @classmethod
+    def of(cls, channel: str, turn_id: int) -> Thread | None:
+        """The thread ``(channel, turn_id)``, or None when it has none."""
+        return cls.filter("channel", channel).filter("turn_id", turn_id).first()
+
+    @classmethod
+    def latest(cls, channel: str) -> Thread | None:
+        """The channel's latest thread (highest turn id), or None on a channel
+        with no thread yet."""
+        return cls.filter("channel", channel).order_by("turn_id DESC").first()
+
+    @classmethod
+    def set_settings(cls, channel: str, turn_id: int, provider_id: int, thinking_level: str) -> bool:
+        """Store the model and thinking level of the thread ``(channel, turn_id)``;
+        return False when there is no such thread."""
+        cursor = cls._bound_connection().execute(
+            "UPDATE threads SET provider_id = ?, thinking_level = ? WHERE channel = ? AND turn_id = ?",
+            (provider_id, thinking_level, channel, turn_id),
+        )
+        return cursor.rowcount > 0
 
     @classmethod
     def set_summary(cls, channel: str, turn_id: int, summary: str) -> bool:

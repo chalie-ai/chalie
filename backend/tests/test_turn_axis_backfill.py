@@ -519,3 +519,54 @@ def test_the_1_4_0_beta_labels_land_on_the_threads_they_named(
         "a chat thread lost its label, or a label landed on a thread it did not name"
     )
     assert Thread.summaries(_SCHEDULE, [3]) == {3: "Morning Briefing"}, "the schedule thread lost its label"
+
+
+# (row id, level) as the old release stored a level per message.
+_LEVEL_OF_ROW = {1: "high", 10: "high", 12: "medium", 14: "low", 17: "high"}
+# Each thread's level after the upgrade: its newest row level a thread can
+# hold, else ``auto``. Turn 1's answer kept no level, so its question's
+# carries; turn 6's newest row holds a level a thread cannot, so row 12's does;
+# the schedule's turn 3 keeps its own level apart from the chat's turn 3.
+_LEVEL_OF_THREAD = {
+    (_CHAT, 1): "high", (_CHAT, 2): "auto", (_CHAT, 3): "auto", (_CHAT, 4): "auto",
+    (_CHAT, 5): "auto", (_CHAT, 6): "medium", (_CHAT, 7): "auto", (_SCHEDULE, 3): "high",
+}
+
+
+@pytest.mark.parametrize("layout", ["1.3.1", "1.4.0-beta"])
+def test_each_thread_keeps_the_newest_level_its_messages_carried(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, layout: str
+) -> None:
+    """The old releases stored the level on every message; the upgrade puts each
+    thread's newest one on the thread and leaves every thread on the default
+    model."""
+    _point_instance_at(monkeypatch, tmp_path / "data")
+    if layout == "1.3.1":
+        path = _legacy_install(_TRANSCRIPT, _COMPACTIONS, [])
+    else:
+        path = _boot(_BETA_VERSION)
+        conn = _connect(path)
+        try:
+            conn.executescript("DROP TABLE transcript; DROP TABLE threads;" + _BETA_TRANSCRIPT + _BETA_THREAD_GIST)
+            conn.executemany(
+                "INSERT INTO transcript (id, channel, turn_id, role, settled, content, xml_migrated) "
+                "VALUES (?, ?, ?, ?, ?, ?, 1)",
+                _TRANSCRIPT,
+            )
+        finally:
+            conn.close()
+    conn = _connect(path)
+    try:
+        conn.executemany("UPDATE transcript SET thinking_level = ? WHERE id = ?", [
+            (level, row) for row, level in _LEVEL_OF_ROW.items()
+        ])
+    finally:
+        conn.close()
+
+    _open(_boot(_RUNNING_VERSION))
+
+    threads = Thread.all().get()
+    assert {(t.channel, t.turn_id): t.thinking_level for t in threads} == _LEVEL_OF_THREAD, (
+        "a thread did not keep the newest level its messages carried"
+    )
+    assert {t.provider_id for t in threads} == {None}, "a thread was moved off the default model"

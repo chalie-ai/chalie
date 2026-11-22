@@ -176,6 +176,19 @@ _LABEL_BACKFILLS: dict[str, str] = {
     ),
 }
 
+# A thread's thinking level used to be stored on each of its transcript rows; it
+# is now the thread's own. A source whose transcript still holds it gets each
+# thread's newest valid level written onto the thread, after the threads exist;
+# a thread with none keeps the default.
+_LEVEL_COLUMN = "thinking_level"
+_LEVEL_BACKFILL = (
+    "UPDATE main.threads SET thinking_level = COALESCE((SELECT s.thinking_level "
+    f"FROM {_SOURCE_SCHEMA}.transcript s "
+    "WHERE s.channel = threads.channel AND s.turn_id = threads.turn_id "
+    "AND s.thinking_level IN ('auto', 'medium', 'high') ORDER BY s.id DESC LIMIT 1), "
+    "thinking_level)"
+)
+
 # The implicit rowid, named explicitly in every copy: it is the join key between a
 # content table and its vec0/FTS5 sidecars, and no declared column carries it on
 # a TEXT-keyed table. vec0 tables report it through table_info; ordinary tables do
@@ -419,8 +432,9 @@ class VersionedDatabaseService:
         appear, so a child would otherwise be rejected ahead of its parent.
 
         A table the source still holds in its turn-axis shape, the threads of
-        a source from before they had rows (:data:`_THREAD_BACKFILLS`) and
-        their labels (:data:`_LABEL_BACKFILLS`) are carried by
+        a source from before they had rows (:data:`_THREAD_BACKFILLS`), their
+        labels (:data:`_LABEL_BACKFILLS`) and thinking levels
+        (:data:`_LEVEL_BACKFILL`) are carried by
         :meth:`_backfill_table`, which raises rather than returning a failure.
         """
         conn.execute("PRAGMA foreign_keys=OFF")
@@ -443,6 +457,10 @@ class VersionedDatabaseService:
                     self._backfill_table(conn, table, statement, source)
             if _LABEL_TABLE in source_tables:
                 self._backfill_table(conn, _LABEL_TABLE, self._label_backfill(conn), source)
+            if "transcript" in source_tables and _LEVEL_COLUMN in self._columns(
+                conn, _SOURCE_SCHEMA, "transcript"
+            ):
+                self._backfill_table(conn, "threads", _LEVEL_BACKFILL, source)
             for table, module in self._virtual_tables(conn, "main").items():
                 if module == _FTS5_MODULE and not self._rebuild_index(conn, table):
                     failed.append(table)
@@ -526,8 +544,8 @@ class VersionedDatabaseService:
 
         One autocommit statement, so a failure writes none of the table's rows.
         Unlike :meth:`_copy_table` it is not recorded and passed over: these
-        rows are the conversation's checkpoints, its threads and their labels,
-        and losing them silently would change what the person's conversation
+        rows are the conversation's checkpoints, its threads, their labels and
+        thinking levels, and losing them silently would change what the person's conversation
         shows. The error is logged before it is raised, so it reaches the log
         file and not only the console. No lineage row is written, so the next
         boot sets this file aside and rebuilds it from the same source.

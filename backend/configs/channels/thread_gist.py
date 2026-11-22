@@ -4,7 +4,7 @@ Fired once when a turn first grows into a thread (the first reply past its
 settle0). The MP reads ONLY two non-assistant messages from the DB — the thread's
 opening message and the first message beyond settle0 (no carried state) — sends a
 single delegate call, and the daemon target persists the label via
-``GistService.upsert`` (the ``ThreadGist`` model). No tools, no act trail, no
+``GistService.upsert`` onto the thread's own row. No tools, no act trail, no
 transcript row.
 """
 

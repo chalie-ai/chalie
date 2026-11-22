@@ -391,7 +391,13 @@ CREATE TABLE IF NOT EXISTS threads (
     -- The thread's terse topical label, written once its first reply is past
     -- the opening exchange. NULL until then. Shown on the collapsed thread;
     -- no embedding, no search index.
-    summary  TEXT
+    summary  TEXT,
+    -- The model this thread's turns run on. NULL = the default model; a turn
+    -- that falls back to the default (NULL, or a model no longer configured)
+    -- stores the default's id here.
+    provider_id    INTEGER,
+    -- The thinking level this thread's turns run at: auto|medium|high.
+    thinking_level TEXT NOT NULL DEFAULT 'auto'
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_threads_channel_turn ON threads(channel, turn_id);
@@ -424,10 +430,6 @@ CREATE TABLE IF NOT EXISTS transcript (
     -- (its last provider call: no tool calls and no joined message waiting).
     -- Written once at insert, never changed.
     settled     INTEGER NOT NULL DEFAULT 0,
-    -- Per-turn thinking level chosen by the sender (auto|medium|high); NULL =
-    -- legacy row or not-yet-set, lets a later query distinguish "chose auto"
-    -- from "never set".
-    thinking_level TEXT,
     -- 1 on a user row sent into the turn while it was still working: the
     -- running exchange reads it at its next boundary instead of a new
     -- exchange opening for it.

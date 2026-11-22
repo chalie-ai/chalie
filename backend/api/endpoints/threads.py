@@ -144,11 +144,10 @@ class ThreadsEndpoint(Endpoint):
         the thread's first exchange, and when that is not the one working —
         finished, or only a reply into it is running — it starts a new thread
         exactly as ``-1`` would, never a reply. Files never join (409): they
-        only ever start an exchange. ``thinking_level`` applies only to a
-        message that starts one.
+        only ever start an exchange.
 
-        The body is multipart/form-data — ``text``, ``type``, ``thinking_level``,
-        ``join`` and repeatable ``files`` parts — so it is read here rather than
+        The body is multipart/form-data — ``text``, ``type``, ``join`` and
+        repeatable ``files`` parts — so it is read here rather than
         through a request DTO, which cannot hold many uploads under one field.
 
         Args:
@@ -182,10 +181,7 @@ class ThreadsEndpoint(Endpoint):
         # ``type`` selects the ProcessorConfig directly (user → UserConfig,
         # scheduled → ScheduledConfig on the schedule channel). Forked-ness is
         # derived internally by the MessageProcessor from the turn_id.
-        payload: dict[str, object] = {
-            "attachments": attachments,
-            "thinking_level": request.form.get("thinking_level"),
-        }
+        payload: dict[str, object] = {"attachments": attachments}
         execution = MessageProcessor.send(scope.config, text, payload, turn_id, spine_only=spine_only)
         if execution is None:
             return Response.failure("Failed to open turn execution"), 500

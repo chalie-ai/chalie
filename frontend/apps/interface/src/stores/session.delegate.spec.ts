@@ -109,7 +109,7 @@ let servedAgents: Agent[] = [];
 let agentsDown = false;
 
 /** The backend at the network boundary: thread reads, stops, the dock's
- *  thinking-level read, and the pending-permission listing, the header's open
+ *  thread-settings read, and the pending-permission listing, the header's open
  *  browser tabs and the running agents that the stores re-read on every
  *  connect. */
 async function fakeBackend(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
@@ -123,8 +123,8 @@ async function fakeBackend(input: RequestInfo | URL, init?: RequestInit): Promis
     const limit = Number(url.searchParams.get('limit'));
     return json({ success: true, result: servedAgents, pagination: { page: 1, limit, total: servedAgents.length } });
   }
-  if (url.pathname.startsWith('/api/threads/thinking-level/')) {
-    return json({ success: true, result: { level: 'auto' } });
+  if (url.pathname.startsWith('/api/threads/settings/')) {
+    return json({ success: true, result: { provider_id: 1, thinking_level: 'auto', turn_id: null } });
   }
   if (url.pathname === '/api/policies/pending') {
     return json({ success: true, result: [], pagination: { page: 1, limit: 50, total: 0 } });
