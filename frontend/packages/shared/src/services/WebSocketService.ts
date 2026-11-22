@@ -345,14 +345,13 @@ export class WebSocketService {
     files: File[] = [],
     threadId: number | null = null,
     type: string = ConfigType.USER,
-    thinkingLevel: string | null = null,
     join = false,
   ): Promise<{ turn_id: number; type: string } | null> {
     if (!this.isConnected) {
       onSendFailure('Not connected. Please wait...');
       return Promise.resolve(null);
     }
-    return this.postChat(text, files, threadId, onSendFailure, type, thinkingLevel, join);
+    return this.postChat(text, files, threadId, onSendFailure, type, join);
   }
 
   private postChat(
@@ -361,15 +360,12 @@ export class WebSocketService {
     threadId: number | null,
     onSendFailure: (message: string) => void,
     type: string = ConfigType.USER,
-    thinkingLevel: string | null = null,
     join = false,
   ): Promise<{ turn_id: number; type: string } | null> {
     const form = new FormData();
     form.append('text', text);
     form.append('type', type);
     if (join) form.append('join', '1');
-    // A join ignores it; a message that starts a new thread instead honours it.
-    if (thinkingLevel) form.append('thinking_level', thinkingLevel);
     for (const file of files) form.append('files', file, file.name);
     // POST /api/threads/<turn_id> — -1 creates a new thread, a real id replies
     // into it. Both answer 200 with the turn_execution row under the standard

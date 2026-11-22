@@ -54,8 +54,7 @@ describe('context_usage frame → meter', () => {
     dispatchDrift(contextUsageFrame('user', 42, 12_000, 128_000) as never);
 
     // The spine dock reads (type, null) — InputDock.vue's `props.turnId` default.
-    expect(store.usageDisplayFor('user', null)).toBe('12.0/128.0k');
-    expect(store.usageRatioFor('user', null)).toBeCloseTo(12_000 / 128_000);
+    expect(store.percentUsedFor('user', null, null)).toBe(9);
   });
 
   it('paints a thread dock from its own turn, and keeps two threads independent', () => {
@@ -64,10 +63,10 @@ describe('context_usage frame → meter', () => {
     dispatchDrift(contextUsageFrame('user', 10, 1_000, 128_000) as never);
     dispatchDrift(contextUsageFrame('user', 20, 90_000, 128_000) as never);
 
-    expect(store.usageDisplayFor('user', 10)).toBe('1.0/128.0k');
-    expect(store.usageDisplayFor('user', 20)).toBe('90.0/128.0k');
+    expect(store.percentUsedFor('user', 10, null)).toBe(1);
+    expect(store.percentUsedFor('user', 20, null)).toBe(70);
     // The spine follows the latest reading, not the highest turn id.
-    expect(store.usageDisplayFor('user', null)).toBe('90.0/128.0k');
+    expect(store.percentUsedFor('user', null, null)).toBe(70);
   });
 
   it('keeps each channel on its own latest — a scheduled turn never repaints the user spine', () => {
@@ -76,16 +75,15 @@ describe('context_usage frame → meter', () => {
     dispatchDrift(contextUsageFrame('user', 7, 5_000, 128_000) as never);
     dispatchDrift(contextUsageFrame('scheduled', 8, 99_000, 128_000) as never);
 
-    expect(store.usageDisplayFor('user', null)).toBe('5.0/128.0k');
-    expect(store.usageDisplayFor('scheduled', null)).toBe('99.0/128.0k');
+    expect(store.percentUsedFor('user', null, null)).toBe(4);
+    expect(store.percentUsedFor('scheduled', null, null)).toBe(77);
   });
 
   it('renders no meter for a thread that has spent nothing, rather than a fabricated zero', () => {
     const store = useContextUsageStore();
 
-    expect(store.usageDisplayFor('user', null)).toBe('');
-    expect(store.usageDisplayFor('user', 99)).toBe('');
-    expect(store.usageRatioFor('user', null)).toBe(0);
+    expect(store.percentUsedFor('user', null, null)).toBeNull();
+    expect(store.percentUsedFor('user', 99, null)).toBeNull();
   });
 
   it('drops a frame missing its reading instead of painting a zeroed meter', () => {
@@ -96,6 +94,16 @@ describe('context_usage frame → meter', () => {
     // malformed frame must not erase the last real reading.
     dispatchDrift({ status: 'context_usage', type: 'user', turn_id: 42 } as never);
 
-    expect(store.usageDisplayFor('user', null)).toBe('12.0/128.0k');
+    expect(store.percentUsedFor('user', null, null)).toBe(9);
+  });
+
+  it('caps an overrun at a full ring and shows no reading for a call with no window', () => {
+    const store = useContextUsageStore();
+
+    dispatchDrift(contextUsageFrame('user', 5, 140_000, 128_000) as never);
+    dispatchDrift(contextUsageFrame('user', 6, 3_000, 0) as never);
+
+    expect(store.percentUsedFor('user', 5, null)).toBe(100);
+    expect(store.percentUsedFor('user', 6, null)).toBeNull();
   });
 });

@@ -19,9 +19,18 @@ export interface ReadyStatus {
 // a 401 there means the session expired → redirect to /login/.
 const NO_REDIRECT = { redirectOnAuthError: false } as const;
 
+/** A thread's model and thinking level, as the thread settings API answers.
+ *  `provider_id` is null only when no model is configured at all; `turn_id` is
+ *  the thread they belong to, null on a channel with no thread yet. */
+export interface ThreadSettings {
+  provider_id: number | null;
+  thinking_level: string;
+  turn_id: number | null;
+}
+
 interface ThreadSettingsEnvelope {
   success: true;
-  result: { thinking_level: string };
+  result: ThreadSettings;
 }
 
 export const system = {
@@ -47,8 +56,16 @@ export const system = {
     return api.post('/health', payload, NO_REDIRECT);
   },
 
-  /** GET /api/threads/settings/<turnId>?type= — the thinking level this thread runs at. */
-  thinkingLevel(type: string, turnId: number): Promise<{ level: string }> {
-    return api.get<ThreadSettingsEnvelope>(`/api/threads/settings/${turnId}?type=${type}`).then((body) => ({ level: body.result.thinking_level }));
+  /** GET /api/threads/settings/<turnId>?type= — the model and thinking level
+   *  the thread's next message runs on; -1 names the channel's latest thread. */
+  threadSettings(type: string, turnId: number): Promise<ThreadSettings> {
+    return api.get<ThreadSettingsEnvelope>(`/api/threads/settings/${turnId}?type=${type}`).then((body) => body.result);
+  },
+
+  /** POST /api/threads/settings/<turnId>?type= — change a thread's model and
+   *  thinking level, from its next message on; -1 names the channel's latest
+   *  thread. */
+  saveThreadSettings(type: string, turnId: number, settings: { provider_id: number; thinking_level: string }): Promise<ThreadSettings> {
+    return api.post<ThreadSettingsEnvelope>(`/api/threads/settings/${turnId}?type=${type}`, settings).then((body) => body.result);
   },
 };
