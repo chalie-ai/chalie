@@ -46,12 +46,30 @@ function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 }
 
-/** The backend, at the network boundary: the thread read and the dock's
- *  thinking-level read, nothing else. */
+/** The configured models the reply dock lists. */
+const MODELS = [{ id: 1, name: 'Opus' }, { id: 2, name: 'Sonnet' }];
+/** Each thread's saved model and level, as the reply dock reads them, by
+ *  type and turn id: a turn id is only unique within its type. */
+const SETTINGS: Record<string, { provider_id: number; thinking_level: string }> = {
+  'user:77': { provider_id: 1, thinking_level: 'high' },
+  'user:78': { provider_id: 2, thinking_level: 'medium' },
+  'scheduled:77': { provider_id: 2, thinking_level: 'auto' },
+};
+/** The threads the reply dock read settings for, as `type:turnId`, in order. */
+const settingsReads: string[] = [];
+
+/** The backend, at the network boundary: the thread read, and the reply
+ *  dock's model listing and thread-settings read, nothing else. */
 async function fakeBackend(input: RequestInfo | URL): Promise<Response> {
   const url = new URL(String(input), 'http://chalie.test');
-  if (url.pathname.startsWith('/api/threads/thinking-level/')) {
-    return json({ success: true, result: { level: 'auto' } });
+  if (url.pathname === '/api/providers/all') {
+    return json({ success: true, result: MODELS, pagination: { page: 1, limit: 100, total: MODELS.length } });
+  }
+  const settings = /^\/api\/threads\/settings\/(-?\d+)$/.exec(url.pathname);
+  if (settings) {
+    const thread = `${url.searchParams.get('type')}:${settings[1]}`;
+    settingsReads.push(thread);
+    return json({ success: true, result: { ...(SETTINGS[thread] ?? { provider_id: 1, thinking_level: 'auto' }), turn_id: Number(settings[1]) } });
   }
   const match = /^\/api\/threads\/(\d+)$/.exec(url.pathname);
   if (!match) return json({ error: 'unrouted' }, 404);
@@ -113,6 +131,7 @@ function openPanel(): { panel: VueWrapper; session: ReturnType<typeof useSession
 beforeEach(() => {
   setActivePinia(createPinia());
   reads.length = 0;
+  settingsReads.length = 0;
   serve = () => {
     throw new Error('no block served');
   };
@@ -341,6 +360,51 @@ describe('moving between transcripts', () => {
     await flushPromises();
     expect(panel.find('textarea').exists()).toBe(false);
     expect(panel.findAll('aside [role="alert"]').map((a) => a.text())).toEqual(['Provider quota exceeded']);
+  });
+
+  it("a typed thread opened over another shows its own model, level and draft in the reply box", async () => {
+    // Browser storage, where a reply box keeps its draft: the test runtime's
+    // own has no backing file, so an in-memory one stands in.
+    const saved = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => saved.get(key) ?? null,
+      setItem: (key: string, value: string) => void saved.set(key, value),
+    });
+    const PARIS = [msg('780', 'user', 'Book the Paris hotel', 78), msg('781', 'assistant', 'Which dates?', 78)];
+    serve = (read) => (read.turnId === 78 ? userThread(78, PARIS) : userThread(77, TRIP));
+    const { panel, session } = openPanel();
+
+    session.openThreadPanel(77, 'user');
+    await flushPromises();
+    expect(panel.get('#modelLabel').text()).toBe('Opus · High');
+    await panel.get('textarea').setValue('Saturday works');
+
+    session.openThreadPanel(78, 'user');
+    await flushPromises();
+    expect(settingsReads).toEqual(['user:77', 'user:78']);
+    expect(panel.get('#modelLabel').text()).toBe('Sonnet · Medium');
+    expect((panel.get('textarea').element as HTMLTextAreaElement).value).toBe('');
+
+    session.openThreadPanel(77, 'user');
+    await flushPromises();
+    expect(panel.get('#modelLabel').text()).toBe('Opus · High');
+    expect((panel.get('textarea').element as HTMLTextAreaElement).value).toBe('Saturday works');
+    expect(session.errorMessage).toBeFalsy();
+  });
+
+  it('a thread of another type that shares the open thread\'s number shows its own model and level', async () => {
+    serve = () => userThread(77, TRIP);
+    const { panel, session } = openPanel();
+
+    session.openThreadPanel(77, 'user');
+    await flushPromises();
+    expect(panel.get('#modelLabel').text()).toBe('Opus · High');
+
+    session.openThreadPanel(77, 'scheduled');
+    await flushPromises();
+    expect(settingsReads).toEqual(['user:77', 'scheduled:77']);
+    expect(panel.get('#modelLabel').text()).toBe('Sonnet · Auto');
+    expect(session.errorMessage).toBeFalsy();
   });
 });
 

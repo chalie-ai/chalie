@@ -264,8 +264,12 @@ onBeforeUnmount(() => {
            load) show here. A thread's own dock shows them itself. -->
       <DockError v-if="session.panelThreadId == null" class="thread-panel__error" />
 
+      <!-- Keyed by thread — its type and turn id, as a turn id is only unique
+           within its type: the dock reads its thread's draft, model and level
+           once as it mounts, so a switch to another thread mounts a fresh one. -->
       <InputDock
         v-if="session.panelThreadId != null"
+        :key="`${session.panelType}:${session.panelThreadId}`"
         dock-id="thread_view_dock"
         :turn-id="session.panelThreadId"
         :type="session.panelType"

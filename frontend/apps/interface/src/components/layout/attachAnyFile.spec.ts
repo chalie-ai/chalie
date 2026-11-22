@@ -32,12 +32,12 @@ function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 }
 
-/** The backend, at the network boundary: the dock's thinking-level read and
+/** The backend, at the network boundary: the dock's thread-settings read and
  *  the chat send, nothing else. */
 async function fakeBackend(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const url = new URL(String(input), 'http://chalie.test');
-  if (url.pathname.startsWith('/api/threads/thinking-level/')) {
-    return json({ success: true, result: { level: 'auto' } });
+  if (url.pathname.startsWith('/api/threads/settings/')) {
+    return json({ success: true, result: { provider_id: 1, thinking_level: 'auto', turn_id: null } });
   }
   if (init?.method === 'POST' && /^\/api\/threads\/-?\d+$/.test(url.pathname)) {
     const form = init.body as FormData;

@@ -44,7 +44,7 @@ from configs.enums.config_type import ConfigTypeEnum
 from controllers.message_processor import MessageProcessor
 from cron.jobs.scheduled_items import ScheduledItemsDispatcherJob
 from models.provider_response import ProviderResponse
-from models.thread_gist import ThreadGist
+from models.thread import Thread
 from models.turn_execution import TurnExecution
 from services.time_utils import utc_now
 from models.transcript import Transcript
@@ -99,20 +99,20 @@ def _join_named_thread(name: str, timeout: float = _JOIN_TIMEOUT) -> bool:
     return False
 
 
-def _label_the_first_fire(db: sqlite3.Connection, gist: str) -> None:
+def _label_the_first_fire(db: sqlite3.Connection, item_id: int, gist: str) -> None:
     """Store the label of the thread a schedule's first fire opens, before it
     fires, so no fire launches a label-writing turn of its own
     (``MessageProcessor._maybe_fire_gist``) that would outlive the provider
-    patch. A label is found by its thread's opening row id, and the first
-    fire's input row is the next transcript row written."""
-    seq = db.execute("SELECT seq FROM sqlite_sequence WHERE name = 'transcript'").fetchone()
-    ThreadGist(opening_id=(int(seq[0]) if seq else 0) + 1, gist=gist).upsert()
+    patch. The label sits on the schedule's thread, so the thread is made
+    here; the first fire's input row joins it."""
+    Thread.ensure(Channel.SCHEDULE.value, item_id)
+    assert Thread.set_summary(Channel.SCHEDULE.value, item_id, gist)
     db.commit()
 
 
 def _assert_labelled(item_id: int, gist: str) -> None:
     """The label stored before the first fire sits on the thread it opened."""
-    assert ThreadGist.bulk_get(Channel.SCHEDULE.value, [item_id]) == {item_id: gist}
+    assert Thread.summaries(Channel.SCHEDULE.value, [item_id]) == {item_id: gist}
 
 
 def _schedule_turn_rows(turn_id: int) -> list[dict[str, object]]:
@@ -196,7 +196,7 @@ def test_first_fire_opens_main_turn_second_fire_forks_the_same_turn(
     # label ingest spawns its own background turn. The schedule channel labels
     # on the first fire, so this has to land before it. This test is about turn
     # threading; the label is isolated scaffolding.
-    _label_the_first_fire(db, "Watering reminder")
+    _label_the_first_fire(db, item_id, "Watering reminder")
 
     with patch(_BUILD_CLIENT, return_value=_RecordingProvider("first response")):
         _DISPATCHER._fire_item(item_id, "Water the plants")
@@ -270,7 +270,7 @@ def test_every_minute_schedule_skips_fires_while_its_run_is_still_going(
     item_id = insert_scheduled_item(db, message="Daily bloat check")
     # Label the thread up front so no fire spawns its own background labelling
     # turn (see the fork test above); this test is about overlap, not labels.
-    _label_the_first_fire(db, "Bloat check")
+    _label_the_first_fire(db, item_id, "Bloat check")
     caplog.set_level(logging.INFO, logger="cron.jobs.scheduled_items")
     provider = _GatedProvider()
 
@@ -346,7 +346,7 @@ def test_a_run_a_restart_cut_off_blocks_fires_until_the_boot_sweep_ends_it(
     same thread."""
     _seed_timezone(db, "UTC")
     item_id = insert_scheduled_item(db, message="Daily bloat check")
-    _label_the_first_fire(db, "Bloat check")
+    _label_the_first_fire(db, item_id, "Bloat check")
     caplog.set_level(logging.INFO, logger="cron.jobs.scheduled_items")
 
     with patch(_BUILD_CLIENT, return_value=_DyingProvider()), process_deaths_expected():
@@ -395,7 +395,7 @@ def test_a_reply_running_in_the_schedules_thread_blocks_its_fires(
     client, _db, _store = authed_client
     _seed_timezone(db, "UTC")
     item_id = insert_scheduled_item(db, message="Daily bloat check")
-    _label_the_first_fire(db, "Bloat check")
+    _label_the_first_fire(db, item_id, "Bloat check")
     caplog.set_level(logging.INFO, logger="cron.jobs.scheduled_items")
 
     with patch(_BUILD_CLIENT, return_value=_RecordingProvider("checked")):

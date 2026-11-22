@@ -1,16 +1,21 @@
-"""Feature tests: a 1.3.1 database keeps its checkpoints and thread labels on upgrade.
+"""Feature tests: a 1.3.1 database keeps its checkpoints, threads and labels on upgrade.
 
 1.3.1 found a checkpoint and a thread label by turn number: ``compactions``
 carried ``for_turn_id`` and ``compacted_up_to`` (a turn number on the spine,
 a row id in a thread), and ``thread_gist`` was keyed by ``(channel, turn_id)``.
-The running release finds both by transcript row id. Copy-forward computes the
-new columns from the old database's transcript, so the first turn after the
-upgrade sees the conversation 1.3.1 showed.
+The running release finds a checkpoint by transcript row id. Copy-forward
+computes the new columns from the old database's transcript, so the first turn
+after the upgrade sees the conversation 1.3.1 showed. A thread was only the
+turn number its rows shared; it is now a row of its own every transcript row
+points at, so copy-forward makes one per turn, points each row at it, and
+writes each label onto the thread it names. The 1.4.0 beta found a label by
+its thread's first row instead; its labels land on their threads the same way.
 
 Each old database is built the way 1.3.1 built its own: the real
-``provision()`` under the old version, then ``compactions`` and
-``thread_gist`` recreated with 1.3.1's DDL (frozen history, copied verbatim
-from that release's ``schema.sql``) and filled with raw rows. The upgrade is
+``provision()`` under the old version, then ``transcript`` and
+``compactions`` recreated and ``thread_gist`` added with 1.3.1's DDL (frozen
+history, copied verbatim from that release's ``schema.sql``), the threads table
+it did not have dropped, and the tables filled with raw rows. The upgrade is
 the real ``provision()`` under the running version, and every assertion reads
 through the production readers: the history read, the checkpoint envelope and
 the thread label lookup. The only redirection is ``FileMapperService``'s
@@ -27,6 +32,7 @@ import shutil
 import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -34,7 +40,8 @@ from configs.channels.user import UserConfig
 from controllers.message_processor import MessageProcessor
 from models.compaction import Compaction
 from models.scheduled_item import ScheduledItem
-from models.thread_gist import ThreadGist
+from models.thread import Thread
+from models.transcript import Transcript
 from services.app_version import get_version, version_sort_key
 from services.database import Database
 from services.file_mapper_service import FileMapperService
@@ -47,7 +54,32 @@ pytestmark = pytest.mark.unit
 # Read before any test redirects the VERSION file.
 _RUNNING_VERSION = get_version()
 _LEGACY_VERSION = "1.3.1-beta"
+# Names the beta-shaped file; any version below the running one would do.
+_BETA_VERSION = "1.4.0-beta.0"
 
+_LEGACY_TRANSCRIPT = """
+CREATE TABLE IF NOT EXISTS transcript (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel     TEXT NOT NULL,
+    role        TEXT NOT NULL,
+    content     TEXT NOT NULL,
+    tool_call_id TEXT,
+    tool_name   TEXT,
+    internal    INTEGER DEFAULT 0,
+    deliberation_score REAL,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    xml_migrated INTEGER NOT NULL DEFAULT 0,
+    location_lat  REAL,
+    location_lon  REAL,
+    location_name TEXT,
+    turn_id     INTEGER,
+    settled     INTEGER NOT NULL DEFAULT 0,
+    thinking_level TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_transcript_channel ON transcript(channel, created_at);
+CREATE INDEX IF NOT EXISTS idx_transcript_channel_created_desc ON transcript(channel, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_transcript_channel_turn ON transcript(channel, turn_id);
+"""
 _LEGACY_THREAD_GIST = """
 CREATE TABLE IF NOT EXISTS thread_gist (
     channel     TEXT NOT NULL,
@@ -56,6 +88,40 @@ CREATE TABLE IF NOT EXISTS thread_gist (
     created_at  TEXT NOT NULL,
     PRIMARY KEY (channel, turn_id)
 );
+"""
+# The 1.4.0 beta's transcript (no thread column yet) and label table, keyed by
+# the thread's first row; frozen history from that release's ``schema.sql``.
+_BETA_TRANSCRIPT = """
+CREATE TABLE IF NOT EXISTS transcript (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel     TEXT NOT NULL,
+    role        TEXT NOT NULL,
+    content     TEXT NOT NULL,
+    tool_call_id TEXT,
+    tool_name   TEXT,
+    internal    INTEGER DEFAULT 0,
+    deliberation_score REAL,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    xml_migrated INTEGER NOT NULL DEFAULT 0,
+    location_lat  REAL,
+    location_lon  REAL,
+    location_name TEXT,
+    turn_id     INTEGER,
+    settled     INTEGER NOT NULL DEFAULT 0,
+    thinking_level TEXT,
+    joined      INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_transcript_channel ON transcript(channel, created_at);
+CREATE INDEX IF NOT EXISTS idx_transcript_channel_created_desc ON transcript(channel, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_transcript_channel_turn ON transcript(channel, turn_id);
+"""
+_BETA_THREAD_GIST = """
+CREATE TABLE IF NOT EXISTS thread_gist (
+    opening_id  INTEGER,
+    gist        TEXT,
+    created_at  TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_thread_gist_opening ON thread_gist(opening_id);
 """
 _LEGACY_COMPACTIONS = """
 CREATE TABLE IF NOT EXISTS compactions (
@@ -119,6 +185,19 @@ _GISTS: list[tuple[str, int, str]] = [
     (_CHAT, 6, "Sintra Day Trip"),
     (_SCHEDULE, 3, "Morning Briefing"),
 ]
+
+# The threads after the upgrade: one per (channel, turn_id), numbered in the
+# order the threads began — the schedule channel's turn 3 is a thread apart from
+# the chat's.
+_THREADS = {
+    (_CHAT, 1): 1, (_CHAT, 2): 2, (_CHAT, 3): 3, (_CHAT, 4): 4, (_CHAT, 5): 5,
+    (_CHAT, 6): 6, (_CHAT, 7): 7, (_SCHEDULE, 3): 8,
+}
+# The thread each row points at, by row id; none for the row with no turn.
+_THREAD_OF_ROW = {
+    1: 1, 2: 1, 3: 2, 4: 3, 5: 2, 6: 4, 7: 4, 8: None, 9: 5,
+    10: 6, 11: 6, 12: 6, 13: 6, 14: 6, 15: 6, 16: 7, 17: 8, 18: 8,
+}
 
 # 1.3.1's spine read with its checkpoint at turn 2: turns 4, 6 and 7 (3 and 5
 # hold only memory rows), turn 6 cut at its first settled answer (row 11),
@@ -184,7 +263,8 @@ def _legacy_install(
     conn = _connect(path)
     try:
         conn.executescript(
-            "DROP TABLE thread_gist; DROP TABLE compactions;"
+            "DROP TABLE compactions; DROP TABLE transcript; DROP TABLE threads;"
+            + _LEGACY_TRANSCRIPT
             + _LEGACY_THREAD_GIST
             + _LEGACY_COMPACTIONS
         )
@@ -235,12 +315,17 @@ def _assert_conversation_reads_as_1_3_1_showed() -> None:
     assert _SPINE_SUMMARY not in body, f"a reply into the thread read the spine's checkpoint: {body!r}"
     assert _history(reply) == _THREAD_AS_1_3_1_SHOWED, "the thread does not show what 1.3.1 showed"
 
-    assert ThreadGist.bulk_get(_CHAT, [1, 3, 6]) == {1: "Spring in Lisbon", 6: "Sintra Day Trip"}, (
+    assert Thread.summaries(_CHAT, [1, 3, 6]) == {1: "Spring in Lisbon", 6: "Sintra Day Trip"}, (
         "the chat threads lost their labels, or one leaked onto a turn of another channel"
     )
-    assert ThreadGist.bulk_get(_SCHEDULE, [3]) == {3: "Morning Briefing"}, (
+    assert Thread.summaries(_SCHEDULE, [3]) == {3: "Morning Briefing"}, (
         "the schedule thread lost its label"
     )
+
+    threads = {(t.channel, t.turn_id): t.id for t in Thread.all().get()}
+    assert threads == _THREADS, "not one thread per turn, numbered in the order the threads began"
+    rows = {cast("int", r.id): r.thread_id for r in Transcript.all().get()}
+    assert rows == _THREAD_OF_ROW, "a row does not point at its own turn's thread"
 
     orphan = Compaction.filter("content", _ORPHAN_SUMMARY).first()
     assert orphan is not None, "the checkpoint of a thread with no rows was not carried forward"
@@ -384,8 +469,9 @@ def test_a_label_table_the_upgrade_cannot_read_stops_boot_and_the_next_boot_rebu
 def test_a_database_already_carried_forward_carries_forward_again_as_it_is(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The release after this one upgrades from a file whose checkpoints and
-    labels are already keyed by row id: they copy as they are and read the same."""
+    """The release after this one upgrades from a file whose checkpoints are
+    already keyed by row id and whose labels already sit on their threads: they
+    copy as they are and read the same."""
     next_release = f"{_RUNNING_VERSION}.1"
     assert version_sort_key(next_release) > version_sort_key(_RUNNING_VERSION)
     _point_instance_at(monkeypatch, tmp_path / "data")
@@ -397,3 +483,90 @@ def test_a_database_already_carried_forward_carries_forward_again_as_it_is(
     assert (next_release, carried.name) in _sources(target)
     _open(target)
     _assert_conversation_reads_as_1_3_1_showed()
+
+
+def test_the_1_4_0_beta_labels_land_on_the_threads_they_named(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The beta found a label by its thread's first row. After the upgrade each
+    label is its own thread's, on its own channel, and a label whose first row
+    is gone names no thread and lands on none."""
+    _point_instance_at(monkeypatch, tmp_path / "data")
+    path = _boot(_BETA_VERSION)
+    conn = _connect(path)
+    try:
+        conn.executescript("DROP TABLE transcript; DROP TABLE threads;" + _BETA_TRANSCRIPT + _BETA_THREAD_GIST)
+        conn.executemany(
+            "INSERT INTO transcript (id, channel, turn_id, role, settled, content, xml_migrated) "
+            "VALUES (?, ?, ?, ?, ?, ?, 1)",
+            _TRANSCRIPT,
+        )
+        conn.executemany(
+            "INSERT INTO thread_gist (opening_id, gist, created_at) VALUES (?, ?, ?)",
+            [
+                (1, "Spring in Lisbon", _LABELLED_AT),
+                (10, "Sintra Day Trip", _LABELLED_AT),
+                (17, "Morning Briefing", _LABELLED_AT),
+                (99, "A label whose first row is gone", _LABELLED_AT),
+            ],
+        )
+    finally:
+        conn.close()
+
+    _open(_boot(_RUNNING_VERSION))
+
+    assert Thread.summaries(_CHAT, [1, 2, 3, 4, 5, 6, 7]) == {1: "Spring in Lisbon", 6: "Sintra Day Trip"}, (
+        "a chat thread lost its label, or a label landed on a thread it did not name"
+    )
+    assert Thread.summaries(_SCHEDULE, [3]) == {3: "Morning Briefing"}, "the schedule thread lost its label"
+
+
+# (row id, level) as the old release stored a level per message.
+_LEVEL_OF_ROW = {1: "high", 10: "high", 12: "medium", 14: "low", 17: "high"}
+# Each thread's level after the upgrade: its newest row level a thread can
+# hold, else ``auto``. Turn 1's answer kept no level, so its question's
+# carries; turn 6's newest row holds a level a thread cannot, so row 12's does;
+# the schedule's turn 3 keeps its own level apart from the chat's turn 3.
+_LEVEL_OF_THREAD = {
+    (_CHAT, 1): "high", (_CHAT, 2): "auto", (_CHAT, 3): "auto", (_CHAT, 4): "auto",
+    (_CHAT, 5): "auto", (_CHAT, 6): "medium", (_CHAT, 7): "auto", (_SCHEDULE, 3): "high",
+}
+
+
+@pytest.mark.parametrize("layout", ["1.3.1", "1.4.0-beta"])
+def test_each_thread_keeps_the_newest_level_its_messages_carried(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, layout: str
+) -> None:
+    """The old releases stored the level on every message; the upgrade puts each
+    thread's newest one on the thread and leaves every thread on the default
+    model."""
+    _point_instance_at(monkeypatch, tmp_path / "data")
+    if layout == "1.3.1":
+        path = _legacy_install(_TRANSCRIPT, _COMPACTIONS, [])
+    else:
+        path = _boot(_BETA_VERSION)
+        conn = _connect(path)
+        try:
+            conn.executescript("DROP TABLE transcript; DROP TABLE threads;" + _BETA_TRANSCRIPT + _BETA_THREAD_GIST)
+            conn.executemany(
+                "INSERT INTO transcript (id, channel, turn_id, role, settled, content, xml_migrated) "
+                "VALUES (?, ?, ?, ?, ?, ?, 1)",
+                _TRANSCRIPT,
+            )
+        finally:
+            conn.close()
+    conn = _connect(path)
+    try:
+        conn.executemany("UPDATE transcript SET thinking_level = ? WHERE id = ?", [
+            (level, row) for row, level in _LEVEL_OF_ROW.items()
+        ])
+    finally:
+        conn.close()
+
+    _open(_boot(_RUNNING_VERSION))
+
+    threads = Thread.all().get()
+    assert {(t.channel, t.turn_id): t.thinking_level for t in threads} == _LEVEL_OF_THREAD, (
+        "a thread did not keep the newest level its messages carried"
+    )
+    assert {t.provider_id for t in threads} == {None}, "a thread was moved off the default model"

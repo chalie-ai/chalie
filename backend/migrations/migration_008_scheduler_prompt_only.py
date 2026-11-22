@@ -18,7 +18,7 @@ to a fresh AUTOINCREMENT integer id, nor from an INTEGER cron field to a
 crontab expression.
 
 It also purges every ``channel='schedule'`` row from the thread-system tables
-(``transcript``, ``thread_gist``, ``turn_executions``, ``compactions``).
+(``transcript``, ``threads``, ``turn_executions``, ``compactions``).
 Pre-rewrite, the scheduler fired through ``MessageProcessor`` with the ``-1``
 sentinel, so ``Transcript.next_turn_id`` allocated a per-channel monotonic
 turn_id (1, 2, 3, …) on the ``'schedule'`` channel; those turn rows survive the
@@ -77,7 +77,7 @@ _CREATE_INDEX_SQL = (
 # ``channel`` alone (a schedule's whole turn history lives on that channel), so
 # the differing turn_id column names (turn_id vs for_turn_id) don't matter here.
 # A table missing at apply time is skipped.
-_SCHEDULE_TURN_TABLES = ("transcript", "thread_gist", "turn_executions", "compactions")
+_SCHEDULE_TURN_TABLES = ("transcript", "threads", "turn_executions", "compactions")
 
 
 def needed(conn: sqlite3.Connection) -> bool:

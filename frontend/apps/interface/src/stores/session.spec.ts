@@ -208,7 +208,7 @@ describe('isSurfaceBusy', () => {
     // hitting the dead transport and losing the draft.
     await session.sendMessage('typed while offline', [], 7, ConfigType.USER);
     expect(sendMock).not.toHaveBeenCalled();
-    expect(queue.queuedFor(7)).toEqual([{ text: 'typed while offline', files: [], thinkingLevel: null }]);
+    expect(queue.queuedFor(7)).toEqual([{ text: 'typed while offline', files: [] }]);
 
     // Reconcile settles the turn on reconnect and drops the blanket flags.
     threadMock.mockResolvedValue(stubBlock(7, false));
@@ -251,14 +251,14 @@ describe('sendMessage — surface-scoped busy gate', () => {
     // the queue, not touch the network again.
     await session.sendMessage('second message while busy', [], null, ConfigType.USER);
     expect(sendMock).toHaveBeenCalledTimes(1);
-    expect(queue.queuedFor(null)).toEqual([{ text: 'second message while busy', files: [], thinkingLevel: null }]);
+    expect(queue.queuedFor(null)).toEqual([{ text: 'second message while busy', files: [] }]);
 
     // A send on a DIFFERENT scope (a thread, not busy) must post immediately.
     sendMock.mockResolvedValueOnce({ turn_id: 909, type: ConfigType.USER });
     await session.sendMessage('thread message', [], 555, ConfigType.USER);
     expect(sendMock).toHaveBeenCalledTimes(2);
     expect(sendMock).toHaveBeenLastCalledWith(
-      'thread message', expect.any(Function), [], 555, ConfigType.USER, null, false,
+      'thread message', expect.any(Function), [], 555, ConfigType.USER, false,
     );
     expect(queue.queuedFor(555)).toEqual([]);
 
@@ -299,7 +299,7 @@ describe('sendMessage — surface-scoped busy gate', () => {
     await session.sendMessage('a new top-level message', [], null, ConfigType.USER);
     expect(queue.queuedFor(null)).toEqual([]);
     expect(sendMock).toHaveBeenLastCalledWith(
-      'a new top-level message', expect.any(Function), [], null, ConfigType.USER, null, false,
+      'a new top-level message', expect.any(Function), [], null, ConfigType.USER, false,
     );
 
     // ...and so does a second thread, in parallel with the first.
@@ -313,7 +313,7 @@ describe('sendMessage — surface-scoped busy gate', () => {
     await session.sendMessage('second reply in thread 42', [], 42, ConfigType.USER);
     expect(sendMock).toHaveBeenCalledTimes(4);
     expect(sendMock).toHaveBeenLastCalledWith(
-      'second reply in thread 42', expect.any(Function), [], 42, ConfigType.USER, null, false,
+      'second reply in thread 42', expect.any(Function), [], 42, ConfigType.USER, false,
     );
     expect(queue.queuedFor(42)).toEqual([]);
 
@@ -348,13 +348,11 @@ describe('sendMessage — a text sent while the lane\'s turn works joins it', ()
     );
     sendMock.mockResolvedValue(JOINED_OK);
 
-    await session.sendMessage('and add the chart too', [], null, ConfigType.USER, 'high');
+    await session.sendMessage('and add the chart too', [], null, ConfigType.USER);
 
-    // Honoured by the backend only if the turn finished first and the text
-    // starts a new one instead — the thinking level must still ride along.
     expect(sendMock).toHaveBeenCalledTimes(1);
     expect(sendMock).toHaveBeenCalledWith(
-      'and add the chart too', expect.any(Function), [], 7, ConfigType.USER, 'high', true,
+      'and add the chart too', expect.any(Function), [], 7, ConfigType.USER, true,
     );
     expect(queue.queuedFor(null)).toEqual([]);
     // The joined turn stays the spine's: only the pre-existing claim on 5.
@@ -380,7 +378,7 @@ describe('sendMessage — a text sent while the lane\'s turn works joins it', ()
     await session.sendMessage('try again', [], null, ConfigType.USER);
     expect(sendMock).toHaveBeenCalledTimes(2);
     expect(sendMock).toHaveBeenLastCalledWith(
-      'try again', expect.any(Function), [], 7, ConfigType.USER, null, true,
+      'try again', expect.any(Function), [], 7, ConfigType.USER, true,
     );
     expect(queue.queuedFor(null)).toEqual([]);
   });
@@ -394,7 +392,7 @@ describe('sendMessage — a text sent while the lane\'s turn works joins it', ()
 
     expect(sendMock).toHaveBeenCalledTimes(2);
     expect(sendMock).toHaveBeenLastCalledWith(
-      'second follow-up', expect.any(Function), [], 7, ConfigType.USER, null, true,
+      'second follow-up', expect.any(Function), [], 7, ConfigType.USER, true,
     );
     expect(queue.queuedFor(null)).toEqual([]);
   });
@@ -409,7 +407,7 @@ describe('sendMessage — a text sent while the lane\'s turn works joins it', ()
 
     expect(sendMock).toHaveBeenCalledTimes(1);
     expect(queue.queuedFor(null)).toEqual([
-      { text: 'typed before the first POST resolved', files: [], thinkingLevel: null },
+      { text: 'typed before the first POST resolved', files: [] },
     ]);
 
     resolveFirst(JOINED_OK);
@@ -427,7 +425,7 @@ describe('sendMessage — a text sent while the lane\'s turn works joins it', ()
     await session.sendMessage('typed while offline', [], null, ConfigType.USER);
 
     expect(sendMock).not.toHaveBeenCalled();
-    expect(queue.queuedFor(null)).toEqual([{ text: 'typed while offline', files: [], thinkingLevel: null }]);
+    expect(queue.queuedFor(null)).toEqual([{ text: 'typed while offline', files: [] }]);
   });
 
   it('a busy lane queues a message with files — a join refuses attachments — on the spine and in a thread alike', async () => {
@@ -440,8 +438,8 @@ describe('sendMessage — a text sent while the lane\'s turn works joins it', ()
     await session.sendMessage('and here, in the thread', [file], 42, ConfigType.USER);
 
     expect(sendMock).not.toHaveBeenCalled();
-    expect(queue.queuedFor(null)).toEqual([{ text: 'see attached', files: [file], thinkingLevel: null }]);
-    expect(queue.queuedFor(42)).toEqual([{ text: 'and here, in the thread', files: [file], thinkingLevel: null }]);
+    expect(queue.queuedFor(null)).toEqual([{ text: 'see attached', files: [file] }]);
+    expect(queue.queuedFor(42)).toEqual([{ text: 'and here, in the thread', files: [file] }]);
   });
 
   it('a spine whose only working marker names no turn has nothing to join, so the text queues', async () => {
@@ -450,7 +448,7 @@ describe('sendMessage — a text sent while the lane\'s turn works joins it', ()
     await session.sendMessage('nothing to join yet', [], null, ConfigType.USER);
 
     expect(sendMock).not.toHaveBeenCalled();
-    expect(queue.queuedFor(null)).toEqual([{ text: 'nothing to join yet', files: [], thinkingLevel: null }]);
+    expect(queue.queuedFor(null)).toEqual([{ text: 'nothing to join yet', files: [] }]);
   });
 
   /** A thread panel registered over the spine, rendering turn 42 as `html`. */
@@ -473,7 +471,7 @@ describe('sendMessage — a text sent while the lane\'s turn works joins it', ()
 
     expect(sendMock).toHaveBeenCalledTimes(1);
     expect(sendMock).toHaveBeenCalledWith(
-      'one more thing for the thread', expect.any(Function), [], 42, ConfigType.USER, null, false,
+      'one more thing for the thread', expect.any(Function), [], 42, ConfigType.USER, false,
     );
     expect(queue.queuedFor(42)).toEqual([]);
     expect(panel.querySelector('[data-send-echo]')).toBeNull();
@@ -487,7 +485,7 @@ describe('sendMessage — a text sent while the lane\'s turn works joins it', ()
     await session.sendMessage('a reply typed in the panel', [], 42, ConfigType.USER);
 
     expect(sendMock).toHaveBeenCalledWith(
-      'a reply typed in the panel', expect.any(Function), [], 42, ConfigType.USER, null, false,
+      'a reply typed in the panel', expect.any(Function), [], 42, ConfigType.USER, false,
     );
     expect(panel.querySelector('[data-send-echo]')).toBeNull();
     // A join is no fork: neither copy is claimed for a thread lane.
@@ -508,10 +506,10 @@ describe('sendMessage — a text sent while the lane\'s turn works joins it', ()
     await session.sendMessage('reply into a settled thread', [], 555, ConfigType.USER);
 
     expect(sendMock).toHaveBeenNthCalledWith(
-      1, 'a fresh question', expect.any(Function), [], null, ConfigType.USER, null, false,
+      1, 'a fresh question', expect.any(Function), [], null, ConfigType.USER, false,
     );
     expect(sendMock).toHaveBeenNthCalledWith(
-      2, 'reply into a settled thread', expect.any(Function), [], 555, ConfigType.USER, null, false,
+      2, 'reply into a settled thread', expect.any(Function), [], 555, ConfigType.USER, false,
     );
     expect(queue.queuedFor(null)).toEqual([]);
     expect(queue.queuedFor(555)).toEqual([]);
@@ -537,7 +535,7 @@ describe('_drainLane — queued sends replay their files, not just their text', 
 
     expect(sendMock).toHaveBeenCalledTimes(1);
     expect(sendMock).toHaveBeenCalledWith(
-      'queued while the thread was busy', expect.any(Function), [file], 77, ConfigType.USER, null, false,
+      'queued while the thread was busy', expect.any(Function), [file], 77, ConfigType.USER, false,
     );
   });
 });
@@ -1031,7 +1029,7 @@ describe('reconnect reconcile', () => {
     expect(turnDom.isTurnWorking(6, ConfigType.USER)).toBe(true); // restored
     expect(threadPhase(6, ConfigType.USER)).toBe('working');
     expect(sendMock).toHaveBeenCalledWith(
-      'queued while offline', expect.any(Function), [], 909, ConfigType.USER, null, false,
+      'queued while offline', expect.any(Function), [], 909, ConfigType.USER, false,
     );
   });
 

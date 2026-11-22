@@ -43,8 +43,7 @@ from controllers.message_processor import MessageProcessor
 from exceptions import ContextLimit
 from models.policy import Policy
 from models.provider_response import ProviderResponse
-from models.thread_gist import ThreadGist
-from models.transcript import Transcript
+from models.thread import Thread
 from models.turn_execution import TurnExecution
 from services.provider_api import ProviderApiRequest
 from services.turn_serializer_service import get_service as _serializer
@@ -186,9 +185,7 @@ def test_nudge_is_gone_on_the_next_turn(db: sqlite3.Connection) -> None:
 
     # A thread that already carries its label launches no gist delegate, whose
     # provider call would race the reply's for the scripted answer.
-    opening_id = Transcript.first_id(mp_1.channel, mp_1.turn_id)
-    assert opening_id is not None
-    ThreadGist(opening_id=opening_id, gist="nudge probe").upsert()
+    assert Thread.set_summary(mp_1.channel, mp_1.turn_id, "nudge probe")
     provider_2 = _ScriptedProvider(_answer("Second answer."))
     _run(provider_2, "and now?", turn_id=mp_1.turn_id)
 

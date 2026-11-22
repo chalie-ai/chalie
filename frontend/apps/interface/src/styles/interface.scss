@@ -331,8 +331,8 @@ body {
 .btn-action:active,
 .voice-rec-btn:active,
 .btn-icon:active,
-.thinking-select__trigger:active,
-.thinking-select__item:active,
+.model-select__trigger:active,
+.model-select__item:active,
 .loading-overlay__skip:active,
 .chalie-toast__undo:active,
 .dock-error__close:active,
@@ -430,13 +430,14 @@ body {
 .btn-icon:hover  { color: var(--text); }
 .btn-icon--small { padding: var(--space-xs); }
 
-// Status line — thinking pill (left) and context indicator (right)
+// Status line — model and thinking level menu (left), context ring (right)
 .dock-controls {
+  // Anchors the model menu at phone width, where it spans the whole line.
+  position: relative;
   max-width: var(--dock-width);
-  // Centre at the dock width like .input-dock__outer (was left-pinned at 4px, so
-  // the thinking pill + context meter drifted off the composer's edges). The 2px
-  // inset matches .input-dock__inner's padding so the pill lines up with the
-  // attach button and the meter with the send button (border-box).
+  // Centre at the dock width like .input-dock__outer. The 2px inset matches
+  // .input-dock__inner's padding so the menu trigger lines up with the attach
+  // button and the ring with the send button (border-box).
   margin: 11px auto 0;
   padding: 0 2px;
   display: flex;
@@ -447,12 +448,16 @@ body {
   color: var(--muted);
 }
 
-.thinking-select { position: relative; }
+.model-select {
+  position: relative;
+  min-width: 0;
+}
 
-.thinking-select__trigger {
+.model-select__trigger {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  max-width: 100%;
   height: var(--control-h);
   padding: 0 9px;
   background: transparent;
@@ -463,12 +468,13 @@ body {
   transition: background-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
 }
 
-.thinking-select__trigger:hover {
+// Disabled on a channel with no thread yet, which has nothing to change.
+.model-select__trigger:hover:not(:disabled) {
   background: var(--cell);
   color: var(--text);
 }
 
-.thinking-select__swirl {
+.model-select__swirl {
   display: block;
   width: 6px;
   height: 6px;
@@ -476,17 +482,24 @@ body {
   flex-shrink: 0;
 }
 
-.thinking-select__value {
+.model-select__value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--muted);
   font-weight: 500;
 }
 
-.thinking-select__menu {
+.model-select__menu {
   position: absolute;
   bottom: 100%;
   left: 0;
   margin-bottom: 6px;
-  min-width: 132px;
+  min-width: 200px;
+  max-width: min(320px, 90vw);
+  max-height: 50vh;
+  overflow-y: auto;
   z-index: 200;
   display: flex;
   flex-direction: column;
@@ -495,9 +508,11 @@ body {
   background: var(--surface);
 }
 
-.thinking-select__menu.hidden { display: none; }
-
-.thinking-select__item {
+.model-select__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
   text-align: left;
   background: transparent;
   cursor: pointer;
@@ -507,34 +522,64 @@ body {
   transition: background-color var(--dur-1) var(--ease-out);
 }
 
-.thinking-select__item:hover  { background: var(--surface-2); }
-.thinking-select__item.active { color: var(--pink-text); font-weight: 600; }
+.model-select__item:hover  { background: var(--surface-2); }
+.model-select__item.active { color: var(--pink-text); font-weight: 600; }
 
-.context-display {
+// The back row names the model whose levels are listed below it.
+.model-select__item--back {
+  justify-content: flex-start;
+  color: var(--muted);
+}
+
+.model-select__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+// How full the thread's context window is. The percentage shows on hover,
+// keyboard focus, or a tap (which toggles it, for touch screens).
+.context-ring {
   margin-left: auto;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  flex-shrink: 0;
+  cursor: pointer;
 }
 
-.context-indicator {
-  background: transparent;
+.context-ring__dial {
+  width: var(--icon);
+  height: var(--icon);
+  transform: rotate(-90deg);
+  flex-shrink: 0;
+}
+
+.context-ring__track {
+  fill: none;
+  stroke: var(--cell);
+  stroke-width: 5;
+}
+
+.context-ring__fill {
+  fill: none;
+  stroke: var(--pink-text);
+  stroke-width: 5;
+  transition: stroke-dashoffset var(--dur-2) var(--ease-out);
+}
+
+.context-ring__label {
+  display: none;
   color: var(--muted);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 
-.meter {
-  width: 96px;
-  height: 5px;
-  background: var(--surface-2);
-  overflow: hidden;
-}
-
-.meter > i {
-  display: block;
-  height: 100%;
-  background: var(--pink);
+.context-ring:hover .context-ring__label,
+.context-ring:focus-visible .context-ring__label,
+.context-ring--open .context-ring__label {
+  display: inline;
 }
 
 @media (max-width: 640px) {
@@ -551,6 +596,10 @@ body {
   // box is exactly 90vw, not 90vw minus the padding.
   :root { --dock-width: 90vw; }
   .input-dock { padding: var(--space-sm) 0; }
+
+  // The model menu spans the status line instead of hanging off the trigger.
+  .model-select { position: static; }
+  .model-select__menu { right: 0; max-width: none; }
 
   .presence-bar { padding: 0 var(--space-md); }
 }

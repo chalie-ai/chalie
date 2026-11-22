@@ -371,7 +371,6 @@ export const useSessionStore = defineStore('session', {
       files: File[] = [],
       threadId: number | null = null,
       type: string = ConfigType.USER,
-      thinkingLevel: string | null = null,
     ): Promise<void> {
       if (!text && !files.length) return;
 
@@ -383,7 +382,7 @@ export const useSessionStore = defineStore('session', {
           ? (threadId ?? workingSpineTurnId())
           : null;
       if (busy && joinId == null) {
-        useQueueStore().enqueue(threadId, body, type, files, thinkingLevel);
+        useQueueStore().enqueue(threadId, body, type, files);
         return;
       }
 
@@ -404,7 +403,6 @@ export const useSessionStore = defineStore('session', {
           files,
           threadId ?? joinId,
           type,
-          thinkingLevel,
           threadId == null && joinId != null,
         );
         // POST resolved with the allocated turn_id but execution runs in the
@@ -475,8 +473,8 @@ export const useSessionStore = defineStore('session', {
       const queue = useQueueStore();
       const type = queue.typeFor(threadId);
       if (this.isSurfaceBusy(threadId, type)) return;
-      const { text, files, thinkingLevel } = queue.take(threadId);
-      if (text) void this.sendMessage(text, files, threadId, type, thinkingLevel);
+      const { text, files } = queue.take(threadId);
+      if (text) void this.sendMessage(text, files, threadId, type);
     },
 
     /**

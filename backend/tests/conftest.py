@@ -162,6 +162,22 @@ def chat_provider(db: sqlite3.Connection) -> sqlite3.Connection:
 
 
 @pytest.fixture
+def models(chat_provider: sqlite3.Connection) -> tuple[int, int]:
+    """``(default, other)``: the selected provider and a second configured one."""
+    chat_provider.execute(
+        "INSERT INTO providers (name, platform, model, host, context_window) "
+        "VALUES ('second-provider', 'ollama', 'second-model', 'http://localhost:11434', ?)",
+        (SEEDED_CONTEXT_WINDOW,),
+    )
+    chat_provider.commit()
+    ids = {
+        str(row["name"]): int(row["id"])
+        for row in chat_provider.execute("SELECT id, name FROM providers").fetchall()
+    }
+    return ids["test-chat-provider"], ids["second-provider"]
+
+
+@pytest.fixture
 def earlier_agents(db: sqlite3.Connection) -> None:
     """Record ``EARLIER_AGENTS`` subagents that ran and ended before the test,
     through the real model, so every agent the test spawns is numbered past

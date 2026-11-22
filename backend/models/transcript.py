@@ -46,7 +46,7 @@ class Transcript(Model):
         "id", "channel", "role", "content", "tool_call_id", "tool_name",
         "internal", "deliberation_score", "created_at", "xml_migrated",
         "location_lat", "location_lon", "location_name", "turn_id", "settled",
-        "thinking_level", "joined",
+        "joined", "thread_id",
     )
 
     @classmethod
@@ -67,8 +67,8 @@ class Transcript(Model):
     location_name: str | None
     turn_id: int | None
     settled: int
-    thinking_level: str | None
     joined: int
+    thread_id: int | None
 
     # settle0 — the FIRST assistant row of a turn with settled=1: the boundary
     # between a turn's main exchange and its fork continuation. Each provider
@@ -173,26 +173,6 @@ class Transcript(Model):
             .order_by("id ASC")
             .get()
         )
-
-    @classmethod
-    def latest_thinking_level(cls, channel: str, turn_id: int | None = None) -> str | None:
-        """``thinking_level`` of the most recent row (highest id) for ``channel``
-        that has a non-NULL ``thinking_level``. When ``turn_id`` is given, also
-        filter on it — used to read back the level written onto the current
-        turn's input row; when ``turn_id`` is None, span every turn of the
-        channel (the spine's "latest level for this type"). Returns None when
-        no such row exists (legacy/empty channel)."""
-        sql = (
-            "SELECT thinking_level FROM transcript WHERE channel = ? "
-            "AND thinking_level IS NOT NULL"
-        )
-        params: list[object] = [channel]
-        if turn_id is not None:
-            sql += " AND turn_id = ?"
-            params.append(turn_id)
-        sql += " ORDER BY id DESC LIMIT 1"
-        row = cls._bound_connection().execute(sql, tuple(params)).fetchone()
-        return row[0] if row and row[0] is not None else None
 
     def set_deliberation_score(self, score: float) -> Self:
         """Persist this row's per-turn deliberation score — the value that
@@ -519,17 +499,16 @@ class Transcript(Model):
     )
 
     # A thread matches a search term when either its user-role content or its
-    # (LLM-generated) gist label carries it. The gist half is a correlated
-    # subquery that finds the label by the thread's opening row id
-    # (``thread_gist.opening_id``): the group matches when one of its rows is
-    # that opening row. A legacy NULL-turn_id singleton never gets a label, so
-    # this matches nothing for those. Wrapped in MAX(COALESCE(..., 0)) to
-    # mirror the ``_CANCELLED_ORPHAN_HAVING`` idiom: a per-row correlated
-    # subquery aggregated across the GROUP, since HAVING cannot reference a
+    # (LLM-generated) label carries it. The label half is a correlated
+    # subquery on the thread each row points at (``threads.summary``). A
+    # legacy NULL-turn_id singleton has no thread, so this matches nothing for
+    # those. Wrapped in MAX(COALESCE(..., 0)) to mirror the
+    # ``_CANCELLED_ORPHAN_HAVING`` idiom: a per-row correlated subquery
+    # aggregated across the GROUP, since HAVING cannot reference a
     # non-aggregated, non-grouped column directly.
     _GIST_MATCH: ClassVar[str] = (
-        "MAX(COALESCE((SELECT 1 FROM thread_gist tg WHERE tg.opening_id = transcript.id "
-        "AND tg.gist LIKE ?), 0)) = 1"
+        "MAX(COALESCE((SELECT 1 FROM threads th WHERE th.id = transcript.thread_id "
+        "AND th.summary LIKE ?), 0)) = 1"
     )
 
     @classmethod
@@ -537,7 +516,7 @@ class Transcript(Model):
         """The feed's HAVING clause over a per-turn GROUP: always drops a
         cancelled reply-less orphan (``_CANCELLED_ORPHAN_HAVING``), and when
         ``query`` is non-empty additionally keeps only threads carrying a
-        user-role row OR a thread_gist label matching it (case-insensitive
+        user-role row OR a thread label matching it (case-insensitive
         substring). Shared by ``recent_threads`` (the page) and ``count_turns``
         (its ``has_more``) so search and feed run one identical path."""
         conditions = [cls._CANCELLED_ORPHAN_HAVING]

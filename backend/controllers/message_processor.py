@@ -39,11 +39,11 @@ returns: a POST handler reads the WORKING execution handle instantly and live
 output then streams over WS, while fire-and-forget callers (scheduler) read the
 allocated id off ``mp.metadata``.
 
-The thinking override is resolved per-turn in ``_setup`` (after ``begin()`` has
-allocated ``turn_id`` and written the input row) by reading the transcript's
-``thinking_level`` column for the current (channel, turn_id); ``medium``/``high``
-becomes the override, ``auto``/NULL leaves it unset so the deliberation gate
-decides normally.
+The model and thinking level are read per-turn in ``_setup`` (after ``begin()``
+has allocated ``turn_id`` and written the input row) from the turn's own thread
+row. A model that is unset or no longer configured falls back to the default,
+which is then stored on the thread. ``medium``/``high`` becomes the thinking
+override; ``auto`` leaves it unset so the deliberation gate decides normally.
 
 ``_step()`` is the **recursive** step loop: send → (compact-and-continue on
 over-cap) → store the call's own assistant row → dispatch tool calls → take in
@@ -94,6 +94,7 @@ from models.plan_task import PlanTask
 from models.provider_request import ProviderRequest
 from models.queued_message import QueuedMessage
 from models.tool_call import ToolCall
+from models.thread import Thread as ThreadRow
 from models.turn_execution import TurnExecution
 from models.transcript import Transcript
 from models.transcript_thinking import TranscriptThinking
@@ -104,6 +105,7 @@ from services.dispatch_service import DispatchService
 from services.gist_service import GistService
 from services.llm_log_service import LlmLogService
 from services.prompt_service import PromptService
+from services.provider_cache_service import ProviderCacheService
 from services.provider_service import ProviderService
 from services.tool_call_service import ToolCallService
 from services.transcript_service import TranscriptService
@@ -236,6 +238,9 @@ class MessageProcessor:
         self.active_tools: list[str] = []
         self.thinking_level: str = "low"
         self.thinking_override: str | None = None
+        # The chat model this turn runs on, read from its thread in _setup;
+        # None = the default.
+        self.provider_id: int | None = None
         self.turn_handover: str = ""
         self.seeding_turn_zero: bool = False
         # Raised while the planning pre-pass runs (``_plan_turn``): the prompt
@@ -558,7 +563,8 @@ class MessageProcessor:
     def _open_turn(self) -> None:
         """Write this turn's opening rows inside the caller's transaction: the
         ``agents`` row a spawn carries, the allocated turn id, the fork guard
-        and the input row."""
+        and the input row. A spawn on the chat lane passes its caller's model
+        and thinking level, and its thread starts on them."""
         agent = self.metadata.get("agent")
         if isinstance(agent, Agent):
             agent.turn_id = 1
@@ -579,6 +585,9 @@ class MessageProcessor:
         elif self._forked and not self.transcript_service.turn_exists():
             raise ValueError("Invalid turn_id specified")
         self.uid = self._open_input_row()
+        level = self.metadata.get("thinking_level")
+        if isinstance(level, str) and self._provider_type() is ProviderType.CHAT:
+            ThreadRow.set_settings(self.channel, self.turn_id, cast("int | None", self.metadata.get("provider_id")), level)
         self.current_transcript_id = self.uid
         if self.uid is not None:
             self._consumed_through = self.uid
@@ -619,10 +628,8 @@ class MessageProcessor:
         config skips it (channels whose input is not a transcript utterance)."""
         if self.config.skip_input_row:
             return None
-        raw_level = self.metadata.get("thinking_level")
         return self.transcript_service.append_input(
             self.raw_input,
-            thinking_level=raw_level if isinstance(raw_level, str) else None,
             tool_call_id=cast("int | None", self.metadata.get("tool_call_id")),
         )
 
@@ -1188,7 +1195,8 @@ class MessageProcessor:
         this turn (:func:`~abilities.message_parent.waiting_reminder`) — seed
         the always-available tools — and ``message_parent`` on the turn of a
         subagent the chat spawned, the one kind that holds it, which no config
-        can tell — gate thinking on the ``user`` channel, seed the turn-zero
+        can tell — read the model and thinking level off the turn's thread,
+        gate thinking on the ``user`` channel, seed the turn-zero
         flashback + any attachments, ingest the reply's parent gist on a fork,
         then plan the message."""
         self.waiting_reminder = waiting_reminder(self.channel, cast("int | None", self.metadata.get("tool_call_id")))
@@ -1198,16 +1206,29 @@ class MessageProcessor:
         anchor = self.transcript_service.anchor_row()
         if anchor is not None:
             self._offer_replying_tools([anchor])
-        # Resolve thinking override from the transcript row written by begin()
-        # (the current turn's input row). medium/high becomes the override,
-        # auto/NULL leaves it unset so the deliberation gate decides normally.
-        level = Transcript.latest_thinking_level(self.channel, self.turn_id)
-        self.thinking_override = level if level in ("medium", "high") else None
+        self._read_thread_settings()
         if self.channel == Channel.USER:
             self._run_thinking_gate()
         self._seed_turn_zero()
         self._maybe_fire_gist()
         self._plan_turn()
+
+    def _read_thread_settings(self) -> None:
+        """Take this turn's model and thinking level from its thread row. A
+        model that is unset or no longer configured falls back to the default,
+        and the default is stored on the thread so the fallback sticks. A turn
+        with no thread row (a channel that writes no transcript, such as a
+        compaction or its hand-over) runs on the model its caller passed, else
+        the default, at its own level."""
+        thread = ThreadRow.of(self.channel, self.turn_id)
+        if thread is None:
+            self.provider_id = cast("int | None", self.metadata.get("provider_id"))
+            return
+        self.provider_id = cast("int | None", ProviderCacheService.chat_provider(thread.provider_id).get("id"))
+        if self.provider_id is not None and self.provider_id != thread.provider_id:
+            ThreadRow.set_settings(self.channel, self.turn_id, self.provider_id, thread.thinking_level)
+        level = thread.thinking_level
+        self.thinking_override = level if level in ("medium", "high") else None
 
     def _plan_turn(self) -> None:
         """The planning pre-pass: before the loop's first step, the model plans

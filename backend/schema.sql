@@ -66,7 +66,6 @@ CREATE VIRTUAL TABLE IF NOT EXISTS episodes_fts USING fts5(
 
 -- identity_vectors + identity_events removed — personality dimensions ripped out.
 
--- threads table removed — dropped by migration 035_channel_migration.sql
 -- thread_exchanges table removed — dropped by migration 035_channel_migration.sql
 
 -- ────────────────────────────────────────────────────────────────
@@ -313,20 +312,6 @@ CREATE VIRTUAL TABLE IF NOT EXISTS scheduled_items_vec USING vec0(embedding floa
 CREATE VIRTUAL TABLE IF NOT EXISTS lists_vec USING vec0(embedding float[768]);
 
 -- ────────────────────────────────────────────────────────────────
--- THREAD GIST — one terse 3-5 word topical label per conversation thread (a
--- turn grown past its settle0). Written once, on the first reply past settle0.
--- Found by its thread's opening transcript row id (opening_id). No foreign
--- key: once that row is purged the label matches no row and reads as gone.
--- Pure FE affordance, no embedding, no search index.
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS thread_gist (
-    opening_id  INTEGER,
-    gist        TEXT,
-    created_at  TEXT NOT NULL
-);
-CREATE UNIQUE INDEX IF NOT EXISTS ux_thread_gist_opening ON thread_gist(opening_id);
-
--- ────────────────────────────────────────────────────────────────
 -- WRAPPER TOKENS — bearer auth for external programmatic access
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS wrapper_tokens (
@@ -395,6 +380,29 @@ CREATE INDEX IF NOT EXISTS idx_mcp_client_servers_enabled
     ON mcp_client_servers(enabled);
 
 -- ────────────────────────────────────────────────────────────────
+-- THREADS — one row per conversation thread: a channel's turn. Every
+-- transcript row the thread holds points at it. The transcript writer
+-- creates it with the thread's first row.
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS threads (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel  TEXT NOT NULL,
+    turn_id  INTEGER NOT NULL,
+    -- The thread's terse topical label, written once its first reply is past
+    -- the opening exchange. NULL until then. Shown on the collapsed thread;
+    -- no embedding, no search index.
+    summary  TEXT,
+    -- The model this thread's turns run on. NULL = the default model; a turn
+    -- that falls back to the default (NULL, or a model no longer configured)
+    -- stores the default's id here.
+    provider_id    INTEGER,
+    -- The thinking level this thread's turns run at: auto|medium|high.
+    thinking_level TEXT NOT NULL DEFAULT 'auto'
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_threads_channel_turn ON threads(channel, turn_id);
+
+-- ────────────────────────────────────────────────────────────────
 -- TRANSCRIPT — persistent, channel-scoped conversation record
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS transcript (
@@ -422,14 +430,13 @@ CREATE TABLE IF NOT EXISTS transcript (
     -- (its last provider call: no tool calls and no joined message waiting).
     -- Written once at insert, never changed.
     settled     INTEGER NOT NULL DEFAULT 0,
-    -- Per-turn thinking level chosen by the sender (auto|medium|high); NULL =
-    -- legacy row or not-yet-set, lets a later query distinguish "chose auto"
-    -- from "never set".
-    thinking_level TEXT,
     -- 1 on a user row sent into the turn while it was still working: the
     -- running exchange reads it at its next boundary instead of a new
     -- exchange opening for it.
-    joined      INTEGER NOT NULL DEFAULT 0
+    joined      INTEGER NOT NULL DEFAULT 0,
+    -- The thread this row belongs to. NULL only on a row copied forward from
+    -- a release that predates turns (its turn_id is NULL too).
+    thread_id   INTEGER REFERENCES threads(id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_transcript_channel ON transcript(channel, created_at);

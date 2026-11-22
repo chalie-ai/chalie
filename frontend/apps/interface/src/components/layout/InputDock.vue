@@ -16,7 +16,7 @@ const activeDockKey = ref<string>('main');
  * never touches the WebSocket directly.
  */
 import { storeToRefs } from 'pinia';
-import { ConfigType } from '@chalie/shared';
+import { ConfigType, webPlatformAdapter } from '@chalie/shared';
 import { readDomContext } from '../../utils/domContext';
 import { on } from '../../composables/useEventBus';
 import { useSessionStore } from '../../stores/session';
@@ -24,12 +24,13 @@ import { useVoiceStore } from '../../stores/voice';
 import { useAttachmentsStore } from '../../stores/attachments';
 import { useContextUsageStore } from '../../stores/contextUsage';
 import { lsGet, lsSet } from '../../utils/storage';
-import { system } from '../../api';
+import { providers, system } from '../../api';
+import type { Provider } from '../../api/providers';
 import ImageAttachStrip from '../upload/ImageAttachStrip.vue';
 import QueuedMessages from '../conversation/QueuedMessages.vue';
 import OffScreenAsks from './OffScreenAsks.vue';
 import DockError from './DockError.vue';
-import { Plus, Mic, Send, ChevronDown } from '@lucide/vue';
+import { Plus, Mic, Send, ChevronDown, ChevronLeft, ChevronRight } from '@lucide/vue';
 
 /**
  * `turnId` is the only thing that distinguishes a thread reply from a main-dock
@@ -55,15 +56,9 @@ const voiceStore = useVoiceStore();
 const attachments = useAttachmentsStore();
 const contextUsage = useContextUsageStore();
 const { available: voiceAvailable, recorderState } = storeToRefs(voiceStore);
-// A null turnId (the footer dock) reads the channel's latest reading; a thread
-// panel's dock reads its own thread. Both are fed by the same `context_usage`
-// frame — the store resolves which entry that is.
-const usageDisplay = computed(() => contextUsage.usageDisplayFor(props.type, props.turnId));
-const usageRatio = computed(() => contextUsage.usageRatioFor(props.type, props.turnId));
-// The meter shows the percentage used ("30%"); the raw "X/Y" token counts move
-// to the hover tooltip (see the container's :title below) so the inline chip
-// stays compact.
-const usagePercent = computed(() => Math.round(usageRatio.value * 100) + '%');
+// The ring's % label shows on hover and keyboard focus; a phone has neither,
+// so a tap toggles it.
+const percentShown = ref(false);
 
 const THINKING_ITEMS = [
   { level: 'auto', label: 'Auto' },
@@ -84,12 +79,40 @@ watch(text, (v) => lsSet(DRAFT_KEY, v));
 
 const fileInputRef = ref<HTMLInputElement | null>(null);
 
-const thinkingMenuOpen = ref(false);
-const thinkingWrapRef = ref<HTMLDivElement | null>(null);
 const footerRef = ref<HTMLElement | null>(null);
 
-const level = ref<'auto' | 'medium' | 'high'>('auto');
-const levelLabel = computed(() => level.value.charAt(0).toUpperCase() + level.value.slice(1));
+type Level = (typeof THINKING_ITEMS)[number]['level'];
+
+// What the dock's next message runs on: its thread's model and level. The
+// main dock's thread is the channel's latest, which a new thread copies; on a
+// channel with no thread yet it shows the default and has nothing to change
+// until the first message makes one.
+const level = ref<Level>('auto');
+const providerId = ref<number | null>(null);
+const hasThread = ref(false);
+const canPick = computed(() => props.turnId != null || hasThread.value);
+// Every configured model; null until the list has been read.
+const models = ref<Provider[] | null>(null);
+const levelLabel = (l: string): string => THINKING_ITEMS.find((i) => i.level === l)?.label ?? l;
+const triggerLabel = computed(() => {
+  const name = models.value?.find((m) => m.id === providerId.value)?.name;
+  return name ? `${name} · ${levelLabel(level.value)}` : levelLabel(level.value);
+});
+// A null turnId (the footer dock) reads the channel's latest reading; a thread
+// panel's dock reads its own thread. Both are fed by the same `context_usage`
+// frame — the store resolves which entry that is. The reading is measured
+// against the window of the model the next message goes to, as the server's
+// context check measures it, so a switch to a smaller model shows at once.
+const pickedWindow = computed(() => models.value?.find((m) => m.id === providerId.value)?.context_window ?? null);
+const percentUsed = computed(() => contextUsage.percentUsedFor(props.type, props.turnId, pickedWindow.value));
+
+// The menu drills in: it lists the models, and choosing one lists that
+// model's levels (`menuModel`), with a row back to the models at the top.
+const menuOpen = ref(false);
+const menuModel = ref<Provider | null>(null);
+const selectWrapRef = ref<HTMLDivElement | null>(null);
+const triggerRef = ref<HTMLButtonElement | null>(null);
+const menuRef = ref<HTMLDivElement | null>(null);
 
 /** True when there is something to send: non-empty text OR ≥1 attachment.
  *  Mirrors the handleSend guard — both gate on getFiles(). */
@@ -110,7 +133,10 @@ async function handleSend(): Promise<void> {
   text.value = '';
   await nextTick();
 
-  await session.sendMessage(trimmed, files, turnId, type, level.value);
+  await session.sendMessage(trimmed, files, turnId, type);
+  // A main-dock send may start the channel's first thread, which the menu
+  // then has to change.
+  if (props.turnId == null) void loadSettings();
 
   // sendMessage takes ownership of `files` in BOTH branches — a direct dispatch
   // uploads them; a busy send with files queues the whole {text, files}
@@ -149,16 +175,99 @@ function onFileInputChange(e: Event): void {
   input.value = ''; // allow re-selecting the same file
 }
 
-function selectLevel(next: (typeof THINKING_ITEMS)[number]['level']): void {
-  level.value = next;
-  thinkingMenuOpen.value = false;
+/** Read what the dock's next message runs on: its thread's settings, -1
+ *  naming the main dock's thread. */
+async function loadSettings(): Promise<void> {
+  try {
+    const r = await system.threadSettings(props.type, props.turnId ?? -1);
+    level.value = asLevel(r.thinking_level);
+    providerId.value = r.provider_id;
+    hasThread.value = r.turn_id != null;
+  } catch {
+    level.value = 'auto';
+  }
+}
+
+async function loadModels(): Promise<void> {
+  try {
+    models.value = await providers.all();
+  } catch {
+    session.errorMessage = 'Could not load the models';
+  }
+}
+
+function asLevel(v: string): Level {
+  return v === 'medium' || v === 'high' ? v : 'auto';
+}
+
+/** Move focus into the menu once it renders: onto the checked row, else the first. */
+function focusMenuRow(): void {
+  void nextTick(() => {
+    const rows = menuRef.value?.querySelectorAll<HTMLElement>('[role^="menuitem"]');
+    const checked = menuRef.value?.querySelector<HTMLElement>('.active');
+    (checked ?? rows?.[0])?.focus();
+  });
+}
+
+function closeMenu(): void {
+  menuOpen.value = false;
+  menuModel.value = null;
+}
+
+function toggleMenu(): void {
+  if (menuOpen.value) return closeMenu();
+  menuOpen.value = true;
+  focusMenuRow();
+}
+
+function openLevels(model: Provider): void {
+  menuModel.value = model;
+  focusMenuRow();
+}
+
+function backToModels(): void {
+  menuModel.value = null;
+  focusMenuRow();
+}
+
+/** Arrow keys move between rows, wrapping; Escape backs out of a model's
+ *  levels, then closes. Enter picks through the row's own click. */
+function onMenuKeydown(e: KeyboardEvent): void {
+  if (e.key === 'Escape') {
+    e.stopPropagation();
+    if (menuModel.value) return backToModels();
+    closeMenu();
+    triggerRef.value?.focus();
+    return;
+  }
+  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+  e.preventDefault();
+  const rows = Array.from(menuRef.value?.querySelectorAll<HTMLElement>('[role^="menuitem"]') ?? []);
+  const at = rows.indexOf(document.activeElement as HTMLElement);
+  const step = e.key === 'ArrowDown' ? 1 : -1;
+  rows[(at + step + rows.length) % rows.length]?.focus();
+}
+
+/** Save the pick to the dock's thread at once, -1 naming the main dock's
+ *  thread; a failed save keeps the old settings. */
+async function selectLevel(next: Level): Promise<void> {
+  const model = menuModel.value;
+  closeMenu();
+  triggerRef.value?.focus();
+  if (!model) return;
+  const saved = await system
+    .saveThreadSettings(props.type, props.turnId ?? -1, { provider_id: model.id, thinking_level: next })
+    .catch(() => null);
+  if (!saved) {
+    session.errorMessage = 'Could not change the model or thinking level';
+    return;
+  }
+  providerId.value = saved.provider_id;
+  level.value = asLevel(saved.thinking_level);
 }
 
 function onDocumentClick(e: MouseEvent): void {
-  const target = e.target as Node;
-  if (thinkingMenuOpen.value && !thinkingWrapRef.value?.contains(target)) {
-    thinkingMenuOpen.value = false;
-  }
+  if (menuOpen.value && !selectWrapRef.value?.contains(e.target as Node)) closeMenu();
 }
 
 // Raw File objects are structurally non-persistable, so the only loss the
@@ -248,10 +357,8 @@ onMounted(() => {
     _dockResizeObserver.observe(footerRef.value);
   }
 
-  void system.thinkingLevel(props.type, props.turnId ?? -1).then((r) => {
-    const v = r?.level;
-    level.value = v === 'medium' || v === 'high' ? v : 'auto';
-  }).catch(() => { level.value = 'auto'; });
+  void loadSettings();
+  void loadModels();
 });
 
 onBeforeUnmount(() => {
@@ -344,49 +451,106 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="dock-controls">
-      <div ref="thinkingWrapRef" class="thinking-select">
+      <div ref="selectWrapRef" class="model-select">
+        <!-- With no model configured there is nothing to pick: the trigger
+             opens the Brain, whose first page adds one. -->
         <button
-          id="thinkingTrigger"
-          class="thinking-select__trigger"
+          v-if="models?.length === 0"
+          id="modelTrigger"
+          class="model-select__trigger"
           type="button"
-          aria-haspopup="true"
-          :aria-expanded="thinkingMenuOpen"
-          @click.stop="thinkingMenuOpen = !thinkingMenuOpen"
+          @click="webPlatformAdapter.openBrain()"
         >
-          <span class="thinking-select__swirl" aria-hidden="true"></span>
-          <span id="thinkingLabel" class="thinking-select__value">{{ levelLabel }}</span>
+          <span class="model-select__swirl" aria-hidden="true"></span>
+          <span class="model-select__value">Add a model</span>
+        </button>
+        <button
+          v-else
+          id="modelTrigger"
+          ref="triggerRef"
+          class="model-select__trigger"
+          type="button"
+          aria-haspopup="menu"
+          :aria-expanded="menuOpen"
+          :disabled="!canPick"
+          @click.stop="toggleMenu"
+        >
+          <span class="model-select__swirl" aria-hidden="true"></span>
+          <span id="modelLabel" class="model-select__value">{{ triggerLabel }}</span>
           <ChevronDown :size="16" style="opacity: 0.6" />
         </button>
         <div
-          id="thinkingMenu"
-          class="thinking-select__menu"
-          :class="{ hidden: !thinkingMenuOpen }"
+          v-if="menuOpen"
+          id="modelMenu"
+          ref="menuRef"
+          class="model-select__menu"
           role="menu"
+          :aria-label="menuModel ? `${menuModel.name} thinking levels` : 'Models'"
+          @keydown="onMenuKeydown"
         >
-          <button
-            v-for="item in THINKING_ITEMS"
-            :key="item.level"
-            class="thinking-select__item"
-            :class="{ active: level === item.level }"
-            :data-level="item.level"
-            type="button"
-            role="menuitem"
-            @click="selectLevel(item.level)"
-          >
-            {{ item.label }}
-          </button>
+          <template v-if="menuModel">
+            <button class="model-select__item model-select__item--back" type="button" role="menuitem" @click="backToModels">
+              <ChevronLeft :size="16" aria-hidden="true" />
+              <span class="model-select__name">{{ menuModel.name }}</span>
+            </button>
+            <button
+              v-for="item in THINKING_ITEMS"
+              :key="item.level"
+              class="model-select__item"
+              :class="{ active: menuModel.id === providerId && level === item.level }"
+              :data-level="item.level"
+              type="button"
+              role="menuitemradio"
+              :aria-checked="menuModel.id === providerId && level === item.level"
+              @click="selectLevel(item.level)"
+            >
+              {{ item.label }}
+            </button>
+          </template>
+          <template v-else>
+            <button
+              v-for="model in models"
+              :key="model.id"
+              class="model-select__item"
+              :class="{ active: model.id === providerId }"
+              :data-model="model.id"
+              type="button"
+              role="menuitem"
+              aria-haspopup="menu"
+              @click="openLevels(model)"
+            >
+              <span class="model-select__name">{{ model.name }}</span>
+              <ChevronRight :size="16" aria-hidden="true" />
+            </button>
+          </template>
         </div>
       </div>
       <div
+        v-if="percentUsed != null"
         id="contextDisplay"
-        class="context-display"
-        :class="{ hidden: !usageDisplay }"
-        :title="`${usageDisplay} context`"
+        class="context-ring"
+        :class="{ 'context-ring--open': percentShown }"
+        role="meter"
+        aria-label="Context used"
+        aria-valuemin="0"
+        aria-valuemax="100"
+        :aria-valuenow="percentUsed"
+        tabindex="0"
+        @click="percentShown = !percentShown"
       >
-        <span class="context-indicator">
-          <b>{{ usagePercent }}</b>
-        </span>
-        <span class="meter"><i :style="{ width: usageRatio * 100 + '%' }"></i></span>
+        <svg class="context-ring__dial" viewBox="0 0 36 36" aria-hidden="true">
+          <circle class="context-ring__track" cx="18" cy="18" r="14" />
+          <circle
+            class="context-ring__fill"
+            cx="18"
+            cy="18"
+            r="14"
+            pathLength="100"
+            stroke-dasharray="100"
+            :stroke-dashoffset="100 - percentUsed"
+          />
+        </svg>
+        <span class="context-ring__label">{{ percentUsed }}%</span>
       </div>
     </div>
 

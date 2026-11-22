@@ -13,8 +13,8 @@ the subagent's own ``delegate:code_agent:{agent_id}`` channel so the delegate ca
 act-trail across ACT iterations (``skip_transcript=False`` /
 ``skip_input_row=False``). Unlike those two, this channel does NOT set
 ``uses_delegate_provider`` — it stays on the default ``False`` and therefore
-runs on the brain's globally selected (main) provider, not the Delegate
-Provider slot. Coding work benefits from the same model quality the user's
+runs on the model and thinking level of the thread that started it, not the
+Delegate Provider slot, and keeps them when it is messaged again. Coding work benefits from the same model quality the user's
 own conversation gets, and there is no separate "delegate-grade" model tier
 worth carving out for it. Paired with ``CodeAgentAbility`` (abilities/code_agent.py).
 """

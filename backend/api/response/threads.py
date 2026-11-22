@@ -68,11 +68,17 @@ class ThreadBatch(Response):
     blocks: list[TurnBlock]
 
 
-class ThinkingLevel(Response):
-    """``GET /api/threads/thinking-level/<turn_id>`` body — the literal value
-    persisted on the thread's input row (``auto``/``medium``/``high``)."""
+class ThreadSettings(Response):
+    """``/api/threads/settings/<turn_id>`` body — the model and thinking level
+    the thread's next message runs on."""
 
-    level: str
+    #: The provider's id; null only when no provider is configured at all.
+    provider_id: int | None
+    #: ``auto``/``medium``/``high``.
+    thinking_level: str
+    #: The thread these settings belong to; null on a channel with no thread
+    #: yet, where there is nothing to change until the first message.
+    turn_id: int | None
 
 
 class TurnExecution(Response):
