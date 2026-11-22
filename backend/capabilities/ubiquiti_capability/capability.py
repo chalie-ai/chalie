@@ -6,6 +6,7 @@ import logging
 from typing import TYPE_CHECKING, cast
 
 from capabilities.base import AbstractCapability
+from capabilities.ubiquiti_capability import authenticator
 from capabilities.ubiquiti_capability import unifi_rest_handler as rest
 from services.file_mapper_service import FileMapperService
 
@@ -16,6 +17,7 @@ if TYPE_CHECKING:
         api_key: str | None
         username: str | None
         password: str | None
+        totp_key: str | None
         verify_ssl: bool
 
 logger = logging.getLogger(__name__)
@@ -27,6 +29,7 @@ _K_AUTH_METHOD = "ubiquiti:auth_method"
 _K_API_KEY = "ubiquiti:api_key"
 _K_USERNAME = "ubiquiti:username"
 _K_PASSWORD = "ubiquiti:password"
+_K_TOTP_KEY = "ubiquiti:totp_key"
 _K_SITE = "ubiquiti:site"
 _K_VERIFY_SSL = "ubiquiti:verify_ssl"
 
@@ -40,6 +43,7 @@ class UbiquitiCapability(AbstractCapability):
         self._api_key: str | None = None
         self._username: str | None = None
         self._password: str | None = None
+        self._totp_key: str | None = None
         self._site: str = "default"
         self._verify_ssl: bool = False
 
@@ -56,6 +60,7 @@ class UbiquitiCapability(AbstractCapability):
             "api_key": self._api_key,
             "username": self._username,
             "password": self._password,
+            "totp_key": self._totp_key,
             "verify_ssl": self._verify_ssl,
         }
 
@@ -84,12 +89,13 @@ class UbiquitiCapability(AbstractCapability):
             raise ValueError("UniFi Controller URL is required")
         if auth_method == "api_key" and not api_key:
             raise ValueError("API Key is required when authentication method is 'api_key'")
-        if auth_method == "credentials" and (not username or not password):
+        if auth_method in ("credentials", "ui_account") and (not username or not password):
             raise ValueError(
-                "Username and Password are required when authentication method is 'credentials'"
+                f"Username and Password are required when authentication method is {auth_method!r}"
             )
-        if auth_method not in ("api_key", "credentials"):
+        if auth_method not in ("api_key", "credentials", "ui_account"):
             raise ValueError(f"Unknown authentication method: {auth_method!r}")
+        totp_key = self._setup_key(credentials) if auth_method == "ui_account" else None
 
         logger.info(
             "[ubiquiti] configure: url=%s auth=%s site=%s verify_ssl=%r (raw=%r)",
@@ -97,7 +103,7 @@ class UbiquitiCapability(AbstractCapability):
         )
         try:
             rest.probe(url, site, api_key=api_key, username=username,
-                       password=password, verify_ssl=cast(bool, verify_ssl))
+                       password=password, totp_key=totp_key, verify_ssl=cast(bool, verify_ssl))
         except Exception as exc:
             logger.warning("[ubiquiti] probe error detail: %s %s", type(exc).__name__, exc)
             if hasattr(exc, "response") and exc.response is not None:
@@ -109,6 +115,7 @@ class UbiquitiCapability(AbstractCapability):
         self.store_credential(_K_API_KEY, api_key or "")
         self.store_credential(_K_USERNAME, username or "")
         self.store_credential(_K_PASSWORD, password or "")
+        self.store_credential(_K_TOTP_KEY, totp_key or "")
         self.store_credential(_K_SITE, site)
         self.store_credential(_K_VERIFY_SSL, "1" if verify_ssl else "0")
 
@@ -117,9 +124,23 @@ class UbiquitiCapability(AbstractCapability):
         self._api_key = api_key
         self._username = username
         self._password = password
+        self._totp_key = totp_key
         self._site = site
         self._verify_ssl = cast(bool, verify_ssl)
         self._connected = True
+
+    def _setup_key(self, credentials: dict[str, object]) -> str | None:
+        """The authenticator setup key, tidied; left empty on an edit, the one already stored.
+
+        UI.com shows a setup key only once, so an edit that leaves the field empty keeps it.
+
+        Raises:
+            ValueError: the key is not one an authenticator app takes.
+        """
+        raw = cast(str, credentials.get("totp_key")) or ""
+        if raw.strip():
+            return authenticator.setup_key(raw)
+        return self.load_credential(_K_TOTP_KEY) or None
 
     def connect(self) -> bool:
         url = self.load_credential(_K_URL)
@@ -132,6 +153,7 @@ class UbiquitiCapability(AbstractCapability):
         self._api_key = self.load_credential(_K_API_KEY) or None
         self._username = self.load_credential(_K_USERNAME) or None
         self._password = self.load_credential(_K_PASSWORD) or None
+        self._totp_key = self.load_credential(_K_TOTP_KEY) or None
         self._site = self.load_credential(_K_SITE) or "default"
         self._verify_ssl = self.load_credential(_K_VERIFY_SSL) == "1"
 

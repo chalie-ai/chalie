@@ -3,9 +3,13 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from typing import TYPE_CHECKING, cast
 
 import requests
+
+from capabilities.ubiquiti_capability import authenticator
+from exceptions import AuthenticatorCodeRefused, AuthenticatorKeyMissing, TooManySignInAttempts
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -13,10 +17,12 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _TIMEOUT = 15
+# What a console answers a UI.com account that has an authenticator app, until a code is sent with it.
+_MFA_REQUIRED = 499
 
 _session_lock = threading.Lock()
-# A session belongs to the exact sign-in that made it, so a changed password signs in again.
-_session_cache: dict[tuple[str, str, str], dict[str, object]] = {}
+# A session belongs to the exact sign-in that made it, so a changed password or setup key signs in again.
+_session_cache: dict[tuple[str, str, str, str | None], dict[str, object]] = {}
 
 
 # ── Auth helpers ─────────────────────────────────────────────────────────────
@@ -29,8 +35,32 @@ def _auth_headers(api_key: str | None) -> dict[str, str]:
     return headers
 
 
-def _get_session(url: str, username: str, password: str, verify_ssl: bool) -> tuple[requests.Session, str]:
-    key = (url, username, password)
+def _mfa_cookie(resp: requests.Response) -> str | None:
+    """The half-made sign-in a 499 reply hands back, as the ``name=value`` cookie that finishes it."""
+    try:
+        data = resp.json().get("data")
+    except (ValueError, AttributeError):
+        return None
+    raw = data.get("mfaCookie") if isinstance(data, dict) else None
+    cookie = raw.split(";")[0].strip() if isinstance(raw, str) else ""
+    return cookie if "=" in cookie else None
+
+
+def _sign_in_refusal(status: int, totp_key: str | None, code_sent: bool) -> type[Exception] | None:
+    """The refusal a failed UI.com sign-in is raised as, when its reason is known."""
+    if status == _MFA_REQUIRED and not totp_key:
+        return AuthenticatorKeyMissing
+    if status == _MFA_REQUIRED and code_sent:
+        return AuthenticatorCodeRefused
+    if status == 429 and totp_key:
+        return TooManySignInAttempts
+    return None
+
+
+def _get_session(
+    url: str, username: str, password: str, totp_key: str | None, verify_ssl: bool,
+) -> tuple[requests.Session, str]:
+    key = (url, username, password, totp_key)
     with _session_lock:
         cached = _session_cache.get(key)
         if cached:
@@ -41,21 +71,38 @@ def _get_session(url: str, username: str, password: str, verify_ssl: bool) -> tu
     body: dict[str, str | bool] = {"username": username, "password": password, "rememberMe": True}
 
     resp = session.post(login_url, json=body, verify=verify_ssl, timeout=_TIMEOUT)
-    if not resp.ok:
-        safe_body = resp.text[:300].replace("\n", " ").replace("\r", " ")
-        logger.warning(
-            "[unifi] login %s returned %d: %s", login_url, resp.status_code, safe_body,
+    code_sent = False
+    if resp.status_code == _MFA_REQUIRED and totp_key and (cookie := _mfa_cookie(resp)):
+        # The cookie goes as a header: a cookie jar can drop one set for a console addressed by IP.
+        resp = session.post(
+            login_url, json={**body, "token": authenticator.code(totp_key, time.time())},
+            headers={"Cookie": cookie}, verify=verify_ssl, timeout=_TIMEOUT,
         )
-    resp.raise_for_status()
+        code_sent = True
+    if not resp.ok:
+        # A 499 reply carries the half-made sign-in, so only its status is logged; so is any reply to a code.
+        shown = "" if code_sent or resp.status_code == _MFA_REQUIRED else resp.text[:300]
+        logger.warning(
+            "[unifi] login %s returned %d: %s", login_url, resp.status_code,
+            shown.replace("\n", " ").replace("\r", " "),
+        )
+    try:
+        resp.raise_for_status()
+    except requests.HTTPError as exc:
+        refusal = _sign_in_refusal(resp.status_code, totp_key, code_sent)
+        if refusal is None:
+            raise
+        # The same words as the request error, which the model may read: status and address only.
+        raise refusal(str(exc)) from exc
     csrf = resp.headers.get("x-csrf-token", "")
     with _session_lock:
         _session_cache[key] = {"session": session, "csrf": csrf}
     return session, csrf
 
 
-def _invalidate_session(url: str, username: str, password: str) -> None:
+def _invalidate_session(url: str, username: str, password: str, totp_key: str | None) -> None:
     with _session_lock:
-        _session_cache.pop((url, username, password), None)
+        _session_cache.pop((url, username, password, totp_key), None)
 
 
 # ── Core request helper ──────────────────────────────────────────────────────
@@ -68,6 +115,7 @@ def _request(
     api_key: str | None,
     username: str | None,
     password: str | None,
+    totp_key: str | None,
     verify_ssl: bool,
     body: dict[str, object] | None = None,
 ) -> requests.Response:
@@ -83,7 +131,7 @@ def _request(
         return resp
 
     uname = username or ""
-    session, csrf = _get_session(url, uname, password or "", verify_ssl)
+    session, csrf = _get_session(url, uname, password or "", totp_key, verify_ssl)
 
     def _session_call(sess: requests.Session, tok: str) -> requests.Response:
         headers = {"Content-Type": "application/json", "X-CSRF-Token": tok}
@@ -92,8 +140,8 @@ def _request(
     resp = _session_call(session, csrf)
 
     if resp.status_code == 401:
-        _invalidate_session(url, uname, password or "")
-        session, csrf = _get_session(url, uname, password or "", verify_ssl)
+        _invalidate_session(url, uname, password or "", totp_key)
+        session, csrf = _get_session(url, uname, password or "", totp_key, verify_ssl)
         resp = _session_call(session, csrf)
 
     resp.raise_for_status()
@@ -120,10 +168,11 @@ def probe(
     api_key: str | None = None,
     username: str | None = None,
     password: str | None = None,
+    totp_key: str | None = None,
     verify_ssl: bool = True,
 ) -> dict[str, object]:
     try:
-        resp = _request("get", url, "/api/", api_key, username, password, verify_ssl)
+        resp = _request("get", url, "/api/", api_key, username, password, totp_key, verify_ssl)
     except requests.HTTPError as exc:
         if exc.response is not None and exc.response.status_code == 404:
             raise ValueError(
@@ -140,9 +189,10 @@ def list_devices(
     api_key: str | None = None,
     username: str | None = None,
     password: str | None = None,
+    totp_key: str | None = None,
     verify_ssl: bool = True,
 ) -> dict[str, object]:
-    raw = cast(list[object], _request("get", url, _site_path(site, "stat/device"), api_key, username, password, verify_ssl).json().get("data", []))
+    raw = cast(list[object], _request("get", url, _site_path(site, "stat/device"), api_key, username, password, totp_key, verify_ssl).json().get("data", []))
     devices = [
         {
             "mac": cast(dict[str, object], d).get("mac", ""),
@@ -165,11 +215,12 @@ def list_clients(
     api_key: str | None = None,
     username: str | None = None,
     password: str | None = None,
+    totp_key: str | None = None,
     verify_ssl: bool = True,
     active_only: bool = True,
 ) -> dict[str, object]:
     endpoint = "stat/sta" if active_only else "rest/user"
-    raw = cast(list[object], _request("get", url, _site_path(site, endpoint), api_key, username, password, verify_ssl).json().get("data", []))
+    raw = cast(list[object], _request("get", url, _site_path(site, endpoint), api_key, username, password, totp_key, verify_ssl).json().get("data", []))
     clients = [
         {
             "mac": cast(dict[str, object], c).get("mac", ""),
@@ -192,13 +243,14 @@ def get_info(
     api_key: str | None = None,
     username: str | None = None,
     password: str | None = None,
+    totp_key: str | None = None,
     verify_ssl: bool = True,
 ) -> dict[str, object]:
     if target == "health":
-        data = cast(dict[str, object], _request("get", url, _site_path(site, "stat/health"), api_key, username, password, verify_ssl).json())
+        data = cast(dict[str, object], _request("get", url, _site_path(site, "stat/health"), api_key, username, password, totp_key, verify_ssl).json())
         return {"health": data.get("data", [])}
 
-    data = cast(dict[str, object], _request("get", url, _site_path(site, "stat/device"), api_key, username, password, verify_ssl).json())
+    data = cast(dict[str, object], _request("get", url, _site_path(site, "stat/device"), api_key, username, password, totp_key, verify_ssl).json())
     mac_lower = target.lower()
     for device in cast(list[object], data.get("data", [])):
         if cast(str, cast(dict[str, object], device).get("mac", "")).lower() == mac_lower:
@@ -214,10 +266,11 @@ def control_client(
     api_key: str | None = None,
     username: str | None = None,
     password: str | None = None,
+    totp_key: str | None = None,
     verify_ssl: bool = True,
     **kwargs: object,
 ) -> dict[str, object]:
-    _request("post", url, _site_path(site, "cmd/stamgr"), api_key, username, password, verify_ssl, {"cmd": command, "mac": mac, **kwargs})
+    _request("post", url, _site_path(site, "cmd/stamgr"), api_key, username, password, totp_key, verify_ssl, {"cmd": command, "mac": mac, **kwargs})
     return {"status": "ok", "command": command, "mac": mac}
 
 
@@ -229,10 +282,11 @@ def control_device(
     api_key: str | None = None,
     username: str | None = None,
     password: str | None = None,
+    totp_key: str | None = None,
     verify_ssl: bool = True,
     **kwargs: object,
 ) -> dict[str, object]:
-    _request("post", url, _site_path(site, "cmd/devmgr"), api_key, username, password, verify_ssl, {"cmd": command, "mac": mac, **kwargs})
+    _request("post", url, _site_path(site, "cmd/devmgr"), api_key, username, password, totp_key, verify_ssl, {"cmd": command, "mac": mac, **kwargs})
     return {"status": "ok", "command": command, "mac": mac}
 
 
@@ -242,9 +296,10 @@ def list_wlans(
     api_key: str | None = None,
     username: str | None = None,
     password: str | None = None,
+    totp_key: str | None = None,
     verify_ssl: bool = True,
 ) -> dict[str, object]:
-    raw = cast(list[object], _request("get", url, _site_path(site, "rest/wlanconf"), api_key, username, password, verify_ssl).json().get("data", []))
+    raw = cast(list[object], _request("get", url, _site_path(site, "rest/wlanconf"), api_key, username, password, totp_key, verify_ssl).json().get("data", []))
     wlans = [
         {
             "_id": cast(dict[str, object], w).get("_id", ""),
@@ -267,9 +322,10 @@ def update_wlan(
     api_key: str | None = None,
     username: str | None = None,
     password: str | None = None,
+    totp_key: str | None = None,
     verify_ssl: bool = True,
 ) -> dict[str, object]:
-    _request("put", url, _site_path(site, f"rest/wlanconf/{wlan_id}"), api_key, username, password, verify_ssl, updates)
+    _request("put", url, _site_path(site, f"rest/wlanconf/{wlan_id}"), api_key, username, password, totp_key, verify_ssl, updates)
     return {"status": "ok", "wlan_id": wlan_id, "updated": list(updates.keys())}
 
 
@@ -279,9 +335,10 @@ def list_port_forwards(
     api_key: str | None = None,
     username: str | None = None,
     password: str | None = None,
+    totp_key: str | None = None,
     verify_ssl: bool = True,
 ) -> dict[str, object]:
-    raw = cast(list[object], _request("get", url, _site_path(site, "rest/portforward"), api_key, username, password, verify_ssl).json().get("data", []))
+    raw = cast(list[object], _request("get", url, _site_path(site, "rest/portforward"), api_key, username, password, totp_key, verify_ssl).json().get("data", []))
     rules = [
         {
             "_id": cast(dict[str, object], r).get("_id", ""),
@@ -305,9 +362,10 @@ def update_port_forward(
     api_key: str | None = None,
     username: str | None = None,
     password: str | None = None,
+    totp_key: str | None = None,
     verify_ssl: bool = True,
 ) -> dict[str, object]:
-    _request("put", url, _site_path(site, f"rest/portforward/{rule_id}"), api_key, username, password, verify_ssl, updates)
+    _request("put", url, _site_path(site, f"rest/portforward/{rule_id}"), api_key, username, password, totp_key, verify_ssl, updates)
     return {"status": "ok", "rule_id": rule_id, "updated": list(updates.keys())}
 
 
@@ -318,9 +376,10 @@ def create_port_forward(
     api_key: str | None = None,
     username: str | None = None,
     password: str | None = None,
+    totp_key: str | None = None,
     verify_ssl: bool = True,
 ) -> dict[str, object]:
-    resp = _request("post", url, _site_path(site, "rest/portforward"), api_key, username, password, verify_ssl, rule)
+    resp = _request("post", url, _site_path(site, "rest/portforward"), api_key, username, password, totp_key, verify_ssl, rule)
     created = cast(list[object], resp.json().get("data", [{}]))
     return {"status": "ok", "rule": created[0] if created else {}}
 
@@ -331,9 +390,10 @@ def list_traffic_rules(
     api_key: str | None = None,
     username: str | None = None,
     password: str | None = None,
+    totp_key: str | None = None,
     verify_ssl: bool = True,
 ) -> dict[str, object]:
-    data = cast(dict[str, object], _request("get", url, _v2_path(site, "trafficrules"), api_key, username, password, verify_ssl).json())
+    data = cast(dict[str, object], _request("get", url, _v2_path(site, "trafficrules"), api_key, username, password, totp_key, verify_ssl).json())
     raw = cast(list[object], data if isinstance(data, list) else data.get("data", []))
     rules = [
         {
@@ -356,7 +416,8 @@ def update_traffic_rule(
     api_key: str | None = None,
     username: str | None = None,
     password: str | None = None,
+    totp_key: str | None = None,
     verify_ssl: bool = True,
 ) -> dict[str, object]:
-    _request("put", url, _v2_path(site, f"trafficrules/{rule_id}"), api_key, username, password, verify_ssl, updates)
+    _request("put", url, _v2_path(site, f"trafficrules/{rule_id}"), api_key, username, password, totp_key, verify_ssl, updates)
     return {"status": "ok", "rule_id": rule_id, "updated": list(updates.keys())}

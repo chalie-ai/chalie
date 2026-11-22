@@ -11,6 +11,8 @@ only re-exports so callers never depend on the internal file layout.
 from exceptions.chalie_exception import ChalieException
 from exceptions.exception import (
     AgentStopped,
+    AuthenticatorCodeRefused,
+    AuthenticatorKeyMissing,
     ConflictError,
     DownloadTooLarge,
     EmptyCompletionLoop,
@@ -34,12 +36,15 @@ from exceptions.exception import (
     SourceIsImage,
     SystemPathBlocked,
     TelegramApiError,
+    TooManySignInAttempts,
     UnroutedPromptChannel,
     VaultLockedError,
 )
 
 __all__ = [
     "AgentStopped",
+    "AuthenticatorCodeRefused",
+    "AuthenticatorKeyMissing",
     "ChalieException",
     "ConflictError",
     "DownloadTooLarge",
@@ -64,6 +69,7 @@ __all__ = [
     "SourceIsImage",
     "SystemPathBlocked",
     "TelegramApiError",
+    "TooManySignInAttempts",
     "UnroutedPromptChannel",
     "VaultLockedError",
 ]

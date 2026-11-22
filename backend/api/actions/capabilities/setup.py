@@ -19,8 +19,11 @@ A ``configure()`` failure carries a plain ``reason`` the Brain words for the
 reader, read from the request error the capability raised it from:
 ``credentials_rejected`` (the server answered 401/403),
 ``certificate_untrusted`` (its certificate failed verification),
-``unreachable`` (no answer, or no secure connection), or
-``invalid_configuration`` (anything else).
+``unreachable`` (no answer, or no secure connection),
+``authenticator_key_missing`` (the account asks for an authenticator code and
+no setup key was given), ``authenticator_code_refused`` (the code made from
+the setup key was refused), ``too_many_attempts`` (the account is blocked from
+signing in for now), or ``invalid_configuration`` (anything else).
 """
 
 from __future__ import annotations
@@ -38,7 +41,13 @@ from api.endpoints.capabilities import _load_caps
 from api.request import Request
 from api.request.capabilities import CapabilitySetupRequest
 from api.response.response import Response
-from exceptions import NotFoundError, VaultLockedError
+from exceptions import (
+    AuthenticatorCodeRefused,
+    AuthenticatorKeyMissing,
+    NotFoundError,
+    TooManySignInAttempts,
+    VaultLockedError,
+)
 
 if TYPE_CHECKING:
     from api.endpoints.capabilities import _Capability
@@ -48,7 +57,15 @@ logger = logging.getLogger(__name__)
 _ERR_VAULT = "Vault is locked — please log out and log back in"
 _ERR_CONNECTION = "Connection failed — check credentials and try again"
 
-SetupFailureReason = Literal["credentials_rejected", "certificate_untrusted", "unreachable", "invalid_configuration"]
+SetupFailureReason = Literal[
+    "credentials_rejected",
+    "certificate_untrusted",
+    "unreachable",
+    "authenticator_key_missing",
+    "authenticator_code_refused",
+    "too_many_attempts",
+    "invalid_configuration",
+]
 
 
 def _failure_reason(exc: ValueError) -> SetupFailureReason:
@@ -60,6 +77,12 @@ def _failure_reason(exc: ValueError) -> SetupFailureReason:
         return "certificate_untrusted"
     if isinstance(cause, requests.ConnectionError | requests.Timeout):
         return "unreachable"
+    if isinstance(cause, AuthenticatorKeyMissing):
+        return "authenticator_key_missing"
+    if isinstance(cause, AuthenticatorCodeRefused):
+        return "authenticator_code_refused"
+    if isinstance(cause, TooManySignInAttempts):
+        return "too_many_attempts"
     return "invalid_configuration"
 
 

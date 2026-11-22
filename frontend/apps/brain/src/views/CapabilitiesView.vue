@@ -56,7 +56,10 @@ function isAvailable(c: Capability): boolean {
 const formFields = computed<CapabilityField[]>(() => formCap.value?.fields ?? []);
 
 function isVisible(f: CapabilityField): boolean {
-  return !f.show_when || Object.entries(f.show_when).every(([k, v]) => textValues[k] === v);
+  return (
+    !f.show_when ||
+    Object.entries(f.show_when).every(([k, v]) => (Array.isArray(v) ? v.includes(textValues[k]) : textValues[k] === v))
+  );
 }
 
 async function openForm(c: Capability): Promise<void> {
@@ -121,6 +124,11 @@ const SETUP_FAILURES: Record<SetupFailureReason, string> = {
   credentials_rejected: 'The server rejected these credentials. Check them and try again.',
   certificate_untrusted: "The server's certificate isn't trusted. If it uses a self-signed certificate, turn off Verify SSL.",
   unreachable: "Couldn't reach the server. Check the URL and that the server is on.",
+  authenticator_key_missing:
+    'This UI.com account asks for a code from an authenticator app. Add its setup key and try again.',
+  authenticator_code_refused:
+    "The UI.com account didn't accept the code made from this setup key. Check the key, and that this computer's clock is right.",
+  too_many_attempts: 'UI.com has blocked sign-ins for now after too many attempts. Wait a few minutes, then try again.',
   invalid_configuration: "These settings weren't accepted. Check each field and try again.",
 };
 
@@ -285,6 +293,9 @@ async function disconnect(c: Capability): Promise<void> {
                 :placeholder="f.placeholder ?? ''"
                 :required="!!(f.required && !formConnected)"
               />
+              <p v-if="f.guide_url" class="wizard-hint">
+                <a :href="f.guide_url" target="_blank" rel="noopener">How to set this up</a>
+              </p>
             </div>
           </template>
 

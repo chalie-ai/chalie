@@ -28,7 +28,10 @@ export interface CapabilityField {
   default?: unknown;
   required?: boolean;
   options?: CapabilityFieldOption[];
+  /** Each named field's value, or any of a list of values, that shows this field. */
   show_when?: Record<string, unknown>;
+  /** A web page with the steps for filling this field in. */
+  guide_url?: string;
 }
 
 export interface Capability {
@@ -61,7 +64,14 @@ export interface CapabilityStatus {
 }
 
 /** Why a capability's settings failed — the 422 body's plain `reason`, worded by the Brain. */
-export type SetupFailureReason = 'credentials_rejected' | 'certificate_untrusted' | 'unreachable' | 'invalid_configuration';
+export type SetupFailureReason =
+  | 'credentials_rejected'
+  | 'certificate_untrusted'
+  | 'unreachable'
+  | 'authenticator_key_missing'
+  | 'authenticator_code_refused'
+  | 'too_many_attempts'
+  | 'invalid_configuration';
 
 interface SingleEnvelope<T> {
   success: true;

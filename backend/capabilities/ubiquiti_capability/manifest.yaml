@@ -17,6 +17,7 @@ fields:
     options:
       - {value: "api_key", label: "API Key (UniFi OS)"}
       - {value: "credentials", label: "Username & Password"}
+      - {value: "ui_account", label: "UI.com account"}
     default: "api_key"
     required: true
   - name: api_key
@@ -28,12 +29,18 @@ fields:
     label: Username
     type: text
     required: false
-    show_when: {auth_method: "credentials"}
+    show_when: {auth_method: ["credentials", "ui_account"]}
   - name: password
     label: Password
     type: password
     required: false
-    show_when: {auth_method: "credentials"}
+    show_when: {auth_method: ["credentials", "ui_account"]}
+  - name: totp_key
+    label: Authenticator setup key
+    type: password
+    required: false
+    show_when: {auth_method: "ui_account"}
+    guide_url: "https://chalie.ai/guide/smart-home/unifi/"
   - name: site
     label: Site Name
     type: text
