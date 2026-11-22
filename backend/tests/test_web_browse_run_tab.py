@@ -66,7 +66,6 @@ from tests._delegates import (
 from tools.browser import tabs
 from tools.browser.tabs import Tab
 
-pytest_plugins = ("tests._browser_live",)
 pytestmark = [pytest.mark.e2e, pytest.mark.usefixtures("chat_provider", "earlier_agents")]
 
 _RUN_KIND = delegate_channel(WebBrowseAbility.NAME)

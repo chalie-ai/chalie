@@ -37,7 +37,6 @@ from tests._browser_live import (
 )
 from tools.browser import session
 
-pytest_plugins = ("tests._browser_live",)
 pytestmark = pytest.mark.e2e
 
 _SIZED_WAIT = 15.0  # seconds a new size gets to reach the socket's meta and frames

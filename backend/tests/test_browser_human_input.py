@@ -42,7 +42,6 @@ from tests._browser_live import (
 )
 from tools.browser.tabs import Tab
 
-pytest_plugins = ("tests._browser_live",)
 pytestmark = pytest.mark.e2e
 
 _WAIT = 15.0  # seconds a site gets to see a request, or a page to show a title

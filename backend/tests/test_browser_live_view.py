@@ -38,7 +38,6 @@ from tests._browser_live import (
 from tools.browser import session
 from tools.browser.tabs import Tab
 
-pytest_plugins = ("tests._browser_live",)
 pytestmark = pytest.mark.e2e
 
 

@@ -42,7 +42,6 @@ from tests._browser_live import (
 )
 from tools.browser import session
 
-pytest_plugins = ("tests._browser_live",)
 pytestmark = pytest.mark.e2e
 
 _ORIGIN: dict[str, object] = {"type": "user", "turn_id": 1, "forked": False}

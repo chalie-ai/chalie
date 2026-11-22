@@ -51,7 +51,6 @@ from tests._delegates import (
     run_turn,
 )
 
-pytest_plugins = ("tests._browser_live",)
 pytestmark = [pytest.mark.e2e, pytest.mark.usefixtures("chat_provider", "earlier_agents")]
 
 _SERIALIZER_LOG = TurnSerializerService.__module__

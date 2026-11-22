@@ -13,6 +13,10 @@ from unittest.mock import patch
 
 import pytest
 
+# Plugins are named here, in the top-level conftest: a test module naming one
+# registers it for every test collected after it, not only its own.
+pytest_plugins = ("tests._browser_live",)
+
 if TYPE_CHECKING:
     from services.memory_store import MemoryStore
 

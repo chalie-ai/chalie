@@ -36,7 +36,6 @@ from tests._browser_live import (
 )
 from tools.browser import session, tabs
 
-pytest_plugins = ("tests._browser_live",)
 pytestmark = pytest.mark.e2e
 
 # A thread's turn, so a tab can only list it by carrying the run's own origin.

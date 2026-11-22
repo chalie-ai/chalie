@@ -7,9 +7,8 @@ mint them, and the real socket registry. The one redirection is the data
 directory, pointed at the test's tmp dir so the browser profile a test signs in
 to is its own and never the install's.
 
-A test module loads the fixtures below with ``pytest_plugins = ("tests._browser_live",)``.
-That module imports this one before pytest can mark it for assertion rewriting, so
-it opts out (PYTEST_DONT_REWRITE) and every assert here carries its own message.
+The top-level conftest loads the fixtures below through ``pytest_plugins``, before
+any test module imports this one, so its asserts are rewritten like a test's.
 """
 
 from __future__ import annotations
