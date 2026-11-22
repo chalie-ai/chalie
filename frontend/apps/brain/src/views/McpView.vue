@@ -53,13 +53,13 @@ async function saveInbound(updates: Partial<McpServerConfig>): Promise<void> {
 }
 
 function onEnabledChange(e: Event): void {
-  saveInbound({ enabled: (e.target as HTMLInputElement).checked });
+  void saveInbound({ enabled: (e.target as HTMLInputElement).checked });
 }
 
 function onPortBlur(): void {
   const val = inPort.value;
   if (val >= 1024 && val <= 65535 && val !== inConfig.value.port) {
-    saveInbound({ port: val });
+    void saveInbound({ port: val });
   }
 }
 

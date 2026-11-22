@@ -7,7 +7,7 @@ import { system } from '../api/system';
 
 // Pre-mount auth gate: existing master account → redirect to /login/ and skip
 // mounting. On failure, stay and mount so an outage doesn't lock the user out of setup.
-(async () => {
+void (async () => {
   try {
     const status = await system.authStatus();
     if (status.has_master_account) {

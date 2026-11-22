@@ -6,7 +6,7 @@ import LoginPage from './LoginPage.vue';
 import { system } from '../api/system';
 
 // Pre-mount auth gate: existing session → redirect to / and skip mounting.
-(async () => {
+void (async () => {
   try {
     const status = await system.authStatus();
     if (status.has_session) {

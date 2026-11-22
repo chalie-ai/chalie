@@ -229,14 +229,16 @@ async function _open(transcriptId: number): Promise<void> {
   }
 }
 
-/** Promise wrapper around AudioContext.decodeAudioData (callback form for iOS compat). */
+/** Promise wrapper around AudioContext.decodeAudioData (callback form for iOS compat;
+ *  newer engines also return a promise that rejects alongside `reject`, so it is
+ *  routed there rather than left unhandled). */
 function _decodeAudio(arrayBuffer: ArrayBuffer): Promise<AudioBuffer> {
   return new Promise<AudioBuffer>((resolve, reject) => {
     if (!_audioCtx) {
       reject(new Error('AudioContext gone'));
       return;
     }
-    _audioCtx.decodeAudioData(arrayBuffer, resolve, reject);
+    Promise.resolve(_audioCtx.decodeAudioData(arrayBuffer, resolve, reject)).catch(reject);
   });
 }
 

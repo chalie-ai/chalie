@@ -183,8 +183,10 @@ export const useVoiceStore = defineStore('voice', () => {
     const blob = new Blob(chunks, { type: mimeType });
     const arrayBuffer = await blob.arrayBuffer();
     const audioCtx = adapter.createAudioContext();
+    // Callback form, as the player uses; the promise newer engines also return
+    // rejects alongside `reject`, so it goes there rather than unhandled.
     const audioBuffer = await new Promise<AudioBuffer>((resolve, reject) => {
-      audioCtx.decodeAudioData(arrayBuffer, resolve, reject);
+      Promise.resolve(audioCtx.decodeAudioData(arrayBuffer, resolve, reject)).catch(reject);
     });
     void audioCtx.close();
     return _audioBufferToWav(audioBuffer);

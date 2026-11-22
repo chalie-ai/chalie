@@ -89,11 +89,7 @@ function startAlarm(): AlarmHandle {
         clearTimeout(burstTimer);
         burstTimer = null;
       }
-      try {
-        void ctx.close();
-      } catch {
-        /* already closed */
-      }
+      void ctx.close();
     },
   };
 }

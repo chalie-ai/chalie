@@ -86,7 +86,7 @@ function fieldsOf(params: Params, keys: readonly string[]): DetailField[] {
 }
 
 function labelOf(key: string): string {
-  return key.charAt(0).toUpperCase() + key.slice(1).replace(/_/g, ' ');
+  return key.charAt(0).toUpperCase() + key.slice(1).replaceAll('_', ' ');
 }
 
 function isEmpty(value: unknown): boolean {
