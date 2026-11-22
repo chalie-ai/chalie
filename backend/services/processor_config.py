@@ -92,12 +92,12 @@ class ProcessorConfig(ABC):
 
     uses_vision_provider: ClassVar[bool] = False
     """True -> ProviderService._resolve reads the brain's Vision Provider from the DB
-    instead of the global selected provider. Only VisionConfig sets it."""
+    instead of the model of the turn's thread. Only VisionConfig sets it."""
 
     uses_delegate_provider: ClassVar[bool] = False
     """True -> ProviderService._resolve reads the brain's Delegate Provider from the DB
     (falling back to the selected provider when none is pinned) instead of the
-    global selected provider. Set by the subagent channels (web_search,
+    model of the turn's thread. Set by the subagent channels (web_search,
     web_browse). Vision takes precedence: VisionConfig keeps uses_vision_provider
     and never sets this (vision > delegate > chat)."""
 

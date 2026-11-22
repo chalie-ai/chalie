@@ -52,6 +52,7 @@ class TurnHandoverService:
             else:
                 handover = (MessageProcessor.process(
                     TurnHandoverConfig(), raw_input=body,
+                    metadata={"provider_id": mp.provider_id},
                 ).result() or "").strip()
                 if handover:
                     return handover

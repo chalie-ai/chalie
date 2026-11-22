@@ -99,6 +99,8 @@ class DelegateAbility(Ability[B], ABC):
         the plain task is stored as the child's input row; its first turn
         reads it inside the first-turn template, with that context, as the
         prompt is built (:func:`~abilities.message_parent.first_turn`). The
+        child is passed the model and thinking level the caller's turn runs
+        on; a child on the chat lane starts its thread on them. The
         parent's frame is sent again once that row exists — the earlier
         ``started`` frame went out before there was a child turn to point at."""
         from controllers.message_processor import MessageProcessor  # noqa: PLC0415
@@ -120,6 +122,8 @@ class DelegateAbility(Ability[B], ABC):
                     spawned_by_channel=mp.channel, spawned_in_turn=mp.turn_id,
                     context_id=mp.uid,
                 ),
+                "provider_id": mp.provider_id,
+                "thinking_level": mp.thinking_override or "auto",
             },
         )
         mp.tool_call_service.reemit(self.tool_call_id)

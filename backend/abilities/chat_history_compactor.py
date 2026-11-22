@@ -46,6 +46,7 @@ if TYPE_CHECKING:
         _compaction_folded_block: str
         turn_id: "int | None"
         fork_view: bool
+        provider_id: "int | None"
 
         class _TranscriptService(Protocol):
             def read(self) -> list["Transcript"]: ...
@@ -173,6 +174,7 @@ class ChatHistoryCompactor(Ability[ChatHistoryCompactorParamsBag]):
 
         summary = (MessageProcessor.process(
             ChatHistoryCompactionConfig(), raw_input=combined,
+            metadata={"provider_id": mp.provider_id},
         ).result() or "").strip()
         if not summary:
             logger.warning(

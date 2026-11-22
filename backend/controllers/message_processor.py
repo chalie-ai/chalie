@@ -563,7 +563,8 @@ class MessageProcessor:
     def _open_turn(self) -> None:
         """Write this turn's opening rows inside the caller's transaction: the
         ``agents`` row a spawn carries, the allocated turn id, the fork guard
-        and the input row."""
+        and the input row. A spawn on the chat lane passes its caller's model
+        and thinking level, and its thread starts on them."""
         agent = self.metadata.get("agent")
         if isinstance(agent, Agent):
             agent.turn_id = 1
@@ -584,6 +585,9 @@ class MessageProcessor:
         elif self._forked and not self.transcript_service.turn_exists():
             raise ValueError("Invalid turn_id specified")
         self.uid = self._open_input_row()
+        level = self.metadata.get("thinking_level")
+        if isinstance(level, str) and self._provider_type() is ProviderType.CHAT:
+            ThreadRow.set_settings(self.channel, self.turn_id, cast("int | None", self.metadata.get("provider_id")), level)
         self.current_transcript_id = self.uid
         if self.uid is not None:
             self._consumed_through = self.uid
@@ -1213,10 +1217,12 @@ class MessageProcessor:
         """Take this turn's model and thinking level from its thread row. A
         model that is unset or no longer configured falls back to the default,
         and the default is stored on the thread so the fallback sticks. A turn
-        with no thread row (a channel that writes no transcript) runs on the
-        default at its own level."""
+        with no thread row (a channel that writes no transcript, such as a
+        compaction or its hand-over) runs on the model its caller passed, else
+        the default, at its own level."""
         thread = ThreadRow.of(self.channel, self.turn_id)
         if thread is None:
+            self.provider_id = cast("int | None", self.metadata.get("provider_id"))
             return
         self.provider_id = cast("int | None", ProviderCacheService.chat_provider(thread.provider_id).get("id"))
         if self.provider_id is not None and self.provider_id != thread.provider_id:

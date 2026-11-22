@@ -202,6 +202,11 @@ def _as_read(request_text: str) -> str:
     return "\n".join(out)
 
 
+def _shape(dto: ProviderRequest) -> tuple[str, frozenset[str]]:
+    """A request's messages as one JSON text, and the names of the tools it offers."""
+    return json.dumps(dto.messages, default=str), frozenset(str(t["name"]) for t in dto.tools or [])
+
+
 class ChannelProvider:
     """Answers each provider call from the script of the channel that made it.
 
@@ -244,6 +249,10 @@ class ChannelProvider:
         """A stopped turn's watcher aborts its call in flight; a held call
         still waits for its own gate, which the test opens."""
 
+    def route(self, dto: ProviderRequest) -> str:
+        """The route *dto* is answered from."""
+        return self._route(dto, *_shape(dto))
+
     def _route(self, dto: ProviderRequest, text: str, names: frozenset[str]) -> str:
         for route, head in self._heads.items():
             if dto.system.startswith(head):
@@ -257,8 +266,7 @@ class ChannelProvider:
     def send(self, dto: ProviderRequest) -> ProviderResponse:
         if is_planning_request(dto):
             return NO_PLAN
-        text = json.dumps(dto.messages, default=str)
-        names = frozenset(str(t["name"]) for t in dto.tools or [])
+        text, names = _shape(dto)
         route = self._route(dto, text, names)
         with self._lock:
             self.requests.append(Request(route, text, names, dto.system, tuple(dto.tools or ())))

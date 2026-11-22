@@ -74,7 +74,7 @@ class Thread(Model):
         return cls.filter("channel", channel).order_by("turn_id DESC").first()
 
     @classmethod
-    def set_settings(cls, channel: str, turn_id: int, provider_id: int, thinking_level: str) -> bool:
+    def set_settings(cls, channel: str, turn_id: int, provider_id: int | None, thinking_level: str) -> bool:
         """Store the model and thinking level of the thread ``(channel, turn_id)``;
         return False when there is no such thread."""
         cursor = cls._bound_connection().execute(
