@@ -1330,6 +1330,7 @@ input[type='checkbox'] {
 .list-card { flex-direction: column; align-items: stretch; gap: 0; padding: 0; overflow: hidden; }
 
 .list-card-header {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1337,8 +1338,36 @@ input[type='checkbox'] {
   cursor: pointer;
 }
 
-.list-card-title { display: flex; align-items: center; gap: 8px; font-weight: 500; font-size: var(--fs-title); }
+// The title is a native <button> for keyboard use, with the UA button chrome
+// dropped so it looks as the div did. Its ::after spans the header so a click
+// anywhere on the row still opens the list; the actions sit above it.
+.list-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  background: none;
+  font-weight: 500;
+  font-size: var(--fs-title);
+  text-align: inherit;
+  appearance: none;
+  -webkit-appearance: none;
+
+  &::-moz-focus-inner {
+    border: 0;
+    padding: 0;
+  }
+
+  &::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+  }
+}
+
 .list-card-actions { display: flex; gap: 6px; }
+.list-card-actions .btn { position: relative; }
 .list-chev { display: inline-flex; transition: transform var(--dur-2) var(--ease-out); }
 .list-count { font-family: var(--font-mono); font-size: var(--fs-mono); color: var(--muted); padding: 1px 6px; background: var(--surface-2); }
 
@@ -1460,7 +1489,25 @@ input[type='checkbox'] {
   flex-wrap: wrap;
 }
 
-.skill-card-title { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+// A native <button> for keyboard use, with the UA button chrome dropped so it
+// looks as the div did.
+.skill-card-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 0;
+  padding: 0;
+  background: none;
+  text-align: inherit;
+  appearance: none;
+  -webkit-appearance: none;
+
+  &::-moz-focus-inner {
+    border: 0;
+    padding: 0;
+  }
+}
 .skill-card-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 .skill-use-for { font-size: var(--fs-body); color: var(--muted); line-height: 1.5; }
 .skill-tags { display: flex; flex-wrap: wrap; gap: 4px; }

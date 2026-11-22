@@ -275,7 +275,12 @@ async function submitCreate(): Promise<void> {
           :class="{ 'skill-expanded': expandedId === skill.id }"
         >
           <div class="skill-card-header">
-            <div class="skill-card-title clickable" @click="toggleExpand(skill)">
+            <button
+              type="button"
+              class="skill-card-title"
+              :aria-expanded="expandedId === skill.id"
+              @click="toggleExpand(skill)"
+            >
               <span class="skill-expand-icon">
                 <component :is="expandedId === skill.id ? ChevronDown : ChevronRight" :size="16" />
               </span>
@@ -283,7 +288,7 @@ async function submitCreate(): Promise<void> {
               <span class="badge">v{{ skill.version }}</span>
               <span v-if="skill.enabled" class="badge badge-success">enabled</span>
               <span v-else class="badge badge-muted">disabled</span>
-            </div>
+            </button>
             <div class="skill-card-actions">
               <label
                 class="switch-label skill-toggle-wrap"
@@ -340,7 +345,12 @@ async function submitCreate(): Promise<void> {
         :class="{ 'skill-disabled': !skill.enabled, 'skill-expanded': expandedId === skill.id }"
       >
         <div class="skill-card-header">
-          <div class="skill-card-title clickable" @click="toggleExpand(skill)">
+          <button
+            type="button"
+            class="skill-card-title"
+            :aria-expanded="expandedId === skill.id"
+            @click="toggleExpand(skill)"
+          >
             <span class="skill-expand-icon">
               <component :is="expandedId === skill.id ? ChevronDown : ChevronRight" :size="16" />
             </span>
@@ -348,7 +358,7 @@ async function submitCreate(): Promise<void> {
             <span class="badge badge-muted">v{{ skill.version }}</span>
             <span v-if="skill.enabled" class="badge badge-success">enabled</span>
             <span v-else class="badge badge-muted">disabled</span>
-          </div>
+          </button>
           <div class="skill-card-actions">
             <label
               class="switch-label skill-toggle-wrap"

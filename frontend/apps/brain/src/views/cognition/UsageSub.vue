@@ -24,12 +24,12 @@ const {
 
 function selectWindow(w: UsageWindow): void {
   usageWindow.value = w;
-  reload();
+  void reload();
 }
 
 function selectType(t: UsageType): void {
   usageType.value = t;
-  reload();
+  void reload();
 }
 
 const bucketMap = computed((): Record<string, BucketValue> => {
@@ -85,6 +85,22 @@ const chartData = computed((): ChartBar[] => {
       input: v.input,
       output: v.output,
     }));
+});
+
+// The table below is cut to calendar periods (today's hours, this month's days),
+// so it misses bars the chart shows; the chart carries its own spoken summary.
+const chartLabel = computed((): string => {
+  const chart = chartData.value;
+  if (chart.length === 0) return '';
+  const tokensOf = (d: ChartBar): number => d.input + d.output;
+  const total = chart.reduce((sum, d) => sum + tokensOf(d), 0);
+  const peak = chart.reduce((top, d) => (tokensOf(d) > tokensOf(top) ? d : top));
+  const bars = chart.length === 1 ? '1 bar' : `${chart.length} bars`;
+  const period = windowLabels[usageWindow.value].toLowerCase();
+  return (
+    `Bar chart of tokens used, ${period}: ${fmtTokens(total)} in total across ${bars}. ` +
+    `Highest bar: ${peak.label}, ${fmtTokens(tokensOf(peak))} tokens.`
+  );
 });
 
 const tableSlots = computed((): SlotRow[] => buildTableSlots(bucketMap.value, usageWindow.value));
@@ -183,6 +199,8 @@ const chartGeom = computed(() => {
         <!-- eslint-disable-next-line vue/html-self-closing -->
         <svg
           class="usage-chart"
+          role="img"
+          :aria-label="chartLabel"
           :viewBox="`0 0 ${CHART_W} ${chartGeom.h + chartGeom.labelH}`"
           preserveAspectRatio="none"
         >

@@ -14,13 +14,22 @@ const { init: initTheme } = useTheme();
 const shell = useShellStore();
 const heartbeat = useHeartbeat();
 
+// Registered after the palette's and the confirm dialog's own Escape listeners
+// (children mount first), so an Escape one of them already handled is skipped.
+function onKeydown(e: KeyboardEvent): void {
+  if (e.key !== 'Escape' || e.defaultPrevented || !shell.mobileOpen) return;
+  shell.closeMobileSidebar();
+}
+
 onMounted(() => {
   initTheme();
   heartbeat.start();
+  document.addEventListener('keydown', onKeydown);
 });
 
 onBeforeUnmount(() => {
   heartbeat.stop();
+  document.removeEventListener('keydown', onKeydown);
 });
 </script>
 

@@ -1,7 +1,20 @@
 <script setup lang="ts">
+import { onBeforeUnmount, onMounted } from 'vue';
 import { useConfirm } from '../composables/useConfirm';
 
 const { visible, pending, accept, cancel } = useConfirm();
+
+// Escape closes only the topmost layer: a layer that handled it marks it with
+// preventDefault. Listeners run in mount order (palette, this dialog, then App's
+// mobile drawer), which is top to bottom on screen.
+function onKeydown(e: KeyboardEvent): void {
+  if (e.key !== 'Escape' || e.defaultPrevented || !visible.value) return;
+  e.preventDefault();
+  cancel();
+}
+
+onMounted(() => document.addEventListener('keydown', onKeydown));
+onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
 </script>
 
 <template>

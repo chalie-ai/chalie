@@ -52,7 +52,7 @@ async function fetchListDetail(list: List): Promise<void> {
 function toggle(list: List): void {
   const id = String(list.id);
   expanded[id] = !expanded[id];
-  if (expanded[id]) fetchListDetail(list);
+  if (expanded[id]) void fetchListDetail(list);
 }
 
 async function toggleItem(list: List, item: ListItem, checked: boolean): Promise<void> {
@@ -67,7 +67,7 @@ function onAddKey(e: KeyboardEvent, list: List): void {
   const input = e.target as HTMLInputElement;
   const value = input.value.trim();
   if (value) {
-    addItem(list, value);
+    void addItem(list, value);
     input.value = '';
   }
 }
@@ -154,17 +154,22 @@ async function deleteList(list: List): Promise<void> {
 
   <template v-else>
     <div v-for="{ list, c } in decoratedLists" :key="list.id" class="list-card">
-      <div class="list-card-header" @click="toggle(list)">
-        <div class="list-card-title">
+      <div class="list-card-header">
+        <button
+          type="button"
+          class="list-card-title"
+          :aria-expanded="!!expanded[String(list.id)]"
+          @click="toggle(list)"
+        >
           <span class="list-chev">
             <component :is="expanded[String(list.id)] ? ChevronDown : ChevronRight" :size="16" />
           </span>
           <span>{{ list.name }}</span>
           <span class="list-count">{{ c.done }}/{{ c.total }}</span>
-        </div>
+        </button>
         <div class="list-card-actions">
-          <button class="btn btn-sm" @click.stop="openRename(list)">Rename</button>
-          <button class="btn btn-sm btn-danger" @click.stop="deleteList(list)">Delete</button>
+          <button class="btn btn-sm" @click="openRename(list)">Rename</button>
+          <button class="btn btn-sm btn-danger" @click="deleteList(list)">Delete</button>
         </div>
       </div>
 
