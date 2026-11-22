@@ -17,7 +17,7 @@ from api.action import Action
 from api.endpoint import DocumentedResponse
 from api.response.scheduler_turn import SchedulerTurn
 from models.scheduled_item import ScheduledItem
-from models.thread_gist import ThreadGist
+from models.thread import Thread
 
 
 class SchedulerTurns(Action):
@@ -31,13 +31,12 @@ class SchedulerTurns(Action):
 
         Every live schedule is its own thread — ``turn_id`` is simply the
         schedule's own ``id`` (no series ``group_id`` to collapse occurrences
-        into). The gist is sourced from ``thread_gist``, found through each
-        schedule thread's opening transcript row — read separately and merged
-        here.
+        into). The gist is the schedule thread's own label — read separately
+        and merged here.
         """
         self.require_create_sentinel(id)
         schedules = ScheduledItem.recent()
-        gists = ThreadGist.bulk_get(ScheduledItem.SCHEDULE_CHANNEL, [cast(int, s.id) for s in schedules])
+        gists = Thread.summaries(ScheduledItem.SCHEDULE_CHANNEL, [cast(int, s.id) for s in schedules])
         items = [
             SchedulerTurn(
                 turn_id=cast(int, s.id),

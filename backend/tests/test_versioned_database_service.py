@@ -9,9 +9,10 @@ overwrites a b-tree root page on disk so SQLite raises SQLITE_CORRUPT for real.
 
 The contract under test: a release opens its own file, an existing file is never
 touched again, a damaged source table costs only itself, and nothing older than
-three files survives. The exception is ``compactions`` and ``thread_gist`` from a
-source that still finds their rows by turn number: a failure to carry them
-forward stops provisioning, leaving the old database intact for the next boot.
+three files survives. The exceptions are ``compactions`` from a source that
+still finds its rows by turn number, and the threads and their labels of a
+source from before threads had rows: a failure to carry them forward stops
+provisioning, leaving the old database intact for the next boot.
 """
 
 import logging

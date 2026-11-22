@@ -10,6 +10,7 @@
 
 Active-record row-model. A thread is named by its ``(channel, turn_id)`` pair,
 which is unique; every transcript row the thread holds points at its ``id``.
+It carries what is stored once per thread: its topical label (``summary``).
 Holds no mp, calls no service (Rule-3 depth).
 """
 
@@ -23,7 +24,7 @@ from models.model import Model
 class Thread(Model):
     """One conversation thread, keyed by its channel and turn number."""
 
-    __columns__: ClassVar[tuple[str, ...]] = ("id", "channel", "turn_id")
+    __columns__: ClassVar[tuple[str, ...]] = ("id", "channel", "turn_id", "summary")
 
     @classmethod
     def get_table(cls) -> str:
@@ -31,6 +32,7 @@ class Thread(Model):
 
     channel: str
     turn_id: int
+    summary: str | None
 
     @classmethod
     def ensure(cls, channel: str, turn_id: int) -> int:
@@ -49,3 +51,27 @@ class Thread(Model):
             (channel, turn_id),
         ).fetchone()
         return int(row[0])
+
+    @classmethod
+    def set_summary(cls, channel: str, turn_id: int, summary: str) -> bool:
+        """Store (or replace) the label of the thread ``(channel, turn_id)``;
+        return False when there is no such thread to carry it."""
+        cursor = cls._bound_connection().execute(
+            "UPDATE threads SET summary = ? WHERE channel = ? AND turn_id = ?",
+            (summary, channel, turn_id),
+        )
+        return cursor.rowcount > 0
+
+    @classmethod
+    def summaries(cls, channel: str, turn_ids: list[int]) -> dict[int, str]:
+        """``{turn_id: summary}`` for every thread of ``turn_ids`` on ``channel``
+        that has a label — the thread feed's collapsed labels."""
+        if not turn_ids:
+            return {}
+        placeholders = ", ".join("?" for _ in turn_ids)
+        rows = cls._bound_connection().execute(
+            f"SELECT turn_id, summary FROM threads WHERE channel = ? AND turn_id IN ({placeholders}) "
+            "AND summary IS NOT NULL",
+            (channel, *turn_ids),
+        ).fetchall()
+        return {int(row[0]): str(row[1]) for row in rows}

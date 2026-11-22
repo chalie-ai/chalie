@@ -18,7 +18,7 @@ import pytest
 
 from configs.channels.thread_gist import ThreadGistConfig
 from controllers.message_processor import MessageProcessor
-from models.transcript import Transcript
+from models.thread import Thread
 from services.thread_gist_message_processor import _persist_gist
 
 pytestmark = pytest.mark.unit
@@ -31,8 +31,8 @@ def _labels(turn_ids: list[int]) -> dict[int, str]:
 
 
 def _open_thread(turn_id: int) -> None:
-    """The thread's opening row, which its label is stored against."""
-    Transcript(channel=_CHANNEL, role="user", content="hello", turn_id=turn_id, settled=0, xml_migrated=1).save()
+    """The thread its label is stored on."""
+    Thread.ensure(_CHANNEL, turn_id)
 
 
 def test_gist_with_think_block_is_persisted_clean(db: sqlite3.Connection) -> None:

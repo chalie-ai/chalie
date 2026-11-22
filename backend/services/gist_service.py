@@ -1,8 +1,8 @@
 """GistService — persist + batch-read per-thread topical labels.
 
-Coordinates ``thread_gist`` rows: one terse 3-5 word topical label per
-thread, written once on the first reply past settle0 and found by the
-thread's opening transcript row id. The label is a pure FE affordance shown
+Coordinates each thread's ``summary``: one terse 3-5 word topical label per
+thread, written once on the first reply past settle0 and stored on the
+thread's own row. The label is a pure FE affordance shown
 on a collapsed thread pill — it carries no memory or retrieval significance
 (no embedding, no search index).
 
@@ -18,8 +18,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from models.thread_gist import ThreadGist
-from models.transcript import Transcript
+from models.thread import Thread
 
 if TYPE_CHECKING:
     from controllers.message_processor import MessageProcessor
@@ -38,21 +37,19 @@ class GistService:
         """Persist (or replace) the label for one thread (idempotent per thread)
         and return whether it was stored.
 
-        The label is stored against the thread's opening row; a thread with no
-        rows has nothing to carry it, so the label is skipped and logged."""
+        The label is stored on the thread's row; a thread with no rows has no
+        such row to carry it, so the label is skipped and logged."""
         gist = (gist or "").strip()
         if not gist:
             return False
-        opening_id = Transcript.first_id(channel, turn_id)
-        if opening_id is None:
-            logger.warning("%s no opening row for %s turn=%s; label skipped", LOG_PREFIX, channel, turn_id)
-            return False
         try:
-            ThreadGist(opening_id=opening_id, gist=gist).upsert()
+            stored = Thread.set_summary(channel, turn_id, gist)
         except Exception as exc:
             logger.warning("%s upsert failed for %s turn=%s: %s", LOG_PREFIX, channel, turn_id, exc)
             return False
-        return True
+        if not stored:
+            logger.warning("%s no thread for %s turn=%s; label skipped", LOG_PREFIX, channel, turn_id)
+        return stored
 
     def bulk_get(self, channel: str, turn_ids: list[int]) -> dict[int, str]:
         """Labels for a batch of turn_ids — the thread feed's collapsed labels.
@@ -60,7 +57,7 @@ class GistService:
         Returns ``{turn_id: gist}`` for every turn_id that has a label.
         """
         try:
-            return ThreadGist.bulk_get(channel, turn_ids)
+            return Thread.summaries(channel, turn_ids)
         except Exception as exc:
             logger.debug("%s bulk_get failed for %s: %s", LOG_PREFIX, channel, exc)
             return {}

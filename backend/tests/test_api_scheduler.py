@@ -4,8 +4,7 @@ from typing import cast
 import pytest
 from flask.testing import FlaskClient
 
-from models.thread_gist import ThreadGist
-from models.transcript import Transcript
+from models.thread import Thread
 from tests.helpers import insert_scheduled_item
 
 
@@ -168,10 +167,10 @@ class TestSchedulerAPI:
         item_id = _unwrap_single(cast("dict[str, object]", resp.get_json()))["id"]
 
         # Creating a schedule writes no gist: the label is generated from the
-        # fired thread on the first fire, found by that thread's opening row.
+        # fired thread on the first fire and stored on that thread.
         # Seeding the raw prompt here would be indistinguishable from a real
         # gist and would permanently suppress generation.
-        labels = db.execute("SELECT COUNT(*) FROM thread_gist").fetchone()[0]
+        labels = db.execute("SELECT COUNT(*) FROM threads WHERE summary IS NOT NULL").fetchone()[0]
         assert labels == 0, "create must not write a gist — it is generated on the first fire"
 
         # Until then /turns carries gist=None and the prompt as preview, which
@@ -186,12 +185,10 @@ class TestSchedulerAPI:
         client, db, _store = authed_client
         item_id = insert_scheduled_item(db, message="Water the plants")
 
-        # Stand in for the first fire: its input row opens the schedule's own
-        # turn (§13.1), and its gist ingest labels that opening row.
-        opening = Transcript(
-            channel="schedule", role="user", content="Water the plants", turn_id=item_id, settled=0, xml_migrated=1,
-        ).save()
-        ThreadGist(opening_id=cast("int", opening.id), gist="Watering reminder").upsert()
+        # Stand in for the first fire: it opens the schedule's own thread
+        # (§13.1), and its gist ingest labels that thread.
+        Thread.ensure("schedule", item_id)
+        assert Thread.set_summary("schedule", item_id, "Watering reminder")
         db.commit()
 
         mine = _find_turn(client, item_id)

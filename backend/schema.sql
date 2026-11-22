@@ -312,20 +312,6 @@ CREATE VIRTUAL TABLE IF NOT EXISTS scheduled_items_vec USING vec0(embedding floa
 CREATE VIRTUAL TABLE IF NOT EXISTS lists_vec USING vec0(embedding float[768]);
 
 -- ────────────────────────────────────────────────────────────────
--- THREAD GIST — one terse 3-5 word topical label per conversation thread (a
--- turn grown past its settle0). Written once, on the first reply past settle0.
--- Found by its thread's opening transcript row id (opening_id). No foreign
--- key: once that row is purged the label matches no row and reads as gone.
--- Pure FE affordance, no embedding, no search index.
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS thread_gist (
-    opening_id  INTEGER,
-    gist        TEXT,
-    created_at  TEXT NOT NULL
-);
-CREATE UNIQUE INDEX IF NOT EXISTS ux_thread_gist_opening ON thread_gist(opening_id);
-
--- ────────────────────────────────────────────────────────────────
 -- WRAPPER TOKENS — bearer auth for external programmatic access
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS wrapper_tokens (
@@ -401,7 +387,11 @@ CREATE INDEX IF NOT EXISTS idx_mcp_client_servers_enabled
 CREATE TABLE IF NOT EXISTS threads (
     id       INTEGER PRIMARY KEY AUTOINCREMENT,
     channel  TEXT NOT NULL,
-    turn_id  INTEGER NOT NULL
+    turn_id  INTEGER NOT NULL,
+    -- The thread's terse topical label, written once its first reply is past
+    -- the opening exchange. NULL until then. Shown on the collapsed thread;
+    -- no embedding, no search index.
+    summary  TEXT
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_threads_channel_turn ON threads(channel, turn_id);

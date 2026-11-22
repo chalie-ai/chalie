@@ -15,18 +15,19 @@ copies normally. The alternative shipped in 1.3.0 (converge the live file
 in-place inside one ``BEGIN IMMEDIATE``) turned one damaged table into a
 poisoned transaction and a boot that could not complete.
 
-``compactions`` and ``thread_gist`` are the exception when the source still
-finds their rows by turn number. Their rows are rebuilt onto transcript row ids
-from the source's own transcript, and if that fails provisioning stops instead
-of passing over the table: those rows are the conversation's checkpoints and
-its thread labels, and losing them silently would change what the person's
-conversation shows. The old database is only read, so it stays intact, and the
-next boot rebuilds from it.
+``compactions`` is the exception when the source still finds its rows by
+turn number. Its rows are rebuilt onto transcript row ids from the source's own
+transcript, and if that fails provisioning stops instead of passing over the
+table: those rows are the conversation's checkpoints, and losing them silently
+would change what the person's conversation shows. The old database is only
+read, so it stays intact, and the next boot rebuilds from it.
 
 A source from before threads had rows of their own gets them the same way:
 one thread per channel and turn number its transcript holds, and every
-transcript row pointed at its thread. That too stops provisioning on failure —
-a row that lost its thread would drop out of the conversation it belongs to.
+transcript row pointed at its thread. Its thread labels, kept then in a table
+of their own, move onto the threads they name. That too stops provisioning on
+failure — a row that lost its thread would drop out of the conversation it
+belongs to, and a lost label would leave its thread unnamed.
 
 Boot order (``run.py``): the snapshot restore swaps artifacts in, then
 :meth:`VersionedDatabaseService.provision` runs BEFORE the first
@@ -86,13 +87,13 @@ _PROVIDERS_ACTIVE_COLUMN = "is_active"
 # Schema name the source database is ATTACHed under for the copy.
 _SOURCE_SCHEMA = "src"
 
-# Checkpoints and thread labels used to find their rows by turn number; they now
-# find them by transcript row id. A source still in the old shape holds the turn
-# number in a column the target does not have, so the shared-column copy would
-# leave it behind and no reader could find the row again. Each such table is
-# carried by its own INSERT-SELECT, keyed here by the column only the old shape
-# has, that computes the new columns from the source's transcript. Transcript
-# ids carry forward unchanged, so an id read there names the same row here.
+# Checkpoints used to find their rows by turn number; they now find them by
+# transcript row id. A source still in the old shape holds the turn number in a
+# column the target does not have, so the shared-column copy would leave it
+# behind and no reader could find the row again. Each such table is carried by
+# its own INSERT-SELECT, keyed here by the column only the old shape has, that
+# computes the new columns from the source's transcript. Transcript ids carry
+# forward unchanged, so an id read there names the same row here.
 #
 # compactions, FORK row (for_turn_id set): compacted_up_to is already a row id
 # and stays as it is; opening_id is the thread's first row, the rule
@@ -107,10 +108,6 @@ _SOURCE_SCHEMA = "src"
 # summary is always read. Where turns overlapped, a row of a folded turn can
 # sit above the cut and shows again: that errs on the side of showing a row
 # twice, never of hiding one.
-#
-# thread_gist: opening_id is the labelled thread's first row; a thread with no
-# rows stays NULL and is never read. The old primary key (channel, turn_id)
-# gives every label its own thread, so the opening ids are unique.
 _TURN_AXIS_BACKFILLS: dict[str, tuple[str, str]] = {
     "compactions": (
         "for_turn_id",
@@ -132,15 +129,6 @@ _TURN_AXIS_BACKFILLS: dict[str, tuple[str, str]] = {
         "THEN c.compacted_up_to END, "
         "c.content, c.created_at "
         f"FROM {_SOURCE_SCHEMA}.compactions c",
-    ),
-    "thread_gist": (
-        "turn_id",
-        "INSERT INTO main.thread_gist (rowid, opening_id, gist, created_at) "
-        "SELECT g.rowid, "
-        f"(SELECT MIN(t.id) FROM {_SOURCE_SCHEMA}.transcript t "
-        "WHERE t.channel = g.channel AND t.turn_id = g.turn_id), "
-        "g.gist, g.created_at "
-        f"FROM {_SOURCE_SCHEMA}.thread_gist g",
     ),
 }
 
@@ -166,6 +154,27 @@ _THREAD_BACKFILLS: tuple[tuple[str, str], ...] = (
         "WHERE turn_id IS NOT NULL",
     ),
 )
+
+# A thread's label used to sit in a table of its own; it is now the thread's
+# ``summary``. A source that still has that table gets each label written onto
+# the thread it names, after the threads exist. Two shapes shipped: the older
+# one names the thread by its channel and turn number, the newer one by the
+# thread's first transcript row. A label whose thread has no rows names no
+# thread and is not carried, as it was never read before either.
+_LABEL_TABLE = "thread_gist"
+_LABEL_BY_OPENING_ROW = "opening_id"
+_LABEL_BACKFILLS: dict[str, str] = {
+    _LABEL_BY_OPENING_ROW: (
+        "UPDATE main.threads SET summary = (SELECT g.gist "
+        f"FROM {_SOURCE_SCHEMA}.thread_gist g JOIN main.transcript t ON t.id = g.opening_id "
+        "WHERE t.thread_id = threads.id)"
+    ),
+    "turn_id": (
+        "UPDATE main.threads SET summary = (SELECT g.gist "
+        f"FROM {_SOURCE_SCHEMA}.thread_gist g "
+        "WHERE g.channel = threads.channel AND g.turn_id = threads.turn_id)"
+    ),
+}
 
 # The implicit rowid, named explicitly in every copy: it is the join key between a
 # content table and its vec0/FTS5 sidecars, and no declared column carries it on
@@ -409,10 +418,10 @@ class VersionedDatabaseService:
         inherited from SQLite's default: tables copy in whatever order they
         appear, so a child would otherwise be rejected ahead of its parent.
 
-        A table the source still holds in its turn-axis shape, and the threads
-        of a source from before they had rows (:data:`_THREAD_BACKFILLS`), are
-        carried by :meth:`_backfill_table`, which raises rather than returning
-        a failure.
+        A table the source still holds in its turn-axis shape, the threads of
+        a source from before they had rows (:data:`_THREAD_BACKFILLS`) and
+        their labels (:data:`_LABEL_BACKFILLS`) are carried by
+        :meth:`_backfill_table`, which raises rather than returning a failure.
         """
         conn.execute("PRAGMA foreign_keys=OFF")
         conn.execute(f"ATTACH DATABASE ? AS {_SOURCE_SCHEMA}", (str(source),))
@@ -432,6 +441,8 @@ class VersionedDatabaseService:
             ):
                 for table, statement in _THREAD_BACKFILLS:
                     self._backfill_table(conn, table, statement, source)
+            if _LABEL_TABLE in source_tables:
+                self._backfill_table(conn, _LABEL_TABLE, self._label_backfill(conn), source)
             for table, module in self._virtual_tables(conn, "main").items():
                 if module == _FTS5_MODULE and not self._rebuild_index(conn, table):
                     failed.append(table)
@@ -488,8 +499,8 @@ class VersionedDatabaseService:
         """Return the INSERT-SELECT that carries *table* out of a turn-axis
         source, or None when the shared-column copy applies.
 
-        Only ``compactions`` and ``thread_gist`` have one, and only while the
-        source still has the column that held the turn number
+        Only ``compactions`` has one, and only while the source still has the
+        column that held the turn number
         (:data:`_TURN_AXIS_BACKFILLS`). A source already in the row-id shape
         copies like any other table.
         """
@@ -500,6 +511,13 @@ class VersionedDatabaseService:
         if legacy_column not in self._columns(conn, _SOURCE_SCHEMA, table):
             return None
         return statement
+
+    def _label_backfill(self, conn: sqlite3.Connection) -> str:
+        """Return the UPDATE that writes the source's thread labels onto the
+        threads they name, picked by the shape the source's label table has."""
+        columns = self._columns(conn, _SOURCE_SCHEMA, _LABEL_TABLE)
+        shape = _LABEL_BY_OPENING_ROW if _LABEL_BY_OPENING_ROW in columns else "turn_id"
+        return _LABEL_BACKFILLS[shape]
 
     def _backfill_table(
         self, conn: sqlite3.Connection, table: str, statement: str, source: Path

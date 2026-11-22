@@ -34,7 +34,7 @@ from flask.testing import FlaskClient
 
 from configs.channels.user import UserConfig
 from controllers.message_processor import MessageProcessor
-from models.thread_gist import ThreadGist
+from models.thread import Thread
 from models.transcript import Transcript
 from models.turn_execution import TurnExecution
 
@@ -181,9 +181,7 @@ def test_recent_threads_search_matches_thread_gist_label_not_just_user_content(
     plain_turn_id = 8502
 
     _open_exchange(gisted_turn_id, "Send an email to Jane about the invoice.", "Sent.")
-    opening_id = Transcript.first_id(_CHANNEL, gisted_turn_id)
-    assert opening_id is not None
-    ThreadGist(opening_id=opening_id, gist="Testing and Debugging").upsert()
+    assert Thread.set_summary(_CHANNEL, gisted_turn_id, "Testing and Debugging")
 
     _open_exchange(plain_turn_id, "What's the weather tomorrow?", "Sunny, 22C.")
 
