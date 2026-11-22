@@ -46,7 +46,7 @@ class TranscriptService:
     def read(self) -> list[Transcript]:
         """The current turn's history view, above the compaction watermark
         (§6.1): FORK (``self.mp.fork_view`` — a reply into an already-settled
-        thread, or any turn on a ``turn_scoped_history`` channel) returns the
+        thread) returns the
         whole turn, unfloored, between the watermark and this turn's anchoring
         row; MAIN (a fresh turn) returns every prior turn above the watermark,
         each floored at its own settle0. Keyed off the same ``mp.fork_view``
@@ -56,7 +56,9 @@ class TranscriptService:
         the fixed flag can't). Feeds
         ``PromptService``'s history assembly. ``[]`` when the config
         suppresses history. BOTH views exclude ``role='memory'`` rows
-        (memory-step inputs — turn plumbing, not conversation) by name. A
+        (memory-step inputs — turn plumbing, not conversation) by name. MAIN
+        reads turns, so a row with no ``turn_id`` belongs to none and is not
+        on it. A
         PRIOR turn that never settled is NOT dropped: a crash leaves its input
         row behind and the rendered thread still shows it, so dropping it here
         would hide from the model a message the user is looking at — the
@@ -105,7 +107,8 @@ class TranscriptService:
             by_turn: dict[int, list[Transcript]] = {}
             for row in (
                 Transcript.filter("channel", channel)
-                .filter("turn_id", watermark, ">")
+                .filter("id", watermark, ">")
+                .filter("turn_id", None, "IS NOT")
                 .filter("role", "memory", "!=")
                 .order_by("id ASC")
                 .get()
@@ -157,19 +160,6 @@ class TranscriptService:
         if self.mp.uid is not None:
             q = q.filter("id", self.mp.uid, ">")
         return q.get()
-
-    def joined_since(self, after_id: int) -> list[Transcript]:
-        """This turn's joined input rows written after ``after_id``, oldest-
-        first — the messages sent into the working turn that the running
-        exchange has not read yet."""
-        return (
-            Transcript.filter("channel", self.mp.channel)
-            .filter("turn_id", self.mp.turn_id)
-            .filter("joined", 1)
-            .filter("id", after_id, ">")
-            .order_by("id ASC")
-            .get()
-        )
 
     def anchor_row(self) -> Transcript | None:
         """This turn's anchoring input row, or ``None`` before it exists

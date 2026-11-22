@@ -39,8 +39,8 @@ const EMAIL_FIELDS = [
   'to', 'cc', 'subject', 'body', 'uid', 'operation', 'sender', 'keyword', 'date_from', 'date_to', 'attachments',
 ];
 
-/** What a delegate was asked: its instructions, or a subtask's message. */
-const DELEGATE_FIELDS = ['instructions', 'message'];
+/** What a delegate was asked: its instructions. */
+const DELEGATE_FIELDS = ['instructions'];
 
 /** Past this many table cells a diff skips the line match. */
 const MAX_DIFF_CELLS = 1_000_000;

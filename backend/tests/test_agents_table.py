@@ -6,7 +6,8 @@ spawned it: the person's chat, a scheduled task, or another subagent. The row's
 ``agent_id`` is the number the model knows the subagent by, never its turn id.
 The row ends with its turn, once: ``done`` with the id of its final answer,
 ``cancelled`` when the person or its caller's stop ends it, ``failed`` when it
-crashed or a restart cut it off. Every write goes out on the socket as an
+crashed or a restart cut it off — the last two with the id of the last row
+its turn wrote. Every write goes out on the socket as an
 ``agent_changed`` frame carrying the row as the listing returns it, and
 ``GET /api/agents/all`` lists the agents still running to a person signed in on
 the page — never to a bearer-token client.
@@ -40,13 +41,11 @@ from configs.enums.channels import Channel
 from configs.enums.config_type import ConfigTypeEnum
 from controllers.message_processor import _MAX_PROVIDER_ATTEMPTS, MessageProcessor
 from migrations.runner import run_all
-from models.tool_call import ToolCall
 from models.turn_execution import TurnExecution
 from models.agent import Agent
 from run import _reply_to_swept_delegates
 from services.database import Database
 from services.file_mapper_service import FileMapperService
-from services.garbage_collector_service import GarbageCollectorService
 from services.wrapper_auth_service import WrapperAuthService
 from tests._delegates import (
     EARLIER_AGENTS,
@@ -58,7 +57,7 @@ from tests._delegates import (
     begin,
     calls,
     calls_of,
-    child_turn,
+    child,
     connected_mail,
     delegate_channel,
     dies,
@@ -73,6 +72,7 @@ from tests._delegates import (
     tool,
     wait,
 )
+from tests.test_message_parent import _first_turn
 
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider", "earlier_agents")]
 
@@ -103,8 +103,9 @@ def _route(name: str) -> str:
     return "subtask" if name == SubtaskAbility.NAME else name
 
 
-def _channel(name: str) -> str:
-    """The channel the *name* subagent's own turn runs on."""
+def _kind(name: str) -> str:
+    """The bare channel of the *name* subagent's kind, which its own channel is
+    spelled under."""
     return _SUBTASK if name == SubtaskAbility.NAME else delegate_channel(name)
 
 
@@ -129,9 +130,9 @@ def _empty_listing() -> dict[str, object]:
     return {"success": True, "result": [], "pagination": {"page": 1, "limit": 20, "total": 0}}
 
 
-def _row(db: sqlite3.Connection, name: str, turn_id: int) -> sqlite3.Row:
-    row = db.execute("SELECT * FROM agents WHERE type = ? AND turn_id = ?", (name, turn_id)).fetchone()
-    assert row is not None, f"no agents row for {name} turn {turn_id}"
+def _row(db: sqlite3.Connection, agent_id: int) -> sqlite3.Row:
+    row = db.execute("SELECT * FROM agents WHERE agent_id = ?", (agent_id,)).fetchone()
+    assert row is not None, f"no agents row for agent {agent_id}"
     return cast("sqlite3.Row", row)
 
 
@@ -146,15 +147,37 @@ def _final_answer(db: sqlite3.Connection, channel: str, turn_id: int) -> sqlite3
     return cast("sqlite3.Row", row)
 
 
+def _last_row(db: sqlite3.Connection, channel: str, turn_id: int) -> int:
+    """The id of the last row one turn wrote, whatever its role."""
+    row = db.execute(
+        "SELECT MAX(id) FROM transcript WHERE channel = ? AND turn_id = ?", (channel, turn_id),
+    ).fetchone()
+    assert row is not None and row[0] is not None, f"no rows on {channel} turn {turn_id}"
+    return cast("int", row[0])
+
+
+def _first_row(db: sqlite3.Connection, channel: str, turn_id: int, said: str) -> int:
+    """The id of the first row one turn wrote — its input row, which must hold
+    *said*."""
+    row = db.execute(
+        "SELECT id, content FROM transcript WHERE channel = ? AND turn_id = ? ORDER BY id LIMIT 1",
+        (channel, turn_id),
+    ).fetchone()
+    assert row is not None, f"no rows on {channel} turn {turn_id}"
+    assert row["content"] == said, f"{channel} turn {turn_id} opens on {row['content']!r}"
+    return cast("int", row["id"])
+
+
 def _running(
-    agent_id: int, name: str, turn_id: int, *, by: str, in_turn: int, prompt: str = _INSTRUCTIONS,
-    summary: str = _SUMMARY,
+    agent_id: int, name: str, turn_id: int, *, by: str, in_turn: int, context: int | None,
+    prompt: str = _INSTRUCTIONS, summary: str = _SUMMARY,
 ) -> dict[str, object]:
-    """One running agent exactly as the listing and its frame carry it."""
+    """One running agent exactly as the listing and its frame carry it —
+    *context* being the id of its spawning turn's input row."""
     return {
         "agent_id": agent_id, "spawned_by_channel": by, "spawned_in_turn": in_turn, "type": name,
         "prompt": prompt, "status": "running", "response_id": None, "turn_id": turn_id,
-        "channel": _channel(name), "summary": summary,
+        "context_id": context, "channel": Channel.for_agent(name, agent_id), "summary": summary,
     }
 
 
@@ -167,8 +190,9 @@ def test_each_subagent_the_chat_spawns_is_one_row_listed_while_it_runs_and_done_
     authed_client: _Client, name: str,
 ) -> None:
     """The chat spawns one subagent of each kind. While it runs, the listing
-    holds exactly its row — numbered past every earlier agent, never by its
-    turn id — with who spawned it, its task, its own turn and channel, and the
+    holds exactly its row — numbered past every earlier agent, on a channel of
+    its own where its turn is the first — with who spawned it, its task, its
+    own turn and channel, and the
     call's summary; the call told the model that number. Once it answers, its
     row is ``done`` with the id of that answer, the socket carried the row
     twice — running, then done — and the listing is empty."""
@@ -191,15 +215,16 @@ def test_each_subagent_the_chat_spawns_is_one_row_listed_while_it_runs_and_done_
 
     assert held.opened and provider.unused() == {}
     [call] = calls_of(db, name)
-    turn = child_turn(db, _channel(name), call["id"])
+    channel, turn = child(db, _kind(name), call["id"])
     agent_id = EARLIER_AGENTS + 1
-    assert agent_id != turn
-    running = _running(agent_id, name, turn, by=USER, in_turn=parent.turn_id)
+    assert (channel, turn) == (Channel.for_agent(name, agent_id), 1)
+    context = _first_row(db, USER, parent.turn_id, _QUESTION)
+    running = _running(agent_id, name, turn, by=USER, in_turn=parent.turn_id, context=context)
     assert while_running == {"success": True, "result": [running], "pagination": {"page": 1, "limit": 20, "total": 1}}
-    answer = _final_answer(db, _channel(name), turn)
+    answer = _final_answer(db, channel, turn)
     assert answer["content"] == _ANSWER
     done = {**running, "status": "done", "response_id": answer["id"]}
-    assert dict(_row(db, name, turn)) == {k: v for k, v in done.items() if k not in ("channel", "summary")}
+    assert dict(_row(db, agent_id)) == {k: v for k, v in done.items() if k not in ("channel", "summary")}
     assert _frames(listener) == [_changed(running), _changed(done)]
     assert f"Subagent {name} #{agent_id} has been spawned." in call["result"]
     assert f'"Reply from {name} #{agent_id}"' in call["result"]
@@ -225,18 +250,23 @@ def test_a_subagent_a_scheduled_task_spawns_names_the_schedule_and_its_turn(auth
 
     assert held.opened and provider.unused() == {}
     [call] = calls_of(db, WebSearchAbility.NAME)
-    turn = child_turn(db, _channel(WebSearchAbility.NAME), call["id"])
-    running = _running(EARLIER_AGENTS + 1, WebSearchAbility.NAME, turn, by=schedule_channel, in_turn=7, summary="")
+    channel, turn = child(db, _kind(WebSearchAbility.NAME), call["id"])
+    context = _first_row(db, schedule_channel, 7, "write a note")
+    running = _running(
+        EARLIER_AGENTS + 1, WebSearchAbility.NAME, turn, by=schedule_channel, in_turn=7, context=context, summary="",
+    )
     assert while_running["result"] == [running]
-    done = {**running, "status": "done", "response_id": _final_answer(db, _channel(WebSearchAbility.NAME), turn)["id"]}
+    done = {**running, "status": "done", "response_id": _final_answer(db, channel, turn)["id"]}
     assert _frames(listener) == [_changed(running), _changed(done)]
 
 
 def test_a_subagent_another_subagent_spawns_names_that_subagent_and_its_turn(authed_client: _Client) -> None:
     """The chat starts a subtask, and the subtask spawns a search it waits
-    for. While the search runs both are listed, oldest first; the search's row
-    names the subtask's channel and turn as its spawner. Both end ``done``,
-    the search first, each with its own answer."""
+    for. The search reads its task with the subtask's own task as context,
+    and that it should just finish. While the search runs both are listed,
+    oldest first; the search's row names the subtask's own channel and turn
+    as its spawner. Both end ``done``, the search first, each with its own
+    answer."""
     client, db, _store = authed_client
     held = Held(text("Paris."))
     provider = ChannelProvider(
@@ -254,18 +284,21 @@ def test_a_subagent_another_subagent_spawns_names_that_subagent_and_its_turn(aut
         drain()
 
     assert held.opened and provider.unused() == {}
-    sub_turn = child_turn(db, _SUBTASK, calls_of(db, SubtaskAbility.NAME)[0]["id"])
-    search_turn = child_turn(db, _channel(WebSearchAbility.NAME), calls_of(db, WebSearchAbility.NAME)[0]["id"])
+    sub_channel, sub_turn = child(db, _SUBTASK, calls_of(db, SubtaskAbility.NAME)[0]["id"])
+    search_channel, search_turn = child(db, _kind(WebSearchAbility.NAME), calls_of(db, WebSearchAbility.NAME)[0]["id"])
+    [searched] = provider.read(WebSearchAbility.NAME)
+    assert f"Research query:\n{_first_turn(_INSTRUCTIONS, 'find out the capital of France', asks=False)}\n" in searched
     subtask = _running(
         EARLIER_AGENTS + 1, SubtaskAbility.NAME, sub_turn, by=USER, in_turn=parent.turn_id,
-        prompt="find out the capital of France", summary="",
+        context=_first_row(db, USER, parent.turn_id, _QUESTION), prompt="find out the capital of France", summary="",
     )
-    search = _running(EARLIER_AGENTS + 2, WebSearchAbility.NAME, search_turn, by=_SUBTASK, in_turn=sub_turn, summary="")
+    search = _running(
+        EARLIER_AGENTS + 2, WebSearchAbility.NAME, search_turn, by=sub_channel, in_turn=sub_turn,
+        context=_first_row(db, sub_channel, sub_turn, "find out the capital of France"), summary="",
+    )
     assert while_running["result"] == [subtask, search]
-    search_done = {
-        **search, "status": "done", "response_id": _final_answer(db, _channel(WebSearchAbility.NAME), search_turn)["id"],
-    }
-    subtask_answer = _final_answer(db, _SUBTASK, sub_turn)
+    search_done = {**search, "status": "done", "response_id": _final_answer(db, search_channel, search_turn)["id"]}
+    subtask_answer = _final_answer(db, sub_channel, sub_turn)
     assert subtask_answer["content"] == _ANSWER
     subtask_done = {**subtask, "status": "done", "response_id": subtask_answer["id"]}
     assert _frames(listener) == [_changed(subtask), _changed(search), _changed(search_done), _changed(subtask_done)]
@@ -273,10 +306,10 @@ def test_a_subagent_another_subagent_spawns_names_that_subagent_and_its_turn(aut
 
 def test_a_subagent_the_person_stops_is_cancelled_once_with_no_answer(authed_client: _Client) -> None:
     """The person stops a running search from its panel. Its row is
-    ``cancelled`` with no answer, and the socket carries the row twice —
-    running, then cancelled — even though the search's own turn ends after."""
+    ``cancelled`` with the id of its turn's last row — never its late answer —
+    and the socket carries the row twice — running, then cancelled — even
+    though the search's own turn ends after."""
     client, db, _store = authed_client
-    channel = _channel(WebSearchAbility.NAME)
     held = Held(text(_ANSWER))
     provider = ChannelProvider(
         chat=[calls(_spawn(WebSearchAbility.NAME)), text(_STARTED), text("It was stopped.")], web_search=[held],
@@ -286,26 +319,29 @@ def test_a_subagent_the_person_stops_is_cancelled_once_with_no_answer(authed_cli
         parent = begin(UserConfig(), _QUESTION)
         parent.result()
         wait(held.entered, "the search's model call")
-        turn = child_turn(db, channel, calls_of(db, WebSearchAbility.NAME)[0]["id"])
+        channel, turn = child(db, _kind(WebSearchAbility.NAME), calls_of(db, WebSearchAbility.NAME)[0]["id"])
         stop = client.delete(f"/api/threads/{turn}?channel={channel}")
         held.gate.set()
         drain()
 
     assert stop.status_code == 200 and (stop.get_json() or {})["result"]["cancelled"] is True
     assert held.opened and provider.unused() == {}
-    running = _running(EARLIER_AGENTS + 1, WebSearchAbility.NAME, turn, by=USER, in_turn=parent.turn_id, summary="")
-    cancelled = {**running, "status": "cancelled"}
-    assert (_row(db, WebSearchAbility.NAME, turn)["status"], _row(db, WebSearchAbility.NAME, turn)["response_id"]) == (
-        "cancelled", None,
+    running = _running(
+        EARLIER_AGENTS + 1, WebSearchAbility.NAME, turn, by=USER, in_turn=parent.turn_id,
+        context=_first_row(db, USER, parent.turn_id, _QUESTION), summary="",
     )
+    last = _last_row(db, channel, turn)
+    cancelled = {**running, "status": "cancelled", "response_id": last}
+    assert tuple(_row(db, EARLIER_AGENTS + 1)[k] for k in ("status", "response_id")) == ("cancelled", last)
+    assert _ANSWER not in [r[0] for r in db.execute("SELECT content FROM transcript WHERE id = ?", (last,))]
     assert _frames(listener) == [_changed(running), _changed(cancelled)]
     assert _listing(client) == _empty_listing()
 
 
 def test_stopping_the_caller_cancels_the_subtask_it_started_once(authed_client: _Client) -> None:
     """The person stops the chat while the subtask it started is mid-call.
-    The subtask's row is ``cancelled`` with no answer, and the socket carries
-    exactly one cancelled frame for it."""
+    The subtask's row is ``cancelled`` with the id of its turn's last row, and
+    the socket carries exactly one cancelled frame for it."""
     client, db, _store = authed_client
     caller_held = Held(text("Done for now."))
     subtask_held = Held(text(_ANSWER))
@@ -323,18 +359,22 @@ def test_stopping_the_caller_cancels_the_subtask_it_started_once(authed_client: 
 
     assert stop.status_code == 200 and (stop.get_json() or {})["result"]["cancelled"] is True
     assert caller_held.opened and subtask_held.opened
-    turn = child_turn(db, _SUBTASK, calls_of(db, SubtaskAbility.NAME)[0]["id"])
-    assert execution(_SUBTASK, turn).stop_reason == "parent stopped"
-    running = _running(EARLIER_AGENTS + 1, SubtaskAbility.NAME, turn, by=USER, in_turn=parent.turn_id, summary="")
-    assert (_row(db, SubtaskAbility.NAME, turn)["status"], _row(db, SubtaskAbility.NAME, turn)["response_id"]) == (
-        "cancelled", None,
+    channel, turn = child(db, _SUBTASK, calls_of(db, SubtaskAbility.NAME)[0]["id"])
+    assert execution(channel, turn).stop_reason == "parent stopped"
+    running = _running(
+        EARLIER_AGENTS + 1, SubtaskAbility.NAME, turn, by=USER, in_turn=parent.turn_id,
+        context=_first_row(db, USER, parent.turn_id, "find the capital of France in the background"), summary="",
     )
-    assert _frames(listener) == [_changed(running), _changed({**running, "status": "cancelled"})]
+    last = _last_row(db, channel, turn)
+    assert tuple(_row(db, EARLIER_AGENTS + 1)[k] for k in ("status", "response_id")) == ("cancelled", last)
+    assert _frames(listener) == [
+        _changed(running), _changed({**running, "status": "cancelled", "response_id": last}),
+    ]
 
 
 def test_a_subagent_whose_provider_keeps_failing_ends_failed(authed_client: _Client) -> None:
     """The search's provider fails on every attempt, so the search crashes:
-    its row is ``failed`` with no answer, sent once."""
+    its row is ``failed`` with the id of its turn's last row, sent once."""
     client, db, _store = authed_client
     boom = RuntimeError("boom")
     script: list[Entry] = [Held(boom), *(raises(boom) for _ in range(_MAX_PROVIDER_ATTEMPTS - 1))]
@@ -345,22 +385,25 @@ def test_a_subagent_whose_provider_keeps_failing_ends_failed(authed_client: _Cli
     parent, frames = run_turn(provider, UserConfig(), _QUESTION)
 
     assert provider.unused() == {}
-    turn = child_turn(db, _channel(WebSearchAbility.NAME), calls_of(db, WebSearchAbility.NAME)[0]["id"])
-    assert execution(_channel(WebSearchAbility.NAME), turn).state == TurnExecution.CRASHED
-    running = _running(EARLIER_AGENTS + 1, WebSearchAbility.NAME, turn, by=USER, in_turn=parent.turn_id, summary="")
-    assert (_row(db, WebSearchAbility.NAME, turn)["status"], _row(db, WebSearchAbility.NAME, turn)["response_id"]) == (
-        "failed", None,
+    channel, turn = child(db, _kind(WebSearchAbility.NAME), calls_of(db, WebSearchAbility.NAME)[0]["id"])
+    assert execution(channel, turn).state == TurnExecution.CRASHED
+    running = _running(
+        EARLIER_AGENTS + 1, WebSearchAbility.NAME, turn, by=USER, in_turn=parent.turn_id,
+        context=_first_row(db, USER, parent.turn_id, _QUESTION), summary="",
     )
+    last = _last_row(db, channel, turn)
+    assert tuple(_row(db, EARLIER_AGENTS + 1)[k] for k in ("status", "response_id")) == ("failed", last)
     assert [f for f in frames if f.get("type") == "agent_changed"] == [
-        _changed(running), _changed({**running, "status": "failed"}),
+        _changed(running), _changed({**running, "status": "failed", "response_id": last}),
     ]
     assert _listing(client) == _empty_listing()
 
 
 def test_a_subagent_a_restart_cut_off_stays_listed_until_boot_ends_it_failed(authed_client: _Client) -> None:
     """The process dies while the search is mid-call, so its row is still
-    ``running`` — and still listed. The next boot's sweep ends it ``failed``,
-    sends that row once, and the listing is empty."""
+    ``running`` — and still listed. The next boot's sweep ends it ``failed``
+    with the id of its turn's last row, sends that row once, and the listing
+    is empty."""
     client, db, _store = authed_client
     script: list[Entry] = [dies]
     provider = ChannelProvider(
@@ -369,8 +412,11 @@ def test_a_subagent_a_restart_cut_off_stays_listed_until_boot_ends_it_failed(aut
 
     with process_deaths_expected():
         parent, _frames_before = run_turn(provider, UserConfig(), _QUESTION)
-    turn = child_turn(db, _channel(WebSearchAbility.NAME), calls_of(db, WebSearchAbility.NAME)[0]["id"])
-    running = _running(EARLIER_AGENTS + 1, WebSearchAbility.NAME, turn, by=USER, in_turn=parent.turn_id, summary="")
+    channel, turn = child(db, _kind(WebSearchAbility.NAME), calls_of(db, WebSearchAbility.NAME)[0]["id"])
+    running = _running(
+        EARLIER_AGENTS + 1, WebSearchAbility.NAME, turn, by=USER, in_turn=parent.turn_id,
+        context=_first_row(db, USER, parent.turn_id, _QUESTION), summary="",
+    )
     assert _listing(client)["result"] == [running]
 
     with listening() as listener, patched(provider):
@@ -379,10 +425,9 @@ def test_a_subagent_a_restart_cut_off_stays_listed_until_boot_ends_it_failed(aut
         drain()
 
     assert provider.unused() == {}
-    assert (_row(db, WebSearchAbility.NAME, turn)["status"], _row(db, WebSearchAbility.NAME, turn)["response_id"]) == (
-        "failed", None,
-    )
-    assert _frames(listener) == [_changed({**running, "status": "failed"})]
+    last = _last_row(db, channel, turn)
+    assert tuple(_row(db, EARLIER_AGENTS + 1)[k] for k in ("status", "response_id")) == ("failed", last)
+    assert _frames(listener) == [_changed({**running, "status": "failed", "response_id": last})]
     assert _listing(client) == _empty_listing()
 
 
@@ -394,107 +439,21 @@ def test_boot_ends_failed_an_agent_left_running_with_no_turn_to_sweep(authed_cli
     with Database.transaction():
         stranded = Agent(
             type=WebSearchAbility.NAME, prompt=_INSTRUCTIONS, spawned_by_channel=USER, spawned_in_turn=1, turn_id=1,
+            context_id=None,
         ).insert()
     assert stranded.agent_id == EARLIER_AGENTS + 1
     assert db.execute("SELECT COUNT(*) FROM turn_executions WHERE ended_at IS NULL").fetchone()[0] == 0
-    running = _running(stranded.agent_id, WebSearchAbility.NAME, 1, by=USER, in_turn=1, summary="")
+    running = _running(stranded.agent_id, WebSearchAbility.NAME, 1, by=USER, in_turn=1, context=None, summary="")
     assert _listing(client)["result"] == [running]
 
     with listening() as listener:
         swept = MessageProcessor(config_for(ConfigTypeEnum.USER)).turn_execution_service.sweep_orphaned()
 
     assert swept == []
-    ended = _row(db, WebSearchAbility.NAME, 1)
+    ended = _row(db, stranded.agent_id)
     assert (ended["status"], ended["response_id"]) == ("failed", None)
     assert _frames(listener) == [_changed({**running, "status": "failed"})]
     assert _listing(client) == _empty_listing()
-
-
-def test_a_subagent_spawned_after_retention_purged_its_channel_is_a_new_agent_on_the_reused_turn(
-    authed_client: _Client,
-) -> None:
-    """The chat's first search answers; retention then purges the search
-    channel's old turns, so the next search runs as the same turn id again. It
-    is spawned all the same, as a new agent with the next number: its row, its
-    frames, the number its call names and the label its reply carries are its
-    own, and the first agent keeps its outcome, its purged answer cleared."""
-    client, db, _store = authed_client
-    name, channel = WebSearchAbility.NAME, _channel(WebSearchAbility.NAME)
-    first = ChannelProvider(
-        chat=[calls(_spawn(name)), text(_STARTED), text(_ANSWERED)], web_search=[text(_ANSWER)],
-    )
-    run_turn(first, UserConfig(), _QUESTION)
-    turn = child_turn(db, channel, calls_of(db, name)[0]["id"])
-
-    db.execute("UPDATE transcript SET created_at = datetime('now', '-200 days') WHERE channel = ?", (channel,))
-    db.commit()
-    GarbageCollectorService().run()
-    assert db.execute("SELECT COUNT(*) FROM transcript WHERE channel = ?", (channel,)).fetchone()[0] == 0
-
-    task = "find the capital of Spain"
-    second = ChannelProvider(
-        chat=[calls(_spawn(name, task)), text(_STARTED), text(_ANSWERED)],
-        web_search=[text("Madrid is the capital of Spain.")],
-    )
-    parent, frames = run_turn(second, UserConfig(), "what is the capital of Spain?")
-
-    assert first.unused() == {} and second.unused() == {}
-    call = calls_of(db, name)[-1]
-    assert child_turn(db, channel, call["id"]) == turn
-    first_id, second_id = EARLIER_AGENTS + 1, EARLIER_AGENTS + 2
-    rows = db.execute(
-        "SELECT agent_id, prompt, status, response_id FROM agents WHERE type = ? AND turn_id = ? ORDER BY agent_id",
-        (name, turn),
-    ).fetchall()
-    answer = _final_answer(db, channel, turn)
-    assert [tuple(r) for r in rows] == [
-        (first_id, _INSTRUCTIONS, "done", None), (second_id, task, "done", answer["id"]),
-    ]
-    running = _running(second_id, name, turn, by=USER, in_turn=parent.turn_id, prompt=task, summary="")
-    assert [f for f in frames if f.get("type") == "agent_changed"] == [
-        _changed(running), _changed({**running, "status": "done", "response_id": answer["id"]}),
-    ]
-    assert f"Subagent {name} #{second_id} has been spawned." in call["result"]
-    assert f"Reply from {name} #{second_id}" in second.read("chat")[-1]
-    assert _listing(client) == _empty_listing()
-
-
-def test_a_subtask_message_naming_another_kind_of_agent_is_refused(db: sqlite3.Connection) -> None:
-    """The chat spawns a search, then messages a subtask by the search's
-    number. The number is one the chat spawned, but not a subtask's, so the
-    message is refused as not found and never reaches the search."""
-    held = Held(text(_ANSWER))
-    agent_id = EARLIER_AGENTS + 1
-    follow_up = "also find the capital of Spain"
-    provider = ChannelProvider(
-        chat=[
-            calls(_spawn(WebSearchAbility.NAME)),
-            calls(tool(SubtaskAbility.NAME, action="message", subtask=agent_id, message=follow_up)),
-            text(_STARTED),
-            text(_ANSWERED),
-        ],
-        web_search=[held],
-    )
-
-    with patched(provider):
-        begin(UserConfig(), _QUESTION).result()
-        wait(held.entered, "the search's model call")
-        held.gate.set()
-        drain()
-
-    assert held.opened and provider.unused() == {}
-    [search] = calls_of(db, WebSearchAbility.NAME)
-    turn = child_turn(db, delegate_channel(WebSearchAbility.NAME), search["id"])
-    assert _row(db, WebSearchAbility.NAME, turn)["agent_id"] == agent_id
-    [refused] = calls_of(db, SubtaskAbility.NAME)
-    assert refused["state"] == ToolCall.ERROR, refused["result"]
-    assert "code=subtask-not-found" in refused["result"]
-    assert f"No subtask #{agent_id} belongs to this conversation." in refused["result"]
-    assert all(follow_up not in sent for sent in provider.texts(WebSearchAbility.NAME))
-    reached = db.execute(
-        "SELECT COUNT(*) FROM transcript WHERE tool_call_id = ? AND channel != ?", (str(refused["id"]), USER),
-    ).fetchone()[0]
-    assert reached == 0
 
 
 def test_the_listing_pages_the_running_agents_oldest_first(authed_client: _Client) -> None:
@@ -563,17 +522,15 @@ def _migration_outcome(db: sqlite3.Connection) -> object:
 
 def test_an_install_without_the_agents_table_gets_it_on_boot(db: sqlite3.Connection) -> None:
     """A database provisioned before agents were recorded has no ``agents``;
-    the boot migration creates it with its guards and its lookup index — only
-    the four statuses, numbers never reused, a turn id a purged channel reuses
-    taking a second row, and an answer that is deleted leaves its agent
+    the boot migration creates it with its guards — only the four statuses,
+    numbers never reused, a turn id shared by many rows (every agent's own
+    channel opens on turn 1), and an answer that is deleted leaves its agent
     without one."""
     db.execute("DROP TABLE agents")
     db.commit()
     run_all(str(FileMapperService.get_db_path()))
 
     assert _migration_outcome(db) == "applied"
-    index = db.execute("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_agents_type_turn'").fetchone()
-    assert index is not None and "agents(type, turn_id)" in index[0]
     answer_id = db.execute("INSERT INTO transcript (channel, role, content) VALUES ('user', 'assistant', 'hi')").lastrowid
     insert = (
         "INSERT INTO agents (spawned_by_channel, spawned_in_turn, type, prompt, turn_id, status, response_id) "

@@ -8,8 +8,9 @@
 
 """WebSearchConfig — delegate channel for the ``web_search`` tool.
 
-Writes a real per-turn transcript row on its own ``delegate:web_search``
-channel so the delegate can render its own act-trail across ACT iterations.
+Writes a real per-turn transcript row on the subagent's own
+``delegate:web_search:{agent_id}`` channel so the delegate can render its own
+act-trail across ACT iterations.
 Without that row the turn uid is never assigned and ``_render_act_trail``
 returns "" — the loop would re-search blind to its own results with no way to
 converge. ``skip_input_row`` (HiddenInput) is
@@ -66,9 +67,12 @@ class WebSearchConfig(ProcessorConfig):
             always_available=[*tools, Recall.NAME, PlanAbility.NAME],
             skip_transcript=False,  # write a delegate-channel transcript row so
             skip_input_row=False,   # _setup assigns the uid the act-trail needs
-            suppress_history=True,
+            suppress_history=False,
             memory_seed=True,
         )
+        # The spawning turn rebinds ``channel`` to the subagent's own; the
+        # prompt is chosen by the kind's bare channel.
+        object.__setattr__(self, "prompt_channel", Channel.DELEGATE_WEB_SEARCH.value)
 
     @property
     def system_prompt(self) -> str:
@@ -78,4 +82,4 @@ Be efficient. Run ONE search, then work from the result snippets — they usuall
 
 Cite the sources you actually used. Never fabricate URLs, quotes, or facts. If the web yields nothing useful, say so plainly.
 
-Return a concise synthesis that directly answers the query. You have no conversation history and no user personality — work only from the query."""
+Return a concise synthesis that directly answers the query."""

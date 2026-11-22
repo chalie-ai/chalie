@@ -133,8 +133,7 @@ export function clearAll(type: string): void {
 
 /**
  * Each delegate turn's run state as its own latest execution frame gave it,
- * keyed `${channel}#${turnId}`. An ended turn can work again: a follow-up
- * message to a subtask reopens the same turn, and its frames mark it working.
+ * keyed `${channel}#${turnId}`.
  */
 const _delegateStates = reactive(new Map<string, TurnExecutionState>());
 

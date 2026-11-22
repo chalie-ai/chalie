@@ -19,14 +19,16 @@ const showText = computed(
   () => !(props.message.content === '[File attached]' && props.message.attachments?.length),
 );
 
-// A subagent's reply reads "Reply from <b>{name}</b> agent": the name is the
+// A subagent's reply reads "Reply from <b>{name}</b> agent", and a message it
+// sent while still working "Message from <b>{name}</b> agent": the name is the
 // summary of the call that started it, or its type when the call had none —
-// never its tool name or number. A reply whose call was purged names neither.
+// never its tool name or number. One whose call was purged names neither.
 const replyName = computed(() => {
   const origin = props.message.reply_from;
   if (!origin) return null;
   return origin.summary?.trim() || (origin.tool_name ? subagentKind(origin.tool_name).name : null);
 });
+const replyKind = computed(() => (props.message.reply_from?.kind === 'message' ? 'Message' : 'Reply'));
 
 // A subagent's reply starts folded to its label; a click opens it, another folds it.
 const open = ref(false);
@@ -96,8 +98,8 @@ function openAttachment(att: ConversationAttachment): void {
       @click="open = !open"
     >
       <ChevronRight class="user-message__chevron" :size="14" />
-      <span v-if="replyName">Reply from <b>{{ replyName }}</b> agent</span>
-      <span v-else>Reply from a subagent</span>
+      <span v-if="replyName">{{ replyKind }} from <b>{{ replyName }}</b> agent</span>
+      <span v-else>{{ replyKind }} from a subagent</span>
     </button>
     <span v-else-if="label" class="user-message__label">{{ label }}</span>
 

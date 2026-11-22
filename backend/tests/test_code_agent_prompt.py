@@ -9,11 +9,12 @@
 """Feature tests — the ``code_agent`` delegate's user prompt, and the
 class-of-defect guard that covers every channel behind it.
 
-``CodeAgentConfig`` sets ``suppress_history=True``, so the string
-:meth:`PromptService.user_prompt` returns IS the delegate's entire input: there
-is no history, no seeded memory, nothing else in the message list to carry the
-task. This channel once had no dispatch arm at all, and the fallthrough returned
-an empty body — which is not a soft failure. Empty-content tolerance is
+Each ``code_agent`` subagent runs as the first turn of a channel of its own
+(``delegate:code_agent:<agent_id>``), so it has no earlier history and the
+string :meth:`PromptService.user_prompt` returns is the only thing in the
+message list that carries the task. Its prompt is chosen by its kind's bare
+``delegate:code_agent`` channel. That channel once had no dispatch arm at all,
+and the fallthrough returned an empty body — which is not a soft failure. Empty-content tolerance is
 per-provider: a lenient provider answers plausible nonsense, a strict one rejects
 the request and the resulting crash names the vendor instead of the omission.
 Both are wrong, and neither is detectable by asserting on the delegate's answer.
@@ -46,6 +47,7 @@ import sqlite3
 import pytest
 
 import configs.channels as channels_pkg
+from abilities.code_agent import CodeAgentAbility
 from configs.channels.code_agent import CodeAgentConfig
 from configs.enums.channels import Channel
 from configs.enums.policy_channel import PolicyChannel
@@ -59,9 +61,15 @@ pytestmark = pytest.mark.unit
 _TASK = "write a Deno script that reverses a string and prove it runs"
 
 
+def _code_agent_config() -> ProcessorConfig:
+    """A code_agent subagent's config, on the subagent's own channel as the
+    spawning turn rebinds it."""
+    return CodeAgentConfig(PolicyChannel.CHAT).on_channel(Channel.for_agent(CodeAgentAbility.NAME, 12))
+
+
 def _code_agent_prompt(task: str = _TASK) -> str:
     """The real user-message body for a real code_agent delegate turn."""
-    mp = MessageProcessor(CodeAgentConfig(PolicyChannel.CHAT), raw_input=task)
+    mp = MessageProcessor(_code_agent_config(), raw_input=task)
     return mp.prompt_service.user_prompt()
 
 
@@ -73,7 +81,7 @@ def _open_code_agent_turn(task: str = _TASK) -> MessageProcessor:
     through ``_input_stamp``'s chain to the missing-timestamp placeholder.
     The other tests in this file don't depend on either row and use the
     lighter ``_code_agent_prompt`` helper instead."""
-    mp = MessageProcessor(CodeAgentConfig(PolicyChannel.CHAT), raw_input=task)
+    mp = MessageProcessor(_code_agent_config(), raw_input=task)
     mp.turn_id = mp.transcript_service.allocate_turn()
     mp.uid = mp.transcript_service.append_input(mp.raw_input)
     mp.current_transcript_id = mp.uid
@@ -87,13 +95,13 @@ def _open_code_agent_turn(task: str = _TASK) -> MessageProcessor:
 
 
 def test_code_agent_prompt_is_not_empty(db: sqlite3.Connection) -> None:
-    """The headline guarantee. With ``suppress_history=True`` this body is the
-    whole message, so a builder that returns nothing is as bad as no builder at
-    all — and unlike the missing arm, it would not raise."""
+    """The headline guarantee. On a subagent's first turn this body is the only
+    statement of its task, so a builder that returns nothing is as bad as no
+    builder at all — and unlike the missing arm, it would not raise."""
     prompt = _code_agent_prompt()
     assert prompt.strip(), (
-        "code_agent's user prompt is empty — with suppress_history=True this is "
-        "the delegate's ENTIRE input, and a strict provider rejects an "
+        "code_agent's user prompt is empty — on a subagent's first turn this is "
+        "the delegate's only statement of its task, and a strict provider rejects an "
         f"empty-content request outright. prompt={prompt!r}"
     )
 
@@ -155,7 +163,7 @@ def test_code_agent_prompt_renders_its_act_trail(db: sqlite3.Connection) -> None
     body staying well-formed rather than by trail content that does not exist
     yet. The populated-trail path is shared with every sibling delegate and
     covered by ``act_trail``'s own tests."""
-    mp = MessageProcessor(CodeAgentConfig(PolicyChannel.CHAT), raw_input=_TASK)
+    mp = MessageProcessor(_code_agent_config(), raw_input=_TASK)
     prompt = mp.prompt_service.user_prompt()
     trail = mp.prompt_service.act_trail()
     if trail:
@@ -198,7 +206,8 @@ def test_an_unrouted_channel_raises_instead_of_returning_an_empty_body(
 
 def test_code_agent_channel_is_dispatched(db: sqlite3.Connection) -> None:
     """The specific omission that crashed the turn: ``delegate:code_agent``
-    reaching the fallthrough."""
+    reaching the fallthrough — a subagent's own channel included, which is
+    dispatched by its kind's bare one."""
     try:
         _code_agent_prompt()
     except UnroutedPromptChannel as exc:  # pragma: no cover — the defect under test

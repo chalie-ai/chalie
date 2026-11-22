@@ -20,6 +20,7 @@ from collections.abc import Sequence
 from typing import ClassVar
 
 from models.model import Model
+from models.transcript import Transcript
 
 
 class TurnExecution(Model):
@@ -31,7 +32,7 @@ class TurnExecution(Model):
 
     __columns__: ClassVar[tuple[str, ...]] = (
         "id", "channel", "type", "turn_id", "started_at", "ended_at",
-        "cancel_requested", "state", "stop_reason",
+        "cancel_requested", "state", "stop_reason", "input_id",
     )
 
     @classmethod
@@ -54,6 +55,9 @@ class TurnExecution(Model):
     cancel_requested: bool
     state: str
     stop_reason: str | None
+    #: The transcript row id of the input this execution was opened for;
+    #: ``None`` when the turn wrote none (a hidden-input opener).
+    input_id: int | None
 
     @classmethod
     def open_turn(cls, channel: str, turn_id: int) -> "TurnExecution | None":
@@ -69,19 +73,25 @@ class TurnExecution(Model):
         )
 
     @classmethod
+    def open_on(cls, channel: str) -> "TurnExecution | None":
+        """The execution still running on ``channel``, whichever turn it is,
+        or ``None`` when the channel is idle."""
+        return cls.filter("channel", channel).filter("ended_at", None, "IS").first()
+
+    @classmethod
     def joinable(cls, channel: str, turn_id: int, *, spine_only: bool) -> "TurnExecution | None":
         """The live execution a message sent to (channel, turn_id) joins
         instead of opening one of its own — :meth:`open_turn`'s row unless a
-        stop was requested on it. ``spine_only`` narrows it to the turn's
-        first execution: a follow-up on the thread's opener must never land
-        inside a reply that happens to be running."""
+        stop was requested on it. ``spine_only`` narrows it to the execution
+        opened for the thread's opening row, found by its record id: a
+        follow-up on the thread's opener must never land inside a reply that
+        happens to be running. An execution with no input row is a hidden-input
+        opener, which only ever starts a thread."""
         execution = cls.open_turn(channel, turn_id)
         if execution is None or execution.cancel_requested:
             return None
-        if spine_only:
-            first = cls.filter("channel", channel).filter("turn_id", turn_id).order_by("id ASC").first()
-            if first is None or first.id != execution.id:
-                return None
+        if spine_only and execution.input_id is not None and execution.input_id != Transcript.first_id(channel, turn_id):
+            return None
         return execution
 
     @classmethod

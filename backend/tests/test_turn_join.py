@@ -43,7 +43,6 @@ from services.dispatch_service import DispatchService
 from services.file_mapper_service import FileMapperService
 from services.prompt_service import PromptService
 from services.provider_api import ProviderApiRequest
-from services.transcript_service import TranscriptService
 from services.turn_serializer_service import get_service as _serializer
 from tests.test_act_trail_exchange_scope import _assistant_row, _bare_mp, _input_row, _tool_call
 
@@ -175,7 +174,9 @@ def _label_thread(turn_id: int) -> None:
     """Give a thread its label up front. A reply into an unlabelled thread
     launches a label-writing call of its own at the same provider, which would
     race the reply's own call for the scripted responses."""
-    ThreadGist(channel=_CHANNEL, turn_id=turn_id, gist="seeded label").upsert()
+    opening_id = Transcript.first_id(_CHANNEL, turn_id)
+    assert opening_id is not None
+    ThreadGist(opening_id=opening_id, gist="seeded label").upsert()
 
 
 def _start_working_turn(client: FlaskClient, provider: _Provider, text: str) -> dict[str, object]:
@@ -526,7 +527,7 @@ def test_joined_messages_render_after_the_step_they_were_read_with_and_never_bef
     _joined_row(ch, turn, "second addition")
 
     read_both = _bare_mp(ch, turn, uid=uid)
-    joined = TranscriptService(read_both).joined_since(uid)
+    joined = Transcript.joined_since(ch, turn, uid)
     assert [r.content for r in joined] == ["first addition", "second addition"]
     read_both.consumed_joins = {a1: [joined[0]], a2: [joined[1]]}
     lines = PromptService(read_both).act_trail().split("\n")

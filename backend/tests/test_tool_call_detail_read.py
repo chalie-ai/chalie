@@ -37,7 +37,9 @@ from models.provider_response import ProviderResponse
 from models.tool_call import ToolCall
 from services.turn_serializer_service import TurnSerializerService
 from tests._browser_live import bearer_header, signed_in, use_own_data_dir
-from tests._delegates import ChannelProvider, Held, agent_number, child_turn, delegate_channel, replies, run_turn
+from tests._delegates import (
+    ChannelProvider, Held, agent_number, child, delegate_channel, kind_rows, replies, run_turn,
+)
 
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider", "earlier_agents")]
 
@@ -193,22 +195,22 @@ def test_a_subagent_call_from_the_chat_names_its_turn_while_it_works_and_after_a
 
     assert search.opened and provider.unused() == {}
     row = _row(db, WebSearchAbility.NAME)
-    n = child_turn(db, _WEB_SEARCH_CHANNEL, row["id"])
-    assert f"Reply from {WebSearchAbility.NAME} #{agent_number(WebSearchAbility.NAME, n)}" in row["result"]
+    channel, n = child(db, _WEB_SEARCH_CHANNEL, row["id"])
+    assert f"Reply from {WebSearchAbility.NAME} #{agent_number(channel)}" in row["result"]
     assert _ANSWER not in row["result"]
     [(status, body)] = mid_run
     assert status == 200, body
     while_working = cast("dict[str, object]", cast("dict[str, object]", body)["result"])
     assert (while_working["state"], while_working["result"], while_working["delegate"]) == (
         "done", row["result"], {
-            "channel": _WEB_SEARCH_CHANNEL, "turn_id": n,
+            "channel": channel, "turn_id": n,
             "working": True, "crashed": False, "cancelled": False,
         },
     )
     after = _ok(person, f"/api/tool-calls/{row['id']}")
     assert (after["state"], after["result"], after["delegate"]) == (
         "done", row["result"], {
-            "channel": _WEB_SEARCH_CHANNEL, "turn_id": n,
+            "channel": channel, "turn_id": n,
             "working": False, "crashed": False, "cancelled": False,
         },
     )
@@ -301,4 +303,4 @@ def test_a_web_browse_call_refused_before_it_starts_opens_no_run_and_lists_no_pa
     call = _ok(person, f"/api/tool-calls/{row['id']}")
     assert (call["state"], call["result"]) == ("error", row["result"])
     assert (call["delegate"], call["pages"]) == (None, [])
-    assert db.execute("SELECT COUNT(*) FROM transcript WHERE channel = ?", (_WEB_BROWSE_CHANNEL,)).fetchone()[0] == 0
+    assert kind_rows(db, _WEB_BROWSE_CHANNEL) == 0

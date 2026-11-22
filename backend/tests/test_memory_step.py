@@ -405,12 +405,16 @@ def test_out_of_scope_settles_fire_nothing(db: sqlite3.Connection) -> None:
     """Channels outside the in-scope set never fire a memory step.
 
     Directly asserts ``_in_scope`` for several fixed and dynamic channel
-    names, then drives a real out-of-scope one-shot (``compaction``) and
+    names — a subtask's own channel is in scope, its kind's bare one and any
+    other subagent's are not — then drives a real out-of-scope one-shot (``compaction``) and
     verifies that no step requests were served and no role='memory' rows
     were written."""
     assert _in_scope("skills_building") is False
     assert _in_scope("delegate:pim") is False
+    assert _in_scope("delegate:web_search:12") is False
+    assert _in_scope("delegate:subtask") is False
     assert _in_scope("compaction") is False
+    assert _in_scope("delegate:subtask:12") is True
     assert _in_scope("external-agent:crm") is True
     assert _in_scope("user") is True
 

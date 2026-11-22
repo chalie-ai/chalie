@@ -50,7 +50,7 @@ from tests._delegates import (
     block,
     calls,
     calls_of,
-    child_turn,
+    child,
     drain,
     messages,
     patched,
@@ -174,8 +174,9 @@ def test_a_subtask_the_chat_starts_plans_its_task_and_is_offered_no_subagent(db:
     assert not subtask_tools & _SUBAGENTS, subtask_tools
 
     call_id = cast("int", calls_of(db, SubtaskAbility.NAME)[0]["id"])
-    n = child_turn(db, _SUBTASK, call_id)
-    [task_row] = [cast("int", r["id"]) for r in Transcript.by_turn(_SUBTASK, n) if r["role"] == "user"]
+    [task_row] = [
+        cast("int", r["id"]) for r in Transcript.by_turn(*child(db, _SUBTASK, call_id)) if r["role"] == "user"
+    ]
     assert [(t.title, t.status) for t in PlanTask.for_transcript(task_row)] == [(_STEP, "done")]
     [reply] = replies(db, call_id)
     assert reply["content"] == _PRIMES

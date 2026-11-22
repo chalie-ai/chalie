@@ -32,18 +32,19 @@ from werkzeug.test import TestResponse
 
 from abilities.chalie_docs import ChalieDocsAbility
 from abilities.find_tools import FindToolsAbility
+from abilities.message_subagent import MessageSubagentAbility
 from abilities.recall import Recall
-from abilities.subtask import SubtaskAbility
 from abilities.web_search import WebSearchAbility
 from configs.channels.user import UserConfig
+from configs.enums.channels import delegate_agent_id
 from models.provider_response import ProviderResponse
-from tests._delegates import ChannelProvider, Held, calls, chip, delegate_channel, run_turn, text, tool
+from tests._delegates import ChannelProvider, Held, calls, calls_of, child, chip, delegate_channel, run_turn, text, tool
 
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 
 _READ_TIMEOUT_S = 30.0
 _STEP_WAIT_S = 10.0
-_CHILD_CHANNEL = delegate_channel(WebSearchAbility.NAME)
+_CHILD_KIND = delegate_channel(WebSearchAbility.NAME)
 
 Frame = dict[str, object]
 
@@ -51,6 +52,15 @@ Frame = dict[str, object]
 def _address(frame: Frame) -> tuple[object, object]:
     """The surface a frame is for: a delegate turn by its channel, any other by its type."""
     return frame.get("channel") or frame.get("type"), frame.get("turn_id")
+
+
+def _waits_on(frame: Frame) -> str:
+    """The key of the model steps that wait on the surface *frame* addresses:
+    a subagent's own channel by its kind's bare one (this run starts one
+    subagent, whose channel is not known until it runs), any other surface as
+    it is addressed."""
+    surface = str(_address(frame)[0])
+    return surface.rpartition(":")[0] if delegate_agent_id(surface) is not None else surface
 
 
 def _thread_path(frame: Frame) -> str:
@@ -91,6 +101,7 @@ class _RefetchRun:
     frames: list[Frame]
     reads: list[tuple[Frame, TestResponse | None]]
     next_steps: list[_AfterRefetch]
+    child_channel: str
 
     @property
     def finished(self) -> list[Frame]:
@@ -105,28 +116,28 @@ def refetch_run(authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -
     """A user turn that runs an ordinary tool to ``done``, sends a call its tool
     rejects before running it, calls ``web_search`` — which returns at once,
     ``done``, while its child turn runs ``recall`` to ``done`` after the user
-    turn has ended — then messages a subtask this conversation never started,
+    turn has ended — then messages a subagent this conversation never started,
     which fails while running, and replies; the child's reply is answered in a
     turn of its own. Each call runs in its own model step, so no two calls on
     one surface are ever in flight together, and the step after each finished
     call waits for that surface's refetch, as a slow model would."""
-    client, _db, _store = authed_client
+    client, db, _store = authed_client
     reads: list[tuple[Frame, TestResponse | None]] = []
     lock = threading.Lock()
     waiting = {
         "user": [
             _AfterRefetch(calls(tool(ChalieDocsAbility.NAME))),
             _AfterRefetch(calls(tool(WebSearchAbility.NAME, instructions="find the capital of France"))),
-            _AfterRefetch(calls(tool(SubtaskAbility.NAME, action="message", subtask=9999, message="any news?"))),
+            _AfterRefetch(calls(tool(MessageSubagentAbility.NAME, agent_id=9999, message="any news?"))),
             _AfterRefetch(text("I could not find it.")),
         ],
-        _CHILD_CHANNEL: [_AfterRefetch(text(""))],
+        _CHILD_KIND: [_AfterRefetch(text(""))],
     }
     next_steps = [step for steps in waiting.values() for step in steps]
     just_finished: set[str] = set()
 
     def refetch_on_poke(frame: Frame) -> None:
-        surface = str(_address(frame)[0])
+        surface = _waits_on(frame)
         if surface not in waiting:
             return
         if "tool_name" in frame and frame["state"] != "started":
@@ -148,15 +159,16 @@ def refetch_run(authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -
 
     provider = ChannelProvider(
         chat=[
-            calls(tool(FindToolsAbility.NAME, query=["weather"])),
+            calls(tool(FindToolsAbility.NAME, query=[MessageSubagentAbility.NAME])),
             *waiting["user"],
             text("The search found nothing either."),
         ],
-        web_search=[Held(calls(tool(Recall.NAME, query="capital of France"))), *waiting[_CHILD_CHANNEL]],
+        web_search=[Held(calls(tool(Recall.NAME, query="capital of France"))), *waiting[_CHILD_KIND]],
     )
     _chat, frames = run_turn(provider, UserConfig(), "what is the capital of France?", refetch_on_poke)
     assert provider.unused() == {}
-    return _RefetchRun(frames, reads, next_steps)
+    [search] = calls_of(db, WebSearchAbility.NAME)
+    return _RefetchRun(frames, reads, next_steps, child(db, _CHILD_KIND, search["id"]).channel)
 
 
 def test_every_finished_call_is_followed_by_updated_on_its_own_surface(refetch_run: _RefetchRun) -> None:
@@ -168,10 +180,10 @@ def test_every_finished_call_is_followed_by_updated_on_its_own_surface(refetch_r
     finished = refetch_run.finished
 
     assert sorted((_address(f)[0], f["tool_name"], f["state"]) for f in finished) == [
-        (_CHILD_CHANNEL, Recall.NAME, "done"),
+        (refetch_run.child_channel, Recall.NAME, "done"),
         ("user", ChalieDocsAbility.NAME, "error"),
         ("user", FindToolsAbility.NAME, "done"),
-        ("user", SubtaskAbility.NAME, "error"),
+        ("user", MessageSubagentAbility.NAME, "error"),
         ("user", WebSearchAbility.NAME, "done"),
     ]
     for call in finished:
@@ -204,7 +216,7 @@ def test_a_running_call_sends_no_updated(refetch_run: _RefetchRun) -> None:
             windows[call["tool_name"]] = on_address[start:on_address.index(call)]
 
     assert sorted(cast("list[str]", list(windows))) == sorted(
-        [FindToolsAbility.NAME, Recall.NAME, SubtaskAbility.NAME, WebSearchAbility.NAME],
+        [FindToolsAbility.NAME, MessageSubagentAbility.NAME, Recall.NAME, WebSearchAbility.NAME],
     )
     assert [f["state"] for f in windows[WebSearchAbility.NAME] if f.get("tool_name") == WebSearchAbility.NAME] == [
         "started", "started",

@@ -256,7 +256,10 @@ def test_next_turn_execution_starts_clean(
     # turn's for the scripted responses below. A thread that already carries its
     # label launches nothing, so this turn is the provider's only caller.
     from models.thread_gist import ThreadGist
-    ThreadGist(channel=mp_1.channel, turn_id=mp_1.turn_id, gist="first turn").upsert()
+    from models.transcript import Transcript
+    opening_id = Transcript.first_id(mp_1.channel, mp_1.turn_id)
+    assert opening_id is not None
+    ThreadGist(opening_id=opening_id, gist="first turn").upsert()
 
     # Second turn — fresh MP, new scripted provider.
     trace_2 = "turn two reasoning"

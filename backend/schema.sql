@@ -315,16 +315,16 @@ CREATE VIRTUAL TABLE IF NOT EXISTS lists_vec USING vec0(embedding float[768]);
 -- ────────────────────────────────────────────────────────────────
 -- THREAD GIST — one terse 3-5 word topical label per conversation thread (a
 -- turn grown past its settle0). Written once, on the first reply past settle0.
--- Logical FK (channel, turn_id) → transcript; pure FE affordance, no embedding,
--- no search index.
+-- Found by its thread's opening transcript row id (opening_id). No foreign
+-- key: once that row is purged the label matches no row and reads as gone.
+-- Pure FE affordance, no embedding, no search index.
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS thread_gist (
-    channel     TEXT NOT NULL,
-    turn_id     INTEGER NOT NULL,
+    opening_id  INTEGER,
     gist        TEXT,
-    created_at  TEXT NOT NULL,
-    PRIMARY KEY (channel, turn_id)
+    created_at  TEXT NOT NULL
 );
+CREATE UNIQUE INDEX IF NOT EXISTS ux_thread_gist_opening ON thread_gist(opening_id);
 
 -- ────────────────────────────────────────────────────────────────
 -- WRAPPER TOKENS — bearer auth for external programmatic access
@@ -475,24 +475,25 @@ CREATE INDEX IF NOT EXISTS idx_tool_calls_created ON tool_calls(created_at DESC)
 -- in its own table means firing one never moves a turn_id, so the
 -- turn boundary stays stable across a mid-turn collapse.
 --
--- Two-axis watermark — one table, two scopes told apart by for_turn_id.
--- A MAIN-view checkpoint leaves for_turn_id empty and stores a turn id in
--- compacted_up_to, so the spine read drops every turn at or before that id.
--- A FORK-view checkpoint sets for_turn_id to its thread and stores a
--- transcript row id, so the thread read drops that thread's rows at or
--- before it. The two scopes sit on different axes and never collide, so a
--- MAIN checkpoint can't hide a fork reply and a FORK checkpoint can't hide
--- the spine.
+-- One table, two scopes told apart by opening_id. A MAIN-view checkpoint
+-- leaves opening_id empty and covers the spine; a FORK-view checkpoint sets
+-- opening_id to its thread's opening transcript row id and covers that thread
+-- only. Either way compacted_up_to_id is the transcript row id the checkpoint
+-- folded up to, and the view's read drops its rows at or before it. No
+-- foreign keys: once a thread's opening row is purged its checkpoint matches
+-- no row and reads as gone. A row with no compacted_up_to_id is one the
+-- upgrade could not match to a transcript row (its thread has no rows), and
+-- it is never read.
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS compactions (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    channel         TEXT NOT NULL,
-    for_turn_id     INTEGER,
-    compacted_up_to INTEGER NOT NULL,
-    content         TEXT NOT NULL,
-    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel             TEXT NOT NULL,
+    opening_id          INTEGER,
+    compacted_up_to_id  INTEGER,
+    content             TEXT NOT NULL,
+    created_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
-CREATE INDEX IF NOT EXISTS ix_compactions_scope ON compactions(channel, for_turn_id, id);
+CREATE INDEX IF NOT EXISTS ix_compactions_scope ON compactions(channel, opening_id, id);
 
 -- ────────────────────────────────────────────────────────────────
 -- USER SYNTHESIS — versioned append-only user profile summary
@@ -546,15 +547,25 @@ CREATE TABLE IF NOT EXISTS plan_tasks (
 -- ────────────────────────────────────────────────────────────────
 -- AGENTS — one row per subagent spawned, by any caller. agent_id is the
 -- number the model uses for it; type is the spawn tool's name, and the
--- subagent's own turn runs on that tool's delegate channel as turn_id.
--- Turn ids are counted per channel and start over once retention has purged
--- a channel's newest turns, so type + turn_id is not unique: the newest row
--- for the pair is the live one.
+-- subagent runs on a channel of its own, delegate:<type>:<agent_id>, its
+-- current turn there being turn_id: its spawn turn, then each turn a message
+-- opens on it.
 -- spawned_by_channel / spawned_in_turn name the caller's turn; prompt is the
--- plain task it wrote. status leaves 'running' once, when the run ends;
--- response_id is the final reply row of a run that ended 'done'. The
--- retention sweep may delete that row; the agent is still kept, so its
--- reference is cleared rather than the agent deleted with it.
+-- plain task it wrote. status leaves 'running' once per turn, when that turn
+-- ends: 'waiting' when it completed with a delivered message_parent as its
+-- last tool call (it asked its caller and stopped for the reply), 'done'
+-- when it completed any other way, 'cancelled' or 'failed' when it was stopped or
+-- crashed. An agent leaves 'waiting' when a message to it opens its next
+-- turn, which sets it running again, as it does for a 'done' one; a stop
+-- ends it 'cancelled' from any status. response_id is the row its latest
+-- turn ended on: the final reply when that turn ended 'done' or 'waiting',
+-- the turn's last row when it ended 'cancelled' or 'failed'. The retention
+-- sweep may delete that row; the agent is still kept, so its reference is
+-- cleared rather than the agent deleted with it.
+-- context_id is the first row of the caller's turn, its input row: the
+-- subagent's first turn reads it, by this id, as the context of its task.
+-- It is NULL when the caller's turn wrote no input row (a hidden-input
+-- turn), and that first turn then reads its task with no context.
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS agents (
     agent_id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -563,11 +574,11 @@ CREATE TABLE IF NOT EXISTS agents (
     type               TEXT    NOT NULL,
     prompt             TEXT    NOT NULL,
     status             TEXT    NOT NULL DEFAULT 'running'
-                       CHECK (status IN ('running', 'done', 'cancelled', 'failed')),
+                       CHECK (status IN ('running', 'waiting', 'done', 'cancelled', 'failed')),
     response_id        INTEGER REFERENCES transcript(id) ON DELETE SET NULL,
-    turn_id            INTEGER NOT NULL
+    turn_id            INTEGER NOT NULL,
+    context_id         INTEGER REFERENCES transcript(id) ON DELETE SET NULL
 );
-CREATE INDEX IF NOT EXISTS idx_agents_type_turn ON agents(type, turn_id);
 
 -- ────────────────────────────────────────────────────────────────
 -- TRANSCRIPT THINKING — chain-of-thought traces per transcript anchor
@@ -603,7 +614,10 @@ CREATE TABLE IF NOT EXISTS turn_executions (
     cancel_requested  INTEGER NOT NULL DEFAULT 0,
     state             TEXT NOT NULL DEFAULT 'working'
                       CHECK (state IN ('working', 'completed', 'cancelled', 'crashed')),
-    stop_reason       TEXT
+    stop_reason       TEXT,
+    -- The transcript row id of the input this execution was opened for; NULL
+    -- when the turn wrote none (a hidden-input opener). No foreign key.
+    input_id          INTEGER
 );
 
 -- Serves both DELETE /api/thread/<turn_id>'s point lookup (this channel's
@@ -613,6 +627,27 @@ CREATE TABLE IF NOT EXISTS turn_executions (
 -- caller needs.
 CREATE INDEX IF NOT EXISTS idx_turn_executions_open
     ON turn_executions(channel, turn_id) WHERE ended_at IS NULL;
+
+-- ────────────────────────────────────────────────────────────────
+-- QUEUED MESSAGES — a message delivered to a channel while a turn there was
+-- still working, or while other messages already waited. Each turn end on
+-- the channel removes the oldest and opens its turn, one per turn end.
+-- tool_call_id is the tool_calls row that sent the message, if any.
+-- origin is the JSON of the sender's origin, where its turn's prompts land, if any.
+-- response_id is the transcript row of the subagent answer the message carries,
+-- whose follow-up block its turn's prompt shows, if any. No foreign key.
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS queued_messages (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel      TEXT    NOT NULL,
+    text         TEXT    NOT NULL,
+    tool_call_id INTEGER,
+    origin       TEXT,
+    response_id  INTEGER,
+    created_at   TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_queued_messages_channel ON queued_messages(channel, id);
 
 -- ────────────────────────────────────────────────────────────────
 -- DATA GRAPH — research-informed knowledge graph (replaces knowledge)

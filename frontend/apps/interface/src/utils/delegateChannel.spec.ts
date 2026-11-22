@@ -8,10 +8,10 @@
  * Pure function, no collaborators — the one place a plain unit spec is right.
  */
 import { describe, expect, it } from 'vitest';
-import { isDelegateChannel } from './delegateChannel';
+import { delegateName, isDelegateChannel } from './delegateChannel';
 
 describe('isDelegateChannel', () => {
-  it.each(['delegate:web_search', 'delegate:code_agent', 'delegate:web_browse'])(
+  it.each(['delegate:web_search', 'delegate:code_agent', 'delegate:web_browse', 'delegate:web_search:12'])(
     'recognises the delegate channel %s',
     (channel) => {
       expect(isDelegateChannel(channel)).toBe(true);
@@ -38,5 +38,15 @@ describe('isDelegateChannel', () => {
     ['an array holding a delegate channel', ['delegate:web_search']],
   ])('rejects a non-string (%s) without throwing', (_label, value) => {
     expect(isDelegateChannel(value)).toBe(false);
+  });
+});
+
+describe('delegateName', () => {
+  it.each([
+    ["a subagent's own channel", 'delegate:web_search:12', 'web_search'],
+    ["a subtask's own channel", 'delegate:subtask:101', 'subtask'],
+    ['a bare kind channel', 'delegate:code_agent', 'code_agent'],
+  ])('reads the kind of %s', (_label, channel, kind) => {
+    expect(delegateName(channel)).toBe(kind);
   });
 });

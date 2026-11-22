@@ -103,19 +103,20 @@ export interface ConversationMessage {
    */
   joined?: boolean | null;
   /**
-   * Who wrote this row, when it is not the user — a subtask transcript's own
-   * input row carries 'Task from Chalie' or 'Message from Chalie' (on the
-   * `delegate:subtask` channel). Absent/null on every other row, a subagent's
-   * reply included: that row carries `reply_from` instead.
+   * Who wrote this row, when it is not the user — a subtask's first input row
+   * carries 'Task from Chalie', and a message Chalie later sent into any
+   * running subagent carries 'Message from Chalie'. Absent/null on every other
+   * row, a subagent's reply included: that row carries `reply_from` instead.
    */
   speaker?: string | null;
   /**
-   * On a subagent's reply landing on the chat: the subagent's tool and the
-   * one-line summary of the call that started it (empty when the call carried
-   * none) — plain data the interface words the reply's caption from. Both are
-   * null on a reply whose call was purged. Absent on every other row.
+   * On a subagent's reply landing on the chat, or a message it sent while
+   * still working (`kind` 'message', else 'reply'): the subagent's tool and
+   * the one-line summary of the call that started it (empty when the call
+   * carried none) — plain data the interface words the caption from. Both are
+   * null once the call was purged. Absent on every other row.
    */
-  reply_from?: { tool_name: string | null; summary: string | null } | null;
+  reply_from?: { tool_name: string | null; summary: string | null; kind: 'message' | 'reply' } | null;
   /**
    * Pre-synthesis outcome for a settled row, as of this fetch: 'ready' (audio
    * stored), 'failed' (gave up after its attempts), or absent/null for a row
@@ -284,8 +285,9 @@ export const conversation = {
   /**
    * GET /api/threads/<turn_id>?channel= — one delegate turn's full block (the
    * subagent panel's read + WS refetch). turn_id is unique only per channel,
-   * so the full `delegate:<name>` channel is always sent, and a block echoed
-   * back on any other channel rejects rather than reach a caller as this turn.
+   * so the subagent's own `delegate:<name>:<agent_id>` channel is always sent,
+   * and a block echoed back on any other channel rejects rather than reach a
+   * caller as this turn.
    */
   delegateThread(turnId: number, channel: string): Promise<DelegateTurnBlock> {
     return api

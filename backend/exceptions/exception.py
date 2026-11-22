@@ -20,6 +20,7 @@ from exceptions.chalie_exception import ChalieException
 
 if TYPE_CHECKING:
     from controllers.message_processor import MessageProcessor
+    from models.agent import Agent
 
 logger = logging.getLogger(__name__)
 
@@ -188,6 +189,21 @@ class EmptyCompletionLoop(ChalieException):
     a bounded retry first; when the model stays empty past the limit it
     trips this loudly and ``_drive`` stamps the turn CRASHED.
     """
+
+
+class AgentStopped(ChalieException):
+    """A message was sent to a subagent that ended cancelled or failed, which
+    opens no turn again.
+
+    Raised by :meth:`MessageProcessor.deliver` inside its transaction, before
+    anything is queued or opened, carrying the subagent's row as that
+    transaction read it. :class:`~abilities.message_subagent.MessageSubagentAbility`
+    maps this to ``code=agent-stopped``.
+    """
+
+    def __init__(self, agent: Agent) -> None:
+        super().__init__(f"subagent #{agent.agent_id} is {agent.status}: no turn of its can open")
+        self.agent = agent
 
 
 # ── Search layer ──────────────────────────────────────────────────────────────

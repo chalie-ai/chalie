@@ -71,16 +71,18 @@ from functools import partial
 from threading import Thread, get_ident
 from typing import TYPE_CHECKING, Protocol, cast
 
-from abilities._delegate import replies_late, reply_to_caller, replying_tools
+from abilities._delegate import agent_config, replies_late, reply_to_caller, replying_tools
+from abilities.message_parent import MessageParentAbility, holds, waiting_reminder
 from abilities.plan import PlanAbility, plans
 from abilities.recall import Recall
 from configs.channels.user import UserConfig
-from configs.enums.channels import WATCHABLE_DELEGATE_CHANNELS, Channel
+from configs.enums.channels import Channel, delegate_type
 from configs.enums.param_key import Keys
 from configs.enums.plan_task_status import PlanTaskStatus
 from configs.enums.provider_type import ProviderType
 from configs.enums.thinking_level import ThinkingLevel
 from exceptions import (
+    AgentStopped,
     ContextLimit,
     EmptyCompletionLoop,
     ProviderResponseError,
@@ -90,10 +92,12 @@ from exceptions import (
 from models.agent import Agent
 from models.plan_task import PlanTask
 from models.provider_request import ProviderRequest
+from models.queued_message import QueuedMessage
 from models.tool_call import ToolCall
 from models.turn_execution import TurnExecution
 from models.transcript import Transcript
 from models.transcript_thinking import TranscriptThinking
+from services.agent_service import AgentService
 from services.compaction_service import CompactionService
 from services.database import Database
 from services.dispatch_service import DispatchService
@@ -164,6 +168,25 @@ def _without_echoed_calls(text: str, tool_calls: list[dict[str, object]]) -> str
     return text if len(kept) == len(lines) else "\n".join(kept).strip()
 
 
+def _queued_config(channel: str) -> ProcessorConfig:
+    """The config the turn of a message queued on ``channel`` runs on: the
+    chat's, or a subagent's on its own channel (:func:`agent_config`). A
+    message queued anywhere else cannot open its turn."""
+    if channel == Channel.USER:
+        return UserConfig()
+    agent = AgentService.of_channel(channel)
+    if agent is not None:
+        return agent_config(agent)
+    raise ValueError(f"no config opens the turn of a message queued on {channel}")
+
+
+def _working(channel: str, agent: Agent | None) -> bool:
+    """Whether a turn works on ``channel``: its execution is open, or the
+    subagent the channel belongs to (``agent``) is running — a spawn's turn
+    runs before its execution opens."""
+    return TurnExecution.open_on(channel) is not None or (agent is not None and agent.status == Agent.RUNNING)
+
+
 class _TurnCancelled(Exception):
     """Raised internally when a cancel request is observed mid-turn; caught by
     ``_drive`` to stamp the execution CANCELLED (never leaves this module)."""
@@ -207,6 +230,9 @@ class MessageProcessor:
         self.execution: TurnExecution | None = None
         # The ``agents`` row this turn runs as, when a spawn opened it.
         self.agent: Agent | None = None
+        # That subagent's turn before this one, when a message opened this
+        # turn on its channel (_resume); kept in memory only, never stored.
+        self.previous_turn_id: int | None = None
         self.active_tools: list[str] = []
         self.thinking_level: str = "low"
         self.thinking_override: str | None = None
@@ -253,6 +279,10 @@ class MessageProcessor:
         # there, in the order the model saw it rather than the order it arrived).
         self._consumed_through: int = 0
         self.consumed_joins: dict[int, list[Transcript]] = {}
+        # The subagents waiting for this channel's reply when the turn opened,
+        # worked out once in _setup and read on every step's input line, so one
+        # answered mid-turn stays named until the turn ends; '' when none.
+        self.waiting_reminder: str = ""
         # Sends of frames pushed by one thread while it holds an ``_atomic``
         # block, made only once that block commits.
         self._held: tuple[int, list[Callable[[], None]]] | None = None
@@ -305,7 +335,7 @@ class MessageProcessor:
         and a cancel addressed to a turn this process does not hold (which knows
         only the row's channel and the config its type resolves to, if any).
 
-        A watchable delegate turn (``WATCHABLE_DELEGATE_CHANNELS``) broadcasts
+        A watchable delegate turn (:func:`delegate_type`) broadcasts
         addressed by its channel, so a surface following it can stream it live.
         Any other turn broadcasts only when its config opts in
         (``BROADCASTS_STATE`` — the ``user`` and ``scheduled`` types) AND carries
@@ -313,7 +343,7 @@ class MessageProcessor:
         ``type_value() is None``) never reaches the wire. Past the gate this is
         a thin pass to ``Websocket.broadcast`` (itself a no-op on ``None`` and
         when nobody is listening)."""
-        if channel in WATCHABLE_DELEGATE_CHANNELS:
+        if delegate_type(channel) is not None:
             Websocket.broadcast(instance, channel=channel)
         elif config is not None and config.BROADCASTS_STATE and config.type_value() is not None:
             Websocket.broadcast(instance)
@@ -340,12 +370,10 @@ class MessageProcessor:
     def fork_view(self) -> bool:
         """True when this turn's history is its own thread's rows (the FORK
         view) rather than every turn on the channel (the MAIN view): a reply
-        into an existing turn, or any turn on a channel whose every turn is its
-        own conversation (``turn_scoped_history``). The history read, the
-        compaction watermark and the compactor all key on this one answer, so
-        the rows a checkpoint folds and the floor that cuts them never sit on
-        different axes."""
-        return self._forked or self.config.turn_scoped_history
+        into an existing turn. The history read, the compaction watermark and
+        the compactor all key on this one answer, so the rows a checkpoint
+        folds and the floor that cuts them never sit on different axes."""
+        return self._forked
 
     @property
     def origin(self) -> dict[str, object] | None:
@@ -402,24 +430,117 @@ class MessageProcessor:
         meta: dict[str, object] = metadata if metadata is not None else {}
         joined: TurnExecution | None = None
         if turn_id != -1 and not meta.get("attachments"):
-            joined = cls(config, turn_id).join(
-                text,
-                spine_only=spine_only,
-                tool_call_id=cast("int | None", meta.get("tool_call_id")),
-            )
+            joined = cls(config, turn_id).join(text, spine_only=spine_only)
         if joined is not None:
             return joined
         if turn_id != -1 and spine_only:
             turn_id = -1
         return cls.process(config, text, metadata, turn_id).execution
 
+    @classmethod
+    def deliver(
+        cls,
+        config: ProcessorConfig,
+        text: str,
+        tool_call_id: int | None,
+        origin: dict[str, object] | None = None,
+        response_id: int | None = None,
+    ) -> MessageProcessor | None:
+        """Send an agent's message to ``config``'s channel as a turn of its
+        own — it never joins one. An idle channel opens the turn at once; a
+        channel with a turn working, or with a message already waiting, queues
+        it behind them, for a turn's end to open (:meth:`drain`). The check,
+        the queued row and the new turn's rows — its number, input row and
+        execution — share one ``BEGIN IMMEDIATE`` transaction with every other
+        deliver and drain, so a message either queues before the working
+        turn's end commits, and that end opens it, or finds the channel idle
+        after and opens at once. An agent's message carries no attachments,
+        so its execution opens inside that transaction too. On a subagent's
+        own channel a running subagent counts as a working turn, and the turn
+        opened is the subagent's next one (:meth:`_resume`). A subagent that
+        ended cancelled or failed opens no turn again and takes no message:
+        the same transaction raises :class:`~exceptions.AgentStopped`, with
+        the row it read, before anything is queued or opened, so a stop lands
+        wholly before that check or wholly after the message. ``origin`` is
+        the sender's surface (:attr:`origin`), which the opened turn's prompts
+        land on. ``response_id`` is the transcript row of the subagent answer
+        a late reply carries, ``None`` for any other message: the opened
+        turn's prompt follows the reply with that answer's follow-up block
+        (:func:`~abilities._delegate.reply_follow_up`). The queued row keeps
+        both for the turn :meth:`drain` opens. Returns the opened turn, or
+        ``None`` when queued."""
+        mp = cls(
+            config, raw_input=text,
+            metadata={"tool_call_id": tool_call_id, "origin": origin, "response_id": response_id},
+        )
+        with mp._atomic():
+            agent = AgentService.of_channel(mp.channel)
+            if agent is not None and agent.status in (Agent.CANCELLED, Agent.FAILED):
+                raise AgentStopped(agent)
+            if _working(mp.channel, agent) or QueuedMessage.oldest(mp.channel) is not None:
+                QueuedMessage(
+                    channel=mp.channel, text=text, tool_call_id=tool_call_id,
+                    origin=None if origin is None else json.dumps(origin), response_id=response_id,
+                ).save()
+                return None
+            mp._open_turn()
+            mp._resume(agent)
+            mp.turn_execution_service.open()
+        mp._start()
+        return mp
+
+    @classmethod
+    def drain(cls, channel: str) -> MessageProcessor | None:
+        """Open the turn of the message that has waited longest on
+        ``channel``, when one waits and no turn is working there — run as
+        every turn ends and, at boot, for every channel holding one. One
+        message per call: the turn it opens drains the next as it ends. The
+        check, the row's removal and the new turn's rows share one
+        ``BEGIN IMMEDIATE`` transaction with :meth:`deliver`. The opened turn
+        prompts on the origin the row kept, and carries the answer row it
+        kept, as it would have had it opened at once. On a subagent's own
+        channel the turn opened is the subagent's next one (:meth:`_resume`);
+        a subagent that ended cancelled or failed opens no turn again, so
+        every message waiting for it is deleted instead. Never
+        raises: a failure is logged and rolled back, and the message waits for
+        the channel's next turn end or the next boot. Returns the opened turn,
+        or ``None``."""
+        try:
+            if QueuedMessage.oldest(channel) is None:
+                return None
+            mp = cls(_queued_config(channel))
+            with mp._atomic():
+                agent = AgentService.of_channel(channel)
+                if agent is not None and agent.status in (Agent.CANCELLED, Agent.FAILED):
+                    QueuedMessage.filter("channel", channel).delete()
+                    return None
+                queued = None if _working(channel, agent) else QueuedMessage.oldest(channel)
+                if queued is None:
+                    return None
+                queued.delete()
+                mp.raw_input = queued.text
+                mp.metadata["tool_call_id"] = queued.tool_call_id
+                mp.metadata["origin"] = None if queued.origin is None else json.loads(queued.origin)
+                mp.metadata["response_id"] = queued.response_id
+                mp._open_turn()
+                mp._resume(agent)
+                mp.turn_execution_service.open()
+        except Exception:  # noqa: BLE001 — the message waits; log, never raise
+            logger.exception("[MessageProcessor] %s: opening the turn of its oldest queued message failed", channel)
+            return None
+        mp._start()
+        return mp
+
     def begin(self) -> None:
         """Synchronous turn setup, then hand off to the drive thread. The
         turn-id allocation, fork guard and input row land in one single-writer
         transaction — with, for a turn a spawn opened, its ``agents``
         row (``metadata["agent"]``), so a subagent's number exists the moment
-        its turn does. Attachments land *after* that transaction commits
-        and *before* the execution row opens: after, because copying a file of
+        its turn does. That row is written first: its number names the
+        subagent's own channel (:attr:`Agent.channel`), which the turn is
+        rebound to and opens on as that channel's first turn. Attachments land
+        *after* that transaction commits and *before* the execution row opens:
+        after, because copying a file of
         arbitrary size inside ``BEGIN IMMEDIATE`` would hold SQLite's write
         lock for the length of the copy; before, because the ``working`` frame
         ``open()`` emits is the cue clients refetch on — a turn announced
@@ -429,24 +550,66 @@ class MessageProcessor:
         the thread starts. ``begin()`` never joins — it returns the instant the
         daemon is running."""
         with self.db.transaction():
-            self.turn_id = self.transcript_service.allocate_turn()
-            if self.config.external_turn_id:
-                # turn_id came from a key space the caller owns (schedule id). Its first
-                # use opens a MAIN turn; a repeat appends as FORK. Derive forked-ness from
-                # existence, never reject — a fresh external key is legitimately new.
-                self._forked = self.transcript_service.turn_exists()
-            elif self._forked and not self.transcript_service.turn_exists():
-                raise ValueError("Invalid turn_id specified")
-            self.uid = self._open_input_row()
-            self.current_transcript_id = self.uid
-            if self.uid is not None:
-                self._consumed_through = self.uid
-            agent = self.metadata.get("agent")
-            if isinstance(agent, Agent):
-                agent.turn_id = self.turn_id
-                self.agent = agent.insert()
+            self._open_turn()
         self._land_attachments()
         self.turn_execution_service.open()
+        self._start()
+
+    def _open_turn(self) -> None:
+        """Write this turn's opening rows inside the caller's transaction: the
+        ``agents`` row a spawn carries, the allocated turn id, the fork guard
+        and the input row."""
+        agent = self.metadata.get("agent")
+        if isinstance(agent, Agent):
+            agent.turn_id = 1
+            self.agent = agent.insert()
+            self.config = self.config.on_channel(self.agent.channel)
+            self.channel = self.config.channel
+        self.turn_id = self.transcript_service.allocate_turn()
+        if self.agent is not None and self.turn_id != self.agent.turn_id:
+            raise RuntimeError(
+                f"subagent {self.agent.agent_id}: its own channel {self.channel} "
+                f"already holds turns; its first opened as turn {self.turn_id}"
+            )
+        if self.config.external_turn_id:
+            # turn_id came from a key space the caller owns (schedule id). Its first
+            # use opens a MAIN turn; a repeat appends as FORK. Derive forked-ness from
+            # existence, never reject — a fresh external key is legitimately new.
+            self._forked = self.transcript_service.turn_exists()
+        elif self._forked and not self.transcript_service.turn_exists():
+            raise ValueError("Invalid turn_id specified")
+        self.uid = self._open_input_row()
+        self.current_transcript_id = self.uid
+        if self.uid is not None:
+            self._consumed_through = self.uid
+
+    def _resume(self, agent: Agent | None) -> None:
+        """Move ``agent`` — the subagent whose channel this turn opened on, if
+        any — onto this turn as running, inside the caller's transaction, so
+        the turn and its agent's row land together; :meth:`TurnExecutionService.open`
+        then announces the row. A subagent that ended cancelled or failed is
+        never resumed: :meth:`deliver` and :meth:`drain` turn one away in that
+        same transaction before reaching here, so a move that fails here is a
+        broken invariant — it raises, and the transaction rolls back.
+
+        ``agent`` still holds the turn it last ran, so before the move that
+        turn is kept as :attr:`previous_turn_id`, in memory only: this turn's
+        input is read against it (:meth:`PromptService._task`) — beside the
+        last message it delivered with ``message_parent``, which this message
+        answers, or, when it delivered none, word for word, a steer. It cannot
+        be read back later as the latest turn before this one: other turns
+        share the subagent's channel."""
+        if agent is None:
+            return
+        self.previous_turn_id = agent.turn_id
+        if not Agent.resume(agent.agent_id, self.turn_id):
+            current = Agent.by_id(agent.agent_id)
+            status = current.status if current is not None else "gone"
+            raise RuntimeError(f"subagent #{agent.agent_id} is {status}: no turn of its can open")
+        self.agent = Agent.by_id(agent.agent_id)
+
+    def _start(self) -> None:
+        """Record the allocated turn id and start the drive thread."""
         self.metadata["turn_id"] = self.turn_id
         self._thread = Thread(target=self._drive, daemon=True, name=f"turn-{self.turn_id}")
         self._thread.start()
@@ -463,12 +626,10 @@ class MessageProcessor:
             tool_call_id=cast("int | None", self.metadata.get("tool_call_id")),
         )
 
-    def join(self, text: str, *, spine_only: bool, tool_call_id: int | None = None) -> TurnExecution | None:
+    def join(self, text: str, *, spine_only: bool) -> TurnExecution | None:
         """Send ``text`` into this thread's turn while it is still working,
         instead of starting another: the message is written as a joined input
-        row — carrying the caller's ``tool_calls`` row when the message comes
-        from a tool call (``tool_call_id``) — and the running loop takes it in
-        at its next boundary. Returns the execution it joined, or ``None`` when
+        row, and the running loop takes it in at its next boundary. Returns the execution it joined, or ``None`` when
         there is nothing to join — no execution working (or one already asked
         to stop), or, with ``spine_only``, the one working is a reply rather
         than the thread's own first exchange. The check and the write share one
@@ -479,7 +640,7 @@ class MessageProcessor:
             execution = TurnExecution.joinable(self.channel, self.turn_id, spine_only=spine_only)
             if execution is None:
                 return None
-            self.transcript_service.append_input(text, joined=True, tool_call_id=tool_call_id)
+            self.transcript_service.append_input(text, joined=True)
         return execution
 
     def result(self) -> str:
@@ -509,9 +670,11 @@ class MessageProcessor:
         and this thread never waits on it. After every ending (completed,
         stopped, crashed) the turn closes the browser tab it opened, then a
         delegate's turn reports its outcome to a caller that did not wait for
-        it, the reply carrying the model's raw final text — the reply is an
-        input row on the caller's channel, and input rows are raw text —
-        rather than the HTML-formatted result."""
+        it, the reply carrying the model's raw final text — the reply is
+        delivered to the caller's channel as the input of a turn of its own,
+        and input rows are raw text — rather than the HTML-formatted result.
+        Last, the message waiting longest on this channel, if any, opens its
+        turn (:meth:`drain`)."""
         answer = ""
         try:
             self._setup()
@@ -530,6 +693,7 @@ class MessageProcessor:
             self._offer_memory_step()
         self._close_browser_tab()
         self._report_to_caller(answer)
+        self.drain(self.channel)
 
     def _step(self) -> "ProviderResponse":
         """One provider step, recursing until the model stops calling tools,
@@ -649,7 +813,7 @@ class MessageProcessor:
         with self._atomic():
             if self.turn_execution_service.should_stop():
                 raise _TurnCancelled()
-            waiting = bool(self.transcript_service.joined_since(self._consumed_through))
+            waiting = bool(Transcript.joined_since(self.channel, self.turn_id, self._consumed_through))
             if not response.tool_calls:
                 formatted = self._store(response.text, settled=not waiting)
                 self._capture_thinking_trace(response)
@@ -674,7 +838,7 @@ class MessageProcessor:
         """Take in every message joined since the last boundary: file it under
         the assistant row the model just wrote, so the act trail shows it after
         that row's tool calls — the order the model sees it in."""
-        rows = self.transcript_service.joined_since(self._consumed_through)
+        rows = Transcript.joined_since(self.channel, self.turn_id, self._consumed_through)
         if not rows:
             return
         self._offer_replying_tools(rows)
@@ -954,10 +1118,11 @@ class MessageProcessor:
 
     def _report_to_caller(self, answer: str) -> None:
         """Hand this turn's outcome — the model's raw final text, since the
-        reply is an input row on the caller's channel and input rows are raw
-        text — to the turn that started it, when that caller did not wait for
-        it (:func:`~abilities._delegate.reply_to_caller` settles whether there
-        is one). Every ending is offered — completed, stopped or crashed — and
+        reply is the input of a turn on the caller's channel and input rows
+        are raw text — to the channel that spawned this subagent, when that
+        caller did not wait for it: it opens a turn there, or queues behind
+        the one running (:meth:`deliver`). Every ending is offered —
+        completed, stopped or crashed — and
         :func:`~abilities._delegate.reply_to_caller` settles whether it is
         sent. Never raises: the turn is already terminal, so a reply that
         fails is logged and dropped, and the caller gets nothing."""
@@ -1018,10 +1183,18 @@ class MessageProcessor:
     # ── setup (on the drive thread, before the first send) ─────────────────────
 
     def _setup(self) -> None:
-        """Pre-loop setup: seed the always-available tools, gate thinking on the
-        ``user`` channel, seed the turn-zero flashback + any attachments, ingest
-        the reply's parent gist on a fork, then plan the message."""
+        """Pre-loop setup: work out the waiting reminder once, before the
+        first prompt reads it — less the subagent whose own message opened
+        this turn (:func:`~abilities.message_parent.waiting_reminder`) — seed
+        the always-available tools — and ``message_parent`` on the turn of a
+        subagent the chat spawned, the one kind that holds it, which no config
+        can tell — gate thinking on the ``user`` channel, seed the turn-zero
+        flashback + any attachments, ingest the reply's parent gist on a fork,
+        then plan the message."""
+        self.waiting_reminder = waiting_reminder(self.channel, cast("int | None", self.metadata.get("tool_call_id")))
         self.active_tools = list(self.config.always_available or [])
+        if holds(self.agent):
+            self.active_tools.append(MessageParentAbility.NAME)
         anchor = self.transcript_service.anchor_row()
         if anchor is not None:
             self._offer_replying_tools([anchor])

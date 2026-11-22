@@ -35,9 +35,9 @@ function toggleBrowser(): void {
 
 /** DOM-derived (no store) — see `utils/threadActivity.ts`. */
 const threadActivity = useThreadActivity();
-/** Rows the Activity drawer holds: unseen thread replies plus running
- *  subagents. The button shows only while there is one. */
-const activityCount = computed(() => threadActivity.value.length + agents.running.length);
+/** Rows the Activity drawer holds: unseen thread replies plus running and
+ *  waiting subagents. The button shows only while there is one. */
+const activityCount = computed(() => threadActivity.value.length + agents.active.length);
 
 const { toggle, theme } = useTheme();
 

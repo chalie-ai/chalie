@@ -1,5 +1,6 @@
 """DelegateParamsBag — the shared typed input contract of every single-input
-delegate tool (``pim``, ``code_agent``, ``web_search``, ``web_browse``).
+delegate tool (``pim``, ``code_agent``, ``web_search``, ``web_browse``,
+``subtask`` — whose one-value ``action`` the dispatcher's pre-gate checks).
 
 A delegate is a subagent-as-tool: its whole wire contract is one required
 plain-language ``instructions`` string handed to the inner processor as its

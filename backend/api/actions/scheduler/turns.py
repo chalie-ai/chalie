@@ -31,9 +31,9 @@ class SchedulerTurns(Action):
 
         Every live schedule is its own thread — ``turn_id`` is simply the
         schedule's own ``id`` (no series ``group_id`` to collapse occurrences
-        into). The gist is sourced from ``thread_gist`` (keyed by
-        channel=schedule, turn_id) — read separately and merged here, each
-        model owning its own table's SQL rather than a cross-table JOIN.
+        into). The gist is sourced from ``thread_gist``, found through each
+        schedule thread's opening transcript row — read separately and merged
+        here.
         """
         self.require_create_sentinel(id)
         schedules = ScheduledItem.recent()

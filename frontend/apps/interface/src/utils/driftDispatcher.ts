@@ -101,7 +101,7 @@ function resolveFrameType(turnId: number, rawType: string | null | undefined): s
 /**
  * The channel a delegate (subagent) turn's frame is addressed by, or null for
  * every other frame. A delegate turn has no ConfigType: its frames reach the
- * wire with `type` stripped and its `delegate:<name>` channel in its place.
+ * wire with `type` stripped and its `delegate:<name>:<agent_id>` channel in its place.
  * Typed frames may carry a channel too (`user`, a scheduled channel) and keep
  * routing by type exactly as before. A delegate's turn_id collides with user
  * turn ids, so its frame is routed by this channel alone and must never reach

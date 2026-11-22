@@ -17,7 +17,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import ClassVar, Self, cast
 
-from configs.enums.channels import WATCHABLE_DELEGATE_CHANNELS
+from configs.enums.channels import DELEGATE_CHANNEL_SPAN
 from models.model import Model
 
 # How long after a call's ``ended_at`` its child's input row may still land. A
@@ -116,16 +116,38 @@ class Transcript(Model):
         return int(row[0]) if row and row[0] is not None else None
 
     @classmethod
-    def last_answer(cls, channel: str, turn_id: int) -> str | None:
-        """Content of the turn's newest settled assistant row — the answer its
-        latest completed exchange ended on, as stored — or None for a turn that
-        never settled. Mirrors :meth:`settle0`'s style."""
+    def first_id(cls, channel: str, turn_id: int, *, above: int = 0) -> int | None:
+        """``id`` of the turn's first row past ``above``, or None when it has
+        none. With the default ``above`` it is the turn's opening row, the
+        record id other tables find a thread by. Mirrors :meth:`settle0`'s
+        style."""
         row = cls._bound_connection().execute(
-            f"SELECT content FROM transcript WHERE channel = ? AND turn_id = ? "
-            f"AND {cls._SETTLE_PREDICATE} ORDER BY id DESC LIMIT 1",
+            "SELECT MIN(id) FROM transcript WHERE channel = ? AND turn_id = ? AND id > ?",
+            (channel, turn_id, above),
+        ).fetchone()
+        return int(row[0]) if row and row[0] is not None else None
+
+    @classmethod
+    def last_id(cls, channel: str, turn_id: int) -> int | None:
+        """``id`` of the turn's last row, or None when it has none. Mirrors
+        :meth:`first_id`'s style."""
+        row = cls._bound_connection().execute(
+            "SELECT MAX(id) FROM transcript WHERE channel = ? AND turn_id = ?",
             (channel, turn_id),
         ).fetchone()
-        return cast("str | None", row[0]) if row else None
+        return int(row[0]) if row and row[0] is not None else None
+
+    @classmethod
+    def last_answer_id(cls, channel: str, turn_id: int) -> int | None:
+        """``id`` of the turn's newest settled assistant row — the answer its
+        latest completed exchange ended on — or None for a turn that never
+        settled. Mirrors :meth:`settle0`'s style."""
+        row = cls._bound_connection().execute(
+            f"SELECT MAX(id) FROM transcript WHERE channel = ? AND turn_id = ? "
+            f"AND {cls._SETTLE_PREDICATE}",
+            (channel, turn_id),
+        ).fetchone()
+        return int(row[0]) if row and row[0] is not None else None
 
     @classmethod
     def ids_for_turn(cls, channel: str, turn_id: int) -> list[int]:
@@ -137,6 +159,20 @@ class Transcript(Model):
             (channel, turn_id),
         ).fetchall()
         return [int(r[0]) for r in rows]
+
+    @classmethod
+    def joined_since(cls, channel: str, turn_id: int, after_id: int) -> list[Self]:
+        """The joined input rows of ``(channel, turn_id)`` written after
+        ``after_id``, oldest-first — the messages sent into the working turn
+        that its running exchange has not read yet."""
+        return (
+            cls.filter("channel", channel)
+            .filter("turn_id", turn_id)
+            .filter("joined", 1)
+            .filter("id", after_id, ">")
+            .order_by("id ASC")
+            .get()
+        )
 
     @classmethod
     def latest_thinking_level(cls, channel: str, turn_id: int | None = None) -> str | None:
@@ -298,21 +334,24 @@ class Transcript(Model):
         row, whose ``tool_call_id`` holds the caller's call id as text.
 
         ``calls`` maps each id to its ``(created_at, ended_at)``. A child row is
-        written after its call opened and before it ended, so the read is bounded
-        to the batch's span — earliest open to latest end, open-ended while any
-        call still runs — and walks the ``(channel, created_at)`` index rather
-        than every row the delegate channels hold: ``tool_call_id`` is unindexed.
+        written after its call opened and, unless a message the call queued
+        opened it later, before it ended, so the read is bounded to the
+        batch's span — earliest open to latest end, open-ended when any
+        ``ended_at`` is ``None``: that call still runs, or the caller passes
+        ``None`` to find a turn its queued message opened later — and to the
+        delegate channels' range of the
+        ``(channel, created_at)`` index (every subagent has a channel of its
+        own, so they cannot be listed): ``tool_call_id`` is unindexed.
         A call with no such row (not a delegate, not yet started, or purged by
         retention) is simply absent. Empty input short-circuits to ``{}``."""
         if not calls:
             return {}
-        channels = sorted(WATCHABLE_DELEGATE_CHANNELS)
         sql = (
             f"SELECT tool_call_id, channel, turn_id FROM transcript "
-            f"WHERE channel IN ({cls._placeholders(len(channels))}) "
+            f"WHERE channel >= ? AND channel < ? "
             f"AND tool_call_id IN ({cls._placeholders(len(calls))}) AND created_at >= ?"
         )
-        params = [*channels, *(str(i) for i in calls), min(_row_time(c) for c, _ in calls.values())]
+        params = [*DELEGATE_CHANNEL_SPAN, *(str(i) for i in calls), min(_row_time(c) for c, _ in calls.values())]
         ended = [e for _, e in calls.values() if e is not None]
         if len(ended) == len(calls):
             sql += " AND created_at <= ?"
@@ -481,16 +520,16 @@ class Transcript(Model):
 
     # A thread matches a search term when either its user-role content or its
     # (LLM-generated) gist label carries it. The gist half is a correlated
-    # subquery keyed on the real ``transcript.turn_id`` (not the NULL-safe
-    # ``_TURN_KEY``) — ``thread_gist`` rows only ever exist for a real turn_id,
-    # never for a legacy NULL-turn_id singleton, so this correctly matches
-    # nothing for those. Wrapped in MAX(COALESCE(..., 0)) to mirror the
-    # ``_CANCELLED_ORPHAN_HAVING`` idiom: a per-row correlated subquery
-    # aggregated across the GROUP, since HAVING cannot reference a
+    # subquery that finds the label by the thread's opening row id
+    # (``thread_gist.opening_id``): the group matches when one of its rows is
+    # that opening row. A legacy NULL-turn_id singleton never gets a label, so
+    # this matches nothing for those. Wrapped in MAX(COALESCE(..., 0)) to
+    # mirror the ``_CANCELLED_ORPHAN_HAVING`` idiom: a per-row correlated
+    # subquery aggregated across the GROUP, since HAVING cannot reference a
     # non-aggregated, non-grouped column directly.
     _GIST_MATCH: ClassVar[str] = (
-        "MAX(COALESCE((SELECT 1 FROM thread_gist tg WHERE tg.channel = transcript.channel "
-        "AND tg.turn_id = transcript.turn_id AND tg.gist LIKE ?), 0)) = 1"
+        "MAX(COALESCE((SELECT 1 FROM thread_gist tg WHERE tg.opening_id = transcript.id "
+        "AND tg.gist LIKE ?), 0)) = 1"
     )
 
     @classmethod

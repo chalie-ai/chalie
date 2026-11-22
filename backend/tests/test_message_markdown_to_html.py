@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
+from abilities.web_search import WebSearchAbility
 from configs.channels import (
     DiscoveryConfig,
     ScheduledConfig,
@@ -143,14 +144,15 @@ def test_subagent_channel_markdown_is_converted_and_script_stripped(
     text."""
     leaked = "**Valletta** is the capital of Malta.<script>alert('x')</script>"
     expected = "<b>Valletta</b> is the capital of Malta."
+    channel = Channel.for_agent(WebSearchAbility.NAME, 12)
 
     result = _run_turn(
-        WebSearchConfig(PolicyChannel.CHAT), "what is the capital of Malta", leaked
+        WebSearchConfig(PolicyChannel.CHAT).on_channel(channel), "what is the capital of Malta", leaked
     )
 
     assert result == expected
 
-    history = _recent(Channel.DELEGATE_WEB_SEARCH.value, limit=10)
+    history = _recent(channel, limit=10)
     assistant = [r for r in history if r["role"] == "assistant"]
     assert assistant, "no assistant row persisted on the subagent channel"
     content = assistant[-1]["content"]

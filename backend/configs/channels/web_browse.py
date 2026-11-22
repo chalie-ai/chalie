@@ -8,8 +8,8 @@
 
 """WebBrowseConfig — delegate channel for the ``web_browse`` tool.
 
-Writes a real per-turn transcript row on its own ``delegate:web_browse``
-channel so the turn uid is assigned and the delegate renders its own
+Writes a real per-turn transcript row on the subagent's own
+``delegate:web_browse:{agent_id}`` channel so the turn uid is assigned and the delegate renders its own
 act-trail across ACT iterations (do NOT set the two skip flags True). The
 uid keys the per-run browser PageSession and the screenshot ledger; the
 run's turn closes that session when it ends, however it ended. The config is
@@ -56,9 +56,12 @@ class WebBrowseConfig(ProcessorConfig):
             always_available=[*_WEB_BROWSE_TOOLS, Recall.NAME, PlanAbility.NAME],
             skip_transcript=False,  # uid + own transcript row, or the
             skip_input_row=False,   # act-trail dies and the loop runs blind
-            suppress_history=True,
+            suppress_history=False,
             memory_seed=True,
         )
+        # The spawning turn rebinds ``channel`` to the subagent's own; the
+        # prompt is chosen by the kind's bare channel.
+        object.__setattr__(self, "prompt_channel", Channel.DELEGATE_WEB_BROWSE.value)
 
     @property
     def system_prompt(self) -> str:
