@@ -10,7 +10,8 @@
 
 Pairs with a typed ``ProcessorConfig`` subclass (``WebBrowseConfig``, in
 ``configs/channels/web_browse.py`` with the other channel configs).  Replaces the browsing role the former ``web_surfer`` subagent performed,
-scoped down to a clean-context agent that drives the raw ``browser`` tool
+scoped down to an agent on its own channel, given only its task plus the message
+that started the spawning turn, that drives the raw ``browser`` tool
 (open / read / find / click / fill / select / scroll / back / screenshot) and reads what it finds.
 
 Named ``web_browse`` (not ``browser``) to avoid a flat-registry collision with

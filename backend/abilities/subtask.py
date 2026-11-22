@@ -75,8 +75,8 @@ class SubtaskAbility(DelegateAbility[DelegateParamsBag]):
                 "type": "string",
                 "description": (
                     "start: the whole task, written to stand alone — the subtask sees "
-                    "none of this conversation, so include every input, file "
-                    "path, constraint and expected output it needs."
+                    "only the message that started this turn, so include every input, "
+                    "file path, constraint and expected output it needs."
                 ),
             },
         },

@@ -18,8 +18,8 @@ SUBAGENT_TYPES registry, and no make_subagent_config() factory.
 
 Properties of every delegate tool:
   - Clean context — each subagent runs on a channel of its own
-    (``delegate:<type>:<agent_id>``): no personality, no other conversation's
-    history, no world state.
+    (``delegate:<type>:<agent_id>``) and gets only its task plus the message
+    that started the spawning turn.
   - Goal-driven system prompt — short, task-specific.
   - Finite tool surface — always_available lists exactly what the delegate needs;
     it does NOT pin find_tools, so the delegate cannot discover anything else.
