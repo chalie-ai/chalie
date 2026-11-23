@@ -93,10 +93,19 @@ const hasThread = ref(false);
 const canPick = computed(() => props.turnId != null || hasThread.value);
 // Every configured model; null until the list has been read.
 const models = ref<Provider[] | null>(null);
+// A model is shown by the model it runs; where two providers run the same one,
+// each adds its provider's name so the two can be told apart.
+const sharedModels = computed(() => {
+  const seen = new Set<string>();
+  const shared = new Set<string>();
+  for (const m of models.value ?? []) (seen.has(m.model) ? shared : seen).add(m.model);
+  return shared;
+});
+const modelName = (m: Provider): string => (sharedModels.value.has(m.model) ? `${m.model} (${m.name})` : m.model);
 const levelLabel = (l: string): string => THINKING_ITEMS.find((i) => i.level === l)?.label ?? l;
 const triggerLabel = computed(() => {
-  const name = models.value?.find((m) => m.id === providerId.value)?.name;
-  return name ? `${name} · ${levelLabel(level.value)}` : levelLabel(level.value);
+  const picked = models.value?.find((m) => m.id === providerId.value);
+  return picked ? `${modelName(picked)} · ${levelLabel(level.value)}` : levelLabel(level.value);
 });
 // A null turnId (the footer dock) reads the channel's latest reading; a thread
 // panel's dock reads its own thread. Both are fed by the same `context_usage`
@@ -489,13 +498,13 @@ onBeforeUnmount(() => {
           ref="menuRef"
           class="model-select__menu"
           role="menu"
-          :aria-label="menuModel ? `${menuModel.name} thinking levels` : 'Models'"
+          :aria-label="menuModel ? `${modelName(menuModel)} thinking levels` : 'Models'"
           @keydown="onMenuKeydown"
         >
           <template v-if="menuModel">
             <button class="model-select__item model-select__item--back" type="button" role="menuitem" @click="backToModels">
               <ChevronLeft :size="16" aria-hidden="true" />
-              <span class="model-select__name">{{ menuModel.name }}</span>
+              <span class="model-select__name">{{ modelName(menuModel) }}</span>
             </button>
             <button
               v-for="item in THINKING_ITEMS"
@@ -523,7 +532,7 @@ onBeforeUnmount(() => {
               aria-haspopup="menu"
               @click="openLevels(model)"
             >
-              <span class="model-select__name">{{ model.name }}</span>
+              <span class="model-select__name">{{ modelName(model) }}</span>
               <ChevronRight :size="16" aria-hidden="true" />
             </button>
           </template>

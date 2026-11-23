@@ -4,6 +4,8 @@ import { api } from '@chalie/shared';
 export interface Provider {
   id: number;
   name: string;
+  /** The model its requests go to. */
+  model: string;
   /** Its context window in tokens; null until the model is first used. */
   context_window: number | null;
 }

@@ -136,26 +136,26 @@ describe('the model menu under a real mouse', () => {
     saves.length = 0;
     await page.goto(`${ORIGIN}/`);
     await page.locator('#modelTrigger:not([disabled])').waitFor();
-    await page.locator('#modelLabel', { hasText: 'Opus · High' }).waitFor();
+    await page.locator('#modelLabel', { hasText: 'claude-opus-4 · High' }).waitFor();
   });
 
   it('a clicked model opens its levels, the back row returns to the models, and the level picked is saved and shown', async () => {
     await page.click('#modelTrigger');
-    expect(await modelRows()).toEqual(['Opus', 'Sonnet']);
+    expect(await modelRows()).toEqual(['claude-opus-4', 'claude-sonnet-4']);
 
     await page.click('#modelMenu [data-model="4"]');
     expect(await levels()).toEqual(['Auto', 'Medium', 'High']);
 
     await page.click('#modelMenu .model-select__item--back');
-    expect(await modelRows()).toEqual(['Opus', 'Sonnet']);
+    expect(await modelRows()).toEqual(['claude-opus-4', 'claude-sonnet-4']);
 
     await page.click('#modelMenu [data-model="4"]');
     await page.click('#modelMenu [data-level="medium"]');
     expect(await page.locator('#modelMenu').count()).toBe(0);
 
     // The label changes once the save has answered.
-    await page.locator('#modelLabel', { hasText: 'Sonnet · Medium' }).waitFor({ timeout: 5_000 });
-    expect(await label()).toBe('Sonnet · Medium');
+    await page.locator('#modelLabel', { hasText: 'claude-sonnet-4 · Medium' }).waitFor({ timeout: 5_000 });
+    expect(await label()).toBe('claude-sonnet-4 · Medium');
     expect(saves).toEqual([
       { path: '/api/threads/settings/-1?type=user', body: { provider_id: 4, thinking_level: 'medium' } },
     ]);
@@ -170,6 +170,6 @@ describe('the model menu under a real mouse', () => {
 
     expect(await page.locator('#modelMenu').count()).toBe(0);
     expect(saves).toEqual([]);
-    expect(await label()).toBe('Opus · High');
+    expect(await label()).toBe('claude-opus-4 · High');
   });
 });

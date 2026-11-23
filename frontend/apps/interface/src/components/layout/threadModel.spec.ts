@@ -32,8 +32,8 @@ interface Send {
   level: string | null;
 }
 
-const OPUS = { id: 3, name: 'Opus', context_window: 200_000 };
-const SONNET = { id: 4, name: 'Sonnet', context_window: 100_000 };
+const OPUS = { id: 3, name: 'Anthropic', model: 'claude-opus-4', context_window: 200_000 };
+const SONNET = { id: 4, name: 'Work', model: 'claude-sonnet-4', context_window: 100_000 };
 
 interface Settings {
   provider_id: number;
@@ -50,7 +50,7 @@ const settingsSaves: { path: string; body: unknown }[] = [];
 let threads = new Map<number, Settings>();
 let saveFails = false;
 /** Every configured model, served a page at a time; null fails the listing. */
-let modelList: { id: number; name: string; context_window: number | null }[] | null = [];
+let modelList: { id: number; name: string; model: string; context_window: number | null }[] | null = [];
 /** The total the listing claims, when it differs from the rows it holds. */
 let claimedTotal: number | null = null;
 /** The listing pages read, in order. */
@@ -227,30 +227,30 @@ function trigger(dock: VueWrapper) {
 describe("the footer dock's model and level", () => {
   it('shows the default with nothing to change until the first message makes a thread', async () => {
     const dock = await mountDock(null);
-    expect(shownLabel(dock)).toBe('Opus · Auto');
+    expect(shownLabel(dock)).toBe('claude-opus-4 · Auto');
     expect(trigger(dock).attributes('disabled')).toBeDefined();
 
     await send(dock, 'Plan my week');
     expect(sends).toEqual([{ path: '/api/threads/-1', provider: null, level: null }]);
     expect(settingsReads).toEqual(['-1', '-1']);
     expect(trigger(dock).attributes('disabled')).toBeUndefined();
-    expect(shownLabel(dock)).toBe('Opus · Auto');
+    expect(shownLabel(dock)).toBe('claude-opus-4 · Auto');
   });
 
   it("saves a pick to the channel's latest thread at once and sends none with the next message", async () => {
     threads.set(12, { provider_id: OPUS.id, thinking_level: 'high' });
     const dock = await mountDock(null);
-    expect(shownLabel(dock)).toBe('Opus · High');
+    expect(shownLabel(dock)).toBe('claude-opus-4 · High');
 
     await pick(dock, SONNET.id, 'medium');
     expect(settingsSaves).toEqual([
       { path: '/api/threads/settings/-1?type=user', body: { provider_id: SONNET.id, thinking_level: 'medium' } },
     ]);
-    expect(shownLabel(dock)).toBe('Sonnet · Medium');
+    expect(shownLabel(dock)).toBe('claude-sonnet-4 · Medium');
 
     await send(dock, 'Plan my week');
     expect(sends).toEqual([{ path: '/api/threads/-1', provider: null, level: null }]);
-    expect(shownLabel(dock)).toBe('Sonnet · Medium');
+    expect(shownLabel(dock)).toBe('claude-sonnet-4 · Medium');
   });
 });
 
@@ -259,13 +259,13 @@ describe("a thread panel's model and level", () => {
     threads.set(12, { provider_id: OPUS.id, thinking_level: 'high' });
     const dock = await mountDock(12);
     expect(settingsReads).toEqual(['12']);
-    expect(shownLabel(dock)).toBe('Opus · High');
+    expect(shownLabel(dock)).toBe('claude-opus-4 · High');
 
     await pick(dock, SONNET.id, 'medium');
     expect(settingsSaves).toEqual([
       { path: '/api/threads/settings/12?type=user', body: { provider_id: SONNET.id, thinking_level: 'medium' } },
     ]);
-    expect(shownLabel(dock)).toBe('Sonnet · Medium');
+    expect(shownLabel(dock)).toBe('claude-sonnet-4 · Medium');
     expect(useSessionStore().errorMessage).toBeNull();
   });
 
@@ -283,7 +283,7 @@ describe("a thread panel's model and level", () => {
 
     await pick(dock, SONNET.id, 'auto');
     expect(settingsSaves).toHaveLength(1);
-    expect(shownLabel(dock)).toBe('Opus · High');
+    expect(shownLabel(dock)).toBe('claude-opus-4 · High');
     expect(useSessionStore().errorMessage).toBe('Could not change the model or thinking level');
   });
 });
@@ -295,7 +295,7 @@ describe('the model menu', () => {
     await openMenu(dock);
 
     const rows = dock.findAll('[data-model]');
-    expect(rows.map((r) => r.text())).toEqual(['Opus', 'Sonnet']);
+    expect(rows.map((r) => r.text())).toEqual(['claude-opus-4', 'claude-sonnet-4']);
     expect(rows.map((r) => r.classes('active'))).toEqual([true, false]);
     expect(document.activeElement).toBe(rows[0].element);
 
@@ -303,7 +303,7 @@ describe('the model menu', () => {
     await rows[1].trigger('click');
     await flushPromises();
     expect(dock.find('[data-model]').exists()).toBe(false);
-    expect(dock.get('.model-select__item--back').text()).toBe('Sonnet');
+    expect(dock.get('.model-select__item--back').text()).toBe('claude-sonnet-4');
     expect(dock.findAll('[data-level]').map((r) => r.attributes('aria-checked'))).toEqual(['false', 'false', 'false']);
 
     // Back to the models, then into the current one: its level is checked.
@@ -313,6 +313,30 @@ describe('the model menu', () => {
     await flushPromises();
     expect(dock.findAll('[data-level]').map((r) => r.attributes('aria-checked'))).toEqual(['false', 'false', 'true']);
     expect(document.activeElement).toBe(dock.get('[data-level="high"]').element);
+  });
+
+  it('shows a model by the model it runs, adding the provider only where another provider runs it too', async () => {
+    const backup = { id: 5, name: 'Backup', model: OPUS.model, context_window: 200_000 };
+    modelList = [OPUS, SONNET, backup];
+    threads.set(12, { provider_id: OPUS.id, thinking_level: 'high' });
+    const dock = await mountDock(null);
+    expect(shownLabel(dock)).toBe('claude-opus-4 (Anthropic) · High');
+
+    await openMenu(dock);
+    expect(dock.findAll('[data-model]').map((r) => r.text())).toEqual([
+      'claude-opus-4 (Anthropic)',
+      'claude-sonnet-4',
+      'claude-opus-4 (Backup)',
+    ]);
+
+    await dock.get(`[data-model="${backup.id}"]`).trigger('click');
+    await flushPromises();
+    expect(dock.get('.model-select__item--back').text()).toBe('claude-opus-4 (Backup)');
+    expect(dock.get('#modelMenu').attributes('aria-label')).toBe('claude-opus-4 (Backup) thinking levels');
+
+    await dock.get('[data-level="medium"]').trigger('click');
+    await flushPromises();
+    expect(shownLabel(dock)).toBe('claude-opus-4 (Backup) · Medium');
   });
 
   it('backs out of the levels on the first Escape and closes on the second, keeping it from the page', async () => {
@@ -365,7 +389,7 @@ describe('the model menu', () => {
 
   it('lists every model, however many pages the listing takes', async () => {
     threads.set(12, { provider_id: OPUS.id, thinking_level: 'high' });
-    modelList = Array.from({ length: 130 }, (_, i) => ({ id: i + 1, name: `Model ${i + 1}`, context_window: null }));
+    modelList = Array.from({ length: 130 }, (_, i) => ({ id: i + 1, name: `Model ${i + 1}`, model: `model-${i + 1}`, context_window: null }));
     const dock = await mountDock(null);
     await openMenu(dock);
     expect(dock.findAll('[data-model]')).toHaveLength(130);
@@ -373,7 +397,7 @@ describe('the model menu', () => {
 
   it('stops at the first empty page when models were removed while it read', async () => {
     threads.set(12, { provider_id: OPUS.id, thinking_level: 'high' });
-    modelList = Array.from({ length: 130 }, (_, i) => ({ id: i + 1, name: `Model ${i + 1}`, context_window: null }));
+    modelList = Array.from({ length: 130 }, (_, i) => ({ id: i + 1, name: `Model ${i + 1}`, model: `model-${i + 1}`, context_window: null }));
     claimedTotal = 160;
     const dock = await mountDock(null);
     await openMenu(dock);

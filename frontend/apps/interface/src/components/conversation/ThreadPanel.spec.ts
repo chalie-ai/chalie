@@ -47,7 +47,10 @@ function json(body: unknown, status = 200): Response {
 }
 
 /** The configured models the reply dock lists. */
-const MODELS = [{ id: 1, name: 'Opus' }, { id: 2, name: 'Sonnet' }];
+const MODELS = [
+  { id: 1, name: 'Opus', model: 'claude-opus-4' },
+  { id: 2, name: 'Sonnet', model: 'claude-sonnet-4' },
+];
 /** Each thread's saved model and level, as the reply dock reads them, by
  *  type and turn id: a turn id is only unique within its type. */
 const SETTINGS: Record<string, { provider_id: number; thinking_level: string }> = {
@@ -376,18 +379,18 @@ describe('moving between transcripts', () => {
 
     session.openThreadPanel(77, 'user');
     await flushPromises();
-    expect(panel.get('#modelLabel').text()).toBe('Opus · High');
+    expect(panel.get('#modelLabel').text()).toBe('claude-opus-4 · High');
     await panel.get('textarea').setValue('Saturday works');
 
     session.openThreadPanel(78, 'user');
     await flushPromises();
     expect(settingsReads).toEqual(['user:77', 'user:78']);
-    expect(panel.get('#modelLabel').text()).toBe('Sonnet · Medium');
+    expect(panel.get('#modelLabel').text()).toBe('claude-sonnet-4 · Medium');
     expect((panel.get('textarea').element as HTMLTextAreaElement).value).toBe('');
 
     session.openThreadPanel(77, 'user');
     await flushPromises();
-    expect(panel.get('#modelLabel').text()).toBe('Opus · High');
+    expect(panel.get('#modelLabel').text()).toBe('claude-opus-4 · High');
     expect((panel.get('textarea').element as HTMLTextAreaElement).value).toBe('Saturday works');
     expect(session.errorMessage).toBeFalsy();
   });
@@ -398,12 +401,12 @@ describe('moving between transcripts', () => {
 
     session.openThreadPanel(77, 'user');
     await flushPromises();
-    expect(panel.get('#modelLabel').text()).toBe('Opus · High');
+    expect(panel.get('#modelLabel').text()).toBe('claude-opus-4 · High');
 
     session.openThreadPanel(77, 'scheduled');
     await flushPromises();
     expect(settingsReads).toEqual(['user:77', 'scheduled:77']);
-    expect(panel.get('#modelLabel').text()).toBe('Sonnet · Auto');
+    expect(panel.get('#modelLabel').text()).toBe('claude-sonnet-4 · Auto');
     expect(session.errorMessage).toBeFalsy();
   });
 });
