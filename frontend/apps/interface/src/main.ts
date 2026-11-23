@@ -4,12 +4,15 @@ import './styles/conversation.scss';
 import './styles/rich-card-base.scss';
 import { createApp } from 'vue';
 import { createPinia } from 'pinia';
+import { registerReplyFailureReporter } from '@chalie/shared';
 import App from './App.vue';
 import { authGateRedirected, router } from './router';
 import { registerAppContext } from './utils/turnDom';
+import { showToast } from './utils/toast';
 
 const app = createApp(App).use(createPinia()).use(router);
 registerAppContext(app);
+registerReplyFailureReporter((message) => showToast(message));
 
 // Gate the mount behind the auth gate. `router.isReady()` resolves after the async
 // `beforeEach` gate settles, so we know whether it issued a hard redirect. Mounting

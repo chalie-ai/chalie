@@ -90,6 +90,23 @@ function noteClosed(askId: string): void {
   for (const closed of closedDuringRead) closed.add(askId);
 }
 
+/**
+ * How a failed reply is told to the user. This package has no toast, so each
+ * app registers its own once at startup; until one does, a failed reply is
+ * only logged.
+ */
+let reportReplyFailure: (message: string) => void = () => {};
+
+export function registerReplyFailureReporter(report: (message: string) => void): void {
+  reportReplyFailure = report;
+}
+
+/** The server's own words for a failed reply, or a short line for when it sent none. */
+function replyFailureMessage(err: unknown, kind: Ask['kind'] | undefined): string {
+  if (err instanceof HttpError && err.error) return err.error;
+  return kind === 'handoff' ? "Couldn't finish the hand-off" : "Couldn't send your answer";
+}
+
 const idOf = (item: unknown): unknown => (item as { ask_id?: unknown } | null)?.ask_id;
 
 /** The `origin` object as sent, or null when absent/malformed — never a guessed one. */
@@ -224,11 +241,12 @@ export const useAsksStore = defineStore('asks', {
      * Answer an ask — a permission with true/false, a hand-off with null.
      * Optimistic: the row leaves before the round-trip. A 404 means the ask
      * was already answered or closed elsewhere (the first reply wins), so it
-     * stays gone quietly. Any other failure re-reads the open asks, which
-     * brings the row back only if the ask is still open, and is returned so
-     * the caller can tell the user; null when the ask is closed.
+     * stays gone quietly. Any other failure is told to the user through the
+     * registered reporter and re-reads the open asks, which brings the row
+     * back only if the ask is still open.
      */
-    async reply(askId: string, value: boolean | null): Promise<unknown> {
+    async reply(askId: string, value: boolean | null): Promise<void> {
+      const kind = this.queue.find((a) => a.ask_id === askId)?.kind;
       this.remove(askId);
       replying.add(askId);
       let failure: unknown = null;
@@ -241,11 +259,11 @@ export const useAsksStore = defineStore('asks', {
       }
       if (failure == null) {
         noteClosed(askId);
-        return null;
+        return;
       }
       console.warn('[asks] reply failed:', failure);
+      reportReplyFailure(replyFailureMessage(failure, kind));
       void this.refreshOpen();
-      return failure;
     },
   },
 });

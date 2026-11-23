@@ -21,7 +21,7 @@ export { describeCron } from './utils/describeCron';
 export { useThemeStore } from './stores/theme';
 export type { Theme } from './stores/theme';
 export { useConnectionStore } from './stores/connection';
-export { useAsksStore, readOrigin } from './stores/asks';
+export { useAsksStore, readOrigin, registerReplyFailureReporter } from './stores/asks';
 export type { Ask, AskOrigin, HandoffAsk, PermissionAsk } from './stores/asks';
 export { actionLabel, originLabel, waitedSeconds } from './utils/askLabels';
 export { useTheme } from './composables/useTheme';

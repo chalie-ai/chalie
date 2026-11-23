@@ -15,26 +15,30 @@
  *     task — a browser hand-off's row too;
  *   - Allow and Deny each send their own answer for that ask alone, and its
  *     row goes;
- *   - an answer that fails to send brings its row back, since the ask still
- *     waits;
+ *   - an answer the server fails on tells the user why and brings its row
+ *     back, since the ask still waits; one that never reaches the server says
+ *     it did not go through; one the server says came after the ask was
+ *     already answered elsewhere leaves the row gone, with nothing to tell;
  *   - Open shows the ask's turn in the thread panel and answers nothing;
  *   - an ask from a run no chat turn shows has no origin before its words; its
  *     row still offers Open when it is a hand-off, whose tab can be shown, and
  *     not when it is a permission ask, which has no turn to open.
  *
  * The network is the one stand-in: the spec serves the open-asks listing and
- * the browser's tab list, and reads each answer the dock sent.
+ * the browser's tab list, and reads each answer the dock sent. The chat app's
+ * toast is registered for failed answers as the app does at startup.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount } from '@vue/test-utils';
 import type { VueWrapper } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import OffScreenAsks from './OffScreenAsks.vue';
-import { useAsksStore } from '@chalie/shared';
+import { registerReplyFailureReporter, useAsksStore } from '@chalie/shared';
 import type { AskOrigin } from '@chalie/shared';
 import { useSessionStore } from '../../stores/session';
 import { useBrowserStore } from '../../stores/browser';
 import type { BrowserTab } from '../../api/browser';
+import { showToast } from '../../utils/toast';
 
 /** The chat turn that started the subagent; it ended before the ask came. */
 const CHAT_TURN = 7;
@@ -44,8 +48,8 @@ const backend = {
   open: [] as object[],
   tabs: [] as BrowserTab[],
   answers: [] as { path: string; body: unknown }[],
-  /** Every answer is received but fails, so its ask still waits. */
-  answersFail: false,
+  /** How the server answers each answer: a status, or `offline` for a request that never reaches it. */
+  replyAnswer: 204 as number | 'offline',
 };
 
 function json(body: unknown, status = 200): Response {
@@ -62,9 +66,12 @@ async function fakeBackend(input: RequestInfo | URL, init?: RequestInit): Promis
   }
   if (url.pathname.startsWith('/api/asks/reply/') && init?.method === 'POST') {
     backend.answers.push({ path: url.pathname, body: JSON.parse(String(init.body)) });
-    if (backend.answersFail) return json({ error: 'Could not answer the ask' }, 500);
+    const answer = backend.replyAnswer;
+    if (answer === 'offline') throw new TypeError('Failed to fetch');
+    if (answer !== 204 && answer !== 404) return json({ error: 'Could not answer the ask' }, answer);
     const answered = decodeURIComponent(url.pathname.slice('/api/asks/reply/'.length));
     backend.open = backend.open.filter((a) => (a as { ask_id: string }).ask_id !== answered);
+    if (answer === 404) return json({ error: 'That ask was already answered' }, 404);
     return new Response(null, { status: 204 });
   }
   return json({ error: 'unrouted' }, 404);
@@ -106,13 +113,15 @@ const rowNamed = (w: VueWrapper, label: string) => {
   if (!found) throw new Error(`no dock row for "${label}"`);
   return found;
 };
+const toast = () => document.querySelector('.chalie-toast')?.textContent ?? null;
 
 beforeEach(() => {
   setActivePinia(createPinia());
   backend.open = [];
   backend.tabs = [];
   backend.answers = [];
-  backend.answersFail = false;
+  backend.replyAnswer = 204;
+  registerReplyFailureReporter((message) => showToast(message));
   vi.stubGlobal('fetch', fakeBackend);
 });
 
@@ -120,6 +129,7 @@ afterEach(() => {
   wrapper?.unmount();
   wrapper = null;
   vi.unstubAllGlobals();
+  document.body.innerHTML = '';
 });
 
 describe('an ask no live line shows', () => {
@@ -180,19 +190,55 @@ describe('an ask no live line shows', () => {
     expect(labels(w)).toEqual(['Read the ferry booking email']);
   });
 
-  it('an answer that fails to send brings its row back, since the ask still waits', async () => {
+  it('an Allow the server fails on tells the user why, and its row comes back since the ask still waits', async () => {
     const w = await mountDock(
       ask('r1', 'email.read', 'Read the ferry booking email'),
       ask('r2', 'bash.modify_file', 'Write the fare table script'),
     );
-    backend.answersFail = true;
+    backend.replyAnswer = 500;
 
     await rowNamed(w, 'Read the ferry booking email').find('.activity__answer--allow').trigger('click');
     await flushPromises();
 
     expect(backend.answers).toEqual([{ path: '/api/asks/reply/r1', body: { value: true } }]);
+    expect(toast()).toBe('Could not answer the ask');
     expect(labels(w)).toEqual(['Write the fare table script', 'Read the ferry booking email']);
     expect(rowNamed(w, 'Read the ferry booking email').findAll('button').map((b) => b.text())).toEqual(['Deny', 'Allow', 'Open']);
+  });
+
+  it('a Deny the server fails on tells the user why, and its row comes back too', async () => {
+    const w = await mountDock(ask('r1', 'email.send', 'Send the weekly digest'));
+    backend.replyAnswer = 500;
+
+    await rowNamed(w, 'Send the weekly digest').find('.activity__answer--deny').trigger('click');
+    await flushPromises();
+
+    expect(backend.answers).toEqual([{ path: '/api/asks/reply/r1', body: { value: false } }]);
+    expect(toast()).toBe('Could not answer the ask');
+    expect(labels(w)).toEqual(['Send the weekly digest']);
+  });
+
+  it('an answer that never reaches the server tells the user it did not go through, and its row comes back', async () => {
+    const w = await mountDock(ask('r1', 'email.read', 'Read the ferry booking email'));
+    backend.replyAnswer = 'offline';
+
+    await rowNamed(w, 'Read the ferry booking email').find('.activity__answer--allow').trigger('click');
+    await flushPromises();
+
+    expect(toast()).toBe("Couldn't send your answer");
+    expect(labels(w)).toEqual(['Read the ferry booking email']);
+  });
+
+  it('an answer the server says came after the ask was already answered leaves the row gone, with nothing to tell the user', async () => {
+    const w = await mountDock(ask('r1', 'email.read', 'Read the ferry booking email'));
+    backend.replyAnswer = 404;
+
+    await rowNamed(w, 'Read the ferry booking email').find('.activity__answer--allow').trigger('click');
+    await flushPromises();
+
+    expect(backend.answers).toEqual([{ path: '/api/asks/reply/r1', body: { value: true } }]);
+    expect(toast()).toBeNull();
+    expect(labels(w)).toEqual([]);
   });
 
   it('Open shows its turn in the thread panel and answers nothing', async () => {

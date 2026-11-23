@@ -8,7 +8,9 @@
  * server could not take the answer, the user is told; if it says the hand-off
  * was already finished elsewhere, nothing is wrong and the bar stays gone.
  *
- * The real BrowserPanel on the real browser and asks stores and REST client.
+ * The real BrowserPanel on the real browser and asks stores and REST client,
+ * with the chat app's toast registered for failed answers as the app does at
+ * startup.
  * The network is the one stand-in: `fetch` serves the tab list and the open
  * asks and records each answer the panel sends, and the page view's stream
  * socket never connects.
@@ -17,10 +19,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount } from '@vue/test-utils';
 import type { VueWrapper } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
-import { useAsksStore } from '@chalie/shared';
+import { registerReplyFailureReporter, useAsksStore } from '@chalie/shared';
 import BrowserPanel from './BrowserPanel.vue';
 import { useBrowserStore } from '../../stores/browser';
 import type { BrowserTab } from '../../api/browser';
+import { showToast } from '../../utils/toast';
 
 const backend = {
   tabs: [] as BrowserTab[],
@@ -114,6 +117,7 @@ beforeEach(() => {
   backend.sent = [];
   backend.replyAnswer = 204;
   setActivePinia(createPinia());
+  registerReplyFailureReporter((message) => showToast(message));
   vi.stubGlobal('fetch', fakeBackend);
   vi.stubGlobal('WebSocket', StreamSocket);
 });
@@ -153,8 +157,7 @@ describe('browser panel — hand-off bar', () => {
 
     await pressDone(w);
 
-    expect(toast()).not.toBeNull();
-    expect(toast()).not.toBe('');
+    expect(toast()).toBe("Couldn't finish the hand-off");
   });
 
   it('a Done the server says came after the hand-off was already finished leaves the bar gone, with nothing to tell the user', async () => {

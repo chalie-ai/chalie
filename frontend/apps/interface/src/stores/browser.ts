@@ -258,12 +258,6 @@ export const useBrowserStore = defineStore('browser', {
       void this.refresh();
     },
 
-    /** The user pressed Done on a hand-off; a failure other than a 404 is told to the user. */
-    async finishHandoff(askId: string): Promise<void> {
-      const failure = await useAsksStore().reply(askId, null);
-      if (failure != null) reportFailure('finish the hand-off', failure);
-    },
-
     /** Mirror the live stream's address and title onto the tab strip. */
     patchTab(tabId: string, url: string, title: string): void {
       const tab = this.tabs.find((t) => t.id === tabId);

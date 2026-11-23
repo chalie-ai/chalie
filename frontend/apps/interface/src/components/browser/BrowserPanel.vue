@@ -319,7 +319,7 @@ function onKeydown(e: KeyboardEvent): void {
         <span class="browser-panel__handoff-text">
           Chalie needs you here{{ handoff.data.reason ? `: ${handoff.data.reason}` : '' }}
         </span>
-        <button type="button" class="btn btn-primary" @click="browser.finishHandoff(handoff.ask_id)">
+        <button type="button" class="btn btn-primary" @click="asks.reply(handoff.ask_id, null)">
           Done
         </button>
       </div>

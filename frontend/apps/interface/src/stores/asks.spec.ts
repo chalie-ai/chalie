@@ -28,6 +28,8 @@ interface Request {
 let listing: unknown[] = [];
 let replyStatus = 204;
 let requests: Request[] = [];
+/** What the app's toast was asked to tell the user about a failed answer. */
+let told: string[] = [];
 const held: Record<'open' | 'reply', Promise<void>[]> = { open: [], reply: [] };
 
 const json = (status: number, body: unknown) =>
@@ -89,7 +91,8 @@ const closed = (id: string) => ({ type: 'ask_closed', ask_id: id }) as WsPushEve
 async function loadPage() {
   vi.resetModules();
   setActivePinia(createPinia());
-  const { useAsksStore } = await import('@chalie/shared');
+  const { useAsksStore, registerReplyFailureReporter } = await import('@chalie/shared');
+  registerReplyFailureReporter((message) => told.push(message));
   const { dispatchDrift } = await import('../utils/driftDispatcher');
   return { asks: useAsksStore(), frame: dispatchDrift };
 }
@@ -101,6 +104,7 @@ beforeEach(() => {
   listing = [];
   replyStatus = 204;
   requests = [];
+  told = [];
   held.open = [];
   held.reply = [];
   vi.stubGlobal('fetch', fakeBackend);
@@ -185,11 +189,12 @@ describe('asks store — what waits on the user', () => {
 
     const release = holdNext('open');
     const read = asks.refreshOpen();
-    expect(await asks.reply('answered', true)).toBeNull();
+    await asks.reply('answered', true);
     await release();
     await read;
 
     expect(waiting(asks)).toEqual(['never-closed']);
+    expect(told).toEqual([]);
   });
 
   it("an answer leaves its row before the server confirms it, a read landing meanwhile keeps it gone, and the server gets the user's choice", async () => {
@@ -205,7 +210,8 @@ describe('asks store — what waits on the user', () => {
     expect(waiting(asks)).toEqual(['never-closed']);
 
     await confirm();
-    expect(await answer).toBeNull();
+    await answer;
+    expect(told).toEqual([]);
     expect(waiting(asks)).toEqual(['never-closed']);
     expect(requests.filter((r) => r.method === 'POST')).toEqual([
       { method: 'POST', path: '/api/asks/reply/send-report', body: { value: true } },
@@ -218,10 +224,10 @@ describe('asks store — what waits on the user', () => {
     listing = [permissionAsk('answered-elsewhere')];
     replyStatus = 404;
 
-    const failure = await asks.reply('answered-elsewhere', false);
+    await asks.reply('answered-elsewhere', false);
     await flushPromises();
 
-    expect(failure).toBeNull();
+    expect(told).toEqual([]);
     expect(waiting(asks)).toEqual([]);
     expect(opensRead()).toBe(0);
   });
@@ -233,10 +239,10 @@ describe('asks store — what waits on the user', () => {
     listing = [permissionAsk('still-open')];
     replyStatus = 500;
 
-    const failures = await Promise.all([asks.reply('still-open', true), asks.reply('gone-on-server', true)]);
+    await Promise.all([asks.reply('still-open', true), asks.reply('gone-on-server', true)]);
     await flushPromises();
 
-    expect(failures.map((f) => (f as { status?: number }).status)).toEqual([500, 500]);
+    expect(told).toEqual(['Server error', 'Server error']);
     expect(waiting(asks)).toEqual(['still-open']);
   });
 });
