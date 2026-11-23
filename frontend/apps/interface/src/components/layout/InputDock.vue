@@ -266,8 +266,12 @@ async function selectLevel(next: Level): Promise<void> {
   level.value = asLevel(saved.thinking_level);
 }
 
+/** Where a click landed is read from its path, fixed when it was dispatched:
+ *  choosing a model or going back re-renders the menu before the click reaches
+ *  the document, so the row clicked has already left the page. */
 function onDocumentClick(e: MouseEvent): void {
-  if (menuOpen.value && !selectWrapRef.value?.contains(e.target as Node)) closeMenu();
+  const wrap = selectWrapRef.value;
+  if (menuOpen.value && !(wrap && e.composedPath().includes(wrap))) closeMenu();
 }
 
 // Raw File objects are structurally non-persistable, so the only loss the
