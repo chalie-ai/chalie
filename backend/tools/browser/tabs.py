@@ -11,23 +11,21 @@
 A tab is one page target with an attached session: a browsing run's page
 (opener ``chalie``) or a page the user opened, including a popup kept as its
 own tab (opener ``user``). A run's page, and a popup kept from it, carry the
-run's origin — the interactive turn it belongs to, the same shape as a
-hand-off's — so the interface can show the tab where the user is; the user's
+run's origin — the interactive turn it belongs to, the same shape as an
+ask's — so the interface can show the tab where the user is; the user's
 own tabs, and a run's on no conversation the user sees, carry none. The pool
 thread registers and closes tabs; the CDP reader thread keeps each tab's url,
 title, newest screencast frame and liveness current through
 :meth:`Tab.observe`; any thread reads them.
 
 Every change to the list — a tab opening or closing, a navigation, a new
-title, a hand-off opening or closing — sends one ``browser_tabs_changed``
-frame on the main socket, from a worker thread so a slow socket never stalls
-the reader or the pool; the same thread looks up a page's title once its
-document loads.
+title — sends one ``browser_tabs_changed`` frame on the main socket, from a
+worker thread so a slow socket never stalls the reader or the pool; the same
+thread looks up a page's title once its document loads.
 
 A hand-off parks a browsing run on its tab until the user says they are done
-(:func:`hand_off`, :func:`finish_handoff`), the way a permission ask parks a
-tool call: the run's thread waits, the browser stays up. The list is the one
-announcement of a hand-off: its tab lists it until it ends.
+(:func:`hand_off`): it is an ``AskUser`` hand-off ask, the run's thread waits
+on it, and the browser stays up while it is open.
 
 A page refused for its certificate leaves the tab where it was, and the tab
 lists the refusal — the site, the browser's error code and the url — until
@@ -39,13 +37,12 @@ from __future__ import annotations
 
 import logging
 import threading
-import uuid
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable, Literal
 
 from models.ws_message import WsMessage
-from services.time_utils import utc_now
+from services.ask_user import AskReply, AskUser, HandoffAsk, Origin
 from services.websocket import Websocket
 from tools.browser.cdp import Browser, BrowserError, Event, get_dict, site
 
@@ -64,20 +61,6 @@ _LOADED = frozenset({"Page.domContentEventFired", "Page.loadEventFired"})
 _PARK_POLL = 0.25          # seconds between stop checks while a hand-off waits
 _INFO_TIMEOUT = 5.0        # seconds — the url/title lookup after a document loads
 _PAGE = "page"             # what a navigation nobody drove is put down to; a page's own request names its reason
-
-
-@dataclass(eq=False)
-class Handoff:
-    """A run handing its tab to the user; ``done`` is set when the user finishes."""
-
-    reason: str
-    origin: dict[str, object]
-    id: str = field(default_factory=lambda: uuid.uuid4().hex)
-    asked_at: str = field(default_factory=lambda: utc_now().isoformat(timespec="seconds"))
-    done: threading.Event = field(default_factory=threading.Event)
-
-    def to_dict(self) -> dict[str, object]:
-        return {"id": self.id, "reason": self.reason, "origin": self.origin, "asked_at": self.asked_at}
 
 
 @dataclass(frozen=True)
@@ -108,7 +91,6 @@ class Tab:
         self.origin = origin
         self.url = ""
         self.title = ""
-        self.handoff: Handoff | None = None
         self.viewers = 0
         self.frame = ""            # newest screencast frame, base64 JPEG
         self.frames = 0            # bumped per frame
@@ -258,14 +240,12 @@ class Tab:
         self.describe(str(info.get("url", "")), str(info.get("title", "")))
 
     def to_dict(self) -> dict[str, object]:
-        handoff = self.handoff
         return {
             "id": self.id,
             "url": self.url,
             "title": self.title,
             "opener": self.opener,
             "origin": self.origin,
-            "handoff": handoff.to_dict() if handoff is not None and not handoff.done.is_set() else None,
             "certificate_error": blocked.to_dict() if (blocked := self.blocked) is not None else None,
         }
 
@@ -319,49 +299,53 @@ def busy() -> bool:
     """Whether the browser must stay up: a tab is watched, the user's, or handed off."""
     with _lock:
         tabs = list(_tabs.values())
-    return any(tab.live and (tab.viewers or tab.opener == "user" or tab.handoff is not None) for tab in tabs)
+    return any(
+        tab.live and (tab.viewers or tab.opener == "user" or AskUser.open_handoff_on(tab.id))
+        for tab in tabs
+    )
 
 
 # ── Hand-off ─────────────────────────────────────────────────────────────────
 
-def hand_off(tab: Tab, reason: str, origin: dict[str, object], should_stop: Callable[[], bool]) -> bool:
-    """Park the caller until the user finishes the hand-off on *tab*.
+def hand_off(tab: Tab, reason: str, origin: dict[str, object] | None, should_stop: Callable[[], bool]) -> bool:
+    """Hand *tab* to the user through ``AskUser`` and park the caller until they finish.
 
-    True once the user says they are done; False when the run is stopped or
-    the tab closes first. The tab lists the hand-off from before the change
-    frame announcing it goes out until it ends.
+    True once the user says they are done; False when the ask is dismissed,
+    the run is stopped or the tab closes first.
     """
-    handoff = Handoff(reason=reason, origin=origin)
-    tab.handoff = handoff
-    logger.info("[BROWSER] hand-off started tab=%s url=%s id=%s reason=%s", tab.id, tab.url, handoff.id, reason)
+    done = threading.Event()
+    outcome: dict[str, bool] = {}
+
+    def on_reply(reply: AskReply) -> None:
+        outcome["finished"] = reply.answered
+        done.set()
+
+    ask = HandoffAsk(
+        tab_id=tab.id,
+        reason=reason,
+        origin=None if origin is None else Origin.model_validate(origin),
+    )
+    ask_id = AskUser.handoff(ask, on_reply)
+    logger.info("[BROWSER] hand-off started tab=%s url=%s ask_id=%s reason=%s", tab.id, tab.url, ask_id, reason)
     how = "failed"  # stays so only when an exception ends the wait
     try:
-        announce()
-        while not handoff.done.wait(_PARK_POLL):
+        while not done.wait(_PARK_POLL):
             if should_stop():
                 how = "stopped"
-                return False
-            if not tab.live:
+                AskUser.cancel(ask_id)
+            elif not tab.live:
                 how = "tab closed"
-                return False
-        how = "done"
-        return True
+                AskUser.cancel(ask_id)
+        if outcome["finished"]:
+            how = "done"
+        elif how == "failed":
+            how = "dismissed"
+        return outcome["finished"]
     finally:
-        tab.handoff = None
-        logger.info("[BROWSER] hand-off ended tab=%s url=%s id=%s how=%s", tab.id, tab.url, handoff.id, how)
-        announce()
-
-
-def finish_handoff(handoff_id: str) -> Tab | None:
-    """The user is done with hand-off *handoff_id*; the tab it was on, or None when it is unknown or already over."""
-    with _lock:
-        tabs = list(_tabs.values())
-    for tab in tabs:
-        handoff = tab.handoff
-        if handoff is not None and handoff.id == handoff_id and not handoff.done.is_set():
-            handoff.done.set()
-            return tab
-    return None
+        # An exception out of the wait still closes the ask; once it is
+        # answered or cancelled this is a no-op.
+        AskUser.cancel(ask_id)
+        logger.info("[BROWSER] hand-off ended tab=%s url=%s ask_id=%s how=%s", tab.id, tab.url, ask_id, how)
 
 
 # ── Change frames ────────────────────────────────────────────────────────────

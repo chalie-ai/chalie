@@ -4,10 +4,10 @@
  *
  * A subagent the chat started can ask for permission after the chat turn that
  * started it has ended: no live line shows that turn any more, so the ask
- * waits in the input dock. The spec loads the pending asks the way the app does
+ * waits in the input dock. The spec loads the open asks the way the app does
  * on every connect, from the backend's listing, mounts the real OffScreenAsks
- * on the real permissions and session stores, and asserts what a person reads
- * and can press:
+ * on the real asks, browser and session stores, and asserts what a person
+ * reads and can press:
  *
  *   - an ask no live line shows gets one row naming its turn and what it asks,
  *     with Deny, Allow and Open;
@@ -17,30 +17,33 @@
  *     row goes;
  *   - an answer that fails to send brings its row back, since the ask still
  *     waits;
- *   - Open shows the ask's turn in the thread panel and answers nothing.
+ *   - Open shows the ask's turn in the thread panel and answers nothing;
+ *   - an ask from a run no chat turn shows has no origin before its words; its
+ *     row still offers Open when it is a hand-off, whose tab can be shown, and
+ *     not when it is a permission ask, which has no turn to open.
  *
- * The network is the one stand-in: the spec serves the pending listing and the
- * browser's tab list, and reads each answer the dock sent.
+ * The network is the one stand-in: the spec serves the open-asks listing and
+ * the browser's tab list, and reads each answer the dock sent.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount } from '@vue/test-utils';
 import type { VueWrapper } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import OffScreenAsks from './OffScreenAsks.vue';
-import { usePermissionsStore } from '../../stores/permissions';
+import { useAsksStore } from '@chalie/shared';
+import type { AskOrigin } from '@chalie/shared';
 import { useSessionStore } from '../../stores/session';
 import { useBrowserStore } from '../../stores/browser';
-import type { PendingPermission, PermissionOrigin } from '../../api/policies';
 import type { BrowserTab } from '../../api/browser';
 
 /** The chat turn that started the subagent; it ended before the ask came. */
 const CHAT_TURN = 7;
-const ON_CHAT: PermissionOrigin = { type: 'user', turn_id: CHAT_TURN, forked: false };
+const ON_CHAT: AskOrigin = { type: 'user', turn_id: CHAT_TURN, forked: false };
 
 const backend = {
-  pending: [] as PendingPermission[],
+  open: [] as object[],
   tabs: [] as BrowserTab[],
-  answers: [] as unknown[],
+  answers: [] as { path: string; body: unknown }[],
   /** Every answer is received but fails, so its ask still waits. */
   answersFail: false,
 };
@@ -51,30 +54,45 @@ function json(body: unknown, status = 200): Response {
 
 async function fakeBackend(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const url = new URL(String(input), 'http://chalie.test');
-  if (url.pathname === '/api/policies/pending' && (init?.method ?? 'GET') === 'GET') {
-    return json({ success: true, result: backend.pending, pagination: { page: 1, limit: 50, total: backend.pending.length } });
+  if (url.pathname === '/api/asks/open' && (init?.method ?? 'GET') === 'GET') {
+    return json({ success: true, result: backend.open, pagination: { page: 1, limit: 50, total: backend.open.length } });
   }
   if (url.pathname === '/api/browser/tabs' && (init?.method ?? 'GET') === 'GET') {
     return json({ success: true, result: { tabs: backend.tabs } });
   }
-  if (url.pathname === '/api/policies/respond' && init?.method === 'POST') {
-    backend.answers.push(JSON.parse(String(init.body)));
-    return backend.answersFail ? json({ error: 'Could not answer the ask' }, 500) : new Response(null, { status: 204 });
+  if (url.pathname.startsWith('/api/asks/reply/') && init?.method === 'POST') {
+    backend.answers.push({ path: url.pathname, body: JSON.parse(String(init.body)) });
+    if (backend.answersFail) return json({ error: 'Could not answer the ask' }, 500);
+    const answered = decodeURIComponent(url.pathname.slice('/api/asks/reply/'.length));
+    backend.open = backend.open.filter((a) => (a as { ask_id: string }).ask_id !== answered);
+    return new Response(null, { status: 204 });
   }
   return json({ error: 'unrouted' }, 404);
 }
 
 /** A subagent's ask on the turn that started it — the chat turn unless given — as the backend lists it. */
-function ask(request_id: string, action_id: string, summary: string, origin = ON_CHAT): PendingPermission {
-  return { request_id, action_id, summary, asked_at: new Date().toISOString(), origin };
+function ask(ask_id: string, action_id: string, summary: string, origin: AskOrigin | null = ON_CHAT) {
+  return { ask_id, kind: 'permission', asked_at: new Date().toISOString(), data: { action_id, summary, origin } };
+}
+
+/** A hand-off of a browser tab Chalie opened, as the backend lists it. */
+function handoff(ask_id: string, tab: BrowserTab, reason: string) {
+  return { ask_id, kind: 'handoff', asked_at: new Date().toISOString(), data: { tab_id: tab.id, reason, origin: tab.origin } };
+}
+
+function chaliesTab(id: string, origin: AskOrigin | null): BrowserTab {
+  return { id, url: 'https://example.com/login', title: 'Sign in', opener: 'chalie', origin, certificate_error: null };
 }
 
 let wrapper: VueWrapper | null = null;
 
-/** The dock with the backend's pending asks loaded, as on connect. */
-async function mountDock(...asks: PendingPermission[]): Promise<VueWrapper> {
-  backend.pending = asks;
-  await usePermissionsStore().refreshPending();
+/** The dock with the backend's open asks and tabs loaded, as on connect, the browser panel closed. */
+async function mountDock(...asks: object[]): Promise<VueWrapper> {
+  backend.open = asks;
+  await useAsksStore().refreshOpen();
+  const browser = useBrowserStore();
+  await browser.refresh();
+  browser.closePanel();
   wrapper = mount(OffScreenAsks);
   await flushPromises();
   return wrapper;
@@ -91,7 +109,7 @@ const rowNamed = (w: VueWrapper, label: string) => {
 
 beforeEach(() => {
   setActivePinia(createPinia());
-  backend.pending = [];
+  backend.open = [];
   backend.tabs = [];
   backend.answers = [];
   backend.answersFail = false;
@@ -102,7 +120,6 @@ afterEach(() => {
   wrapper?.unmount();
   wrapper = null;
   vi.unstubAllGlobals();
-  vi.restoreAllMocks();
 });
 
 describe('an ask no live line shows', () => {
@@ -129,15 +146,9 @@ describe('an ask no live line shows', () => {
   });
 
   it('a browser hand-off the chat asked for says Chat once the person closes the browser panel', async () => {
-    backend.tabs = [{
-      id: 'run', url: 'https://example.com/login', title: 'Sign in', opener: 'chalie', origin: ON_CHAT,
-      handoff: { id: 'h1', reason: 'Please sign in', origin: ON_CHAT, asked_at: new Date().toISOString() },
-      certificate_error: null,
-    }];
-    const browser = useBrowserStore();
-    await browser.refresh();
-    browser.closePanel();
-    const w = await mountDock();
+    const run = chaliesTab('run', ON_CHAT);
+    backend.tabs = [run];
+    const w = await mountDock(handoff('h1', run, 'Please sign in'));
 
     expect(labels(w)).toEqual(['Please sign in']);
     expect(origins(w)).toEqual([`Chat · #${CHAT_TURN} ·`]);
@@ -152,7 +163,7 @@ describe('an ask no live line shows', () => {
     await rowNamed(w, 'Read the ferry booking email').find('.activity__answer--allow').trigger('click');
     await flushPromises();
 
-    expect(backend.answers).toEqual([{ request_id: 'r1', approved: true }]);
+    expect(backend.answers).toEqual([{ path: '/api/asks/reply/r1', body: { value: true } }]);
     expect(labels(w)).toEqual(['Write the fare table script']);
   });
 
@@ -165,7 +176,7 @@ describe('an ask no live line shows', () => {
     await rowNamed(w, 'Write the fare table script').find('.activity__answer--deny').trigger('click');
     await flushPromises();
 
-    expect(backend.answers).toEqual([{ request_id: 'r2', approved: false }]);
+    expect(backend.answers).toEqual([{ path: '/api/asks/reply/r2', body: { value: false } }]);
     expect(labels(w)).toEqual(['Read the ferry booking email']);
   });
 
@@ -175,13 +186,11 @@ describe('an ask no live line shows', () => {
       ask('r2', 'bash.modify_file', 'Write the fare table script'),
     );
     backend.answersFail = true;
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => { /* the failed answer's console line */ });
 
     await rowNamed(w, 'Read the ferry booking email').find('.activity__answer--allow').trigger('click');
     await flushPromises();
 
-    expect(backend.answers).toEqual([{ request_id: 'r1', approved: true }]);
-    expect(warn).toHaveBeenCalledWith('[permissions] respond failed:', expect.anything());
+    expect(backend.answers).toEqual([{ path: '/api/asks/reply/r1', body: { value: true } }]);
     expect(labels(w)).toEqual(['Write the fare table script', 'Read the ferry booking email']);
     expect(rowNamed(w, 'Read the ferry booking email').findAll('button').map((b) => b.text())).toEqual(['Deny', 'Allow', 'Open']);
   });
@@ -196,5 +205,28 @@ describe('an ask no live line shows', () => {
     expect([session.panelThreadId, session.panelType]).toEqual([CHAT_TURN, 'user']);
     expect(backend.answers).toEqual([]);
     expect(labels(w)).toEqual(['Read the ferry booking email']);
+  });
+
+  it('a hand-off from a run no chat turn shows has no origin before its words, and Open still shows its tab', async () => {
+    const run = chaliesTab('run', null);
+    backend.tabs = [run];
+    const w = await mountDock(handoff('h1', run, 'Please solve the captcha'));
+    const row = rowNamed(w, 'Please solve the captcha');
+
+    expect(row.find('.activity__origin').exists()).toBe(false);
+    expect(row.findAll('button').map((b) => b.text())).toEqual(['Open']);
+
+    await row.find('.activity__stop').trigger('click');
+    const browser = useBrowserStore();
+    expect([browser.open, browser.selectedTabId]).toEqual([true, run.id]);
+    expect(backend.answers).toEqual([]);
+  });
+
+  it('a permission ask from a run no chat turn shows has no origin before its words and no Open, only Deny and Allow', async () => {
+    const w = await mountDock(ask('r1', 'email.send', 'Send the weekly digest', null));
+    const row = rowNamed(w, 'Send the weekly digest');
+
+    expect(row.find('.activity__origin').exists()).toBe(false);
+    expect(row.findAll('button').map((b) => b.text())).toEqual(['Deny', 'Allow']);
   });
 });

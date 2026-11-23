@@ -105,25 +105,25 @@ Ask = dict[str, object]
 
 
 class _Asks:
-    """The permission prompts broadcast while it listens, in order; each one is
-    read back from the pending list and answered as the signed-in person."""
+    """The asks broadcast while it listens, in order; each one is read back from
+    the open-asks list and answered as the signed-in person."""
 
     def __init__(self) -> None:
         self._raised: queue.Queue[str] = queue.Queue()
 
     def note(self, frame: dict[str, object]) -> None:
-        if frame.get("type") == "permission_request":
-            self._raised.put(cast("str", frame["request_id"]))
+        if frame.get("type") == "ask_opened":
+            self._raised.put(cast("str", frame["ask_id"]))
 
     def deny_next(self, client: FlaskClient) -> Ask:
-        """Wait for the next prompt, check it is the only one pending, deny it,
-        and return it as the pending list showed it."""
-        request_id = self._raised.get(timeout=WAIT_S)
-        response = client.get("/api/policies/pending")
+        """Wait for the next ask, check it is the only one open, deny it, and
+        return it as the open-asks list showed it."""
+        ask_id = self._raised.get(timeout=WAIT_S)
+        response = client.get("/api/asks/open")
         assert response.status_code == 200, response.data
         [ask] = cast("list[Ask]", cast("dict[str, object]", response.get_json())["result"])
-        assert ask["request_id"] == request_id
-        answered = client.post("/api/policies/respond", json={"request_id": request_id, "approved": False})
+        assert (ask["ask_id"], ask["kind"]) == (ask_id, "permission")
+        answered = client.post(f"/api/asks/reply/{ask_id}", json={"value": False})
         assert answered.status_code == 204, answered.data
         return ask
 
@@ -133,6 +133,12 @@ class _Asks:
 
 def _origin(kind: str, turn_id: int) -> dict[str, object]:
     return {"type": kind, "turn_id": turn_id, "forked": False}
+
+
+def _asked(ask: Ask) -> tuple[object, object]:
+    """The action an ask asked about, and the turn it was asked for."""
+    data = cast("dict[str, object]", ask["data"])
+    return data["action_id"], data["origin"]
 
 
 def _spawn_call(spawn: str) -> dict[str, object]:
@@ -190,7 +196,7 @@ def test_starting_a_subagent_never_asks_on_any_channel(
             frames = listener.frames
 
     assert provider.unused() == {}
-    assert [f for f in frames if f.get("type") == "permission_request"] == []
+    assert [f for f in frames if f.get("type") == "ask_opened"] == []
     assert _blocked(db) == []
     [call] = calls_of(db, spawn)
     assert call["state"] == ToolCall.DONE, call["result"]
@@ -224,8 +230,8 @@ def test_each_mail_search_a_chat_spawned_pim_makes_asks_on_the_chat_after_the_ch
 
     assert held.opened and provider.unused() == {} and asks.left() == 0
     for ask in (first, second):
-        assert (ask["action_id"], ask["origin"]) == (_MAIL_SEARCH, _origin("user", chat.turn_id))
-    assert first["request_id"] != second["request_id"]
+        assert _asked(ask) == (_MAIL_SEARCH, _origin("user", chat.turn_id))
+    assert first["ask_id"] != second["ask_id"]
     assert _blocked(db) == [(_MAIL_SEARCH, _CHAT, "user_denied")] * 2
     for search in calls_of(db, EmailAbility.NAME):
         assert search["state"] == ToolCall.ERROR
@@ -262,7 +268,7 @@ def test_a_mail_search_a_scheduled_pim_makes_is_asked_exactly_as_the_schedules_o
 
     assert provider.unused() == {} and asks.left() == 0
     assert ScheduledConfig().policy_channel == PolicyChannel.CHAT
-    assert (ask["action_id"], ask["origin"]) == (_MAIL_SEARCH, _origin("scheduled", _SCHEDULE_ID))
+    assert _asked(ask) == (_MAIL_SEARCH, _origin("scheduled", _SCHEDULE_ID))
     assert _blocked(db) == [(_MAIL_SEARCH, _CHAT, "user_denied")]
     [pim] = calls_of(db, PimAbility.NAME)
     assert pim["state"] == ToolCall.DONE, pim["result"]
@@ -306,7 +312,7 @@ def test_a_file_write_three_subagents_down_asks_on_the_chat_that_started_the_cha
         drain()
 
     assert held.opened and provider.unused() == {} and asks.left() == 0
-    assert (ask["action_id"], ask["origin"]) == (_FILE_WRITE, _origin("user", chat.turn_id))
+    assert _asked(ask) == (_FILE_WRITE, _origin("user", chat.turn_id))
     assert _blocked(db) == [(_FILE_WRITE, _CHAT, "user_denied")]
     [write] = calls_of(db, WriteFileAbility.NAME)
     assert write["state"] == ToolCall.ERROR
@@ -344,7 +350,7 @@ def test_a_script_an_outside_agents_code_agent_runs_is_refused_on_a_new_install(
         drain()
 
     assert provider.unused() == {}
-    assert [f for f in listener.frames if f.get("type") == "permission_request"] == []
+    assert [f for f in listener.frames if f.get("type") == "ask_opened"] == []
     assert _blocked(db) == [(_SCRIPT, _OUTSIDE, "deny")]
     [script] = calls_of(db, _SCRIPT)
     assert script["state"] == ToolCall.ERROR
@@ -380,7 +386,7 @@ def test_a_script_a_chat_spawned_code_agent_runs_asks_on_the_chat(
         drain()
 
     assert provider.unused() == {} and asks.left() == 0
-    assert (ask["action_id"], ask["origin"]) == (_SCRIPT, _origin("user", chat.turn_id))
+    assert _asked(ask) == (_SCRIPT, _origin("user", chat.turn_id))
     assert _blocked(db) == [(_SCRIPT, _CHAT, "user_denied")]
     [script] = calls_of(db, _SCRIPT)
     assert script["state"] == ToolCall.ERROR

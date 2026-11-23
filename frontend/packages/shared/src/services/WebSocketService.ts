@@ -121,7 +121,8 @@ export interface WsTurnExecutionEvent {
  *  push. */
 export type WsPushType =
   | 'task'
-  | 'permission_request'
+  | 'ask_opened'
+  | 'ask_closed'
   | 'intent'
   | 'capability_alert'
   | 'browser_tabs_changed'

@@ -14,8 +14,7 @@ import { lastUserText } from '../../utils/turnDom';
 import type { LiveToolPill } from '../../utils/liveActTrail';
 import type { StepCall, StepWork } from '../../utils/turnSteps';
 import { useSessionStore } from '../../stores/session';
-import { usePermissionsStore, type PermissionRequest } from '../../stores/permissions';
-import { actionLabel, waitedSeconds } from '../../utils/permissionAsk';
+import { actionLabel, useAsksStore, waitedSeconds, type PermissionAsk } from '@chalie/shared';
 import ThinkingAndCalls from './ThinkingAndCalls.vue';
 
 const props = withDefaults(
@@ -28,7 +27,7 @@ const props = withDefaults(
      *  delegate's transcript). */
     undoable?: boolean;
     /** The permission ask this turn is parked on, if any. */
-    ask?: PermissionRequest | null;
+    ask?: PermissionAsk | null;
     /** The caller's subagents reply late (see `callMark`). */
     repliesLate?: boolean;
   }>(),
@@ -36,7 +35,7 @@ const props = withDefaults(
 );
 
 const session = useSessionStore();
-const permissions = usePermissionsStore();
+const asks = useAsksStore();
 const rootRef = ref<HTMLElement | null>(null);
 
 const work = computed<StepWork>(() => ({
@@ -60,19 +59,19 @@ const now = ref(Date.now());
 let timer: ReturnType<typeof setInterval> | undefined;
 
 watch(
-  () => props.ask?.request_id,
-  (requestId, prevId) => {
-    if (prevId) permissions.unmarkShown(prevId);
-    if (requestId) permissions.markShown(requestId);
+  () => props.ask?.ask_id,
+  (askId, prevId) => {
+    if (prevId) asks.unmarkShown(prevId);
+    if (askId) asks.markShown(askId);
     clearInterval(timer);
-    timer = requestId ? setInterval(() => (now.value = Date.now()), 100) : undefined;
+    timer = askId ? setInterval(() => (now.value = Date.now()), 100) : undefined;
   },
   { immediate: true },
 );
 
 onUnmounted(() => {
   clearInterval(timer);
-  if (props.ask) permissions.unmarkShown(props.ask.request_id);
+  if (props.ask) asks.unmarkShown(props.ask.ask_id);
 });
 
 async function onStop(): Promise<void> {
@@ -92,25 +91,25 @@ async function onStop(): Promise<void> {
   <ThinkingAndCalls
     class="activity"
     :work="work"
-    :label="ask && (ask.summary || actionLabel(ask.action_id))"
+    :label="ask && (ask.data.summary || actionLabel(ask.data.action_id))"
     :replies-late="repliesLate"
     live
   >
     <span ref="rootRef" class="activity__controls">
       <template v-if="ask">
         <span class="activity__wait">· waiting for you · {{ waitedSeconds(ask.asked_at, now) }}s</span>
-        <span v-if="ask.summary" class="activity__ask">{{ actionLabel(ask.action_id) }}</span>
+        <span v-if="ask.data.summary" class="activity__ask">{{ actionLabel(ask.data.action_id) }}</span>
         <button
           type="button"
           class="activity__answer activity__answer--deny"
-          @click="permissions.respond(ask.request_id, false)"
+          @click="asks.reply(ask.ask_id, false)"
         >
           Deny
         </button>
         <button
           type="button"
           class="activity__answer activity__answer--allow"
-          @click="permissions.respond(ask.request_id, true)"
+          @click="asks.reply(ask.ask_id, true)"
         >
           Allow
         </button>

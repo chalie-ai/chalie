@@ -58,6 +58,7 @@ _MIGRATED_PREFIXES = (
     "/api/memory",
     "/api/settings",
     "/api/capabilities",
+    "/api/asks",
 )
 """Endpoint groups migrated onto the Endpoint/Action base contract as of this
 test's writing — the prefixes the base-contract swagger bridge is responsible
@@ -293,28 +294,34 @@ class TestEveryRefInMigratedNamespacesResolves:
         assert not unresolved, "\n".join(unresolved)
 
 
-class TestPendingPermissionRouteDocumentsListingEnvelope:
-    """``GET /api/policies/pending`` (parked ``ask`` gates) documents the listing
-    envelope of the permission-request DTO, with the nested origin model
-    registered as its own resolvable definition, and no 404 — an empty listing
-    is the normal answer, never a miss."""
+class TestOpenAsksRouteDocumentsListingEnvelope:
+    """``GET /api/asks/open`` documents the listing envelope of the open-ask DTO,
+    whose ``data`` is either kind's model with the nested origin registered as
+    its own resolvable definition, and no 404 — an empty listing is the normal
+    answer, never a miss."""
 
-    def test_get_pending_documents_listing_envelope_with_nested_origin(
+    def test_get_open_asks_documents_listing_envelope_with_both_kinds_and_origin(
         self, swagger_spec: dict[str, object]
     ) -> None:
-        get_op = _at(swagger_spec, "paths", "/api/policies/pending", "get")
-        assert _ref(get_op, "responses", "200", "schema") == (
-            "#/definitions/PermissionRequestResponseListingEnvelope"
-        )
+        get_op = _at(swagger_spec, "paths", "/api/asks/open", "get")
+        assert _ref(get_op, "responses", "200", "schema") == "#/definitions/OpenAskResponseListingEnvelope"
         assert "404" not in _at(get_op, "responses")
 
-        envelope = _at(swagger_spec, "definitions", "PermissionRequestResponseListingEnvelope")
+        envelope = _at(swagger_spec, "definitions", "OpenAskResponseListingEnvelope")
         assert set(_strs(envelope, "required")) == {"success", "result", "pagination"}
-        assert _ref(envelope, "properties", "result", "items") == "#/definitions/PermissionRequestResponse"
+        assert _ref(envelope, "properties", "result", "items") == "#/definitions/OpenAskResponse"
 
-        item = _at(swagger_spec, "definitions", "PermissionRequestResponse")
-        assert set(_strs(item, "required")) == {"request_id", "action_id", "summary", "origin", "asked_at"}
-        assert _ref(item, "properties", "origin") == "#/definitions/PermissionOriginResponse"
+        item = _at(swagger_spec, "definitions", "OpenAskResponse")
+        assert set(_strs(item, "required")) == {"ask_id", "kind", "data", "asked_at"}
+        kinds = sorted(_refs(_at(item, "properties", "data")))
+        assert kinds == ["#/definitions/HandoffAskDataResponse", "#/definitions/PermissionAskDataResponse"]
+
+        permission = _at(swagger_spec, "definitions", "PermissionAskDataResponse")
+        assert set(_strs(permission, "required")) == {"action_id", "summary", "origin"}
+        handoff = _at(swagger_spec, "definitions", "HandoffAskDataResponse")
+        assert set(_strs(handoff, "required")) == {"tab_id", "reason", "origin"}
+        for data in (permission, handoff):
+            assert _refs(_at(data, "properties", "origin")) == ["#/definitions/PermissionOriginResponse"]
 
         origin = _at(swagger_spec, "definitions", "PermissionOriginResponse")
         assert set(_strs(origin, "required")) == {"type", "turn_id", "forked"}

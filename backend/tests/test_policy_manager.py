@@ -1,19 +1,18 @@
 import json
+import queue
 import sqlite3
 import threading
-import time
 from collections.abc import Iterator
-from datetime import datetime, timedelta
 from pathlib import Path
-from typing import cast
 from unittest.mock import patch
 
 import pytest
 
 import services.database as _db_gateway
 from configs.enums.policy_channel import PolicyChannel
+from services.ask_user import AskUser
 from services.file_mapper_service import FileMapperService
-from services.policy_manager import _ASK_NO_SURFACE, _GATE_POLL_SECONDS, PolicyManager, _permission_gates
+from services.policy_manager import PolicyManager
 from services.websocket import Websocket
 
 pytestmark = pytest.mark.unit
@@ -72,12 +71,16 @@ class _RecordingClient:
 
     def __init__(self) -> None:
         self.frames: list[dict[str, object]] = []
+        self.opened: queue.Queue[str] = queue.Queue()
 
     def close(self) -> None:
         """Nothing to release: the captured frames stay readable after the registry lets go."""
 
     def send(self, data: str) -> None:
-        self.frames.append(json.loads(data))
+        frame = json.loads(data)
+        self.frames.append(frame)
+        if frame["type"] == "ask_opened":
+            self.opened.put(frame["ask_id"])
 
 
 @pytest.fixture()
@@ -88,11 +91,6 @@ def recorder() -> Iterator[_RecordingClient]:
         yield client
     finally:
         Websocket._disconnect(client)
-
-
-def _origin() -> dict[str, object]:
-    # The shape MessageProcessor.origin builds for a main-spine user turn.
-    return {"type": "user", "turn_id": 7, "forked": False}
 
 
 def _ran() -> str:
@@ -135,20 +133,38 @@ def test_deny_blocks_and_logs(mgr: PolicyManager, db: sqlite3.Connection) -> Non
     assert db.execute("SELECT reason FROM policy_blocked_log").fetchone()["reason"] == "deny"
 
 
-# 3. unknown key on a surfaceless channel: lazily creates ONE 'ask' row AND denies with the
-#    steer sentence — nobody can answer a prompt on a turn with no origin, so the model is told
-#    to ask the user for access instead of retrying
-def test_unknown_key_provisions_ask_then_escalates(mgr: PolicyManager, db: sqlite3.Connection) -> None:
-    out = mgr.authorize(CH.SUBCONSCIOUS, "newtool.action", _ran)
-    out2 = mgr.authorize(CH.SUBCONSCIOUS, "newtool.action", _ran)  # no duplicate row
-    assert out == out2 == (
-        'The newtool.action action is blocked by policy on the subconscious channel: it is set to "ask" '
-        "and nobody can answer a prompt here. Do NOT retry. Tell the user it was blocked by policy "
-        'and ask them to set newtool.action to "allow" for the subconscious channel in Brain → Policies.'
-    )
+# 3. unknown key: lazily creates ONE 'ask' row and asks the user even on a turn with no origin
+#    (a subconscious turn) — the ask simply carries no origin. A denial blocks with the shared
+#    message and audits reason user_denied, once per call.
+def test_unknown_key_provisions_one_ask_row_and_asks_even_with_no_origin(
+    mgr: PolicyManager, db: sqlite3.Connection, recorder: _RecordingClient,
+) -> None:
+    gave_up = threading.Event()
+
+    def deny_both_asks() -> None:
+        for _ in range(2):
+            try:
+                AskUser.reply(recorder.opened.get(timeout=5.0), False)
+            except queue.Empty:
+                gave_up.set()                         # no ask opened: the gate's should_stop ends the wait
+                return
+
+    answerer = threading.Thread(target=deny_both_asks)
+    answerer.start()
+    out = mgr.authorize(CH.SUBCONSCIOUS, "newtool.action", _ran, should_stop=gave_up.is_set)
+    out2 = mgr.authorize(CH.SUBCONSCIOUS, "newtool.action", _ran, should_stop=gave_up.is_set)  # no duplicate row
+    answerer.join()
+
+    assert not gave_up.is_set(), "the gate never asked the user"
+    assert out == out2 == "The newtool.action action is not allowed. Do NOT retry."
     rows = db.execute("SELECT setting FROM policy WHERE permission='newtool.action'").fetchall()
     assert [r["setting"] for r in rows] == ["ask"]                       # provisioned exactly once
-    assert db.execute("SELECT reason FROM policy_blocked_log ORDER BY id").fetchone()["reason"] == "user_unavailable"
+    reasons = [r["reason"] for r in db.execute("SELECT reason FROM policy_blocked_log ORDER BY id")]
+    assert reasons == ["user_denied", "user_denied"]
+    asked = [(f["kind"], f["data"]) for f in recorder.frames if f["type"] == "ask_opened"]
+    no_origin = {"action_id": "newtool.action", "summary": "", "origin": None}
+    assert asked == [("permission", no_origin), ("permission", no_origin)]
+    assert AskUser.open_asks() == []
 
 
 # 5. data layer: seed → get_all hides internal; upsert flips + rejects bad input; reset restores; blocked-log roundtrip
@@ -162,7 +178,7 @@ def test_data_layer_roundtrip(mgr: PolicyManager) -> None:
     assert not any(r["permission"] == "subtask.start" for r in mgr.get_all())
     mgr.reset_to_defaults()
     assert any(r["permission"] == "bash.modify_file" and r["setting"] == "ask" for r in mgr.get_all())
-    mgr._log_blocked("subconscious", "bash.modify_file", "user_unavailable")
+    mgr._log_blocked("subconscious", "bash.modify_file", "user_denied")
     assert mgr.get_blocked_log()[0]["action_id"] == "bash.modify_file"
     assert mgr.clear_blocked_log() == 1 and mgr.get_blocked_log() == []
 
@@ -184,92 +200,3 @@ def test_apply_seed_reaps_unseeded_rows(mgr: PolicyManager, db: sqlite3.Connecti
     settings = {(r["channel"], r["permission"]): r["setting"] for r in mgr.get_all()}
     assert settings[("chat", "bash.read")] == "deny"
     assert settings[("external_agent", "run_script")] == "allow"
-
-
-# 7. 'ask' on a turn with no surface (origin None — discovery, subconscious, external agent, a
-#    delegate whose caller had none): deny at once with the steer sentence, audit reason
-#    user_unavailable, and NOTHING goes over the socket — there is no card to park on.
-def test_ask_with_no_surface_denies_with_steer_and_never_broadcasts(
-    mgr: PolicyManager, db: sqlite3.Connection, recorder: _RecordingClient,
-) -> None:
-    _seed(db, "chat", "email.read", "ask")
-    out = mgr.authorize(CH.CHAT, "email.read", _ran, summary="Read the latest invoice email")
-    assert out == _ASK_NO_SURFACE.format(permission="email.read", channel="chat")
-    row = db.execute("SELECT context, reason FROM policy_blocked_log").fetchone()
-    assert (row["context"], row["reason"]) == ("chat", "user_unavailable")
-    assert recorder.frames == []
-    assert mgr.pending() == []
-
-
-# 8. 'ask' on a turn WITH a surface: the broadcast frame is the wire contract (origin + summary
-#    + the park instant),
-#    pending() lists that same frame while parked, and an answer given the way
-#    POST /api/policies/respond gives it (result + event) runs or blocks the callback, after
-#    which a permission_resolved frame goes out and pending() is empty again.
-@pytest.mark.parametrize("verdict,should_run", [("approved", True), ("denied", False)])
-def test_ask_with_surface_broadcasts_origin_frame_and_resolves(
-    mgr: PolicyManager, db: sqlite3.Connection, recorder: _RecordingClient, verdict: str, should_run: bool,
-) -> None:
-    _seed(db, "chat", "email.read", "ask")
-    deadline = time.monotonic() + 5.0
-    seen: dict[str, object] = {}
-
-    def _answer_like_the_respond_endpoint() -> None:
-        while not recorder.frames and time.monotonic() < deadline:
-            time.sleep(0.01)
-        if not recorder.frames:
-            return                                   # the should_stop deadline below fails the test loudly
-        seen["pending_while_parked"] = list(mgr.pending())
-        gate = _permission_gates[cast(str, recorder.frames[0]["request_id"])]
-        gate["result"] = verdict
-        cast(threading.Event, gate["event"]).set()
-
-    answerer = threading.Thread(target=_answer_like_the_respond_endpoint)
-    answerer.start()
-    out = mgr.authorize(
-        CH.CHAT, "email.read", _ran,
-        should_stop=lambda: time.monotonic() > deadline,
-        origin=_origin(), summary="Read the latest invoice email",
-    )
-    answerer.join(timeout=5.0)
-
-    request, resolved = recorder.frames
-    rid = request["request_id"]
-    assert isinstance(rid, str) and len(rid) == 36
-    # The park instant rides on the frame as ISO-8601 UTC — it must parse back
-    # to an aware UTC datetime so a reloaded client can age the live line.
-    asked_at = datetime.fromisoformat(cast(str, request["asked_at"]))
-    assert asked_at.tzinfo is not None and asked_at.utcoffset() == timedelta(0)
-    assert request == {
-        "type": "permission_request",
-        "request_id": rid,
-        "action_id": "email.read",
-        "summary": "Read the latest invoice email",
-        "origin": {"type": "user", "turn_id": 7, "forked": False},
-        "asked_at": asked_at.isoformat(timespec="seconds"),
-    }
-    assert seen["pending_while_parked"] == [request]
-    assert resolved == {"type": "permission_resolved", "request_id": rid}
-    assert mgr.pending() == []
-    if should_run:
-        assert out == _ran()
-        assert db.execute("SELECT count(*) FROM policy_blocked_log").fetchone()[0] == 0
-    else:
-        assert out == "The email.read action is not allowed. Do NOT retry."
-        assert db.execute("SELECT reason FROM policy_blocked_log").fetchone()["reason"] == "user_denied"
-
-
-# 9. a cancelled turn unparks the gate on the next poll: blocked, no audit row (not a verdict),
-#    and the card is withdrawn with a permission_resolved frame.
-def test_cancelled_turn_unparks_gate_resolves_card_and_logs_nothing(
-    mgr: PolicyManager, db: sqlite3.Connection, recorder: _RecordingClient,
-) -> None:
-    _seed(db, "chat", "email.read", "ask")
-    started = time.monotonic()
-    out = mgr.authorize(CH.CHAT, "email.read", _ran, should_stop=lambda: True, origin=_origin(), summary="x")
-    assert time.monotonic() - started < 2 * _GATE_POLL_SECONDS
-    assert out == "The email.read action is not allowed. Do NOT retry."
-    assert [f["type"] for f in recorder.frames] == ["permission_request", "permission_resolved"]
-    assert recorder.frames[0]["request_id"] == recorder.frames[1]["request_id"]
-    assert mgr.pending() == []
-    assert db.execute("SELECT count(*) FROM policy_blocked_log").fetchone()[0] == 0

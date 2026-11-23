@@ -2,11 +2,11 @@
  * Ask labels and wait time — the readable label for a gated action (and an
  * off-turn ask's origin) plus whole seconds since the ask parked.
  */
-import { ConfigType } from '@chalie/shared';
-import type { PermissionOrigin } from '../api/policies';
+import { ConfigType } from '../config/configType';
+import type { AskOrigin } from '../stores/asks';
 
 /** Where an ask shown away from its turn came from: a scheduled task, the main chat, or a thread. */
-export function originLabel(origin: PermissionOrigin): string {
+export function originLabel(origin: AskOrigin): string {
   if (origin.type === ConfigType.SCHEDULED) return 'Scheduled task';
   return origin.type === ConfigType.USER && !origin.forked ? 'Chat' : 'Thread';
 }

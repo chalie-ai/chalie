@@ -20,7 +20,7 @@
  */
 import { defineStore } from 'pinia';
 import type { DelegateRef, WsPushEvent } from '@chalie/shared';
-import { AuthError, ConfigType, getWebSocket, useConnectionStore } from '@chalie/shared';
+import { AuthError, ConfigType, getWebSocket, useAsksStore, useConnectionStore } from '@chalie/shared';
 import { extractText } from '../composables/useMarkup';
 import { conversation as convoApi } from '../api/conversation';
 import { dispatchDrift, refetchDelegate, registerSessionHooks } from '../utils/driftDispatcher';
@@ -45,7 +45,6 @@ import {
 } from '../utils/turnDom';
 import { laneKey, useQueueStore } from './queue';
 import { useNotificationsStore } from './notifications';
-import { usePermissionsStore } from './permissions';
 import { registerPanelView, useBrowserStore } from './browser';
 import { useAgentsStore } from './agents';
 import { useVoiceTranscriptsStore } from './voiceTranscripts';
@@ -169,14 +168,15 @@ export const useSessionStore = defineStore('session', {
         conn.setConnected(true);
         void this._reconcileWorking();
         void this._refreshRunningSubagents();
-        // Pending permission gates outlive the socket (the backend thread keeps
-        // waiting; the WS frame was only the visual trigger) — re-read them on
-        // every connect, first load and reconnect alike, so a reload or a drop
-        // brings the asks back instead of parking the turn for ever.
-        void usePermissionsStore().refreshPending();
-        // Likewise the browser's tabs and their hand-offs: a reload or a drop
-        // would otherwise miss the frames that announced them.
-        void useBrowserStore().refresh();
+        // Open asks outlive the socket (the backend keeps waiting; the WS
+        // frame was only the visual trigger) — re-read them on every connect,
+        // first load and reconnect alike, so a reload or a drop brings them
+        // back instead of parking the turn for ever. Then the browser's tabs,
+        // read after the asks so a hand-off that came behind the dead socket
+        // still opens the panel on its tab.
+        void useAsksStore()
+          .refreshOpen()
+          .then(() => useBrowserStore().refresh());
         // And the running and waiting subagents the Activity drawer lists: an
         // agent whose row changed behind the dead socket sent a frame nobody
         // got.

@@ -8,6 +8,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onUpdated, ref, watch } from 'vue';
 import { ArrowLeft, ArrowRight, Keyboard, Plus, RotateCw, X } from '@lucide/vue';
+import { useAsksStore } from '@chalie/shared';
 import { useBrowserStore } from '../../stores/browser';
 import type { BrowserTab } from '../../api/browser';
 import { withScheme, type StreamMeta } from '../../utils/browserInput';
@@ -15,6 +16,7 @@ import BrowserView from './BrowserView.vue';
 import CertificateWarning from './CertificateWarning.vue';
 
 const browser = useBrowserStore();
+const asks = useAsksStore();
 
 const panelRef = ref<HTMLElement | null>(null);
 const addressRef = ref<HTMLInputElement | null>(null);
@@ -32,6 +34,8 @@ let opener: HTMLElement | null = null;
 let editingAddress = false;
 
 const tab = computed(() => browser.selectedTab);
+/** The open hand-off on the shown tab, if any. */
+const handoff = computed(() => (tab.value ? asks.handoffOn(tab.value.id) : null));
 
 /** A blank tab reports 'about:blank' as its url and title; a refused page has neither. */
 function tabName(t: BrowserTab): string {
@@ -210,11 +214,15 @@ function onKeydown(e: KeyboardEvent): void {
               type="button"
               class="browser-panel__tab-name"
               :aria-current="t.id === browser.selectedTabId ? 'true' : undefined"
-              :aria-label="t.handoff ? `${tabName(t)}, waiting for you` : undefined"
+              :aria-label="asks.handoffOn(t.id) ? `${tabName(t)}, waiting for you` : undefined"
               :title="tabName(t)"
               @click="browser.select(t.id)"
             >
-              <span v-if="t.handoff" class="browser-panel__tab-mark" aria-hidden="true" />
+              <span
+                v-if="asks.handoffOn(t.id)"
+                class="browser-panel__tab-mark"
+                aria-hidden="true"
+              />
               <span class="browser-panel__tab-text">{{ tabName(t) }}</span>
             </button>
             <button
@@ -307,11 +315,11 @@ function onKeydown(e: KeyboardEvent): void {
         </button>
       </div>
 
-      <div v-if="tab?.handoff" class="browser-panel__handoff" role="status">
+      <div v-if="handoff" class="browser-panel__handoff" role="status">
         <span class="browser-panel__handoff-text">
-          Chalie needs you here{{ tab.handoff.reason ? `: ${tab.handoff.reason}` : '' }}
+          Chalie needs you here{{ handoff.data.reason ? `: ${handoff.data.reason}` : '' }}
         </span>
-        <button type="button" class="btn btn-primary" @click="browser.finishHandoff(tab.id)">
+        <button type="button" class="btn btn-primary" @click="browser.finishHandoff(handoff.ask_id)">
           Done
         </button>
       </div>

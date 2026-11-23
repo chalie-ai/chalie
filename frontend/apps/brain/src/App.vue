@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted } from 'vue';
 import { RouterView } from 'vue-router';
-import { useTheme } from '@chalie/shared';
+import { AskRow, getWebSocket, useAsksStore, useTheme, useWaitClock } from '@chalie/shared';
 import { useShellStore } from './stores/shell';
 import { useHeartbeat } from './composables/useHeartbeat';
 import BrainSidebar from './ui/BrainSidebar.vue';
@@ -13,6 +13,13 @@ import ToastHost from './ui/ToastHost.vue';
 const { init: initTheme } = useTheme();
 const shell = useShellStore();
 const heartbeat = useHeartbeat();
+const asks = useAsksStore();
+const now = useWaitClock(() => asks.queue.length);
+
+/** Open shows an ask's turn, which lives in the chat. */
+function openChat(): void {
+  globalThis.location.assign('/');
+}
 
 // Registered after the palette's and the confirm dialog's own Escape listeners
 // (children mount first), so an Escape one of them already handled is skipped.
@@ -25,6 +32,12 @@ onMounted(() => {
   initTheme();
   heartbeat.start();
   document.addEventListener('keydown', onKeydown);
+  // The open asks, kept current while any Brain page is open, so one is
+  // answered where the user is.
+  const ws = getWebSocket();
+  ws.onConnect(() => void asks.refreshOpen());
+  ws.onDrift((frame) => asks.route(frame));
+  ws.connect();
 });
 
 onBeforeUnmount(() => {
@@ -51,6 +64,10 @@ onBeforeUnmount(() => {
         <RouterView />
       </div>
     </main>
+
+    <div class="ask-dock" aria-live="polite">
+      <AskRow v-for="ask in asks.queue" :key="ask.ask_id" :ask="ask" :now="now" @open="openChat" />
+    </div>
   </div>
 
   <ToastHost id="toastHost" />

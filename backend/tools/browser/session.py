@@ -38,6 +38,7 @@ from collections.abc import Callable
 from functools import partial
 from typing import TypeVar, cast
 
+from services.ask_user import AskUser
 from tools.browser import tabs
 from tools.browser.cdp import CLOSED, COMMAND_TIMEOUT, Browser, BrowserError, Event, get, get_dict, get_objects
 from tools.browser.tabs import Opener, Tab
@@ -394,7 +395,7 @@ class PageSession:
         info = event.params.get("targetInfo")
         if (event.method == "Target.targetCreated" and isinstance(info, dict) and info.get("type") == "page"
                 and info.get("openerId") == self._target
-                and (self.tab.opener == "user" or self.tab.handoff is not None)):
+                and (self.tab.opener == "user" or AskUser.open_handoff_on(self.tab.id))):
             from tools.browser.pool import get_pool  # noqa: PLC0415
             get_pool().submit(_adopt, str(info.get("targetId")), self.tab.origin)
 

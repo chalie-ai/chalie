@@ -327,6 +327,16 @@ class TooManySignInAttempts(ChalieException):
     """UI.com blocked sign-ins to the account for now, after too many attempts."""
 
 
+# ── Ask layer ─────────────────────────────────────────────────────────────────
+
+
+class AskReplyInvalid(ChalieException):
+    """A reply whose value is wrong for its ask's kind; the ask stays open.
+
+    The message names the kind only, never the value.
+    """
+
+
 # ── Vault layer ───────────────────────────────────────────────────────────────
 
 

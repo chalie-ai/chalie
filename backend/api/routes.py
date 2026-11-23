@@ -24,7 +24,9 @@ from __future__ import annotations
 from importlib import import_module
 from pkgutil import walk_packages
 
-from .actions.browser.handoffs import BrowserHandoffs
+from .actions.asks.dismiss import AsksDismiss
+from .actions.asks.open import AsksOpen
+from .actions.asks.reply import AsksReply
 from .actions.browser.history import BrowserHistory
 from .actions.browser.navigate import BrowserNavigate
 from .actions.browser.proceed import BrowserProceed
@@ -39,9 +41,7 @@ from .actions.mcp_clients.test import McpTest
 from .actions.mcp_clients.tools import McpTools
 from .actions.memory.search import MemorySearch
 from .actions.policies.blocked import BlockedAction
-from .actions.policies.pending import PendingAction
 from .actions.policies.reset import ResetAction
-from .actions.policies.respond import RespondAction
 from .actions.providers.api_key import ProviderApiKey
 from .actions.providers.catalog import ProviderCatalog
 from .actions.providers.delegate import ProviderDelegate
@@ -77,7 +77,10 @@ from .endpoints.wrappers import WrappersEndpoint
 ROUTES: tuple[Endpoint, ...] = (
     AgentsEndpoint("agents"),
 
-    BrowserHandoffs("browser", "handoffs"),
+    AsksDismiss("asks", "dismiss"),
+    AsksOpen("asks", "open"),
+    AsksReply("asks", "reply"),
+
     BrowserHistory("browser", "history"),
     BrowserNavigate("browser", "navigate"),
     BrowserProceed("browser", "proceed"),
@@ -104,9 +107,7 @@ ROUTES: tuple[Endpoint, ...] = (
 
     PoliciesEndpoint("policies"),
     BlockedAction("policies", "blocked"),
-    PendingAction("policies", "pending"),
     ResetAction("policies", "reset"),
-    RespondAction("policies", "respond"),
 
     Providers("providers"),
     ProviderApiKey("providers", "api-key"),

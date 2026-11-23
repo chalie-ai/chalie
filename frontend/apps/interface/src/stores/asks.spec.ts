@@ -1,0 +1,242 @@
+/**
+ * Asks store — feature specs for which of Chalie's questions wait on the
+ * user. Two feeds fill one queue: the `ask_opened` / `ask_closed` frames off
+ * the socket, and the open-asks listing read on every connect. The listing is
+ * a snapshot, so a read must never bring back an ask that closed while it was
+ * in flight; an answer leaves its row at once and posts the user's choice.
+ *
+ * Real Pinia, real store, real socket dispatcher, real REST client. Only the
+ * network is stood in for: `fetch` answers `GET /api/asks/open`,
+ * `POST /api/asks/reply/<id>` and `GET /api/browser/tabs` the way the backend
+ * does, and a test can hold an answer back to land a frame or a reply while
+ * that request is in flight.
+ *
+ * The store keeps its in-flight bookkeeping at module level, so each test
+ * loads a fresh module graph, as a page load would.
+ */
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createPinia, setActivePinia } from 'pinia';
+import { flushPromises } from '@vue/test-utils';
+import type { WsPushEvent } from '@chalie/shared';
+
+// ── The network boundary: what the server holds open, and every request it saw.
+interface Request {
+  method: string;
+  path: string;
+  body: unknown;
+}
+let listing: unknown[] = [];
+let replyStatus = 204;
+let requests: Request[] = [];
+const held: Record<'open' | 'reply', Promise<void>[]> = { open: [], reply: [] };
+
+const json = (status: number, body: unknown) =>
+  new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+
+/** Hold the next answer on a route back until the returned release is called. */
+function holdNext(route: 'open' | 'reply'): () => Promise<void> {
+  let release!: () => void;
+  held[route].push(new Promise<void>((resolve) => (release = resolve)));
+  return async () => {
+    release();
+    await flushPromises();
+  };
+}
+
+async function fakeBackend(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const path = String(input);
+  const method = init?.method ?? 'GET';
+  requests.push({ method, path, body: init?.body ? JSON.parse(String(init.body)) : null });
+  if (method === 'GET' && path === '/api/asks/open') {
+    await held.open.shift();
+    return json(200, { success: true, result: listing, pagination: { page: 1, limit: 50, total: listing.length } });
+  }
+  if (method === 'POST' && path.startsWith('/api/asks/reply/')) {
+    await held.reply.shift();
+    if (replyStatus === 204) return new Response(null, { status: 204 });
+    return json(replyStatus, { error: replyStatus === 404 ? 'That ask was already answered' : 'Server error' });
+  }
+  if (method === 'GET' && path === '/api/browser/tabs') {
+    return json(200, { success: true, result: { tabs: [] } });
+  }
+  return new Response(null, { status: 404 });
+}
+
+const mainChat = { type: 'user', turn_id: 7, forked: false };
+
+function permissionAsk(id: string, origin: unknown = mainChat) {
+  return {
+    ask_id: id,
+    kind: 'permission',
+    asked_at: '2026-11-20T09:00:00+00:00',
+    data: { action_id: 'email.send', summary: `Send the ${id} email`, origin },
+  };
+}
+
+function handoffAsk(id: string, tabId: string) {
+  return {
+    ask_id: id,
+    kind: 'handoff',
+    asked_at: '2026-11-20T09:00:00+00:00',
+    data: { tab_id: tabId, reason: 'Please sign in', origin: mainChat },
+  };
+}
+
+const opened = (ask: object) => ({ type: 'ask_opened', ...ask }) as WsPushEvent;
+const closed = (id: string) => ({ type: 'ask_closed', ask_id: id }) as WsPushEvent;
+
+/** A page load: a fresh module graph; frames arrive through the real socket dispatcher. */
+async function loadPage() {
+  vi.resetModules();
+  setActivePinia(createPinia());
+  const { useAsksStore } = await import('@chalie/shared');
+  const { dispatchDrift } = await import('../utils/driftDispatcher');
+  return { asks: useAsksStore(), frame: dispatchDrift };
+}
+
+const waiting = (asks: { queue: { ask_id: string }[] }) => asks.queue.map((a) => a.ask_id);
+const opensRead = () => requests.filter((r) => r.path === '/api/asks/open').length;
+
+beforeEach(() => {
+  listing = [];
+  replyStatus = 204;
+  requests = [];
+  held.open = [];
+  held.reply = [];
+  vi.stubGlobal('fetch', fakeBackend);
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe('asks store — what waits on the user', () => {
+  it('an ask opened over the socket waits once even when its frame repeats, and its close takes away only that ask', async () => {
+    const { asks, frame } = await loadPage();
+
+    frame(opened(permissionAsk('send-report')));
+    frame(opened(permissionAsk('send-report')));
+    frame(opened(handoffAsk('sign-in', 'tab-1')));
+    frame(opened(permissionAsk('send-invoice')));
+    expect(waiting(asks)).toEqual(['send-report', 'sign-in', 'send-invoice']);
+    expect(asks.handoffOn('tab-1')?.ask_id).toBe('sign-in');
+
+    frame(closed('send-report'));
+    expect(waiting(asks)).toEqual(['sign-in', 'send-invoice']);
+    expect(asks.offScreen.map((a) => a.data.summary)).toEqual(['Send the send-invoice email']);
+  });
+
+  it('an ask from a run no chat turn shows still waits, with no origin; one missing its action or tab never does', async () => {
+    const { asks, frame } = await loadPage();
+
+    frame(opened(permissionAsk('scheduled-send', null)));
+    frame(opened(permissionAsk('half-origin', { type: 'user' })));
+    frame(opened({ ask_id: 'no-action', kind: 'permission', asked_at: '', data: { action_id: '', summary: 'x', origin: null } }));
+    frame(opened({ ask_id: 'no-tab', kind: 'handoff', asked_at: '', data: { reason: 'Sign in', origin: null } }));
+
+    expect(waiting(asks)).toEqual(['scheduled-send', 'half-origin']);
+    expect(asks.offScreen.map((a) => a.data.origin)).toEqual([null, null]);
+  });
+
+  it('on reconnect, an ask the server no longer lists is dropped, a listed one comes back once, and one that arrived during the read stays', async () => {
+    const { asks, frame } = await loadPage();
+    frame(opened(permissionAsk('closed-while-offline')));
+    listing = [permissionAsk('still-open')];
+
+    const release = holdNext('open');
+    const read = asks.refreshOpen();
+    frame(opened(permissionAsk('arrived-during-read')));
+    await release();
+    await read;
+    expect(waiting(asks)).toEqual(['arrived-during-read', 'still-open']);
+
+    listing = [permissionAsk('still-open'), permissionAsk('arrived-during-read')];
+    await asks.refreshOpen();
+    expect(waiting(asks)).toEqual(['arrived-during-read', 'still-open']);
+  });
+
+  it('a failed read of the open asks leaves everything that was waiting in place', async () => {
+    const { asks, frame } = await loadPage();
+    frame(opened(permissionAsk('send-report')));
+    vi.stubGlobal('fetch', async () => json(500, { error: 'Server error' }));
+
+    await asks.refreshOpen();
+
+    expect(waiting(asks)).toEqual(['send-report']);
+  });
+
+  it('an ask closed while the open asks are being read is not brought back by that read', async () => {
+    const { asks, frame } = await loadPage();
+    listing = [permissionAsk('closed-elsewhere'), permissionAsk('never-closed')];
+
+    const release = holdNext('open');
+    const read = asks.refreshOpen();
+    frame(closed('closed-elsewhere'));
+    await release();
+    await read;
+
+    expect(waiting(asks)).toEqual(['never-closed']);
+  });
+
+  it('an ask the user answers while the open asks are being read is not brought back by that read', async () => {
+    const { asks, frame } = await loadPage();
+    frame(opened(permissionAsk('answered')));
+    listing = [permissionAsk('answered'), permissionAsk('never-closed')];
+
+    const release = holdNext('open');
+    const read = asks.refreshOpen();
+    expect(await asks.reply('answered', true)).toBeNull();
+    await release();
+    await read;
+
+    expect(waiting(asks)).toEqual(['never-closed']);
+  });
+
+  it("an answer leaves its row before the server confirms it, a read landing meanwhile keeps it gone, and the server gets the user's choice", async () => {
+    const { asks, frame } = await loadPage();
+    frame(opened(permissionAsk('send-report')));
+    listing = [permissionAsk('send-report'), permissionAsk('never-closed')];
+
+    const confirm = holdNext('reply');
+    const answer = asks.reply('send-report', true);
+    expect(waiting(asks)).toEqual([]);
+
+    await asks.refreshOpen();
+    expect(waiting(asks)).toEqual(['never-closed']);
+
+    await confirm();
+    expect(await answer).toBeNull();
+    expect(waiting(asks)).toEqual(['never-closed']);
+    expect(requests.filter((r) => r.method === 'POST')).toEqual([
+      { method: 'POST', path: '/api/asks/reply/send-report', body: { value: true } },
+    ]);
+  });
+
+  it('an answer the server says came too late stays gone quietly, with no failure to report', async () => {
+    const { asks, frame } = await loadPage();
+    frame(opened(permissionAsk('answered-elsewhere')));
+    listing = [permissionAsk('answered-elsewhere')];
+    replyStatus = 404;
+
+    const failure = await asks.reply('answered-elsewhere', false);
+    await flushPromises();
+
+    expect(failure).toBeNull();
+    expect(waiting(asks)).toEqual([]);
+    expect(opensRead()).toBe(0);
+  });
+
+  it('an answer that fails for another reason is reported, and its ask comes back only if the server still has it open', async () => {
+    const { asks, frame } = await loadPage();
+    frame(opened(permissionAsk('still-open')));
+    frame(opened(permissionAsk('gone-on-server')));
+    listing = [permissionAsk('still-open')];
+    replyStatus = 500;
+
+    const failures = await Promise.all([asks.reply('still-open', true), asks.reply('gone-on-server', true)]);
+    await flushPromises();
+
+    expect(failures.map((f) => (f as { status?: number }).status)).toEqual([500, 500]);
+    expect(waiting(asks)).toEqual(['still-open']);
+  });
+});

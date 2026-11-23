@@ -109,9 +109,8 @@ let servedAgents: Agent[] = [];
 let agentsDown = false;
 
 /** The backend at the network boundary: thread reads, stops, the dock's
- *  thread-settings read, and the pending-permission listing, the header's open
- *  browser tabs and the running agents that the stores re-read on every
- *  connect. */
+ *  thread-settings read, and the open asks, the header's open browser tabs
+ *  and the running agents that the stores re-read on every connect. */
 async function fakeBackend(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const url = new URL(String(input), 'http://chalie.test');
   if (init?.method === 'DELETE') {
@@ -126,7 +125,7 @@ async function fakeBackend(input: RequestInfo | URL, init?: RequestInit): Promis
   if (url.pathname.startsWith('/api/threads/settings/')) {
     return json({ success: true, result: { provider_id: 1, thinking_level: 'auto', turn_id: null } });
   }
-  if (url.pathname === '/api/policies/pending') {
+  if (url.pathname === '/api/asks/open') {
     return json({ success: true, result: [], pagination: { page: 1, limit: 50, total: 0 } });
   }
   if (url.pathname === '/api/browser/tabs') {

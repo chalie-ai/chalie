@@ -8,7 +8,8 @@
  * Boundaries mocked (network + DOM-effect modules, per the project's
  * established convention — see stores/session.spec.ts's "only WS/network is
  * mocked" note): api/conversation, utils/toast, utils/liveActTrail,
- * utils/turnDom, and the three Pinia stores the router touches. Because
+ * utils/turnDom, and the voice-transcripts store. Ask frames are routed to
+ * the real asks store; their routing is proven in stores/asks.spec.ts. Because
  * `utils/cancelReconcile.ts` imports the SAME `./liveActTrail` and
  * `./turnDom` modules (vi.mock is keyed by resolved path, not import
  * specifier), the cancelled branch's real `reconcileCancelledTurn` runs
@@ -67,11 +68,6 @@ vi.mock('./turnDom', () => ({
   // Request ordering is turnDom's job, proven against the real module in
   // driftDispatcher.refetchOrder.spec.ts; here every read just carries one.
   nextTicket: () => 1,
-}));
-
-const { enqueueMock, removeMock } = vi.hoisted(() => ({ enqueueMock: vi.fn(), removeMock: vi.fn() }));
-vi.mock('../stores/permissions', () => ({
-  usePermissionsStore: () => ({ enqueue: enqueueMock, remove: removeMock }),
 }));
 
 const { recordVoiceMock } = vi.hoisted(() => ({ recordVoiceMock: vi.fn() }));
@@ -443,23 +439,10 @@ describe('dispatchDrift — turn_execution frame', () => {
 });
 
 describe('dispatchDrift — simple (content-free) events', () => {
-  it('permission_request reaches the permissions store', () => {
-    dispatchDrift(frame({ type: 'permission_request', request_id: 'r1', action_id: 'email.send' }));
-    expect(enqueueMock).toHaveBeenCalled();
-  });
-
-  it('permission_resolved removes that gate\'s card from the permissions store', () => {
-    dispatchDrift(frame({ type: 'permission_resolved', request_id: 'r1' }));
-    expect(removeMock).toHaveBeenCalledWith('r1');
-  });
-
-  it('permission_resolved without a request_id touches nothing', () => {
-    dispatchDrift(frame({ type: 'permission_resolved' }));
-    expect(removeMock).not.toHaveBeenCalled();
-  });
-
-  it('an unknown type is a no-op — no throw, no store touched', () => {
+  it('an unknown type is a no-op — no throw, nothing fetched, shown or painted', () => {
     expect(() => dispatchDrift(frame({ type: 'something_nobody_emits' }))).not.toThrow();
-    expect(enqueueMock).not.toHaveBeenCalled();
+    expect(threadMock).not.toHaveBeenCalled();
+    expect(showToastMock).not.toHaveBeenCalled();
+    expect(upsertTurnToSurfacesMock).not.toHaveBeenCalled();
   });
 });

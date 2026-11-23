@@ -30,29 +30,31 @@
  *   - speech is offered for the settled answer only — never for a step's work
  *     or an interim row's prose, which reads in its own row, outside the fold.
  *
- * The REST transport the permission answer goes out on is the one stand-in:
- * the spec reads the decision the block sent off it.
+ * The network the permission answer goes out on is the one stand-in: `fetch`
+ * records each answer the block sends, and the spec reads the decision off it.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mount } from '@vue/test-utils';
+import { flushPromises, mount } from '@vue/test-utils';
 import type { VueWrapper } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
-import { ConfigType } from '@chalie/shared';
+import { ConfigType, useAsksStore } from '@chalie/shared';
 import TurnView from './TurnView.vue';
 import { on } from '../../composables/useEventBus';
-import { usePermissionsStore } from '../../stores/permissions';
 import { useVoiceTranscriptsStore } from '../../stores/voiceTranscripts';
 import { clearAll, finishLiveTool, startLiveTool } from '../../utils/liveActTrail';
 import type { ConversationMessage, ConversationTurnBlock } from '../../api/conversation';
-import type { PendingPermission } from '../../api/policies';
 
-const { respondMock } = vi.hoisted(() => ({ respondMock: vi.fn() }));
-vi.mock('../../api/policies', () => ({
-  policies: {
-    pending: () => Promise.resolve([]),
-    respond: (payload: unknown) => respondMock(payload),
-  },
-}));
+/** Every answer sent to the server, as the request that carried it. */
+let answers: { path: string; body: unknown }[] = [];
+
+async function fakeBackend(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const path = String(input);
+  if (init?.method === 'POST' && path.startsWith('/api/asks/reply/')) {
+    answers.push({ path, body: init.body ? JSON.parse(String(init.body)) : null });
+    return new Response(null, { status: 204 });
+  }
+  return new Response(JSON.stringify({ error: 'unrouted' }), { status: 404 });
+}
 
 const TURN = 3;
 const SPEAK_BUTTON = 'button.speech-form__act-btn--speak';
@@ -167,8 +169,8 @@ function mountTurn(block: ConversationTurnBlock): VueWrapper {
 
 beforeEach(() => {
   setActivePinia(createPinia());
-  respondMock.mockReset();
-  respondMock.mockResolvedValue(undefined);
+  answers = [];
+  vi.stubGlobal('fetch', fakeBackend);
 });
 
 /** Each block's summary toggle — the button that folds and unfolds its calls. */
@@ -187,6 +189,7 @@ afterEach(() => {
   mounted = [];
   clearAll(ConfigType.USER);
   vi.useRealTimers();
+  vi.unstubAllGlobals();
   document.body.innerHTML = '';
 });
 
@@ -433,9 +436,14 @@ describe('one step block, live and settled', () => {
 });
 
 describe('the running block', () => {
-  /** A pending ask parked on a turn, as the backend lists it. */
-  function ask(request_id: string, turn_id: number, action_id: string, summary: string): PendingPermission {
-    return { request_id, action_id, summary, asked_at: new Date().toISOString(), origin: { type: 'user', turn_id, forked: false } };
+  /** An open permission ask parked on a turn, as the backend lists it. */
+  function ask(ask_id: string, turn_id: number, action_id: string, summary: string) {
+    return {
+      ask_id,
+      kind: 'permission',
+      asked_at: new Date().toISOString(),
+      data: { action_id, summary, origin: { type: 'user', turn_id, forked: false } },
+    };
   }
 
   /** The block's own controls, by what they say (the fold is its thinking). */
@@ -506,10 +514,10 @@ describe('the running block', () => {
   });
 
   it('parked on its own turn\'s ask, names it and waits for you beside Stop — Allow and Deny each send their own answer and hand the head back', async () => {
-    const permissions = usePermissionsStore();
+    const asks = useAsksStore();
     // An ask parked on another turn is never this block's.
-    permissions.enqueue(ask('r0', TURN + 1, 'email.read', 'Read the inbox'));
-    permissions.enqueue(ask('r1', TURN, 'search', 'Search the web for Albania winter rentals'));
+    asks.enqueue(ask('r0', TURN + 1, 'email.read', 'Read the inbox'));
+    asks.enqueue(ask('r1', TURN, 'search', 'Search the web for Albania winter rentals'));
     const wrapper = mountTurn(askedTurn());
     const live = () => wrapper.find('.activity');
 
@@ -520,21 +528,21 @@ describe('the running block', () => {
 
     await live().find('.activity__answer--allow').trigger('click');
 
-    expect(respondMock).toHaveBeenCalledTimes(1);
-    expect(respondMock).toHaveBeenLastCalledWith({ request_id: 'r1', approved: true });
+    await flushPromises();
+    expect(answers).toEqual([{ path: '/api/asks/reply/r1', body: { value: true } }]);
     expect(live().find('.step__label').text()).toBe('Thinking…');
     expect(live().text()).not.toContain('waiting for you');
     expect(controls(live())).toEqual(['Stop']);
 
-    permissions.enqueue(ask('r2', TURN, 'search', 'Search the web for Spain winter rentals'));
+    asks.enqueue(ask('r2', TURN, 'search', 'Search the web for Spain winter rentals'));
     await wrapper.vm.$nextTick();
     await live().find('.activity__answer--deny').trigger('click');
 
-    expect(respondMock).toHaveBeenCalledTimes(2);
-    expect(respondMock).toHaveBeenLastCalledWith({ request_id: 'r2', approved: false });
+    await flushPromises();
+    expect(answers.slice(1)).toEqual([{ path: '/api/asks/reply/r2', body: { value: false } }]);
     expect(controls(live())).toEqual(['Stop']);
     // The other turn's ask was never answered from here.
-    expect(permissions.queue.map((r) => r.request_id)).toEqual(['r0']);
+    expect(asks.queue.map((a) => a.ask_id)).toEqual(['r0']);
   });
 });
 

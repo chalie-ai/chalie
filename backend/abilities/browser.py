@@ -286,14 +286,7 @@ class BrowserAbility(Ability[BrowserParamsBag]):
         if tab is None:
             return self._reply(error_envelope("No page is open. Use action='open' with a url first."))
         mp = self._bound_mp()
-        origin = mp.origin
-        if origin is None:
-            return ToolResult.err(
-                "Nobody can take over the page from this run: it is not attached to a conversation the user sees.",
-                code="handoff-unavailable",
-                hint="Do not retry. Say in your answer what the user needs to do on the page, and stop.",
-            )
-        if not hand_off(tab, params.reason, origin, mp.turn_execution_service.should_stop):
+        if not hand_off(tab, params.reason, mp.origin, mp.turn_execution_service.should_stop):
             return ToolResult.err(
                 "The hand-off ended before the user finished: the run was stopped or the page closed.",
                 code="handoff-ended",

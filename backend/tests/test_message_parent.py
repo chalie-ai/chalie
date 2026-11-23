@@ -287,7 +287,7 @@ def test_a_subagent_asks_the_chat_and_the_chats_reply_opens_its_next_turn(
         asking.gate.set()
 
     assert asking.opened and provider.unused() == {}
-    assert [f for f in listener.frames if f.get("type") == "permission_request"] == []
+    assert [f for f in listener.frames if f.get("type") == "ask_opened"] == []
     assert _blocked(db) == []
     n = seen["n"]
     [spawn] = calls_of(db, _WEB)
@@ -449,7 +449,7 @@ def test_a_message_sent_while_the_chats_turn_works_queues_and_opens_its_next_tur
         chat.result()
 
     assert provider.unused() == {}
-    assert [f for f in listener.frames if f.get("type") == "permission_request"] == []
+    assert [f for f in listener.frames if f.get("type") == "ask_opened"] == []
     n = seen["n"]
     [spawn_call] = calls_of(db, _WEB)
     [asked_call] = calls_of(db, MessageParentAbility.NAME)
@@ -520,7 +520,7 @@ def test_stopping_a_subagent_that_waits_for_a_reply_ends_it_and_sends_nothing_ba
         begin(UserConfig(), "stop the search").result()
 
     assert asking.opened and provider.unused() == {}
-    assert [f for f in listener.frames if f.get("type") == "permission_request"] == []
+    assert [f for f in listener.frames if f.get("type") == "ask_opened"] == []
     n = seen["n"]
     [spawn] = calls_of(db, _WEB)
     searcher, turn = child(db, _WEB_CHANNEL, cast("int", spawn["id"]))
@@ -861,7 +861,7 @@ def test_a_subagent_its_caller_waits_for_holds_no_message_parent(
             assert _talk("check the bridge news") == ["Noted."]
 
     assert provider.unused() == {}
-    assert [f for f in listener.frames if f.get("type") == "permission_request"] == []
+    assert [f for f in listener.frames if f.get("type") == "ask_opened"] == []
     [spawn] = calls_of(db, tool_name)
     kind = _SUBTASK if tool_name == SubtaskAbility.NAME else delegate_channel(tool_name)
     agent = cast("Agent", Agent.by_id(agent_number(child(db, kind, cast("int", spawn["id"])).channel)))

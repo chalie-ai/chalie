@@ -25,9 +25,9 @@ Persistence + WS emission never happen here directly — every outcome (started 
 finished / recorded) is written and broadcast through ``self.mp.tool_call_service``
 (§3.5); this service only decides WHAT happened and hands it over.
 
-Policy interim note: setting lookup-or-create, the interactive ask-gate (park +
-WS notify + the cross-request ``_permission_gates`` registry ``POST
-/api/policies/respond`` wakes), and the blocked-log write are not yet modelled
+Policy interim note: setting lookup-or-create, the interactive ask-gate (an
+``AskUser`` permission ask the calling thread waits on), and the blocked-log
+write are not yet modelled
 on the new active-record spine — there is no ``Policy`` model in this phase and
 this service may not emit WS directly (above), so re-pointing the ask-gate's
 notification through ``Websocket.broadcast`` is not reachable from here. Until a
@@ -286,11 +286,10 @@ class DispatchService:
         gate for every tool call: the
         instance method (``authorize``) is invoked directly, with the channel,
         the cooperative ``should_stop`` and the turn's ``origin`` sourced off the
-        typed ``self.mp`` instead of the old getattr wedges. ``should_stop`` lets
-        a parked ask-prompt unwind when the turn is cancelled instead of pinning
-        the per-channel lock; ``origin`` tells the gate which interactive turn a
-        prompt belongs to (none → an ``ask`` denies at once); ``summary`` is the
-        model's one-line account of the call, shown on the prompt."""
+        typed ``self.mp`` instead of the old getattr wedges. ``should_stop`` ends
+        the wait on an open ask when the turn is cancelled; ``origin`` names the
+        interactive turn an ask belongs to, if any; ``summary`` is the model's
+        one-line account of the call, carried on the ask."""
         return PolicyManager().authorize(
             channel=self.mp.config.policy_channel,
             permission=permission,

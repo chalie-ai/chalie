@@ -252,7 +252,7 @@ def test_the_chat_lists_checks_and_messages_its_working_subagent_then_reads_how_
         held.gate.set()
 
     assert held.opened and provider.unused() == {}
-    assert [f for f in listener.frames if f.get("type") == "permission_request"] == []
+    assert [f for f in listener.frames if f.get("type") == "ask_opened"] == []
     assert _blocked(db) == []
     # Found, never pinned: the chat's first step was not sent them.
     assert not set(_TOOLS) & provider.offered("chat")[0]
@@ -356,7 +356,7 @@ def test_a_message_to_a_working_subtask_opens_its_next_turn_and_both_replies_go_
         held.gate.set()
 
     assert held.opened and provider.unused() == {}
-    assert [f for f in listener.frames if f.get("type") == "permission_request"] == []
+    assert [f for f in listener.frames if f.get("type") == "ask_opened"] == []
     assert _blocked(db) == []
 
     [start] = calls_of(db, SubtaskAbility.NAME)
@@ -433,7 +433,7 @@ def test_stopping_a_subtask_stops_it_and_its_own_search_and_sends_nothing_back(d
         held.gate.set()
 
     assert held.opened and provider.unused() == {}
-    assert [f for f in listener.frames if f.get("type") == "permission_request"] == []
+    assert [f for f in listener.frames if f.get("type") == "ask_opened"] == []
     assert _blocked(db) == []
     n = seen["n"]
 
@@ -503,7 +503,7 @@ def test_the_chat_cannot_see_or_reach_a_subagent_a_scheduled_task_spawned(db: sq
         schedule.result()
 
     assert held.opened and provider.unused() == {}
-    assert [f for f in listener.frames if f.get("type") == "permission_request"] == []
+    assert [f for f in listener.frames if f.get("type") == "ask_opened"] == []
     assert _blocked(db) == []
     n = seen["n"]
 
@@ -552,7 +552,7 @@ def test_a_scheduled_task_manages_no_subagent_not_even_its_own(db: sqlite3.Conne
     _mp, frames = run_turn(provider, ScheduledConfig(), "check the bridge news", turn_id=_SCHEDULE_ID)
 
     assert provider.unused() == {}
-    assert [f for f in frames if f.get("type") == "permission_request"] == []
+    assert [f for f in frames if f.get("type") == "ask_opened"] == []
     assert _blocked(db) == []
     [search] = calls_of(db, _WEB)
     assert search["state"] == ToolCall.DONE, search["result"]
@@ -623,7 +623,7 @@ def test_no_caller_but_the_chat_reaches_the_chats_working_subagent_even_by_its_r
         held.gate.set()
 
     assert held.opened and provider.unused() == {}
-    assert [f for f in listener.frames if f.get("type") == "permission_request"] == []
+    assert [f for f in listener.frames if f.get("type") == "ask_opened"] == []
     assert _blocked(db) == []
     n = seen["n"]
 
@@ -692,7 +692,7 @@ def test_a_subagent_a_restart_cut_off_reads_as_failed_and_a_stop_ends_it_cancell
     _mp, frames = run_turn(provider, UserConfig(), "what happened to the bridge search?")
 
     assert provider.unused() == {}
-    assert [f for f in frames if f.get("type") == "permission_request"] == []
+    assert [f for f in frames if f.get("type") == "ask_opened"] == []
     assert _blocked(db) == []
     [message] = calls_of(db, MessageSubagentAbility.NAME)
     assert _answer(message) == ("error", "agent-stopped", CRASHED_TEXT)
@@ -780,7 +780,7 @@ def test_two_searches_the_chat_spawns_run_on_channels_of_their_own_and_each_repl
         chat.result()
 
     assert first_held.opened and second_held.opened and waiting.opened and provider.unused() == {}
-    assert [f for f in listener.frames if f.get("type") == "permission_request"] == []
+    assert [f for f in listener.frames if f.get("type") == "ask_opened"] == []
     assert _blocked(db) == []
     (a, a_channel, a_turn), (b, b_channel, b_turn) = _own_channels(db)
     assert (a, b) == (seen["first"], seen["second"])
@@ -862,7 +862,7 @@ def test_stopping_one_of_two_working_searches_ends_only_that_one(db: sqlite3.Con
         first_held.gate.set()
 
     assert first_held.opened and second_held.opened and provider.unused() == {}
-    assert [f for f in listener.frames if f.get("type") == "permission_request"] == []
+    assert [f for f in listener.frames if f.get("type") == "ask_opened"] == []
     assert _blocked(db) == []
     (a, a_channel, a_turn), (b, b_channel, b_turn) = _own_channels(db)
     assert (a, b) == (seen["first"], seen["second"])

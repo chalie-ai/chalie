@@ -11,6 +11,7 @@ only re-exports so callers never depend on the internal file layout.
 from exceptions.chalie_exception import ChalieException
 from exceptions.exception import (
     AgentStopped,
+    AskReplyInvalid,
     AuthenticatorCodeRefused,
     AuthenticatorKeyInvalid,
     AuthenticatorKeyMissing,
@@ -44,6 +45,7 @@ from exceptions.exception import (
 
 __all__ = [
     "AgentStopped",
+    "AskReplyInvalid",
     "AuthenticatorCodeRefused",
     "AuthenticatorKeyInvalid",
     "AuthenticatorKeyMissing",

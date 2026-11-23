@@ -19,6 +19,7 @@
  * cycle in both directions.
  */
 import type { DelegateRef, TurnExecutionState, WsPushEvent, WsTurnExecutionEvent } from '@chalie/shared';
+import { useAsksStore } from '@chalie/shared';
 import { conversation as convoApi } from '../api/conversation';
 import { showToast } from './toast';
 import { clearLiveTurn, finishLiveTool, setDelegateState, setLiveToolDelegate, startLiveTool } from './liveActTrail';
@@ -33,7 +34,6 @@ import {
   upsertDelegateTurn,
   upsertTurnToSurfaces,
 } from './turnDom';
-import { usePermissionsStore } from '../stores/permissions';
 import { useBrowserStore } from '../stores/browser';
 import { useAgentsStore } from '../stores/agents';
 import type { Agent } from '../api/agents';
@@ -465,17 +465,15 @@ function _dispatchSimpleEvent(data: WsPushEvent): boolean {
   switch (data.type as string) {
     case 'capability_alert':
       return true;
-    case 'permission_request':
-      usePermissionsStore().enqueue(data);
+    case 'ask_opened':
+    case 'ask_closed':
+      useAsksStore().route(data);
+      // A hand-off does not change the tab list, so nothing else re-reads the
+      // tabs to open the panel on the tab it hands over.
+      if (data.type === 'ask_opened' && (data as { kind?: unknown }).kind === 'handoff') {
+        void useBrowserStore().refresh();
+      }
       return true;
-    case 'permission_resolved': {
-      // The gate ended elsewhere — answered in another tab, cancelled with its
-      // turn, or failed on the backend — so the card must not wait for an
-      // answer nobody can deliver.
-      const requestId = (data as { request_id?: unknown }).request_id;
-      if (typeof requestId === 'string') usePermissionsStore().remove(requestId);
-      return true;
-    }
     case 'browser_tabs_changed':
       void useBrowserStore().refresh();
       return true;

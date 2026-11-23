@@ -13,10 +13,3 @@ class PolicyUpsertRequest(Request):
     channel: str
     permission: str = Field(..., min_length=1, max_length=200)
     setting: str
-
-
-class PolicyRespondRequest(Request):
-    """Inbound body resolving an in-process permission gate."""
-
-    request_id: str = Field(..., min_length=1)
-    approved: bool

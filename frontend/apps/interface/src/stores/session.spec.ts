@@ -21,6 +21,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
+import { flushPromises } from '@vue/test-utils';
 import { h } from 'vue';
 import type { Component } from 'vue';
 
@@ -49,9 +50,8 @@ const { fakeWs, sendMock, wsCallbacks } = vi.hoisted(() => {
   };
 });
 
-vi.mock('@chalie/shared', () => ({
-  ConfigType: { USER: 'user', SCHEDULED: 'scheduled', DISCOVERY: 'discovery' },
-  AuthError: class AuthError extends Error {},
+vi.mock('@chalie/shared', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@chalie/shared')>()),
   getWebSocket: () => fakeWs,
   useConnectionStore: () => ({ setConnected: () => { /* not under test */ } }),
   getHost: () => '',
@@ -73,15 +73,20 @@ vi.mock('../api/conversation', () => ({
   },
 }));
 
-// The pending permission-gate listing `refreshPending()` re-reads on every
-// connect (`api/policies.ts`) — the same network edge, mocked the same way.
-const pendingMock = vi.fn();
-vi.mock('../api/policies', () => ({
-  policies: {
-    pending: () => pendingMock(),
-    respond: vi.fn(),
-  },
-}));
+// The open-asks listing every connect re-reads, served at the `fetch` edge:
+// `GET /api/asks/open` answers with `openAsks` and counts each read.
+let openAsks: object[] = [];
+let asksReads = 0;
+async function fakeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  if ((init?.method ?? 'GET') === 'GET' && String(input) === '/api/asks/open') {
+    asksReads += 1;
+    return new Response(
+      JSON.stringify({ success: true, result: openAsks, pagination: { page: 1, limit: 50, total: openAsks.length } }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    );
+  }
+  return { ok: true } as Response;
+}
 
 import { ConfigType } from '@chalie/shared';
 import type { ConversationTurnBlock } from '../api/conversation';
@@ -139,9 +144,9 @@ beforeEach(() => {
   threadMock.mockReset();
   stopMock.mockReset();
   stopMock.mockResolvedValue({ cancelled: true, reason: null });
-  pendingMock.mockReset();
-  pendingMock.mockResolvedValue([]);
-  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true } as Response));
+  openAsks = [];
+  asksReads = 0;
+  vi.stubGlobal('fetch', fakeFetch);
   document.body.innerHTML = '';
 });
 
@@ -916,41 +921,39 @@ describe('requestStop — a stop that fails', () => {
 });
 
 describe('reconnect reconcile', () => {
-  it('onConnect re-reads the pending permission gates, so a gate still open across a reload or a dropped socket gets its card back', async () => {
+  it('onConnect re-reads the open asks, so an ask still open across a reload or a dropped socket waits again — once, and only while the server still has it', async () => {
     const { session } = await freshSession();
-    const { usePermissionsStore } = await import('./permissions');
-    const permissions = usePermissionsStore();
-    pendingMock.mockResolvedValue([
-      {
-        request_id: 'gate-1',
-        action_id: 'email.read',
-        summary: 'Read the inbox',
-        asked_at: '2026-10-07T06:32:11+00:00',
-        origin: { type: ConfigType.USER, turn_id: 7, forked: true },
-      },
-    ]);
+    const { useAsksStore } = await import('@chalie/shared');
+    const asks = useAsksStore();
+    const readInbox = {
+      ask_id: 'ask-1',
+      kind: 'permission',
+      asked_at: '2026-10-07T06:32:11+00:00',
+      data: { action_id: 'email.read', summary: 'Read the inbox', origin: { type: ConfigType.USER, turn_id: 7, forked: true } },
+    };
+    openAsks = [readInbox];
 
     session.init();
-    expect(permissions.queue).toEqual([]);
+    expect(asks.queue).toEqual([]);
     wsCallbacks.onConnect();
-    await new Promise((resolve) => setTimeout(resolve, 0)); // flush pending() -> enqueue
+    await flushPromises();
 
-    expect(pendingMock).toHaveBeenCalledTimes(1);
-    expect(permissions.queue).toEqual([
-      {
-        request_id: 'gate-1',
-        action_id: 'email.read',
-        summary: 'Read the inbox',
-        asked_at: '2026-10-07T06:32:11+00:00',
-        origin: { type: 'user', turn_id: 7, forked: true },
-      },
-    ]);
+    expect(asksReads).toBe(1);
+    expect(asks.queue).toEqual([readInbox]);
 
-    // A second connect (reconnect) re-reads and dedupes — the same gate is not queued twice.
+    // A second connect (reconnect) re-reads and dedupes — the same ask is not queued twice.
     wsCallbacks.onConnect();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(pendingMock).toHaveBeenCalledTimes(2);
-    expect(permissions.queue.map((r) => r.request_id)).toEqual(['gate-1']);
+    await flushPromises();
+    expect(asksReads).toBe(2);
+    expect(asks.queue.map((a) => a.ask_id)).toEqual(['ask-1']);
+
+    // An ask answered elsewhere while the socket was down: its close frame was
+    // missed, so the next connect's read drops it.
+    openAsks = [];
+    wsCallbacks.onConnect();
+    await flushPromises();
+    expect(asksReads).toBe(3);
+    expect(asks.queue).toEqual([]);
   });
 
   it('onDisconnect snapshots every in-flight turn (rendered AND live-only) into _offlineWorking, then clears all visual working state', async () => {

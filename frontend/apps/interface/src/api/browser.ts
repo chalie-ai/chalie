@@ -1,18 +1,6 @@
 import { api, getHost } from '@chalie/shared';
+import type { AskOrigin } from '@chalie/shared';
 import type { SingleEnvelope } from './conversation';
-import type { PermissionOrigin } from './policies';
-
-/** A pending hand-off: Chalie gave this tab to the user (a login, a captcha). */
-export interface BrowserHandoff {
-  /** Opaque ID; finished on POST /api/browser/handoffs/<id>. */
-  id: string;
-  /** Chalie's one-line reason, shown in the hand-off bar. */
-  reason: string;
-  /** The turn whose run handed the tab over. */
-  origin: PermissionOrigin;
-  /** The instant the hand-off was asked for (ISO-8601). */
-  asked_at: string;
-}
 
 /** A page the browser refused for its certificate; the tab stays on the page it had. */
 export interface BrowserCertificateError {
@@ -33,8 +21,7 @@ export interface BrowserTab {
   /** Who opened it: Chalie's tabs close with the run that opened them, so only the user's can be closed here. */
   opener: 'chalie' | 'user';
   /** The turn of the run the tab belongs to (its page, or a popup kept from it); null for the user's own tabs. */
-  origin: PermissionOrigin | null;
-  handoff: BrowserHandoff | null;
+  origin: AskOrigin | null;
   /** Set while the tab shows the certificate warning, until it loads another page or the user goes back. */
   certificate_error: BrowserCertificateError | null;
 }
@@ -83,11 +70,6 @@ export const browser = {
    */
   async proceed(tabId: string, host: string, port: number): Promise<void> {
     await api.post(`/api/browser/proceed/${encodeURIComponent(tabId)}`, { host, port });
-  },
-
-  /** POST /api/browser/handoffs/<id> — the user is done; Chalie carries on. 404 once it is already done. */
-  async finishHandoff(handoffId: string): Promise<void> {
-    await api.post(`/api/browser/handoffs/${encodeURIComponent(handoffId)}`);
   },
 
   /** The tab's live stream socket. The session cookie rides the handshake. */

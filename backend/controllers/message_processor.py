@@ -382,14 +382,14 @@ class MessageProcessor:
 
     @property
     def origin(self) -> dict[str, object] | None:
-        """The interactive turn a policy prompt raised by this turn belongs to,
-        or ``None`` when nobody could answer one.
+        """The interactive turn an ask raised by this turn belongs to, or
+        ``None`` when it has none; an ask is made either way.
 
-        A turn has a surface iff its config streams live state
+        A turn is interactive iff its config streams live state
         (``BROADCASTS_STATE``) and it owns a real turn id — exactly the turns
-        the interface can render and reply to. A nested delegate inherits its
-        caller's origin through ``metadata["origin"]``, so the prompt lands where
-        the user is rather than on the delegate's own hidden turn."""
+        the interface can render. A nested delegate inherits its caller's
+        origin through ``metadata["origin"]``, so the ask names the turn the
+        user is on rather than the delegate's own hidden turn."""
         inherited = self.metadata.get("origin")
         if inherited is not None:
             return cast("dict[str, object]", inherited)

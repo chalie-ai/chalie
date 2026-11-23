@@ -80,7 +80,6 @@ function refusedTab(id: string, refused: BrowserCertificateError): BrowserTab {
     title: 'about:blank',
     opener: 'user',
     origin: null,
-    handoff: null,
     certificate_error: refused,
   };
 }

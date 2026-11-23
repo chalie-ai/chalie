@@ -13,8 +13,6 @@ from __future__ import annotations
 
 import json
 import threading
-from typing import cast
-
 import pytest
 from flask import Flask
 from flask.testing import FlaskClient
@@ -80,12 +78,14 @@ def test_a_popup_the_user_opens_while_a_run_waits_on_them_stays_in_the_runs_conv
     with live_server(app) as host, main_socket(host, token) as ui:
         waiting.start()
         try:
-            receive_until(
-                ui,
-                lambda m: (
-                    as_frame(m, "browser_tabs_changed") is not None
-                    and any(t["handoff"] is not None for t in listed(client))
-                ),
+            opened = as_frame(
+                receive_until(ui, lambda m: as_frame(m, "ask_opened") is not None),
+                "ask_opened",
+            )
+            assert opened is not None
+            assert (opened["kind"], opened["data"]) == (
+                "handoff",
+                {"tab_id": tab.id, "reason": "Please sign in", "origin": _ORIGIN},
             )
             with stream_socket(host, tab.id, cookie_header(token)) as ws:
                 receive_until(ws, lambda m: as_frame(m, "meta") is not None)
@@ -120,15 +120,13 @@ def test_a_popup_the_user_opens_while_a_run_waits_on_them_stays_in_the_runs_conv
                 "chalie",
                 _ORIGIN,
             )
-            assert (kept["url"], kept["opener"], kept["origin"], kept["handoff"]) == (
+            assert (kept["url"], kept["opener"], kept["origin"]) == (
                 f"{site.url}/b",
                 "user",
                 _ORIGIN,
-                None,
             )
 
-            handoff = cast("dict[str, object]", asking["handoff"])
-            done = client.post(f"/api/browser/handoffs/{handoff['id']}")
+            done = client.post(f"/api/asks/reply/{opened['ask_id']}", json={"value": None})
             assert done.status_code == 204, done.data
             waiting.join(timeout=60)
             assert not waiting.is_alive(), "the run did not carry on after Done"

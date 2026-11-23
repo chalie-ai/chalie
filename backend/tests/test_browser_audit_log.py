@@ -6,7 +6,7 @@ watching through the live page — is one INFO line that names the tab and the p
 it was on. These tests drive a real browsing run and the real panel through the
 real app on a real port, against the real headless shell on a throwaway profile
 and a loopback site, and read the lines the app actually logged: each one in full,
-built from the real tab id, hand-off id and site address. Text a person types
+built from the real tab id, ask id and site address. Text a person types
 through the panel reaches the page and never the log, at any level.
 """
 
@@ -17,7 +17,6 @@ import logging
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import cast
 
 import pytest
 from flask import Flask
@@ -31,7 +30,6 @@ from tests._browser_live import (
     StreamSocket,
     as_frame,
     cookie_header,
-    listed,
     live_server,
     main_socket,
     open_user_tab,
@@ -182,13 +180,13 @@ def test_a_runs_page_handed_to_the_person_and_back_is_logged_line_by_line_withou
         with live_server(app) as host, main_socket(host, token) as ui:
             waiting.start()
             try:
-                receive_until(ui, lambda m: (
-                    as_frame(m, "browser_tabs_changed") is not None
-                    and any(row["handoff"] is not None for row in listed(client))
-                ))
-                [row] = listed(client)
-                h = str(cast("dict[str, object]", row["handoff"])["id"])
-                log.wait(f"hand-off started tab={t} url={a} id={h} reason=Please sign in")
+                opened = as_frame(
+                    receive_until(ui, lambda m: as_frame(m, "ask_opened") is not None),
+                    "ask_opened",
+                )
+                assert opened is not None
+                h = str(opened["ask_id"])
+                log.wait(f"hand-off started tab={t} url={a} ask_id={h} reason=Please sign in")
 
                 with stream_socket(host, t, cookie_header(token)) as ws:
                     _send(ws, {"type": "size", "width": 900, "height": 700, "scale": 1})
@@ -210,14 +208,13 @@ def test_a_runs_page_handed_to_the_person_and_back_is_logged_line_by_line_withou
                         f"navigation tab={t} from={login} to={login} by=history reload",
                     )
 
-                    done = client.post(f"/api/browser/handoffs/{h}")
+                    done = client.post(f"/api/asks/reply/{h}", json={"value": None})
                     assert done.status_code == 204, done.data
                     waiting.join(timeout=60)
                     assert not waiting.is_alive(), "the run did not carry on after Done"
                     assert results and "status=success" in results[0], results
                     log.wait(
-                        f"panel hand-off done id={h} tab={t} outcome=ok",
-                        f"hand-off ended tab={t} url={login} id={h} how=done",
+                        f"hand-off ended tab={t} url={login} ask_id={h} how=done",
                         f"verb handoff tab={t} url={login} outcome=ok",
                     )
                 log.wait(f"viewer disconnected tab={t} url={login} clicks=1 keys=1 texts=1")

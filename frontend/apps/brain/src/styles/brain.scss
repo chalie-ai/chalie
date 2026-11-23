@@ -31,8 +31,8 @@ body {
 .app-shell {
   display: grid;
   grid-template-columns: var(--sidebar-w) 1fr;
-  grid-template-rows: var(--topbar-h) 1fr;
-  grid-template-areas: 'sidebar topbar' 'sidebar main';
+  grid-template-rows: var(--topbar-h) 1fr auto;
+  grid-template-areas: 'sidebar topbar' 'sidebar main' 'sidebar asks';
   min-height: 100vh;
   position: relative;
   z-index: 2;
@@ -337,7 +337,7 @@ body {
 
   .app-shell {
     grid-template-columns: 1fr;
-    grid-template-areas: 'topbar' 'main';
+    grid-template-areas: 'topbar' 'main' 'asks';
   }
 
   .sidebar {
@@ -368,6 +368,28 @@ body {
 
 .main { grid-area: main; padding: 24px; overflow-y: auto; }
 .main-inner { width: 100%; }
+
+// Open asks, pinned to the bottom of the window over the page as it scrolls,
+// across the content column: the chat's off-screen ask rows in their muted
+// mono type. Their own row ends the page, so its last content scrolls clear.
+.ask-dock {
+  grid-area: asks;
+  position: sticky;
+  bottom: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.ask-dock:not(:empty) {
+  padding: 10px 24px;
+  background: var(--bg);
+}
 
 .panel-header {
   display: flex;
@@ -1586,6 +1608,7 @@ input[type='checkbox'] {
 // Responsive — breakpoint must match the 900px sidebar breakpoint above.
 @media (max-width: 900px) {
   .main { padding: 16px 12px; overflow-x: hidden; }
+  .ask-dock:not(:empty) { padding: 10px 12px; }
   .main-inner { max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
   .panel-header { flex-direction: column; align-items: flex-start; gap: 10px; }
   .panel-header-actions { width: 100%; flex-wrap: wrap; }

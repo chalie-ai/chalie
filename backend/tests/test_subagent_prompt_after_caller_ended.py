@@ -2,9 +2,9 @@
 turn that started it has ended.
 
 The person's chat starts a subtask and ends its own turn at once; the subtask
-then calls a tool whose permission is set to ask. The prompt is listed by
-``GET /api/policies/pending`` under the chat turn that started the subtask, and
-``POST /api/policies/respond`` answers it by its id alone. Approved, the tool
+then calls a tool whose permission is set to ask. The ask is listed by
+``GET /api/asks/open`` under the chat turn that started the subtask, and
+``POST /api/asks/reply/<ask_id>`` answers it by its id alone. Approved, the tool
 runs; denied, it does not run and the subtask reads that it was not allowed.
 Either way the subtask goes on to answer, and its answer reaches the chat as a
 reply.
@@ -91,15 +91,15 @@ def app(db: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
 
 
 def _pending(client: FlaskClient) -> list[Ask]:
-    response = client.get("/api/policies/pending")
+    response = client.get("/api/asks/open")
     assert response.status_code == 200, response.data
     return cast("list[Ask]", cast("dict[str, object]", response.get_json())["result"])
 
 
 def _noting_prompts(asked: threading.Event) -> Callable[[dict[str, object]], None]:
-    """A frame listener that sets *asked* once a permission prompt is broadcast."""
+    """A frame listener that sets *asked* once an ask is broadcast."""
     def note(frame: dict[str, object]) -> None:
-        if frame.get("type") == "permission_request":
+        if frame.get("type") == "ask_opened":
             asked.set()
     return note
 
@@ -110,9 +110,7 @@ def _answer_when_asked(client: FlaskClient, asked: threading.Event, approved: bo
     wait(asked, "the subtask's permission prompt")
     listed = _pending(client)
     for ask in listed:
-        response = client.post(
-            "/api/policies/respond", json={"request_id": ask["request_id"], "approved": approved},
-        )
+        response = client.post(f"/api/asks/reply/{ask['ask_id']}", json={"value": approved})
         assert response.status_code == 204, response.data
     return listed
 
@@ -150,9 +148,11 @@ def _assert_listed_under_the_chat_turn(run: _Answered) -> None:
     """The prompt was listed once, for the probe, with the subtask's summary,
     under the chat turn that started the subtask; nothing is left pending."""
     [ask] = run.listed
-    assert (ask["action_id"], ask["summary"], ask["origin"]) == (
-        gate_probe.NAME, _SUMMARY, {"type": "user", "turn_id": run.chat_turn, "forked": False},
-    )
+    assert (ask["kind"], ask["data"]) == ("permission", {
+        "action_id": gate_probe.NAME,
+        "summary": _SUMMARY,
+        "origin": {"type": "user", "turn_id": run.chat_turn, "forked": False},
+    })
     assert run.left == []
 
 

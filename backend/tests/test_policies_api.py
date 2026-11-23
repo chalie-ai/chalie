@@ -1,13 +1,11 @@
 import sqlite3
 from collections.abc import Generator
-from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
 
 from api.actions.policies.blocked import BlockedAction
-from api.actions.policies.pending import PendingAction
 from api.endpoints.policies import PoliciesEndpoint
 from tests.restx_test_app import mount_namespace
 
@@ -57,7 +55,6 @@ def client(monkeypatch: pytest.MonkeyPatch) -> "Generator[FlaskClient, None, Non
         app = mount_namespace(
             PoliciesEndpoint("policies").namespace(),
             BlockedAction("policies", "blocked").namespace(),
-            PendingAction("policies", "pending").namespace(),
         )
         yield app.test_client()
     finally:
@@ -106,13 +103,13 @@ def test_blocked_log_returns_the_permission_name_verbatim(client: "FlaskClient")
     # `action_id` carries a permission name, not a row id — the DDL column is TEXT.
     # Typing the response DTO `int` made pydantic reject every real row, which the
     # endpoint guard then reported as a 422 "invalid request body".
-    PolicyManager()._log_blocked("chat", "bash.modify_file", "user_unavailable")
+    PolicyManager()._log_blocked("chat", "bash.modify_file", "user_denied")
 
     r = client.get("/api/policies/blocked")
     assert r.status_code == 200, r.get_json()
     entry = r.get_json()["result"][0]
     assert entry["action_id"] == "bash.modify_file"
-    assert entry["context"] == "chat" and entry["reason"] == "user_unavailable"
+    assert entry["context"] == "chat" and entry["reason"] == "user_denied"
 
 
 @pytest.fixture()
@@ -174,52 +171,3 @@ def test_get_groups_and_humanizes_mcp_rows(mcp_client: "FlaskClient") -> None:
     assert row["group"] == "GitHub"
     assert row["label"] == "Add Comment to Pending Review"
     assert row["channel"] == "chat" and row["setting"] == "ask"
-
-
-class TestPendingListing:
-    """``GET /api/policies/pending`` lists the parked ``ask`` gates — the frames
-    the interface would have received over the socket — so a reload can rebuild
-    its cards instead of losing the prompt."""
-
-    def test_empty_when_nothing_is_parked(self, client: "FlaskClient") -> None:
-        resp = client.get("/api/policies/pending")
-        assert resp.status_code == 200
-        body = resp.get_json()
-        assert body["success"] is True
-        assert body["result"] == []
-        assert body["pagination"] == {"page": 1, "limit": 1, "total": 0}
-
-    def test_lists_parked_gate_frame_with_origin(self, client: "FlaskClient") -> None:
-        import threading
-
-        from services.policy_manager import _permission_gates
-
-        rid = "0f3c9b6a-8d2e-4c1f-9a7b-2e5d6c4b8a10"
-        # The park instant the manager stamps on the frame — the test supplies
-        # its own so the endpoint's pass-through is asserted byte-for-byte.
-        asked_at = "2026-10-07T06:32:11+00:00"
-        parsed = datetime.fromisoformat(asked_at)
-        assert parsed.tzinfo is not None and parsed.utcoffset() == timedelta(0)
-        frame: dict[str, object] = {
-            "type": "permission_request",
-            "request_id": rid,
-            "action_id": "email.read",
-            "summary": "Read the latest invoice email",
-            "origin": {"type": "scheduled", "turn_id": 42, "forked": True},
-            "asked_at": asked_at,
-        }
-        _permission_gates[rid] = {"event": threading.Event(), "result": None, "frame": frame}
-        try:
-            resp = client.get("/api/policies/pending")
-        finally:
-            _permission_gates.pop(rid, None)
-        assert resp.status_code == 200
-        body = resp.get_json()
-        assert body["result"] == [{
-            "request_id": rid,
-            "action_id": "email.read",
-            "summary": "Read the latest invoice email",
-            "origin": {"type": "scheduled", "turn_id": 42, "forked": True},
-            "asked_at": asked_at,
-        }]
-        assert body["pagination"] == {"page": 1, "limit": 1, "total": 1}

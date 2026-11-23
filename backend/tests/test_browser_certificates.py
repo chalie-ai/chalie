@@ -180,6 +180,20 @@ def _heard(ui: StreamSocket, want: Callable[[], bool]) -> None:
     receive_until(ui, lambda m: as_frame(m, "browser_tabs_changed") is not None and want())
 
 
+def _handed_off(ui: StreamSocket, tab_id: str) -> str:
+    """Read the person's main socket until the hand-off ask for tab *tab_id* opens; its id."""
+    frame = as_frame(receive_until(ui, lambda m: as_frame(m, "ask_opened") is not None), "ask_opened")
+    assert frame is not None
+    data = cast("dict[str, object]", frame["data"])
+    assert (frame["kind"], data["tab_id"]) == ("handoff", tab_id), frame
+    return str(frame["ask_id"])
+
+
+def _done(client: FlaskClient, ask_id: str) -> int:
+    """The person says they are done with the hand-off *ask_id*; the reply's status."""
+    return client.post(f"/api/asks/reply/{ask_id}", json={"value": None}).status_code
+
+
 def _refusal(client: FlaskClient, tab_id: str) -> object:
     """The certificate warning the panel's tab list shows for the tab *tab_id*."""
     [row] = [t for t in listed(client) if t["id"] == tab_id]
@@ -370,9 +384,7 @@ def test_nothing_a_run_sends_gets_its_page_past_a_certificate_warning(
     with live_server(app) as host, main_socket(host, token) as ui:
         waiting.start()
         try:
-            _heard(ui, lambda: listed(client)[0]["handoff"] is not None)
-            asked = cast("dict[str, object]", listed(client)[0]["handoff"])
-            assert client.post(f"/api/browser/handoffs/{asked['id']}").status_code == 204
+            assert _done(client, _handed_off(ui, tab.id)) == 204
             waiting.join(timeout=_RUN_WAIT)
             assert not waiting.is_alive(), "the run did not carry on after Done"
         finally:
@@ -410,14 +422,12 @@ def test_a_run_the_person_proceeds_for_during_a_hand_off_carries_on_reading_the_
     with live_server(app) as host, main_socket(host, token) as ui:
         waiting.start()
         try:
-            _heard(ui, lambda: listed(client)[0]["handoff"] is not None)
-            [row] = listed(client)
-            assert row["certificate_error"] == _warning(untrusted_site)
-            asked = cast("dict[str, object]", row["handoff"])
+            asked = _handed_off(ui, tab.id)
+            assert _refusal(client, tab.id) == _warning(untrusted_site)
 
             assert _proceed(client, tab.id, "127.0.0.1", untrusted_site.server_address[1]) == 204
             assert wait_for(tab, lambda: tab.title == "Untrusted"), (tab.url, tab.title)
-            assert client.post(f"/api/browser/handoffs/{asked['id']}").status_code == 204
+            assert _done(client, asked) == 204
             waiting.join(timeout=_RUN_WAIT)
             assert not waiting.is_alive(), "the run did not carry on after Done"
         finally:

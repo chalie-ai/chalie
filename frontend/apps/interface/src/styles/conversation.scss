@@ -313,10 +313,6 @@
   min-height: 0;
 }
 
-.activity {
-  animation: rise var(--dur-2) var(--ease-out);
-}
-
 // One fold for everything that unfolds — a step's thinking and its calls:
 // muted in its line's own type, it brightens on hover and its chevron
 // turns down while open (the shared .trace-body collapse above).
@@ -351,16 +347,6 @@
   rotate: 90deg;
 }
 
-// The mark pulses pink while the turn works.
-.activity__mark {
-  flex-shrink: 0;
-  width: 6px;
-  height: 6px;
-  background: var(--pink);
-  animation: working 1.4s ease-in-out infinite;
-}
-
-.activity__label,
 .step__label,
 .step__summary {
   overflow: hidden;
@@ -380,90 +366,6 @@
   gap: 4px;
   color: var(--deny-text);
   white-space: nowrap;
-}
-
-.activity__label {
-  color: var(--text);
-}
-
-// An off-screen ask's lead and a running step's controls each hold together;
-// the action label ellipsizes.
-.activity__lead,
-.activity__controls {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.activity__mark,
-.activity__origin,
-.activity__wait,
-.activity__controls > button {
-  flex-shrink: 0;
-  white-space: nowrap;
-}
-
-.activity__stop {
-  display: inline-flex;
-  align-items: center;
-  height: var(--control-h);
-  padding: 0;
-  background: none;
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono);
-  color: var(--muted);
-  text-decoration: underline;
-  text-underline-offset: 3px;
-  transition: color var(--dur-1) var(--ease-out);
-}
-
-.activity__stop:hover {
-  color: var(--deny-text);
-}
-
-.activity__wait,
-.activity__ask {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono);
-  color: var(--muted);
-  white-space: nowrap;
-}
-
-.activity__answer {
-  min-height: var(--control-h);
-  padding: 0 var(--space-sm);
-  font-weight: 500;
-  cursor: pointer;
-  transition:
-    background-color var(--dur-1) var(--ease-out),
-    color var(--dur-1) var(--ease-out),
-    translate var(--dur-1) var(--ease-out);
-
-  &:active {
-    translate: 0 1px;
-  }
-
-  &--allow {
-    background: var(--allow);
-    color: var(--on-pink);
-
-    &:hover {
-      background: var(--text);
-      color: var(--bg);
-    }
-  }
-
-  &--deny {
-    background: var(--surface-2);
-    color: var(--text);
-
-    &:hover {
-      background: var(--cell);
-    }
-  }
 }
 
 // A reasoning trace — in the unfolded thinking, 12px in.

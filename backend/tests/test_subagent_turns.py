@@ -249,8 +249,8 @@ class _Prompts:
         self.shown: list[tuple[object, object]] = []
 
     def note(self, frame: dict[str, object]) -> None:
-        if frame.get("type") == "permission_request":
-            self._events.put(cast("str", frame["request_id"]))
+        if frame.get("type") == "ask_opened":
+            self._events.put(cast("str", frame["ask_id"]))
 
     def after_write(self, answer: str) -> Callable[[], ProviderResponse]:
         """The model step after a gated write: it marks the write ended, then
@@ -261,20 +261,21 @@ class _Prompts:
         return entry
 
     def deny_until(self, client: FlaskClient, writes: int) -> None:
-        """Deny every prompt, each read back as the only one pending, until
-        *writes* gated writes have ended; note each one as the pending list
+        """Deny every prompt, each read back as the only open ask, until
+        *writes* gated writes have ended; note each one as the open-asks list
         showed it — its permission and the turn it asks on."""
         while writes:
             event = self._events.get(timeout=WAIT_S)
             if event == self._WROTE:
                 writes -= 1
                 continue
-            response = client.get("/api/policies/pending")
+            response = client.get("/api/asks/open")
             assert response.status_code == 200, response.data
             [ask] = cast("list[dict[str, object]]", cast("dict[str, object]", response.get_json())["result"])
-            assert ask["request_id"] == event
-            self.shown.append((ask["action_id"], ask["origin"]))
-            answered = client.post("/api/policies/respond", json={"request_id": event, "approved": False})
+            assert (ask["ask_id"], ask["kind"]) == (event, "permission")
+            data = cast("dict[str, object]", ask["data"])
+            self.shown.append((data["action_id"], data["origin"]))
+            answered = client.post(f"/api/asks/reply/{event}", json={"value": False})
             assert answered.status_code == 204, answered.data
 
     def left(self) -> int:
@@ -305,7 +306,7 @@ def test_a_finished_search_messaged_again_runs_its_next_turn_on_its_own_history(
         begin(UserConfig(), "find the bridge news").result()
 
     assert provider.unused() == {}
-    assert [f for f in listener.frames if f.get("type") == "permission_request"] == []
+    assert [f for f in listener.frames if f.get("type") == "ask_opened"] == []
     assert _blocked(db) == []
     n = cast("int", seen["n"])
     assert seen["status"] == Agent.DONE
@@ -380,7 +381,7 @@ def test_two_searches_each_messaged_again_read_only_their_own_turns(db: sqlite3.
         begin(UserConfig(), "find the bridge news").result()
 
     assert provider.unused() == {}
-    assert [f for f in listener.frames if f.get("type") == "permission_request"] == []
+    assert [f for f in listener.frames if f.get("type") == "ask_opened"] == []
     spawn_bridge, spawn_ferry = (cast("int", c["id"]) for c in calls_of(db, _WEB))
     sent_bridge, sent_ferry = (cast("int", c["id"]) for c in calls_of(db, MessageSubagentAbility.NAME))
     for spawn_id, sent_id, n in ((spawn_bridge, sent_bridge, seen["bridge"]), (spawn_ferry, sent_ferry, seen["ferry"])):
@@ -452,7 +453,7 @@ def test_a_search_the_chat_stops_keeps_its_last_row_drops_its_waiting_message_an
         held.gate.set()
 
     assert held.opened and provider.unused() == {}
-    assert [f for f in listener.frames if f.get("type") == "permission_request"] == []
+    assert [f for f in listener.frames if f.get("type") == "ask_opened"] == []
     n = seen["n"]
     [spawn] = calls_of(db, _WEB)
     spawn_id = cast("int", spawn["id"])

@@ -7,15 +7,14 @@
      rhythm. -->
 <script setup lang="ts">
 import { computed } from 'vue';
-import { ConfigType } from '@chalie/shared';
+import { ConfigType, useAsksStore } from '@chalie/shared';
+import type { PermissionAsk } from '@chalie/shared';
 import type {
   ConversationMessage,
   ConversationTurnBlock,
   DelegateTurnBlock,
   PlanTask,
 } from '../../api/conversation';
-import { usePermissionsStore } from '../../stores/permissions';
-import type { PermissionRequest } from '../../stores/permissions';
 import { delegateState, liveTrailsFor } from '../../utils/liveActTrail';
 import { didWork, mergeWork, showsWork } from '../../utils/turnSteps';
 import UserBubble from './UserBubble.vue';
@@ -56,15 +55,17 @@ const repliesLate = computed(() => channel.value == null && props.type === Confi
  *  store/composable needed. */
 const isForkedThread = computed(() => props.block.messages.some((m) => m.thread_message));
 
-const permissions = usePermissionsStore();
+const asks = useAsksStore();
 
-/** This turn's parked permission ask, if any: the first queued gate whose
+/** This turn's open permission ask, if any: the first queued one whose
  *  `origin` names this view's (turn_id, type) identity — the same pair the
- *  lane resolver matches a card's origin on. A subagent's gate inherits its
+ *  lane resolver matches a card's origin on. A subagent's ask inherits its
  *  caller's origin, so it waits on the caller's line, never a delegate's. */
-const pendingAsk = computed<PermissionRequest | null>(() =>
+const pendingAsk = computed<PermissionAsk | null>(() =>
   channel.value == null
-    ? (permissions.queue.find((r) => r.origin?.turn_id === props.block.turn_id && r.origin.type === props.type) ?? null)
+    ? (asks.permissions.find(
+        (a) => a.data.origin?.turn_id === props.block.turn_id && a.data.origin.type === props.type,
+      ) ?? null)
     : null,
 );
 
