@@ -10,8 +10,8 @@ The seed file (policy_defaults.json) is the single source of truth for the
 policy table. ``apply_seed`` converges the table to the seed on every boot: it
 INSERT-OR-IGNOREs every seeded row, then DELETES every row whose permission is
 neither in the seed nor an MCP tool permission. Retiring an ability needs only
-a seed-file edit — never a migration. The seed is exhaustive (87 permissions ×
-3 channels = 261 rows), so matching on the permission column alone is correct
+a seed-file edit — never a migration. The seed is exhaustive (88 permissions ×
+3 channels = 264 rows), so matching on the permission column alone is correct
 and complete.
 
 A small set of tools (``INTERNAL``) ALWAYS bypass the gate regardless of channel

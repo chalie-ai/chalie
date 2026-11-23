@@ -26,10 +26,26 @@ class HandoffAskDataResponse(Response):
     origin: PermissionOriginResponse | None = Field(description="The interactive turn the ask belongs to; null when it belongs to none.")
 
 
+class QuestionAnswerResponse(Response):
+    """One answer a question offers."""
+
+    label: str
+    description: str = Field(description="One line about the answer; empty when the model gave none.")
+
+
+class QuestionAskDataResponse(Response):
+    """A question ask: a run waits for the user to pick an answer or type their own."""
+
+    question: str
+    answers: list[QuestionAnswerResponse] = Field(description="2 to 4 answers to pick from, in the model's order.")
+    multi_select: bool = Field(description="Whether more than one answer may be picked.")
+    origin: PermissionOriginResponse | None = Field(description="The interactive turn the ask belongs to; null when it belongs to none.")
+
+
 class OpenAskResponse(Response):
     """One ask still waiting for a reply: the same fields as its ``ask_opened`` frame."""
 
     ask_id: str
-    kind: Literal["permission", "handoff"]
-    data: PermissionAskDataResponse | HandoffAskDataResponse
+    kind: Literal["permission", "handoff", "question"]
+    data: PermissionAskDataResponse | HandoffAskDataResponse | QuestionAskDataResponse
     asked_at: str = Field(description="When the ask opened, ISO-8601 UTC with its offset (e.g. '2026-10-07T06:32:11+00:00').")

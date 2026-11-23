@@ -8,7 +8,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { ConfigType, useAsksStore } from '@chalie/shared';
-import type { PermissionAsk } from '@chalie/shared';
+import type { PermissionAsk, QuestionAsk } from '@chalie/shared';
 import type {
   ConversationMessage,
   ConversationTurnBlock,
@@ -57,13 +57,14 @@ const isForkedThread = computed(() => props.block.messages.some((m) => m.thread_
 
 const asks = useAsksStore();
 
-/** This turn's open permission ask, if any: the first queued one whose
- *  `origin` names this view's (turn_id, type) identity — the same pair the
- *  lane resolver matches a card's origin on. A subagent's ask inherits its
- *  caller's origin, so it waits on the caller's line, never a delegate's. */
-const pendingAsk = computed<PermissionAsk | null>(() =>
+/** This turn's open permission ask or question, if any: the first queued
+ *  one whose `origin` names this view's (turn_id, type) identity — the same
+ *  pair the lane resolver matches a card's origin on. A subagent's ask
+ *  inherits its caller's origin, so it waits on the caller's line, never a
+ *  delegate's. */
+const pendingAsk = computed<PermissionAsk | QuestionAsk | null>(() =>
   channel.value == null
-    ? (asks.permissions.find(
+    ? (asks.permissionsAndQuestions.find(
         (a) => a.data.origin?.turn_id === props.block.turn_id && a.data.origin.type === props.type,
       ) ?? null)
     : null,

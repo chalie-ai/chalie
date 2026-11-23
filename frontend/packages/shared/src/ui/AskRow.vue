@@ -1,12 +1,14 @@
 <!-- One open ask as a row: where it came from, what it asks, how long it has
-     waited. A permission is answered right here (Deny/Allow); a hand-off is
-     answered with Done on its browser tab. Open is the caller's to act on: a
-     hand-off always has one (its tab), a permission only when it has a turn
-     the user can open. -->
+     waited. A permission is answered right here (Deny/Allow), and so is a
+     question, whose answers sit under the row; a hand-off is answered with
+     Done on its browser tab. Open is the caller's to act on: a hand-off always
+     has one (its tab), a permission or a question only when it has a turn the
+     user can open. -->
 <script setup lang="ts">
 import { computed } from 'vue';
 import { useAsksStore, type Ask } from '../stores/asks';
 import { actionLabel, originLabel, waitedSeconds } from '../utils/askLabels';
+import QuestionControls from './QuestionControls.vue';
 
 const props = defineProps<{
   ask: Ask;
@@ -18,11 +20,11 @@ const emit = defineEmits<{ open: [] }>();
 
 const asks = useAsksStore();
 
-const label = computed(() =>
-  props.ask.kind === 'permission'
-    ? props.ask.data.summary || actionLabel(props.ask.data.action_id)
-    : props.ask.data.reason || 'Chalie needs you in the browser',
-);
+const label = computed(() => {
+  if (props.ask.kind === 'permission') return props.ask.data.summary || actionLabel(props.ask.data.action_id);
+  if (props.ask.kind === 'question') return 'Chalie has a question';
+  return props.ask.data.reason || 'Chalie needs you in the browser';
+});
 </script>
 
 <template>
@@ -51,9 +53,10 @@ const label = computed(() =>
           Allow
         </button>
       </template>
-      <span v-else class="activity__ask">Browser</span>
+      <span v-else-if="ask.kind === 'handoff'" class="activity__ask">Browser</span>
       <button v-if="ask.kind === 'handoff' || ask.data.origin" type="button" class="activity__stop" @click="emit('open')">Open</button>
     </span>
+    <QuestionControls v-if="ask.kind === 'question'" :ask="ask" />
   </div>
 </template>
 

@@ -22,7 +22,15 @@ export { useThemeStore } from './stores/theme';
 export type { Theme } from './stores/theme';
 export { useConnectionStore } from './stores/connection';
 export { useAsksStore, readOrigin, registerReplyFailureReporter } from './stores/asks';
-export type { Ask, AskOrigin, HandoffAsk, PermissionAsk } from './stores/asks';
+export type {
+  Ask,
+  AskOrigin,
+  HandoffAsk,
+  PermissionAsk,
+  QuestionAnswer,
+  QuestionAsk,
+  QuestionReply,
+} from './stores/asks';
 export { actionLabel, originLabel, waitedSeconds } from './utils/askLabels';
 export { useTheme } from './composables/useTheme';
 export { useWebSocket, getWebSocket } from './composables/useWebSocket';
@@ -35,3 +43,4 @@ export { default as BaseCard } from './ui/BaseCard.vue';
 export { default as BaseField } from './ui/BaseField.vue';
 export { default as ChalieMark } from './ui/ChalieMark.vue';
 export { default as AskRow } from './ui/AskRow.vue';
+export { default as QuestionControls } from './ui/QuestionControls.vue';

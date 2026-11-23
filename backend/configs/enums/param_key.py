@@ -55,6 +55,7 @@ class Keys(StrEnum):
     action = "action"
     active_only = "active_only"
     agent_id = "agent_id"
+    answers = "answers"
     area = "area"
     args = "args"
     attachments = "attachments"
@@ -104,6 +105,7 @@ class Keys(StrEnum):
     key = "key"
     keyword = "keyword"
     kind = "kind"
+    label = "label"
     language = "language"
     limit = "limit"
     list = "list"  # noqa: A003 — member name mirrors the wire key (shadows builtin)
@@ -112,6 +114,7 @@ class Keys(StrEnum):
     minute = "minute"
     minutes = "minutes"
     month = "month"
+    multi_select = "multi_select"
     name_ = "name"  # trailing underscore: bare ``name`` is reserved by Enum
     new_path = "new_path"
     operation = "operation"
@@ -123,6 +126,7 @@ class Keys(StrEnum):
     port_idx = "port_idx"
     provider = "provider"
     query = "query"
+    question = "question"
     quota_mb = "quota_mb"
     reason = "reason"
     recurrence = "recurrence"

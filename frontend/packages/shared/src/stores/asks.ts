@@ -1,6 +1,7 @@
 /**
- * Asks store — every question Chalie is waiting on the user to answer: a
- * permission ask (Deny/Allow) or a browser hand-off (Done on its tab).
+ * Asks store — everything Chalie is waiting on the user to answer: a
+ * permission ask (Deny/Allow), a question (pick an answer, or type one) or a
+ * browser hand-off (Done on its tab).
  *
  * Two feeds, one queue keyed by `ask_id`: `route(frame)` takes each
  * `ask_opened` and `ask_closed` frame off the socket, and `refreshOpen()`
@@ -11,9 +12,9 @@
  * overlapping is harmless. An ask without an origin (a run no chat turn
  * shows) is kept: its row has no origin prefix and no Open.
  *
- * In the chat app a permission ask is shown and answered on the live activity
- * line of its origin's turn while that turn works. Each mounted live line
- * calls `markShown(askId)` on mount and `unmarkShown(askId)` on unmount — a
+ * In the chat app a permission ask or a question is shown and answered on the
+ * live activity line of its origin's turn while that turn works. Each mounted
+ * live line calls `markShown(askId)` on mount and `unmarkShown(askId)` on unmount — a
  * count, since the same turn can render twice, on the main chat and in the
  * thread panel — and the input dock lists `offScreen`, where each ask can be
  * answered too: the queued asks no mounted line is showing (a scheduled task,
@@ -43,6 +44,26 @@ export interface PermissionAskData {
   origin: AskOrigin | null;
 }
 
+export interface QuestionAnswer {
+  /** The answer as the model wrote it; sent back as-is when picked. */
+  label: string;
+  /** One line explaining the answer; empty when the model gave none. */
+  description: string;
+}
+
+export interface QuestionAskData {
+  /** The question, as the user reads it. */
+  question: string;
+  /** The 2 to 4 answers to pick from, in the model's order. */
+  answers: QuestionAnswer[];
+  /** True lets the user pick more than one answer. */
+  multi_select: boolean;
+  origin: AskOrigin | null;
+}
+
+/** A question's answer: the labels picked, or the user's own words. */
+export type QuestionReply = { labels: string[] } | { other: string };
+
 export interface HandoffAskData {
   /** The browser tab handed to the user. */
   tab_id: string;
@@ -63,13 +84,18 @@ export interface PermissionAsk extends AskBase {
   data: PermissionAskData;
 }
 
+export interface QuestionAsk extends AskBase {
+  kind: 'question';
+  data: QuestionAskData;
+}
+
 export interface HandoffAsk extends AskBase {
   kind: 'handoff';
   data: HandoffAskData;
 }
 
 /** One open ask — an `ask_opened` frame or open-asks listing item as kept here. */
-export type Ask = PermissionAsk | HandoffAsk;
+export type Ask = PermissionAsk | QuestionAsk | HandoffAsk;
 
 interface ListingEnvelope<T> {
   success: true;
@@ -119,7 +145,22 @@ export function readOrigin(raw: unknown): AskOrigin | null {
 
 const text = (v: unknown): string => (typeof v === 'string' ? v : '');
 
-/** An ask as sent, or null when it lacks what its row needs (an id, a known kind, its action or tab). */
+/** A question's answers as sent, or null unless there are 2 to 4 and each has a label. */
+function readAnswers(raw: unknown): QuestionAnswer[] | null {
+  if (!Array.isArray(raw) || raw.length < 2 || raw.length > 4) return null;
+  const answers: QuestionAnswer[] = [];
+  for (const item of raw) {
+    const a = (item ?? {}) as { label?: unknown; description?: unknown };
+    if (typeof a.label !== 'string' || !a.label) return null;
+    answers.push({ label: a.label, description: text(a.description) });
+  }
+  return answers;
+}
+
+/**
+ * An ask as sent, or null when it lacks what its row needs: an id, a known
+ * kind, and its action, question and answers, or tab.
+ */
 function readAsk(raw: unknown): Ask | null {
   if (raw == null || typeof raw !== 'object') return null;
   const r = raw as { ask_id?: unknown; kind?: unknown; data?: unknown; asked_at?: unknown };
@@ -135,6 +176,14 @@ function readAsk(raw: unknown): Ask | null {
       data: { action_id: d.action_id, summary: text(d.summary), origin },
     };
   }
+  const answers = r.kind === 'question' ? readAnswers(d.answers) : null;
+  if (answers && typeof d.question === 'string' && d.question) {
+    return {
+      ...base,
+      kind: 'question',
+      data: { question: d.question, answers, multi_select: d.multi_select === true, origin },
+    };
+  }
   if (r.kind === 'handoff' && typeof d.tab_id === 'string' && d.tab_id) {
     return { ...base, kind: 'handoff', data: { tab_id: d.tab_id, reason: text(d.reason), origin } };
   }
@@ -146,15 +195,22 @@ export const useAsksStore = defineStore('asks', {
     queue: [] as Ask[],
     /** ask_id → how many mounted live lines show that ask. */
     shown: {} as Record<string, number>,
+    /**
+     * ask_id → what the user has typed as their own answer to a question. Kept
+     * here, not in the row, so it is still there when the row comes back after
+     * an answer fails to send.
+     */
+    otherDrafts: {} as Record<string, string>,
   }),
 
   getters: {
-    permissions(state): PermissionAsk[] {
-      return state.queue.filter((a): a is PermissionAsk => a.kind === 'permission');
+    /** The permission asks and questions — the kinds answered on their own row — in queue order. */
+    permissionsAndQuestions(state): (PermissionAsk | QuestionAsk)[] {
+      return state.queue.filter((a): a is PermissionAsk | QuestionAsk => a.kind !== 'handoff');
     },
-    /** The queued permission asks no mounted live line is showing, in queue order. */
-    offScreen(state): PermissionAsk[] {
-      return this.permissions.filter((a) => (state.shown[a.ask_id] ?? 0) <= 0);
+    /** The queued permission asks and questions no mounted live line is showing, in queue order. */
+    offScreen(state): (PermissionAsk | QuestionAsk)[] {
+      return this.permissionsAndQuestions.filter((a) => (state.shown[a.ask_id] ?? 0) <= 0);
     },
     handoffs(state): HandoffAsk[] {
       return state.queue.filter((a): a is HandoffAsk => a.kind === 'handoff');
@@ -199,9 +255,16 @@ export const useAsksStore = defineStore('asks', {
       else this.shown[askId] = n;
     },
 
+    /** The user's own answer to a question, as typed so far. */
+    typeOther(askId: string, text: string): void {
+      if (text) this.otherDrafts[askId] = text;
+      else delete this.otherDrafts[askId];
+    },
+
     /** Drop an ask — answered, cancelled or dismissed, here or elsewhere. No-op if absent. */
     remove(askId: string): void {
       this.queue = this.queue.filter((a) => a.ask_id !== askId);
+      delete this.otherDrafts[askId];
       noteClosed(askId);
     },
 
@@ -238,15 +301,18 @@ export const useAsksStore = defineStore('asks', {
     },
 
     /**
-     * Answer an ask — a permission with true/false, a hand-off with null.
+     * Answer an ask — a permission with true/false, a question with the
+     * labels picked or the user's own words, a hand-off with null.
      * Optimistic: the row leaves before the round-trip. A 404 means the ask
      * was already answered or closed elsewhere (the first reply wins), so it
      * stays gone quietly. Any other failure is told to the user through the
      * registered reporter and re-reads the open asks, which brings the row
-     * back only if the ask is still open.
+     * back only if the ask is still open, with the user's own answer still
+     * typed in it.
      */
-    async reply(askId: string, value: boolean | null): Promise<void> {
+    async reply(askId: string, value: boolean | null | QuestionReply): Promise<void> {
       const kind = this.queue.find((a) => a.ask_id === askId)?.kind;
+      const draft = this.otherDrafts[askId];
       this.remove(askId);
       replying.add(askId);
       let failure: unknown = null;
@@ -262,6 +328,7 @@ export const useAsksStore = defineStore('asks', {
         return;
       }
       console.warn('[asks] reply failed:', failure);
+      if (draft) this.otherDrafts[askId] = draft;
       reportReplyFailure(replyFailureMessage(failure, kind));
       void this.refreshOpen();
     },

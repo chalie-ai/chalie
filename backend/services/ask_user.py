@@ -1,7 +1,8 @@
 """AskUser — the one service every ask that waits on a user's reply goes through.
 
-A caller says what to ask (one classmethod per kind) and what to do with the
-answer (a callback); it never knows which screens exist or whether anyone is
+A caller says what to ask (one classmethod per kind: a permission ask, a
+browser hand-off, or a question with answers to pick from) and what to do with
+the answer (a callback); it never knows which screens exist or whether anyone is
 there. An ask is made whether or not a UI is open, has no time limit, and
 lives in memory only: a restart loses every open ask, and the runs waiting on
 them end with the process.
@@ -23,9 +24,9 @@ import threading
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import ClassVar, Literal
+from typing import ClassVar, Literal, Self
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from exceptions import AskReplyInvalid
 from models.ws_message import WsMessage
@@ -34,7 +35,7 @@ from services.websocket import Websocket
 
 logger = logging.getLogger(__name__)
 
-AskKind = Literal["permission", "handoff"]
+AskKind = Literal["permission", "handoff", "question"]
 
 
 @dataclass(frozen=True)
@@ -80,13 +81,53 @@ class HandoffAsk(BaseModel):
     origin: Origin | None
 
 
+class QuestionAnswer(BaseModel):
+    """One answer a question offers: a short label and an optional line about it."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    label: str
+    description: str = ""
+
+
+class QuestionAsk(BaseModel):
+    """A run asks the user one question. Answered with a :class:`QuestionReply`."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    question: str
+    answers: tuple[QuestionAnswer, ...]
+    multi_select: bool
+    origin: Origin | None
+
+
+class QuestionReply(BaseModel):
+    """The answer to a question: the labels picked, or the user's own text (stripped)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    labels: tuple[str, ...] = ()
+    other: str | None = None
+
+    @field_validator("other")
+    @classmethod
+    def _strip_other(cls, value: str | None) -> str | None:
+        return None if value is None else value.strip()
+
+    @model_validator(mode="after")
+    def _one_of(self) -> Self:
+        if bool(self.labels) == (self.other is not None):
+            raise ValueError("give either 'labels' or 'other'")
+        return self
+
+
 @dataclass(frozen=True)
 class OpenAsk:
     """One ask still waiting for a reply."""
 
     ask_id: str
     kind: AskKind
-    data: PermissionAsk | HandoffAsk
+    data: PermissionAsk | HandoffAsk | QuestionAsk
     asked_at: str
 
     def to_dict(self) -> dict[str, object]:
@@ -98,11 +139,20 @@ class OpenAsk:
         }
 
 
-def _accepts(kind: AskKind, value: object) -> bool:
-    """Whether *value* answers an ask of *kind*."""
-    if kind == "permission":
+def _accepts(ask: OpenAsk, value: object) -> bool:
+    """Whether *value* answers *ask*."""
+    if isinstance(ask.data, PermissionAsk):
         return isinstance(value, bool)
-    return value is None
+    if isinstance(ask.data, HandoffAsk):
+        return value is None
+    if not isinstance(value, QuestionReply):
+        return False
+    if value.other is not None:
+        return value.other != ""
+    offered = {answer.label for answer in ask.data.answers}
+    picked = set(value.labels)
+    fits_mode = len(value.labels) >= 1 if ask.data.multi_select else len(value.labels) == 1
+    return fits_mode and len(picked) == len(value.labels) and picked <= offered
 
 
 class AskUser:
@@ -122,6 +172,11 @@ class AskUser:
         return cls._ask("handoff", params, callback)
 
     @classmethod
+    def question(cls, params: QuestionAsk, callback: AskCallback) -> str:
+        """Ask the user a question; the reply's value is a :class:`QuestionReply`."""
+        return cls._ask("question", params, callback)
+
+    @classmethod
     def reply(cls, ask_id: str, value: object) -> bool:
         """Answer ask *ask_id*; the first reply wins. False when it is not open.
 
@@ -131,7 +186,7 @@ class AskUser:
             entry = cls._open.get(ask_id)
             if entry is None:
                 return False
-            if not _accepts(entry[0].kind, value):
+            if not _accepts(entry[0], value):
                 raise AskReplyInvalid(f"A {entry[0].kind} ask cannot take that value")
             del cls._open[ask_id]
         cls._close(entry, AskReply(answered=True, value=value), "answered")
@@ -162,7 +217,7 @@ class AskUser:
         )
 
     @classmethod
-    def _ask(cls, kind: AskKind, params: PermissionAsk | HandoffAsk, callback: AskCallback) -> str:
+    def _ask(cls, kind: AskKind, params: PermissionAsk | HandoffAsk | QuestionAsk, callback: AskCallback) -> str:
         ask = OpenAsk(
             ask_id=uuid.uuid4().hex,
             kind=kind,

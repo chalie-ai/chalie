@@ -314,7 +314,11 @@ class TestOpenAsksRouteDocumentsListingEnvelope:
         item = _at(swagger_spec, "definitions", "OpenAskResponse")
         assert set(_strs(item, "required")) == {"ask_id", "kind", "data", "asked_at"}
         kinds = sorted(_refs(_at(item, "properties", "data")))
-        assert kinds == ["#/definitions/HandoffAskDataResponse", "#/definitions/PermissionAskDataResponse"]
+        assert kinds == [
+            "#/definitions/HandoffAskDataResponse",
+            "#/definitions/PermissionAskDataResponse",
+            "#/definitions/QuestionAskDataResponse",
+        ]
 
         permission = _at(swagger_spec, "definitions", "PermissionAskDataResponse")
         assert set(_strs(permission, "required")) == {"action_id", "summary", "origin"}

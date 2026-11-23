@@ -84,6 +84,24 @@ function handoffAsk(id: string, tabId: string) {
   };
 }
 
+function questionAsk(id: string, data: object = {}) {
+  return {
+    ask_id: id,
+    kind: 'question',
+    asked_at: '2026-11-20T09:00:00+00:00',
+    data: {
+      question: 'Which day suits you?',
+      answers: [
+        { label: 'Tuesday', description: 'Morning only' },
+        { label: 'Friday', description: '' },
+      ],
+      multi_select: false,
+      origin: mainChat,
+      ...data,
+    },
+  };
+}
+
 const opened = (ask: object) => ({ type: 'ask_opened', ...ask }) as WsPushEvent;
 const closed = (id: string) => ({ type: 'ask_closed', ask_id: id }) as WsPushEvent;
 
@@ -127,7 +145,7 @@ describe('asks store — what waits on the user', () => {
 
     frame(closed('send-report'));
     expect(waiting(asks)).toEqual(['sign-in', 'send-invoice']);
-    expect(asks.offScreen.map((a) => a.data.summary)).toEqual(['Send the send-invoice email']);
+    expect(asks.offScreen.map((a) => a.kind === 'permission' && a.data.summary)).toEqual(['Send the send-invoice email']);
   });
 
   it('an ask from a run no chat turn shows still waits, with no origin; one missing its action or tab never does', async () => {
@@ -140,6 +158,61 @@ describe('asks store — what waits on the user', () => {
 
     expect(waiting(asks)).toEqual(['scheduled-send', 'half-origin']);
     expect(asks.offScreen.map((a) => a.data.origin)).toEqual([null, null]);
+  });
+
+  it('a question waits with its answers as sent, and the dock lists it while no line shows it; one with no question, too few or too many answers, or an answer with no label is dropped loudly', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { asks, frame } = await loadPage();
+
+    frame(opened(permissionAsk('send-report')));
+    frame(opened(questionAsk('which-days', { answers: [{ label: 'Tuesday' }, { label: 'Friday', description: 'After 5' }], multi_select: true })));
+    frame(opened(handoffAsk('sign-in', 'tab-1')));
+    frame(opened(questionAsk('no-question', { question: '' })));
+    frame(opened(questionAsk('one-answer', { answers: [{ label: 'Tuesday' }] })));
+    frame(opened(questionAsk('five-answers', { answers: ['A', 'B', 'C', 'D', 'E'].map((label) => ({ label })) })));
+    frame(opened(questionAsk('blank-label', { answers: [{ label: 'Tuesday' }, { label: '' }] })));
+    frame(opened(questionAsk('not-a-list', { answers: 'Tuesday or Friday' })));
+    const dropped = errors.mock.calls.slice();
+    errors.mockRestore();
+
+    expect(waiting(asks)).toEqual(['send-report', 'which-days', 'sign-in']);
+    expect(asks.queue[1]).toEqual({
+      ask_id: 'which-days',
+      kind: 'question',
+      asked_at: '2026-11-20T09:00:00+00:00',
+      data: {
+        question: 'Which day suits you?',
+        answers: [
+          { label: 'Tuesday', description: '' },
+          { label: 'Friday', description: 'After 5' },
+        ],
+        multi_select: true,
+        origin: mainChat,
+      },
+    });
+    expect(dropped).toEqual(
+      ['no-question', 'one-answer', 'five-answers', 'blank-label', 'not-a-list'].map((id) => ['[asks] unreadable ask dropped:', id]),
+    );
+    expect(asks.offScreen.map((a) => a.ask_id)).toEqual(['send-report', 'which-days']);
+    asks.markShown('which-days');
+    expect(asks.offScreen.map((a) => a.ask_id)).toEqual(['send-report']);
+  });
+
+  it("a question's answer leaves its row at once and posts the labels picked or the user's own words", async () => {
+    const { asks, frame } = await loadPage();
+    frame(opened(questionAsk('pick-day')));
+    frame(opened(questionAsk('own-words')));
+
+    const picked = asks.reply('pick-day', { labels: ['Tuesday', 'Friday'] });
+    expect(waiting(asks)).toEqual(['own-words']);
+    const typed = asks.reply('own-words', { other: 'Any evening next week' });
+    expect(waiting(asks)).toEqual([]);
+
+    await Promise.all([picked, typed]);
+    expect(requests.filter((r) => r.method === 'POST')).toEqual([
+      { method: 'POST', path: '/api/asks/reply/pick-day', body: { value: { labels: ['Tuesday', 'Friday'] } } },
+      { method: 'POST', path: '/api/asks/reply/own-words', body: { value: { other: 'Any evening next week' } } },
+    ]);
   });
 
   it('on reconnect, an ask the server no longer lists is dropped, a listed one comes back once, and one that arrived during the read stays', async () => {

@@ -20,6 +20,9 @@
  *     it did not go through; one the server says came after the ask was
  *     already answered elsewhere leaves the row gone, with nothing to tell;
  *   - Open shows the ask's turn in the thread panel and answers nothing;
+ *   - a question gets a row too, with the question, each answer over its
+ *     description and a field for the user's own answer; a picked answer is
+ *     sent as its label and its row goes;
  *   - an ask from a run no chat turn shows has no origin before its words; its
  *     row still offers Open when it is a hand-off, whose tab can be shown, and
  *     not when it is a permission ask, which has no turn to open.
@@ -80,6 +83,16 @@ async function fakeBackend(input: RequestInfo | URL, init?: RequestInit): Promis
 /** A subagent's ask on the turn that started it — the chat turn unless given — as the backend lists it. */
 function ask(ask_id: string, action_id: string, summary: string, origin: AskOrigin | null = ON_CHAT) {
   return { ask_id, kind: 'permission', asked_at: new Date().toISOString(), data: { action_id, summary, origin } };
+}
+
+/** A question the chat asked, as the backend lists it. */
+function question(ask_id: string, text: string, answers: { label: string; description: string }[]) {
+  return {
+    ask_id,
+    kind: 'question',
+    asked_at: new Date().toISOString(),
+    data: { question: text, answers, multi_select: false, origin: ON_CHAT },
+  };
 }
 
 /** A hand-off of a browser tab Chalie opened, as the backend lists it. */
@@ -250,6 +263,33 @@ describe('an ask no live line shows', () => {
 
     expect([session.panelThreadId, session.panelType]).toEqual([CHAT_TURN, 'user']);
     expect(backend.answers).toEqual([]);
+    expect(labels(w)).toEqual(['Read the ferry booking email']);
+  });
+
+  it("a question gets a row naming its turn, with the question, each answer over its description, a field for the user's own answer and Open; a picked answer is sent as its label and its row goes", async () => {
+    const w = await mountDock(
+      question('q1', 'Which ferry should I book?', [
+        { label: 'The 08:15', description: 'Arrives before noon' },
+        { label: 'The 17:40', description: '' },
+      ]),
+      ask('r1', 'email.read', 'Read the ferry booking email'),
+    );
+    const row = rowNamed(w, 'Chalie has a question');
+
+    expect(row.find('.activity__origin').text()).toBe(`Chat · #${CHAT_TURN} ·`);
+    expect(row.find('.activity__ask').exists()).toBe(false);
+    expect(row.find('.question__text').text()).toBe('Which ferry should I book?');
+    expect(row.findAll('.question__answer').map((b) => b.findAll('span').map((s) => s.text()))).toEqual([
+      ['The 08:15', 'Arrives before noon'],
+      ['The 17:40'],
+    ]);
+    expect(row.find('.question__field').attributes('placeholder')).toBe('Other…');
+    expect(row.find('.activity__stop').text()).toBe('Open');
+
+    await row.findAll('.question__answer')[0].trigger('click');
+    await flushPromises();
+
+    expect(backend.answers).toEqual([{ path: '/api/asks/reply/q1', body: { value: { labels: ['The 08:15'] } } }]);
     expect(labels(w)).toEqual(['Read the ferry booking email']);
   });
 

@@ -4,9 +4,10 @@
  * settled row shows (ThinkingAndCalls), live — the stored row's thinking and
  * calls once a refetch returned it, then the act-trail pills running now — its
  * head carrying the turn's controls. Stop always; while the turn is parked on
- * a permission ask, the head names the ask, a ticking "· waiting for you · Ns"
- * note follows — aged from the server's `asked_at` stamp, so it survives a
- * reload — and the ask is answered on the head itself (Deny/Allow).
+ * an ask, the head names the ask, a ticking "· waiting for you · Ns" note
+ * follows — aged from the server's `asked_at` stamp, so it survives a reload —
+ * and the ask is answered on the line itself: a permission on the head
+ * (Deny/Allow), a question with its answers under the head.
  */
 import { computed, onUnmounted, ref, watch } from 'vue';
 import { readDomContext } from '../../utils/domContext';
@@ -14,7 +15,14 @@ import { lastUserText } from '../../utils/turnDom';
 import type { LiveToolPill } from '../../utils/liveActTrail';
 import type { StepCall, StepWork } from '../../utils/turnSteps';
 import { useSessionStore } from '../../stores/session';
-import { actionLabel, useAsksStore, waitedSeconds, type PermissionAsk } from '@chalie/shared';
+import {
+  actionLabel,
+  QuestionControls,
+  useAsksStore,
+  waitedSeconds,
+  type PermissionAsk,
+  type QuestionAsk,
+} from '@chalie/shared';
 import ThinkingAndCalls from './ThinkingAndCalls.vue';
 
 const props = withDefaults(
@@ -26,8 +34,8 @@ const props = withDefaults(
     /** False where a stop interrupts without handing anything back to undo (a
      *  delegate's transcript). */
     undoable?: boolean;
-    /** The permission ask this turn is parked on, if any. */
-    ask?: PermissionAsk | null;
+    /** The permission ask or question this turn is parked on, if any. */
+    ask?: PermissionAsk | QuestionAsk | null;
     /** The caller's subagents reply late (see `callMark`). */
     repliesLate?: boolean;
   }>(),
@@ -37,6 +45,12 @@ const props = withDefaults(
 const session = useSessionStore();
 const asks = useAsksStore();
 const rootRef = ref<HTMLElement | null>(null);
+
+const askLabel = computed(() => {
+  if (props.ask == null) return null;
+  if (props.ask.kind === 'question') return 'Chalie has a question';
+  return props.ask.data.summary || actionLabel(props.ask.data.action_id);
+});
 
 const work = computed<StepWork>(() => ({
   thinking: props.work?.thinking,
@@ -91,13 +105,13 @@ async function onStop(): Promise<void> {
   <ThinkingAndCalls
     class="activity"
     :work="work"
-    :label="ask && (ask.data.summary || actionLabel(ask.data.action_id))"
+    :label="askLabel"
     :replies-late="repliesLate"
     live
   >
     <span ref="rootRef" class="activity__controls">
-      <template v-if="ask">
-        <span class="activity__wait">· waiting for you · {{ waitedSeconds(ask.asked_at, now) }}s</span>
+      <span v-if="ask" class="activity__wait">· waiting for you · {{ waitedSeconds(ask.asked_at, now) }}s</span>
+      <template v-if="ask?.kind === 'permission'">
         <span v-if="ask.data.summary" class="activity__ask">{{ actionLabel(ask.data.action_id) }}</span>
         <button
           type="button"
@@ -122,5 +136,6 @@ async function onStop(): Promise<void> {
         @click="onStop"
       >Stop</button>
     </span>
+    <QuestionControls v-if="ask?.kind === 'question'" :ask="ask" />
   </ThinkingAndCalls>
 </template>
