@@ -501,12 +501,10 @@ defineExpose({ focusPage, setKeyboard });
 </script>
 
 <template>
-  <div class="browser-view">
+  <div class="browser-view" role="application" aria-label="Live page">
     <canvas
       ref="canvasRef"
       class="browser-view__canvas"
-      role="img"
-      aria-label="Live page"
       @pointerdown="onPointerDown"
       @pointermove="onPointerMove"
       @pointerup="onPointerUp"
