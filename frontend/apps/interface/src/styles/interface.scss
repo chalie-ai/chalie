@@ -590,8 +590,12 @@ body {
 }
 
 .context-ring:hover .context-ring__label,
-.context-ring:has(.context-ring__toggle:focus-visible) .context-ring__label,
 .context-ring--open .context-ring__label {
+  display: inline;
+}
+
+// Its own rule: a browser without :has() drops only this one, not hover and tap.
+.context-ring:has(.context-ring__toggle:focus-visible) .context-ring__label {
   display: inline;
 }
 
