@@ -26,6 +26,7 @@ from flask.testing import FlaskClient
 
 from configs.channels.user import UserConfig
 from controllers.message_processor import MessageProcessor
+from models.turn_execution import TurnExecution
 from services.database import Database
 from services.memory_store import MemoryStore
 from services.turn_execution_service import TurnExecutionService
@@ -75,6 +76,7 @@ class _Turn:
         self.channel = ""
         self.turn_id = 0
         self._params = params
+        self._opened: TurnExecution | None = None
         self._result: str | None = None
         self._error: BaseException | None = None
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -83,7 +85,7 @@ class _Turn:
     def _run(self) -> None:
         try:
             mp = MessageProcessor(UserConfig(), raw_input="ask them on Telegram")
-            assert mp.turn_execution_service.open() is not None, "the turn row must be open for Stop to reach it"
+            self._opened = mp.turn_execution_service.open()
             self.channel, self.turn_id = mp.channel, mp.turn_id
             self._result = mp.dispatch_service.dispatch("telegram", self._params)
         except BaseException as exc:  # handed to the test thread by outcome()
@@ -100,6 +102,7 @@ class _Turn:
             pytest.fail(f"the call was still waiting after {_WAIT_LIMIT_SECONDS:.0f}s")
         if self._error is not None:
             raise self._error
+        assert self._opened is not None, "the turn row must be open for Stop to reach it"
         assert self._result is not None
         return self._result
 
