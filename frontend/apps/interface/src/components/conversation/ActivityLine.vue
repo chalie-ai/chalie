@@ -7,7 +7,8 @@
  * an ask, the head names the ask, a ticking "· waiting for you · Ns" note
  * follows — aged from the server's `asked_at` stamp, so it survives a reload —
  * and the ask is answered on the line itself: a permission on the head
- * (Deny/Allow), a question with its answers under the head.
+ * (Deny/Allow), a sign-in code typed on the head, a question with its answers
+ * under the head.
  */
 import { computed, onUnmounted, ref, watch } from 'vue';
 import { readDomContext } from '../../utils/domContext';
@@ -16,12 +17,13 @@ import type { LiveToolPill } from '../../utils/liveActTrail';
 import type { StepCall, StepWork } from '../../utils/turnSteps';
 import { useSessionStore } from '../../stores/session';
 import {
+  AskCodeEntry,
   actionLabel,
+  CODE_ASK_WORDS,
   QuestionControls,
   useAsksStore,
   waitedSeconds,
-  type PermissionAsk,
-  type QuestionAsk,
+  type InlineAsk,
 } from '@chalie/shared';
 import ThinkingAndCalls from './ThinkingAndCalls.vue';
 
@@ -34,8 +36,8 @@ const props = withDefaults(
     /** False where a stop interrupts without handing anything back to undo (a
      *  delegate's transcript). */
     undoable?: boolean;
-    /** The permission ask or question this turn is parked on, if any. */
-    ask?: PermissionAsk | QuestionAsk | null;
+    /** The permission ask, question or sign-in code ask this turn is parked on, if any. */
+    ask?: InlineAsk | null;
     /** The caller's subagents reply late (see `callMark`). */
     repliesLate?: boolean;
   }>(),
@@ -49,6 +51,7 @@ const rootRef = ref<HTMLElement | null>(null);
 const askLabel = computed(() => {
   if (props.ask == null) return null;
   if (props.ask.kind === 'question') return 'Chalie has a question';
+  if (props.ask.kind === 'code') return CODE_ASK_WORDS[props.ask.data.service].heading;
   return props.ask.data.summary || actionLabel(props.ask.data.action_id);
 });
 
@@ -128,6 +131,7 @@ async function onStop(): Promise<void> {
           Allow
         </button>
       </template>
+      <AskCodeEntry v-else-if="ask?.kind === 'code'" :ask="ask" />
       <button
         class="activity__stop"
         :aria-label="undoable ? 'Stop and undo' : 'Stop subagent'"

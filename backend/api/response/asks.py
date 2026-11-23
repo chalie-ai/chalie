@@ -42,10 +42,17 @@ class QuestionAskDataResponse(Response):
     origin: PermissionOriginResponse | None = Field(description="The interactive turn the ask belongs to; null when it belongs to none.")
 
 
+class CodeAskDataResponse(Response):
+    """A code ask: a sign-in to ``service`` waits for the user's 2FA code."""
+
+    service: Literal["unifi"]
+    origin: PermissionOriginResponse | None = Field(description="The interactive turn the ask belongs to; null when it belongs to none.")
+
+
 class OpenAskResponse(Response):
     """One ask still waiting for a reply: the same fields as its ``ask_opened`` frame."""
 
     ask_id: str
-    kind: Literal["permission", "handoff", "question"]
-    data: PermissionAskDataResponse | HandoffAskDataResponse | QuestionAskDataResponse
+    kind: Literal["permission", "handoff", "question", "code"]
+    data: PermissionAskDataResponse | HandoffAskDataResponse | QuestionAskDataResponse | CodeAskDataResponse
     asked_at: str = Field(description="When the ask opened, ISO-8601 UTC with its offset (e.g. '2026-10-07T06:32:11+00:00').")

@@ -1,9 +1,9 @@
 """AskUser — the one service every ask that waits on a user's reply goes through.
 
 A caller says what to ask (one classmethod per kind: a permission ask, a
-browser hand-off, or a question with answers to pick from) and what to do with
-the answer (a callback); it never knows which screens exist or whether anyone is
-there. An ask is made whether or not a UI is open, has no time limit, and
+browser hand-off, a question with answers to pick from, or a sign-in code)
+and what to do with the answer (a callback); it never knows which screens exist
+or whether anyone is there. An ask is made whether or not a UI is open, has no time limit, and
 lives in memory only: a restart loses every open ask, and the runs waiting on
 them end with the process.
 
@@ -35,7 +35,7 @@ from services.websocket import Websocket
 
 logger = logging.getLogger(__name__)
 
-AskKind = Literal["permission", "handoff", "question"]
+AskKind = Literal["permission", "handoff", "question", "code"]
 
 
 @dataclass(frozen=True)
@@ -121,13 +121,30 @@ class QuestionReply(BaseModel):
         return self
 
 
+class CodeAsk(BaseModel):
+    """A sign-in needs the user's 2FA code. Answered with a :class:`CodeReply`."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    service: Literal["unifi"]
+    origin: Origin | None
+
+
+class CodeReply(BaseModel):
+    """The answer to a code ask: the code the user typed."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    code: str
+
+
 @dataclass(frozen=True)
 class OpenAsk:
     """One ask still waiting for a reply."""
 
     ask_id: str
     kind: AskKind
-    data: PermissionAsk | HandoffAsk | QuestionAsk
+    data: PermissionAsk | HandoffAsk | QuestionAsk | CodeAsk
     asked_at: str
 
     def to_dict(self) -> dict[str, object]:
@@ -145,6 +162,10 @@ def _accepts(ask: OpenAsk, value: object) -> bool:
         return isinstance(value, bool)
     if isinstance(ask.data, HandoffAsk):
         return value is None
+    if isinstance(ask.data, CodeAsk):
+        if not isinstance(value, CodeReply):
+            return False
+        return len(value.code) == 6 and value.code.isascii() and value.code.isdigit()
     if not isinstance(value, QuestionReply):
         return False
     if value.other is not None:
@@ -175,6 +196,11 @@ class AskUser:
     def question(cls, params: QuestionAsk, callback: AskCallback) -> str:
         """Ask the user a question; the reply's value is a :class:`QuestionReply`."""
         return cls._ask("question", params, callback)
+
+    @classmethod
+    def code(cls, params: CodeAsk, callback: AskCallback) -> str:
+        """Ask for a sign-in code; the reply's value is a :class:`CodeReply`."""
+        return cls._ask("code", params, callback)
 
     @classmethod
     def reply(cls, ask_id: str, value: object) -> bool:
@@ -217,7 +243,7 @@ class AskUser:
         )
 
     @classmethod
-    def _ask(cls, kind: AskKind, params: PermissionAsk | HandoffAsk | QuestionAsk, callback: AskCallback) -> str:
+    def _ask(cls, kind: AskKind, params: PermissionAsk | HandoffAsk | QuestionAsk | CodeAsk, callback: AskCallback) -> str:
         ask = OpenAsk(
             ask_id=uuid.uuid4().hex,
             kind=kind,

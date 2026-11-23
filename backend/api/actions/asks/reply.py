@@ -23,7 +23,8 @@ class AsksReply(Action):
 
     def post(self, id: int | str, data: Request | None) -> ResponseReturnValue:
         """Answer ask *id* with the body's value: a bool for a permission ask, null for a
-        hand-off, the labels picked or the user's own text for a question.
+        hand-off, the labels picked or the user's own text for a question, the six digits
+        typed for a sign-in code.
 
         An ask that is not open — already answered, dismissed or ended — is a
         404. A value wrong for the ask's kind is a 400 and leaves it open.

@@ -25,13 +25,16 @@ export { useAsksStore, readOrigin, registerReplyFailureReporter } from './stores
 export type {
   Ask,
   AskOrigin,
+  CodeAsk,
+  CodeReply,
   HandoffAsk,
+  InlineAsk,
   PermissionAsk,
   QuestionAnswer,
   QuestionAsk,
   QuestionReply,
 } from './stores/asks';
-export { actionLabel, originLabel, waitedSeconds } from './utils/askLabels';
+export { actionLabel, CODE_ASK_WORDS, originLabel, waitedSeconds } from './utils/askLabels';
 export { useTheme } from './composables/useTheme';
 export { useWebSocket, getWebSocket } from './composables/useWebSocket';
 export { api } from './composables/useApiClient';
@@ -43,4 +46,5 @@ export { default as BaseCard } from './ui/BaseCard.vue';
 export { default as BaseField } from './ui/BaseField.vue';
 export { default as ChalieMark } from './ui/ChalieMark.vue';
 export { default as AskRow } from './ui/AskRow.vue';
+export { default as AskCodeEntry } from './ui/AskCodeEntry.vue';
 export { default as QuestionControls } from './ui/QuestionControls.vue';

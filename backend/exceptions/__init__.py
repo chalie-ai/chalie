@@ -12,9 +12,6 @@ from exceptions.chalie_exception import ChalieException
 from exceptions.exception import (
     AgentStopped,
     AskReplyInvalid,
-    AuthenticatorCodeRefused,
-    AuthenticatorKeyInvalid,
-    AuthenticatorKeyMissing,
     ConflictError,
     DownloadTooLarge,
     EmptyCompletionLoop,
@@ -38,7 +35,7 @@ from exceptions.exception import (
     SourceIsImage,
     SystemPathBlocked,
     TelegramApiError,
-    TooManySignInAttempts,
+    UnifiCallFailed,
     UnroutedPromptChannel,
     VaultLockedError,
 )
@@ -46,9 +43,6 @@ from exceptions.exception import (
 __all__ = [
     "AgentStopped",
     "AskReplyInvalid",
-    "AuthenticatorCodeRefused",
-    "AuthenticatorKeyInvalid",
-    "AuthenticatorKeyMissing",
     "ChalieException",
     "ConflictError",
     "DownloadTooLarge",
@@ -73,7 +67,7 @@ __all__ = [
     "SourceIsImage",
     "SystemPathBlocked",
     "TelegramApiError",
-    "TooManySignInAttempts",
+    "UnifiCallFailed",
     "UnroutedPromptChannel",
     "VaultLockedError",
 ]

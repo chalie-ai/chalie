@@ -102,6 +102,16 @@ function questionAsk(id: string, data: object = {}) {
   };
 }
 
+/** A sign-in that waits on the code the user types, for the service named. */
+function codeAsk(id: string, service = 'unifi', origin: unknown = mainChat) {
+  return {
+    ask_id: id,
+    kind: 'code',
+    asked_at: '2026-11-20T09:00:00+00:00',
+    data: { service, origin },
+  };
+}
+
 const opened = (ask: object) => ({ type: 'ask_opened', ...ask }) as WsPushEvent;
 const closed = (id: string) => ({ type: 'ask_closed', ask_id: id }) as WsPushEvent;
 
@@ -130,6 +140,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe('asks store — what waits on the user', () => {
@@ -317,5 +328,63 @@ describe('asks store — what waits on the user', () => {
 
     expect(told).toEqual(['Server error', 'Server error']);
     expect(waiting(asks)).toEqual(['still-open']);
+  });
+});
+
+describe('asks store — a sign-in that waits on a code', () => {
+  it('a UniFi code ask opened over the socket waits for its code, which goes to the server exactly as typed, leading zero and all, and its row goes', async () => {
+    const { asks, frame } = await loadPage();
+
+    frame(opened(codeAsk('unifi-sign-in')));
+    expect(waiting(asks)).toEqual(['unifi-sign-in']);
+    expect(asks.offScreen.map((a) => a.ask_id)).toEqual(['unifi-sign-in']);
+
+    await asks.reply('unifi-sign-in', { code: '048217' });
+
+    expect(told).toEqual([]);
+    expect(requests.filter((r) => r.method === 'POST')).toEqual([
+      { method: 'POST', path: '/api/asks/reply/unifi-sign-in', body: { value: { code: '048217' } } },
+    ]);
+    expect(waiting(asks)).toEqual([]);
+  });
+
+  it("a code the server refuses is reported in the server's words, never with the code, and its row comes back for another try; one already answered elsewhere stays gone, quietly", async () => {
+    const { asks, frame } = await loadPage();
+    frame(opened(codeAsk('wrong-code')));
+    listing = [codeAsk('wrong-code')];
+    replyStatus = 400;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await asks.reply('wrong-code', { code: '111111' });
+    await flushPromises();
+
+    expect(told).toEqual(['Server error']);
+    expect(JSON.stringify([told, warn.mock.calls])).not.toContain('111111');
+    expect(waiting(asks)).toEqual(['wrong-code']);
+
+    frame(opened(codeAsk('answered-elsewhere')));
+    listing = [codeAsk('wrong-code'), codeAsk('answered-elsewhere')];
+    replyStatus = 404;
+    const reads = opensRead();
+    warn.mockClear();
+
+    await asks.reply('answered-elsewhere', { code: '048217' });
+    await flushPromises();
+
+    expect(told).toEqual(['Server error']);
+    expect(waiting(asks)).toEqual(['wrong-code']);
+    expect(opensRead()).toBe(reads);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('only a UniFi sign-in is taken; a code ask for a service its row has no words for is dropped loudly', async () => {
+    const { asks, frame } = await loadPage();
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    frame(opened(codeAsk('other-sign-in', 'other')));
+    frame(opened(codeAsk('unifi-sign-in')));
+
+    expect(waiting(asks)).toEqual(['unifi-sign-in']);
+    expect(error.mock.calls).toEqual([['[asks] unreadable ask dropped:', 'other-sign-in']]);
   });
 });

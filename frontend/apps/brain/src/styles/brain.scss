@@ -938,36 +938,6 @@ input[type='checkbox'] {
 .form-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
 .form-hint { color: var(--muted); margin-top: 2px; }
 
-// Auth method toggle. Each choice stays on one line; when the row is too narrow
-// for all of them, the choices that don't fit move to a new row.
-.tab-select {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 2px;
-  padding: 2px;
-  background: var(--surface);
-}
-
-.tab-btn {
-  flex: 1;
-  padding: 4px 12px;
-  height: var(--control-h);
-  font-size: var(--fs-body);
-  font-weight: 600;
-  white-space: nowrap;
-  color: var(--muted);
-  background: transparent;
-  cursor: pointer;
-  transition: color var(--dur-1) var(--ease-out), background-color var(--dur-1) var(--ease-out);
-
-  &:hover { color: var(--text); background: var(--cell); }
-
-  &.active {
-    color: var(--text);
-    background: var(--surface-2);
-  }
-}
-
 .input-group {
   display: flex;
   align-items: stretch;
@@ -1027,36 +997,6 @@ input[type='checkbox'] {
 .provider-wizard { width: 100%; }
 .wizard-hint { font-size: var(--fs-body); color: var(--muted); margin: 0 0 18px; line-height: 1.5; }
 .wizard-error { color: var(--deny-text); }
-// The steps for filling a field in, folded under it until asked for.
-.field-guide {
-  margin-top: 4px;
-  font-size: var(--fs-body);
-  line-height: 1.5;
-  color: var(--muted);
-
-  summary {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    height: var(--control-h);
-    list-style: none;
-    cursor: pointer;
-    transition: color var(--dur-1) var(--ease-out);
-
-    &::-webkit-details-marker { display: none; }
-    &:hover { color: var(--text); }
-  }
-
-  &[open] .field-guide-chev { transform: rotate(90deg); }
-}
-.field-guide-chev { flex-shrink: 0; transition: transform var(--dur-2) var(--ease-out); }
-.field-guide-body {
-  padding: 12px;
-  background: var(--surface);
-
-  ol { margin: 0; padding-left: 20px; }
-  p { margin: 8px 0 0; }
-}
 // A code the user must type into another app: a display number, read at a glance.
 .setup-code {
   display: inline-block;

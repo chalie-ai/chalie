@@ -15,23 +15,13 @@
 import { api } from '@chalie/shared';
 import { fetchAllPages } from './paginate';
 
-export interface CapabilityFieldOption {
-  value: string;
-  label: string;
-}
-
 export interface CapabilityField {
   name: string;
   label: string;
-  type: string; // 'checkbox' | 'select' | 'textarea' | 'text' | 'password'
+  type: string; // 'checkbox' | 'textarea' | 'text' | 'password'
   placeholder?: string;
   default?: unknown;
   required?: boolean;
-  options?: CapabilityFieldOption[];
-  /** Each named field's value, or any of a list of values, that shows this field. */
-  show_when?: Record<string, unknown>;
-  /** Plain-text steps for filling this field in, then any notes that follow them. */
-  guide?: { steps: string[]; notes?: string[] };
 }
 
 export interface Capability {
@@ -68,10 +58,6 @@ export type SetupFailureReason =
   | 'credentials_rejected'
   | 'certificate_untrusted'
   | 'unreachable'
-  | 'authenticator_key_missing'
-  | 'authenticator_key_invalid'
-  | 'authenticator_code_refused'
-  | 'too_many_attempts'
   | 'invalid_configuration';
 
 interface SingleEnvelope<T> {

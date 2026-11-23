@@ -302,29 +302,16 @@ class TelegramApiError(ChalieException):
     """
 
 
-# ── UniFi sign-in layer ───────────────────────────────────────────────────────
-#
-# Each message is the console's status and address only, never its reply,
-# which can carry a half-made sign-in.
+# ── UniFi layer ───────────────────────────────────────────────────────────────
 
 
-class AuthenticatorKeyMissing(ChalieException):
-    """A UniFi sign-in asked for an authenticator code, and no setup key was given."""
+class UnifiCallFailed(ChalieException):
+    """A UniFi call that could not run: its sign-in failed or was cancelled, or
+    the console could not be reached.
 
-
-class AuthenticatorKeyInvalid(ChalieException):
-    """A setup key that no authenticator app takes: not base32, or a link for another kind of code.
-
-    The message never contains the key.
+    The message is the exact text the model reads. It never carries a code, a
+    cookie or the console's reply.
     """
-
-
-class AuthenticatorCodeRefused(ChalieException):
-    """A UniFi sign-in refused the code made from the setup key: a wrong key, or a wrong clock."""
-
-
-class TooManySignInAttempts(ChalieException):
-    """UI.com blocked sign-ins to the account for now, after too many attempts."""
 
 
 # ── Ask layer ─────────────────────────────────────────────────────────────────

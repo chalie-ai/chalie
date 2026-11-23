@@ -9,9 +9,9 @@
 """Feature test for the UniFi SSL-verification downgrade regression (#1906).
 
 Spins a real HTTPS server with a self-signed certificate (no mocks) and
-proves that when the user opts into ``verify_ssl=True``, an SSLError is
-raised to the caller instead of being silently swallowed by retrying the
-request with ``verify=False``. This is exactly the narrow MITM exposure the
+proves that when the user opts into ``verify_ssl=True``, the call fails as an
+untrusted certificate, raised from the SSLError, instead of being silently
+retried with ``verify=False``. This is exactly the narrow MITM exposure the
 audit flagged: credentials/CSRF carried over an unverified connection that
 the user never asked for.
 
@@ -32,6 +32,7 @@ import pytest
 import requests.exceptions
 
 from capabilities.ubiquiti_capability import unifi_rest_handler as rest
+from exceptions import UnifiCallFailed
 
 pytestmark = pytest.mark.unit
 
@@ -101,15 +102,32 @@ def untrusted_https_server() -> object:
 # ── The regression contract ────────────────────────────────────────────────
 
 
+def _console(url: str, *, verify_ssl: bool) -> rest.Console:
+    """A console already signed in to, so the one request made is the data call itself."""
+    return rest.Console(
+        url=url,
+        site="default",
+        username="admin",
+        password="not-a-real-password",
+        verify_ssl=verify_ssl,
+        stored=lambda: rest.Session(cookie="TOKEN=t", csrf="c"),
+        keep=lambda session: None,
+        origin=None,
+        should_stop=None,
+    )
+
+
 def test_verify_true_raises_on_untrusted_cert(untrusted_https_server: object) -> None:
     """When the user opts into verify_ssl=True, an untrusted cert must raise — not silently downgrade."""
     url = cast("str", getattr(untrusted_https_server, "url"))
-    with pytest.raises(requests.exceptions.SSLError):
-        rest.list_devices(url, "default", api_key="k", verify_ssl=True)
+    with pytest.raises(UnifiCallFailed) as failed:
+        rest.list_devices(_console(url, verify_ssl=True))
+    assert str(failed.value) == "Failed - certificate not trusted"
+    assert isinstance(failed.value.__cause__, requests.exceptions.SSLError)
 
 
 def test_verify_false_still_connects(untrusted_https_server: object) -> None:
     """The explicit opt-out path (verify_ssl=False) must still connect to the untrusted server."""
     url = cast("str", getattr(untrusted_https_server, "url"))
-    result = rest.list_devices(url, "default", api_key="k", verify_ssl=False)
+    result = rest.list_devices(_console(url, verify_ssl=False))
     assert result["count"] == 0

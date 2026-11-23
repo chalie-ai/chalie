@@ -74,9 +74,10 @@ class CapabilityAbility(Ability[CapabilityParamsBag], ABC):
         empty string flows on to the unknown-action ladder."""
         return self.DEFAULT_ACTION if params.action is None else params.action
 
-    def _dispatch(self, action: str, handler_params: dict[str, object]) -> ToolResult:
+    def _dispatch(self, action: str, handler_params: dict[str, object], **handler_kwargs: object) -> ToolResult:
         """Gate on connection, resolve *action* to its capability handler, call
-        it with *handler_params*, and wrap the returned dict."""
+        it with *handler_params* and any *handler_kwargs*, and wrap the returned
+        dict."""
         from capabilities import load_capabilities
 
         cap = load_capabilities().get(self.CAPABILITY_KEY)
@@ -107,7 +108,7 @@ class CapabilityAbility(Ability[CapabilityParamsBag], ABC):
                 action=action,
             )
 
-        result = cast(Callable[..., dict[str, object]], handler)(handler_params, self.telemetry)
+        result = cast(Callable[..., dict[str, object]], handler)(handler_params, self.telemetry, **handler_kwargs)
         # A handler signals failure with a truthy ``error`` key. Wrapping that in
         # ``ok`` would tag a genuine failure ``status=success`` — the model never
         # sees an error envelope, and the dispatcher's repeat-error steer (which

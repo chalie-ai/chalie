@@ -1,9 +1,10 @@
 /**
  * Ask labels and wait time — the readable label for a gated action (and an
- * off-turn ask's origin) plus whole seconds since the ask parked.
+ * off-turn ask's origin), the words of a sign-in code ask, plus whole seconds
+ * since the ask parked.
  */
 import { ConfigType } from '../config/configType';
-import type { AskOrigin } from '../stores/asks';
+import type { AskOrigin, CodeAskData } from '../stores/asks';
 
 /** Where an ask shown away from its turn came from: a scheduled task, the main chat, or a thread. */
 export function originLabel(origin: AskOrigin): string {
@@ -51,6 +52,18 @@ export function actionLabel(actionId: string): string {
   if (ACTION_LABELS[actionId]) return ACTION_LABELS[actionId];
   return actionId.replace(/[._]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
+
+/** What a sign-in code ask's row says, by the service whose sign-in waits on the code. */
+export const CODE_ASK_WORDS: Record<
+  CodeAskData['service'],
+  { heading: string; field: string; button: string }
+> = {
+  unifi: {
+    heading: 'UniFi sign-in needs your 2FA code',
+    field: '6-digit code',
+    button: 'Sign in',
+  },
+};
 
 /** Whole seconds since an ask parked — 0 when the stamp is unparseable or in
  * the future (a clock skew); the server stamp is what makes the age survive a

@@ -7,7 +7,7 @@ import { HttpError } from '@chalie/shared';
 import { useToast } from '../composables/useToast';
 import { useBrainResource } from '../composables/useBrainResource';
 import ToggleSwitch from '../ui/ToggleSwitch.vue';
-import { ChevronLeft, ChevronRight, Settings } from '@lucide/vue';
+import { ChevronLeft, Settings } from '@lucide/vue';
 
 const { show: showToast } = useToast();
 
@@ -55,13 +55,6 @@ function isAvailable(c: Capability): boolean {
 }
 
 const formFields = computed<CapabilityField[]>(() => formCap.value?.fields ?? []);
-
-function isVisible(f: CapabilityField): boolean {
-  return (
-    !f.show_when ||
-    Object.entries(f.show_when).every(([k, v]) => (Array.isArray(v) ? v.includes(textValues[k]) : textValues[k] === v))
-  );
-}
 
 async function openForm(c: Capability): Promise<void> {
   stopWaiting();
@@ -125,28 +118,15 @@ const SETUP_FAILURES: Record<SetupFailureReason, string> = {
   credentials_rejected: 'The server rejected these credentials. Check them and try again.',
   certificate_untrusted: "The server's certificate isn't trusted. If it uses a self-signed certificate, turn off Verify SSL.",
   unreachable: "Couldn't reach the server. Check the URL and that the server is on.",
-  authenticator_key_missing:
-    'This UI.com account asks for a code from an authenticator app. Add its setup key and try again.',
-  authenticator_key_invalid:
-    "This setup key isn't one an authenticator app accepts. Copy it again from your UI.com account.",
-  authenticator_code_refused:
-    "The UI.com account didn't accept the code made from this setup key. Check the key, and that this computer's clock is right.",
-  too_many_attempts: 'UI.com has blocked sign-ins for now after too many attempts. Wait a few minutes, then try again.',
   invalid_configuration: "These settings weren't accepted. Check each field and try again.",
 };
-
-// The setup key field shows only on the UI.com account choice, so on Username & Password the reader is told where it is.
-const KEY_ON_UI_ACCOUNT = 'Choose UI.com account below to add it.';
 
 // Why the settings failed, as the server's reason for it says, when it gives one.
 function setupFailure(e: unknown): string | null {
   if (!(e instanceof HttpError)) return null;
   const reason = (e.body as { reason?: string } | null | undefined)?.reason;
   if (reason === undefined || !Object.hasOwn(SETUP_FAILURES, reason)) return null;
-  const text = SETUP_FAILURES[reason as SetupFailureReason];
-  return reason === 'authenticator_key_missing' && textValues.auth_method === 'credentials'
-    ? `${text} ${KEY_ON_UI_ACCOUNT}`
-    : text;
+  return SETUP_FAILURES[reason as SetupFailureReason];
 }
 
 async function submit(): Promise<void> {
@@ -257,27 +237,6 @@ async function disconnect(c: Capability): Promise<void> {
               <ToggleSwitch v-model="boolValues[f.name]" :label="f.label" />
             </div>
 
-            <div
-              v-else-if="f.type === 'select'"
-              class="form-group"
-              role="group"
-              :aria-labelledby="'cap-group-' + f.name"
-            >
-              <span :id="'cap-group-' + f.name" class="form-group-label">{{ f.label }}</span>
-              <div class="tab-select">
-                <button
-                  v-for="o in f.options"
-                  :key="o.value"
-                  type="button"
-                  class="tab-btn"
-                  :class="{ active: textValues[f.name] === o.value }"
-                  @click="textValues[f.name] = o.value"
-                >
-                  {{ o.label }}
-                </button>
-              </div>
-            </div>
-
             <div v-else-if="f.type === 'textarea'" class="form-group">
               <label :for="'cap-field-' + f.name">{{ f.label }}</label>
               <textarea
@@ -288,7 +247,7 @@ async function disconnect(c: Capability): Promise<void> {
               ></textarea>
             </div>
 
-            <div v-else v-show="isVisible(f)" class="form-group">
+            <div v-else class="form-group">
               <label :for="'cap-field-' + f.name">{{ f.label }}</label>
               <input
                 :id="'cap-field-' + f.name"
@@ -297,15 +256,6 @@ async function disconnect(c: Capability): Promise<void> {
                 :placeholder="f.placeholder ?? ''"
                 :required="!!(f.required && !formConnected)"
               />
-              <details v-if="f.guide" class="field-guide">
-                <summary><ChevronRight class="field-guide-chev" :size="16" />How to set this up</summary>
-                <div class="field-guide-body">
-                  <ol>
-                    <li v-for="(s, i) in f.guide.steps" :key="i">{{ s }}</li>
-                  </ol>
-                  <p v-for="(n, i) in f.guide.notes" :key="i">{{ n }}</p>
-                </div>
-              </details>
             </div>
           </template>
 

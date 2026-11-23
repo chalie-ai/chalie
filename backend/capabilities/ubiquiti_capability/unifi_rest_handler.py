@@ -1,15 +1,28 @@
+"""REST client for a UniFi OS console, signed in with a UI.com account.
+
+Every call reuses the latest stored console session. With none, or once the
+console refuses it, the call signs in with the saved username and password;
+when UI.com wants a 2FA code, the user is asked for it and the call waits,
+with no time limit, until it is typed, the ask is dismissed or the run stops.
+The caller (UbiquitiCapability) owns where the session is stored.
+
+A sign-in failure the model reads is raised as :class:`UnifiCallFailed`
+carrying one fixed text. The 2FA code and the half-made sign-in cookie live in
+local variables only: never logged, stored, raised or returned.
+"""
 
 from __future__ import annotations
 
 import logging
+import ssl
 import threading
-import time
-from typing import TYPE_CHECKING, cast
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, NamedTuple, cast
 
 import requests
 
-from capabilities.ubiquiti_capability import authenticator
-from exceptions import AuthenticatorCodeRefused, AuthenticatorKeyMissing, TooManySignInAttempts
+from exceptions import UnifiCallFailed
+from services.ask_user import AskReply, AskUser, CodeAsk, CodeReply, Origin
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -17,22 +30,51 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _TIMEOUT = 15
-# What a console answers a UI.com account that has an authenticator app, until a code is sent with it.
+# What a console answers a UI.com account with 2FA on, until a code is sent with it.
 _MFA_REQUIRED = 499
+_LOGIN_PATH = "/api/auth/login"
+_POLL_SECONDS = 0.25
 
-_session_lock = threading.Lock()
-# A session belongs to the exact sign-in that made it, so a changed password or setup key signs in again.
-_session_cache: dict[tuple[str, str, str, str | None], dict[str, object]] = {}
+_CANCELLED = "UniFi sign-in cancelled before a 2FA code was entered."
+_TOO_MANY = "UI.com blocked sign-ins for a few minutes after too many attempts."
+_REJECTED = "UniFi rejected the saved username or password."
+_CODE_REFUSED = "Failed - 2FA Error"
+_UNREACHABLE = "Failed - network unreachable"
+_CERT_UNTRUSTED = "Failed - certificate not trusted"
+
+# Held only while signing in, never across a data call: a call that has a
+# session runs while another waits for a code.
+_sign_in_lock = threading.Lock()
 
 
-# ── Auth helpers ─────────────────────────────────────────────────────────────
+class Session(NamedTuple):
+    """A signed-in console session: the cookie header and the CSRF token sent with every call."""
+
+    cookie: str
+    csrf: str
 
 
-def _auth_headers(api_key: str | None) -> dict[str, str]:
-    headers: dict[str, str] = {"Content-Type": "application/json"}
-    if api_key:
-        headers["X-API-KEY"] = api_key
-    return headers
+@dataclass(frozen=True)
+class Console:
+    """Everything a UniFi call needs to reach the console and sign in to it.
+
+    ``stored`` returns the latest stored session, or ``None`` when there is
+    none; ``keep`` stores a new one. ``origin`` is the turn a code ask belongs
+    to, and ``should_stop`` ends the wait for a code when the run stops.
+    """
+
+    url: str
+    site: str
+    username: str
+    password: str = field(repr=False)
+    verify_ssl: bool
+    stored: Callable[[], Session | None]
+    keep: Callable[[Session], None]
+    origin: dict[str, object] | None
+    should_stop: Callable[[], bool] | None
+
+
+# ── Sign-in ──────────────────────────────────────────────────────────────────
 
 
 def _mfa_cookie(resp: requests.Response) -> str | None:
@@ -46,103 +88,126 @@ def _mfa_cookie(resp: requests.Response) -> str | None:
     return cookie if "=" in cookie else None
 
 
-def _sign_in_refusal(status: int, totp_key: str | None, code_sent: bool) -> type[Exception] | None:
-    """The refusal a failed UI.com sign-in is raised as, when its reason is known."""
-    if status == _MFA_REQUIRED and not totp_key:
-        return AuthenticatorKeyMissing
-    if status == _MFA_REQUIRED and code_sent:
-        return AuthenticatorCodeRefused
-    if status == 429 and totp_key:
-        return TooManySignInAttempts
-    return None
+def _ask_code(console: Console) -> str:
+    """The 2FA code the user types. Waits for a reply, a dismiss or a stop, with no time limit."""
+    done = threading.Event()
+    got: dict[str, str | None] = {}
 
+    def on_reply(reply: AskReply) -> None:
+        got["code"] = cast("CodeReply", reply.value).code if reply.answered else None
+        done.set()
 
-def _get_session(
-    url: str, username: str, password: str, totp_key: str | None, verify_ssl: bool,
-) -> tuple[requests.Session, str]:
-    key = (url, username, password, totp_key)
-    with _session_lock:
-        cached = _session_cache.get(key)
-        if cached:
-            return cast(requests.Session, cached["session"]), cast(str, cached["csrf"])
-
-    session = requests.Session()
-    login_url = f"{url.rstrip('/')}/api/auth/login"
-    body: dict[str, str | bool] = {"username": username, "password": password, "rememberMe": True}
-
-    resp = session.post(login_url, json=body, verify=verify_ssl, timeout=_TIMEOUT)
-    code_sent = False
-    if resp.status_code == _MFA_REQUIRED and totp_key and (cookie := _mfa_cookie(resp)):
-        # The cookie goes as a header: a cookie jar can drop one set for a console addressed by IP.
-        resp = session.post(
-            login_url, json={**body, "token": authenticator.code(totp_key, time.time())},
-            headers={"Cookie": cookie}, verify=verify_ssl, timeout=_TIMEOUT,
-        )
-        code_sent = True
-    if not resp.ok:
-        # A 499 reply carries the half-made sign-in, so only its status is logged; so is any reply to a code.
-        shown = "" if code_sent or resp.status_code == _MFA_REQUIRED else resp.text[:300]
-        logger.warning(
-            "[unifi] login %s returned %d: %s", login_url, resp.status_code,
-            shown.replace("\n", " ").replace("\r", " "),
-        )
+    origin = None if console.origin is None else Origin.model_validate(console.origin)
+    ask_id = AskUser.code(CodeAsk(service="unifi", origin=origin), on_reply)
     try:
-        resp.raise_for_status()
-    except requests.HTTPError as exc:
-        refusal = _sign_in_refusal(resp.status_code, totp_key, code_sent)
-        if refusal is None:
-            raise
-        # The same words as the request error, which the model may read: status and address only.
-        raise refusal(str(exc)) from exc
-    csrf = resp.headers.get("x-csrf-token", "")
-    with _session_lock:
-        _session_cache[key] = {"session": session, "csrf": csrf}
-    return session, csrf
+        while not done.wait(_POLL_SECONDS):
+            if console.should_stop is not None and console.should_stop():
+                AskUser.cancel(ask_id)
+    finally:
+        # An exception out of the wait still closes the ask; once it is
+        # answered or cancelled this is a no-op.
+        AskUser.cancel(ask_id)
+    code = got["code"]
+    if code is None:
+        raise UnifiCallFailed(_CANCELLED)
+    return code
 
 
-def _invalidate_session(url: str, username: str, password: str, totp_key: str | None) -> None:
-    with _session_lock:
-        _session_cache.pop((url, username, password, totp_key), None)
+def _post_login(console: Console, body: dict[str, object], headers: dict[str, str]) -> requests.Response:
+    resp = _send("post", console, _LOGIN_PATH, headers, body)
+    if not resp.ok:
+        logger.warning("[unifi] sign-in %s returned %d", _LOGIN_PATH, resp.status_code)
+    return resp
+
+
+def _log_in(console: Console) -> Session:
+    """Sign in with the saved username and password, asking for a 2FA code when UI.com wants one."""
+    body: dict[str, object] = {"username": console.username, "password": console.password, "rememberMe": True}
+    resp = _post_login(console, body, {})
+    if resp.status_code in (401, 403):
+        raise UnifiCallFailed(_REJECTED)
+    if resp.status_code == _MFA_REQUIRED and (mfa_cookie := _mfa_cookie(resp)):
+        # The cookie goes as a header: a cookie jar can drop one set for a console addressed by IP.
+        resp = _post_login(console, {**body, "token": _ask_code(console)}, {"Cookie": mfa_cookie})
+        if resp.status_code == _MFA_REQUIRED:
+            raise UnifiCallFailed(_CODE_REFUSED)
+    if resp.status_code == 429:
+        raise UnifiCallFailed(_TOO_MANY)
+    resp.raise_for_status()
+    session = Session(
+        cookie="; ".join(f"{c.name}={c.value}" for c in resp.cookies),
+        csrf=resp.headers.get("x-csrf-token", ""),
+    )
+    console.keep(session)
+    return session
+
+
+def _sign_in(console: Console, stale: Session | None) -> Session:
+    """A fresh session in place of *stale*. Signs in once for every call waiting
+    here: a call that finds a newer stored session uses it instead."""
+    while not _sign_in_lock.acquire(timeout=_POLL_SECONDS):
+        if console.should_stop is not None and console.should_stop():
+            raise UnifiCallFailed(_CANCELLED)
+    try:
+        latest = console.stored()
+        if latest is not None and latest != stale:
+            return latest
+        return _log_in(console)
+    finally:
+        _sign_in_lock.release()
 
 
 # ── Core request helper ──────────────────────────────────────────────────────
 
 
-def _request(
-    method: str,
-    url: str,
-    path: str,
-    api_key: str | None,
-    username: str | None,
-    password: str | None,
-    totp_key: str | None,
-    verify_ssl: bool,
-    body: dict[str, object] | None = None,
+def _send(
+    method: str, console: Console, path: str, headers: dict[str, str], body: dict[str, object] | None,
 ) -> requests.Response:
-    full_url = f"{url.rstrip('/')}{path}"
-    kwargs: dict[str, object] = {"timeout": _TIMEOUT}
-    if body is not None or method in ("post", "put"):
-        kwargs["json"] = body or {}
+    """One HTTP call. No answer is raised as the unreachable text, a certificate that fails
+    the check as the untrusted text, and any other TLS failure as it is."""
+    try:
+        return cast("Callable[..., requests.Response]", requests.request)(
+            method, f"{console.url.rstrip('/')}{path}",
+            headers=headers, json=body, verify=console.verify_ssl, timeout=_TIMEOUT,
+        )
+    except requests.exceptions.SSLError as exc:
+        if _certificate_refused(exc):
+            raise UnifiCallFailed(_CERT_UNTRUSTED) from exc
+        raise
+    except (requests.ConnectionError, requests.Timeout) as exc:
+        raise UnifiCallFailed(_UNREACHABLE) from exc
 
-    if api_key:
-        fn = cast("Callable[..., requests.Response]", getattr(requests, method))
-        resp = fn(full_url, headers=_auth_headers(api_key), verify=verify_ssl, **kwargs)
-        resp.raise_for_status()
-        return resp
 
-    uname = username or ""
-    session, csrf = _get_session(url, uname, password or "", totp_key, verify_ssl)
+def _certificate_refused(exc: BaseException) -> bool:
+    """Whether *exc* comes from the console's certificate failing the check, rather
+    than another TLS failure such as an https address on a plain-http port."""
+    seen: list[BaseException] = []
+    cause: BaseException | None = exc
+    while cause is not None and cause not in seen:
+        if isinstance(cause, ssl.SSLCertVerificationError):
+            return True
+        seen.append(cause)
+        cause = cause.__cause__ or cause.__context__
+    return False
 
-    def _session_call(sess: requests.Session, tok: str) -> requests.Response:
-        headers = {"Content-Type": "application/json", "X-CSRF-Token": tok}
-        return cast("Callable[..., requests.Response]", getattr(sess, method))(full_url, headers=headers, verify=verify_ssl, **kwargs)
 
-    resp = _session_call(session, csrf)
+def _call(
+    method: str, console: Console, path: str, session: Session, body: dict[str, object] | None,
+) -> requests.Response:
+    headers = {"Content-Type": "application/json", "X-CSRF-Token": session.csrf, "Cookie": session.cookie}
+    return _send(method, console, path, headers, body)
+
+
+def _request(
+    method: str, console: Console, path: str, body: dict[str, object] | None = None,
+) -> requests.Response:
+    session = console.stored()
+    if session is None:
+        session = _sign_in(console, None)
+    resp = _call(method, console, path, session, body)
 
     if resp.status_code == 401:
-        _invalidate_session(url, uname, password or "", totp_key)
-        session, csrf = _get_session(url, uname, password or "", totp_key, verify_ssl)
-        resp = _session_call(session, csrf)
+        resp = _call(method, console, path, _sign_in(console, session), body)
 
     resp.raise_for_status()
     return resp
@@ -162,37 +227,8 @@ def _v2_path(site: str, endpoint: str) -> str:
 # ── Public API ───────────────────────────────────────────────────────────────
 
 
-def probe(
-    url: str,
-    site: str,
-    api_key: str | None = None,
-    username: str | None = None,
-    password: str | None = None,
-    totp_key: str | None = None,
-    verify_ssl: bool = True,
-) -> dict[str, object]:
-    try:
-        resp = _request("get", url, "/api/", api_key, username, password, totp_key, verify_ssl)
-    except requests.HTTPError as exc:
-        if exc.response is not None and exc.response.status_code == 404:
-            raise ValueError(
-                f"Controller at {url} returned 404 on /api/ -- legacy UniFi controllers "
-                "are not supported. UniFi OS (UDM/UCK-G2-Plus or newer) is required."
-            ) from exc
-        raise
-    return cast(dict[str, object], resp.json())
-
-
-def list_devices(
-    url: str,
-    site: str,
-    api_key: str | None = None,
-    username: str | None = None,
-    password: str | None = None,
-    totp_key: str | None = None,
-    verify_ssl: bool = True,
-) -> dict[str, object]:
-    raw = cast(list[object], _request("get", url, _site_path(site, "stat/device"), api_key, username, password, totp_key, verify_ssl).json().get("data", []))
+def list_devices(console: Console) -> dict[str, object]:
+    raw = cast(list[object], _request("get", console, _site_path(console.site, "stat/device")).json().get("data", []))
     devices = [
         {
             "mac": cast(dict[str, object], d).get("mac", ""),
@@ -209,18 +245,9 @@ def list_devices(
     return {"devices": devices, "count": len(devices)}
 
 
-def list_clients(
-    url: str,
-    site: str,
-    api_key: str | None = None,
-    username: str | None = None,
-    password: str | None = None,
-    totp_key: str | None = None,
-    verify_ssl: bool = True,
-    active_only: bool = True,
-) -> dict[str, object]:
+def list_clients(console: Console, active_only: bool = True) -> dict[str, object]:
     endpoint = "stat/sta" if active_only else "rest/user"
-    raw = cast(list[object], _request("get", url, _site_path(site, endpoint), api_key, username, password, totp_key, verify_ssl).json().get("data", []))
+    raw = cast(list[object], _request("get", console, _site_path(console.site, endpoint)).json().get("data", []))
     clients = [
         {
             "mac": cast(dict[str, object], c).get("mac", ""),
@@ -236,21 +263,12 @@ def list_clients(
     return {"clients": clients, "count": len(clients)}
 
 
-def get_info(
-    url: str,
-    site: str,
-    target: str,
-    api_key: str | None = None,
-    username: str | None = None,
-    password: str | None = None,
-    totp_key: str | None = None,
-    verify_ssl: bool = True,
-) -> dict[str, object]:
+def get_info(console: Console, target: str) -> dict[str, object]:
     if target == "health":
-        data = cast(dict[str, object], _request("get", url, _site_path(site, "stat/health"), api_key, username, password, totp_key, verify_ssl).json())
+        data = cast(dict[str, object], _request("get", console, _site_path(console.site, "stat/health")).json())
         return {"health": data.get("data", [])}
 
-    data = cast(dict[str, object], _request("get", url, _site_path(site, "stat/device"), api_key, username, password, totp_key, verify_ssl).json())
+    data = cast(dict[str, object], _request("get", console, _site_path(console.site, "stat/device")).json())
     mac_lower = target.lower()
     for device in cast(list[object], data.get("data", [])):
         if cast(str, cast(dict[str, object], device).get("mac", "")).lower() == mac_lower:
@@ -258,48 +276,18 @@ def get_info(
     return {"error": f"Device with MAC {target!r} not found"}
 
 
-def control_client(
-    url: str,
-    site: str,
-    mac: str,
-    command: str,
-    api_key: str | None = None,
-    username: str | None = None,
-    password: str | None = None,
-    totp_key: str | None = None,
-    verify_ssl: bool = True,
-    **kwargs: object,
-) -> dict[str, object]:
-    _request("post", url, _site_path(site, "cmd/stamgr"), api_key, username, password, totp_key, verify_ssl, {"cmd": command, "mac": mac, **kwargs})
+def control_client(console: Console, mac: str, command: str, **kwargs: object) -> dict[str, object]:
+    _request("post", console, _site_path(console.site, "cmd/stamgr"), {"cmd": command, "mac": mac, **kwargs})
     return {"status": "ok", "command": command, "mac": mac}
 
 
-def control_device(
-    url: str,
-    site: str,
-    mac: str,
-    command: str,
-    api_key: str | None = None,
-    username: str | None = None,
-    password: str | None = None,
-    totp_key: str | None = None,
-    verify_ssl: bool = True,
-    **kwargs: object,
-) -> dict[str, object]:
-    _request("post", url, _site_path(site, "cmd/devmgr"), api_key, username, password, totp_key, verify_ssl, {"cmd": command, "mac": mac, **kwargs})
+def control_device(console: Console, mac: str, command: str, **kwargs: object) -> dict[str, object]:
+    _request("post", console, _site_path(console.site, "cmd/devmgr"), {"cmd": command, "mac": mac, **kwargs})
     return {"status": "ok", "command": command, "mac": mac}
 
 
-def list_wlans(
-    url: str,
-    site: str,
-    api_key: str | None = None,
-    username: str | None = None,
-    password: str | None = None,
-    totp_key: str | None = None,
-    verify_ssl: bool = True,
-) -> dict[str, object]:
-    raw = cast(list[object], _request("get", url, _site_path(site, "rest/wlanconf"), api_key, username, password, totp_key, verify_ssl).json().get("data", []))
+def list_wlans(console: Console) -> dict[str, object]:
+    raw = cast(list[object], _request("get", console, _site_path(console.site, "rest/wlanconf")).json().get("data", []))
     wlans = [
         {
             "_id": cast(dict[str, object], w).get("_id", ""),
@@ -314,31 +302,13 @@ def list_wlans(
     return {"wlans": wlans, "count": len(wlans)}
 
 
-def update_wlan(
-    url: str,
-    site: str,
-    wlan_id: str,
-    updates: dict[str, object],
-    api_key: str | None = None,
-    username: str | None = None,
-    password: str | None = None,
-    totp_key: str | None = None,
-    verify_ssl: bool = True,
-) -> dict[str, object]:
-    _request("put", url, _site_path(site, f"rest/wlanconf/{wlan_id}"), api_key, username, password, totp_key, verify_ssl, updates)
+def update_wlan(console: Console, wlan_id: str, updates: dict[str, object]) -> dict[str, object]:
+    _request("put", console, _site_path(console.site, f"rest/wlanconf/{wlan_id}"), updates)
     return {"status": "ok", "wlan_id": wlan_id, "updated": list(updates.keys())}
 
 
-def list_port_forwards(
-    url: str,
-    site: str,
-    api_key: str | None = None,
-    username: str | None = None,
-    password: str | None = None,
-    totp_key: str | None = None,
-    verify_ssl: bool = True,
-) -> dict[str, object]:
-    raw = cast(list[object], _request("get", url, _site_path(site, "rest/portforward"), api_key, username, password, totp_key, verify_ssl).json().get("data", []))
+def list_port_forwards(console: Console) -> dict[str, object]:
+    raw = cast(list[object], _request("get", console, _site_path(console.site, "rest/portforward")).json().get("data", []))
     rules = [
         {
             "_id": cast(dict[str, object], r).get("_id", ""),
@@ -354,46 +324,19 @@ def list_port_forwards(
     return {"rules": rules, "count": len(rules)}
 
 
-def update_port_forward(
-    url: str,
-    site: str,
-    rule_id: str,
-    updates: dict[str, object],
-    api_key: str | None = None,
-    username: str | None = None,
-    password: str | None = None,
-    totp_key: str | None = None,
-    verify_ssl: bool = True,
-) -> dict[str, object]:
-    _request("put", url, _site_path(site, f"rest/portforward/{rule_id}"), api_key, username, password, totp_key, verify_ssl, updates)
+def update_port_forward(console: Console, rule_id: str, updates: dict[str, object]) -> dict[str, object]:
+    _request("put", console, _site_path(console.site, f"rest/portforward/{rule_id}"), updates)
     return {"status": "ok", "rule_id": rule_id, "updated": list(updates.keys())}
 
 
-def create_port_forward(
-    url: str,
-    site: str,
-    rule: dict[str, object],
-    api_key: str | None = None,
-    username: str | None = None,
-    password: str | None = None,
-    totp_key: str | None = None,
-    verify_ssl: bool = True,
-) -> dict[str, object]:
-    resp = _request("post", url, _site_path(site, "rest/portforward"), api_key, username, password, totp_key, verify_ssl, rule)
+def create_port_forward(console: Console, rule: dict[str, object]) -> dict[str, object]:
+    resp = _request("post", console, _site_path(console.site, "rest/portforward"), rule)
     created = cast(list[object], resp.json().get("data", [{}]))
     return {"status": "ok", "rule": created[0] if created else {}}
 
 
-def list_traffic_rules(
-    url: str,
-    site: str,
-    api_key: str | None = None,
-    username: str | None = None,
-    password: str | None = None,
-    totp_key: str | None = None,
-    verify_ssl: bool = True,
-) -> dict[str, object]:
-    data = cast(dict[str, object], _request("get", url, _v2_path(site, "trafficrules"), api_key, username, password, totp_key, verify_ssl).json())
+def list_traffic_rules(console: Console) -> dict[str, object]:
+    data = cast(dict[str, object], _request("get", console, _v2_path(console.site, "trafficrules")).json())
     raw = cast(list[object], data if isinstance(data, list) else data.get("data", []))
     rules = [
         {
@@ -408,16 +351,6 @@ def list_traffic_rules(
     return {"rules": rules, "count": len(rules)}
 
 
-def update_traffic_rule(
-    url: str,
-    site: str,
-    rule_id: str,
-    updates: dict[str, object],
-    api_key: str | None = None,
-    username: str | None = None,
-    password: str | None = None,
-    totp_key: str | None = None,
-    verify_ssl: bool = True,
-) -> dict[str, object]:
-    _request("put", url, _v2_path(site, f"trafficrules/{rule_id}"), api_key, username, password, totp_key, verify_ssl, updates)
+def update_traffic_rule(console: Console, rule_id: str, updates: dict[str, object]) -> dict[str, object]:
+    _request("put", console, _v2_path(console.site, f"trafficrules/{rule_id}"), updates)
     return {"status": "ok", "rule_id": rule_id, "updated": list(updates.keys())}

@@ -296,11 +296,11 @@ class TestEveryRefInMigratedNamespacesResolves:
 
 class TestOpenAsksRouteDocumentsListingEnvelope:
     """``GET /api/asks/open`` documents the listing envelope of the open-ask DTO,
-    whose ``data`` is either kind's model with the nested origin registered as
+    whose ``data`` is any one kind's model with the nested origin registered as
     its own resolvable definition, and no 404 — an empty listing is the normal
     answer, never a miss."""
 
-    def test_get_open_asks_documents_listing_envelope_with_both_kinds_and_origin(
+    def test_get_open_asks_documents_listing_envelope_with_every_kind_and_origin(
         self, swagger_spec: dict[str, object]
     ) -> None:
         get_op = _at(swagger_spec, "paths", "/api/asks/open", "get")
@@ -315,6 +315,7 @@ class TestOpenAsksRouteDocumentsListingEnvelope:
         assert set(_strs(item, "required")) == {"ask_id", "kind", "data", "asked_at"}
         kinds = sorted(_refs(_at(item, "properties", "data")))
         assert kinds == [
+            "#/definitions/CodeAskDataResponse",
             "#/definitions/HandoffAskDataResponse",
             "#/definitions/PermissionAskDataResponse",
             "#/definitions/QuestionAskDataResponse",
@@ -324,7 +325,9 @@ class TestOpenAsksRouteDocumentsListingEnvelope:
         assert set(_strs(permission, "required")) == {"action_id", "summary", "origin"}
         handoff = _at(swagger_spec, "definitions", "HandoffAskDataResponse")
         assert set(_strs(handoff, "required")) == {"tab_id", "reason", "origin"}
-        for data in (permission, handoff):
+        code = _at(swagger_spec, "definitions", "CodeAskDataResponse")
+        assert set(_strs(code, "required")) == {"service", "origin"}
+        for data in (permission, handoff, code):
             assert _refs(_at(data, "properties", "origin")) == ["#/definitions/PermissionOriginResponse"]
 
         origin = _at(swagger_spec, "definitions", "PermissionOriginResponse")
