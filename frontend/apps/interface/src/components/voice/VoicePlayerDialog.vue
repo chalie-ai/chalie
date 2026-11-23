@@ -1,6 +1,6 @@
 <template>
   <!-- Non-modal dialog: uses show(), not showModal(). -->
-  <dialog ref="dialogEl" class="voice-player-overlay" @click.self="_close">
+  <dialog ref="dialogEl" class="voice-player-overlay">
     <div v-if="uiState === 'loading'" class="voice-player__loading">
       <span class="voice-player__spinner" aria-label="Loading audio…" />
     </div>
