@@ -890,7 +890,10 @@ input[type='checkbox'] {
   &:hover { background: var(--cell); color: var(--text); }
 }
 
-.form-group label {
+// A switch is a control, not a caption, so it keeps its own layout. `:where`
+// leaves this rule's weight as plain `.form-group label`, so a view's own label
+// rules still win over it.
+.form-group label:where(:not(.switch)) {
   display: block;
   font-size: var(--fs-body);
   font-weight: 600;
@@ -913,9 +916,11 @@ input[type='checkbox'] {
 .form-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
 .form-hint { color: var(--muted); margin-top: 2px; }
 
-// Auth method toggle.
+// Auth method toggle. Each choice stays on one line; when the row is too narrow
+// for all of them, the choices that don't fit move to a new row.
 .tab-select {
   display: flex;
+  flex-wrap: wrap;
   gap: 2px;
   padding: 2px;
   background: var(--surface);
@@ -927,6 +932,7 @@ input[type='checkbox'] {
   height: var(--control-h);
   font-size: var(--fs-body);
   font-weight: 600;
+  white-space: nowrap;
   color: var(--muted);
   background: transparent;
   cursor: pointer;

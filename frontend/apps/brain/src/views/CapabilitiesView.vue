@@ -6,6 +6,7 @@ import { apiErrorMessage } from '../api/http';
 import { HttpError } from '@chalie/shared';
 import { useToast } from '../composables/useToast';
 import { useBrainResource } from '../composables/useBrainResource';
+import ToggleSwitch from '../ui/ToggleSwitch.vue';
 import { ChevronLeft, Settings } from '@lucide/vue';
 
 const { show: showToast } = useToast();
@@ -253,13 +254,7 @@ async function disconnect(c: Capability): Promise<void> {
         <form @submit.prevent="submit">
           <template v-for="f in formFields" :key="f.name">
             <div v-if="f.type === 'checkbox'" class="form-group">
-              <label class="switch-label">
-                <label class="switch" :aria-label="f.label">
-                  <input v-model="boolValues[f.name]" type="checkbox" />
-                  <span class="switch-track"></span>
-                </label>
-                <span>{{ f.label }}</span>
-              </label>
+              <ToggleSwitch v-model="boolValues[f.name]" :label="f.label" />
             </div>
 
             <div
