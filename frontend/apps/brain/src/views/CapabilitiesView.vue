@@ -7,7 +7,7 @@ import { HttpError } from '@chalie/shared';
 import { useToast } from '../composables/useToast';
 import { useBrainResource } from '../composables/useBrainResource';
 import ToggleSwitch from '../ui/ToggleSwitch.vue';
-import { ChevronLeft, Settings } from '@lucide/vue';
+import { ChevronLeft, ChevronRight, Settings } from '@lucide/vue';
 
 const { show: showToast } = useToast();
 
@@ -297,9 +297,15 @@ async function disconnect(c: Capability): Promise<void> {
                 :placeholder="f.placeholder ?? ''"
                 :required="!!(f.required && !formConnected)"
               />
-              <p v-if="f.guide_url" class="wizard-hint">
-                <a :href="f.guide_url" target="_blank" rel="noopener">How to set this up</a>
-              </p>
+              <details v-if="f.guide" class="field-guide">
+                <summary><ChevronRight class="field-guide-chev" :size="16" />How to set this up</summary>
+                <div class="field-guide-body">
+                  <ol>
+                    <li v-for="(s, i) in f.guide.steps" :key="i">{{ s }}</li>
+                  </ol>
+                  <p v-for="(n, i) in f.guide.notes" :key="i">{{ n }}</p>
+                </div>
+              </details>
             </div>
           </template>
 

@@ -1005,6 +1005,36 @@ input[type='checkbox'] {
 .provider-wizard { width: 100%; }
 .wizard-hint { font-size: var(--fs-body); color: var(--muted); margin: 0 0 18px; line-height: 1.5; }
 .wizard-error { color: var(--deny-text); }
+// The steps for filling a field in, folded under it until asked for.
+.field-guide {
+  margin-top: 4px;
+  font-size: var(--fs-body);
+  line-height: 1.5;
+  color: var(--muted);
+
+  summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: var(--control-h);
+    list-style: none;
+    cursor: pointer;
+    transition: color var(--dur-1) var(--ease-out);
+
+    &::-webkit-details-marker { display: none; }
+    &:hover { color: var(--text); }
+  }
+
+  &[open] .field-guide-chev { transform: rotate(90deg); }
+}
+.field-guide-chev { flex-shrink: 0; transition: transform var(--dur-2) var(--ease-out); }
+.field-guide-body {
+  padding: 12px;
+  background: var(--surface);
+
+  ol { margin: 0; padding-left: 20px; }
+  p { margin: 8px 0 0; }
+}
 // A code the user must type into another app: a display number, read at a glance.
 .setup-code {
   display: inline-block;

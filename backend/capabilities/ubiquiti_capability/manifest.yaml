@@ -40,7 +40,18 @@ fields:
     type: password
     required: false
     show_when: {auth_method: "ui_account"}
-    guide_url: "https://chalie.ai/guide/smart-home/unifi/"
+    guide:
+      steps:
+        - 'Sign in at account.ui.com and open "Security".'
+        - 'Click "Click here to make changes in Security settings", type your password again, then click "Unlock".'
+        - 'Click "Add New", then choose "App authentication".'
+        - 'UI.com shows a QR code. Below it, click "Enter code manually": the setup key appears as text, with a "Copy" button. On a phone, this button reads "Set Up In App" instead.'
+        - 'Paste the key into the "Authenticator setup key" field in Chalie. Add the same key to your own authenticator app too: scan the QR code with the app, or paste the key into it.'
+        - 'Your authenticator app now shows a 6-digit code. Type it into UI.com to finish. UI.com doesn''t save the new method until you do, and pressing "Cancel" throws it away.'
+        - 'Set "App authentication" as your primary method. Otherwise UI.com may send you an email or a phone prompt each time Chalie signs in.'
+      notes:
+        - 'Then press "Connect" in Chalie.'
+        - "Keep the key until Chalie has connected. UI.com never shows it again. Save it somewhere safe, such as a password manager: anyone who has it can make codes for your account."
   - name: site
     label: Site Name
     type: text

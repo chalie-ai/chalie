@@ -30,8 +30,8 @@ export interface CapabilityField {
   options?: CapabilityFieldOption[];
   /** Each named field's value, or any of a list of values, that shows this field. */
   show_when?: Record<string, unknown>;
-  /** A web page with the steps for filling this field in. */
-  guide_url?: string;
+  /** Plain-text steps for filling this field in, then any notes that follow them. */
+  guide?: { steps: string[]; notes?: string[] };
 }
 
 export interface Capability {
