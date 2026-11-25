@@ -25,16 +25,15 @@ from .response import Response
 
 class ThreadSummary(Response):
     """One collapsed feed row: the thread's id, last-activity timestamp, opener
-    preview, row count, one-sentence gist, and whether the turn is still
-    working. The internal recency sort key (the latest transcript row id)
-    drives ordering server-side and is not exposed."""
+    preview, row count and one-sentence gist. The internal recency sort key
+    (the latest transcript row id) drives ordering server-side and is not
+    exposed."""
 
     turn_id: int | None = None
     last_activity_at: str | None = None
     preview: str
     row_count: int
     gist: str | None = None
-    working: bool = False
     type: str
 
 

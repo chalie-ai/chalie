@@ -227,10 +227,8 @@ class Transcript(Model):
         ``preview`` (first row's content, truncated). Legacy NULL-turn_id rows
         each form their own singleton thread via ``_TURN_KEY``. A non-empty
         ``query`` restricts the page to threads with a matching user-role row.
-        Whether a thread is still working is not a transcript fact: it is read
-        from its executions (``TurnExecution.open_turn``). Page-position facts
-        (total, has-more) come from :meth:`count_turns` — the one authority —
-        so this returns the page and nothing else."""
+        Page-position facts (total, has-more) come from :meth:`count_turns` —
+        the one authority — so this returns the page and nothing else."""
         role_filter = "".join(" AND role != ?" for _ in exclude_roles)
         having, having_params = cls._thread_query_filter(query)
         conn = cls._bound_connection()
