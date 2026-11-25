@@ -13,17 +13,3 @@
 
 /* Body scroll-lock — toggled as a class from script, never via .style. */
 .no-scroll { overflow: hidden; }
-
-/* ── Layout primitives ─────────────────────────────────────────────────── */
-.page-container {
-  max-width: 640px;
-  margin-inline: auto;
-  margin-block: var(--space-lg);
-  padding-inline: var(--space-md);
-}
-
-.action-row {
-  display: flex;
-  gap: var(--space-sm);
-  margin-top: var(--space-md);
-}

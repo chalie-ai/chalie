@@ -43,7 +43,6 @@ const { fakeWs, sendMock, wsCallbacks } = vi.hoisted(() => {
       onConnect: (cb: () => void) => { wsCallbacks.onConnect = cb; },
       onDisconnect: (cb: () => void) => { wsCallbacks.onDisconnect = cb; },
       onDrift: () => { /* not under test */ },
-      onAny: () => { /* not under test */ },
       connect: () => { /* not under test */ },
     },
   };
@@ -52,7 +51,6 @@ const { fakeWs, sendMock, wsCallbacks } = vi.hoisted(() => {
 vi.mock('@chalie/shared', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@chalie/shared')>()),
   getWebSocket: () => fakeWs,
-  useConnectionStore: () => ({ setConnected: () => { /* not under test */ } }),
   getHost: () => '',
 }));
 

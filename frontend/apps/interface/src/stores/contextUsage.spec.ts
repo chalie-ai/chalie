@@ -23,7 +23,6 @@ vi.mock('@chalie/shared', () => ({
   getWebSocket: () => ({}),
   ConfigType: { USER: 'user', SCHEDULED: 'scheduled' },
   AuthError: class extends Error {},
-  useConnectionStore: () => ({ setConnected: () => { /* unused */ } }),
 }));
 
 import { dispatchDrift, registerSessionHooks } from '../utils/driftDispatcher';

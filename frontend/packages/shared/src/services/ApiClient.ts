@@ -30,11 +30,12 @@ export interface RequestOpts {
 export type AuthErrorHandler = () => void;
 
 /**
- * Default auth-error handler: hard-navigate to /login/ with the current
- * path+query as `next`. Idempotency lives in the client's `_authErrorFired`
- * latch, so this handler is pure navigation.
+ * Hard-navigate to /login/ with the current path+query as `next`, so signing in
+ * brings the user back. Pure navigation: a caller that can fire more than once
+ * keeps its own latch, as the client does with `_authErrorFired` for its
+ * default auth-error handler.
  */
-function redirectToLogin(): void {
+export function redirectToLogin(): void {
   const next = window.location.pathname + window.location.search;
   window.location.replace('/login/?next=' + encodeURIComponent(next));
 }
@@ -161,12 +162,6 @@ export class ApiClient {
     return fetch(this.buildUrl('/health'), { credentials: 'same-origin' })
       .then((r) => r.json())
       .catch(() => null);
-  }
-  /** Never rejects. */
-  ready(): Promise<{ ready: boolean }> {
-    return fetch(this.buildUrl('/ready'), { credentials: 'same-origin' })
-      .then((r) => (r.ok ? r.json() : { ready: false }))
-      .catch(() => ({ ready: false }));
   }
   getSetting(key: string): Promise<{ key: string; value: string | null }> {
     return this.get(`/api/system/settings/${encodeURIComponent(key)}`);

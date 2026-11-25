@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted } from 'vue';
-import { useTheme } from '@chalie/shared';
+import { redirectToLogin, useTheme } from '@chalie/shared';
 import { useSessionStore } from './stores/session';
 import { useVoiceStore } from './stores/voice';
 import { useBrowserStore } from './stores/browser';
@@ -37,14 +37,12 @@ function onSearchHotkey(e: KeyboardEvent): void {
 }
 
 // Single auth-failure redirect — wired to BOTH the session store (turn-level
-// auth_failed) and the heartbeat (periodic /auth/status). Mirrors the router gate.
+// auth_failed) and the heartbeat (periodic /auth/status).
 let _authRedirected = false;
 function handleAuthFailure(): void {
   if (_authRedirected) return;
   _authRedirected = true;
-  window.location.replace(
-    '/login/?next=' + encodeURIComponent(window.location.pathname + window.location.search),
-  );
+  redirectToLogin();
 }
 
 onMounted(() => {

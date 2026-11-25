@@ -61,7 +61,6 @@ const { fakeWs, wsCallbacks } = vi.hoisted(() => {
       onConnect: (cb: () => void): void => { wsCallbacks.onConnect = cb; },
       onDisconnect: (cb: () => void): void => { wsCallbacks.onDisconnect = cb; },
       onDrift: (cb: (data: unknown) => void): void => { wsCallbacks.onDrift = cb; },
-      onAny: (): void => { /* not under test */ },
       connect: (): void => { /* not under test */ },
     },
   };

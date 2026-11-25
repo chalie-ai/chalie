@@ -154,7 +154,6 @@ export class WebSocketService {
   private readonly maxReconnectDelay = 30000;
   private reconnectTimer: Timer | null = null;
   private driftHandler: ((data: WsPushEvent) => void) | null = null;
-  private anyHandler: ((data: WsInboundEvent) => void) | null = null;
   private disconnectHandler: (() => void) | null = null;
   private connectHandler: (() => void) | null = null;
   private connected = false;
@@ -188,9 +187,6 @@ export class WebSocketService {
 
   onDrift(handler: (data: WsPushEvent) => void): void {
     this.driftHandler = handler;
-  }
-  onAny(handler: (data: WsInboundEvent) => void): void {
-    this.anyHandler = handler;
   }
   onDisconnect(handler: () => void): void {
     this.disconnectHandler = handler;
@@ -399,13 +395,6 @@ export class WebSocketService {
   }
 
   private dispatch(data: WsInboundEvent): void {
-    if (this.anyHandler) {
-      try {
-        this.anyHandler(data);
-      } catch {
-        /* never break the WS pipe */
-      }
-    }
     if (data.type === 'ping') {
       if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ type: 'pong' }));
       return;

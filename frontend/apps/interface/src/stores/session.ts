@@ -1,15 +1,10 @@
 /**
  * Session store — WS coordinator + turn send/stop orchestration.
  *
- * Single WS owner rule: ONLY this store may touch WebSocketService's
- * send/onDrift handlers, and it is the
- * only place `connect()` is called for the interface app. `onConnect` /
- * `onDisconnect` / `onAny` are NOT exclusive to this store — `@chalie/shared`'s
- * `useWebSocket()` composable also registers them, but only to drive the
- * connection-status pill (`useConnectionStore`); it never touches `onDrift`
- * or the send surface. Drift routing itself lives in
- * `utils/driftDispatcher.ts` (see `init()` below) — this store no longer
- * inspects WS payload shapes at all.
+ * Single WS owner rule: in the interface app ONLY this store registers
+ * WebSocketService's handlers, uses its send surface and calls `connect()`.
+ * Drift routing itself lives in `utils/driftDispatcher.ts` (see `init()`
+ * below) — this store no longer inspects WS payload shapes at all.
  *
  * D3 — busy/working state for every independent conversation lane (each
  * thread, plus the spine) lives as a DOM attribute (`data-working`, see
@@ -20,7 +15,7 @@
  */
 import { defineStore } from 'pinia';
 import type { DelegateRef, WsPushEvent } from '@chalie/shared';
-import { AuthError, ConfigType, getWebSocket, useAsksStore, useConnectionStore } from '@chalie/shared';
+import { AuthError, ConfigType, getWebSocket, useAsksStore } from '@chalie/shared';
 import { extractText } from '../composables/useMarkup';
 import { conversation as convoApi } from '../api/conversation';
 import { dispatchDrift, refetchDelegate, registerSessionHooks } from '../utils/driftDispatcher';
@@ -152,7 +147,6 @@ export const useSessionStore = defineStore('session', {
       _initialized = true;
 
       const ws = getWebSocket();
-      const conn = useConnectionStore();
 
       registerSessionHooks({
         releasePendingSend: (turnId, type) => this._releasePendingSend(turnId, type),
@@ -165,7 +159,6 @@ export const useSessionStore = defineStore('session', {
       registerPanelView(() => ({ turnId: this.panelThreadId, type: this.panelType }));
 
       ws.onConnect(() => {
-        conn.setConnected(true);
         void this._reconcileWorking();
         void this._refreshRunningSubagents();
         // Open asks outlive the socket (the backend keeps waiting; the WS
@@ -188,7 +181,6 @@ export const useSessionStore = defineStore('session', {
       });
 
       ws.onDisconnect(() => {
-        conn.setConnected(false);
         // A mid-turn drop strands spinners: the terminal `turn_execution` frame
         // lands on the dead socket and is never resent. Snapshot what was in
         // flight FIRST (liveWorkingKeys covers turns whose 'working' frame
