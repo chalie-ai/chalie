@@ -81,7 +81,8 @@ dependencies = [
     "typing-extensions>=4.4.0",
     # watchdog provides FSEvents (macOS) and inotify (Linux) file-change events
     # for the FileIndexService daemon (backend/workers/file_index_worker.py).
-    "watchdog>=4.0.0",
+    # 4.0.2 is the first release whose macOS observer accepts an event filter.
+    "watchdog>=4.0.2",
 ]
 
 [project.optional-dependencies]

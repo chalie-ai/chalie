@@ -36,7 +36,14 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
-from watchdog.observers import Observer
+from watchdog.events import (
+    FileCreatedEvent,
+    FileDeletedEvent,
+    FileModifiedEvent,
+    FileMovedEvent,
+    FileSystemEvent,
+    FileSystemEventHandler,
+)
 from watchdog.observers.api import BaseObserver
 
 from services.file_index_service import (
@@ -45,7 +52,7 @@ from services.file_index_service import (
     _is_in_skip_subtree,
 )
 from services.file_mapper_service import FileMapperService
-from workers.file_index_worker import _FileIndexHandler
+from workers.file_index_worker import _start_observer
 
 pytestmark = pytest.mark.unit
 
@@ -140,10 +147,10 @@ def index_db_path(tmp_path: Path) -> str:
     return str(tmp_path / "file_index_test.sqlite")
 
 
-def _start_observer(handler: _FileIndexHandler, root: Path) -> BaseObserver:
-    observer = Observer()
-    observer.schedule(handler, str(root), recursive=True)
-    observer.start()
+def _start_worker_observer(service: FileIndexService) -> BaseObserver:
+    """The worker's own observer and handler, scheduled exactly as it runs."""
+    observer = _start_observer(service)
+    assert observer is not None, "the worker's observer failed to start"
     return observer
 
 
@@ -159,13 +166,13 @@ def test_live_observer_tracks_create_edit_delete(scan_root: Path, index_db_path:
     of creation; editing it makes the new content searchable and the old
     content stop matching; deleting it removes it from search entirely.
 
-    Drives a REAL watchdog Observer + the REAL _FileIndexHandler scheduled
-    exactly as workers/file_index_worker.py wires them (minus the 30s startup
-    delay and hourly reconcile loop, neither of which affects event dispatch).
+    Drives the worker's REAL watchdog Observer and handler, started by the
+    worker's own start function (minus the 30s startup delay and hourly
+    reconcile loop, neither of which affects event dispatch).
     """
     service = FileIndexService(scan_root=str(scan_root), db_path=index_db_path)
     target = scan_root / "notes.md"
-    observer = _start_observer(_FileIndexHandler(service), scan_root)
+    observer = _start_worker_observer(service)
 
     try:
         # Create -> searchable by a word in its content.
@@ -188,6 +195,73 @@ def test_live_observer_tracks_create_edit_delete(scan_root: Path, index_db_path:
         )
     finally:
         _stop_observer(observer)
+
+
+class _Recorder(FileSystemEventHandler):
+    """Keeps every event its watch delivers, in order."""
+
+    def __init__(self) -> None:
+        self.events: list[FileSystemEvent] = []
+
+    def on_any_event(self, event: FileSystemEvent) -> None:
+        self.events.append(event)
+
+    def delivered(self, kind: type[FileSystemEvent], path: Path) -> bool:
+        return any(
+            type(e) is kind and os.fsdecode(e.src_path) == str(path)
+            for e in self.events
+        )
+
+
+def test_the_watch_delivers_only_the_file_events_the_handler_acts_on(
+    scan_root: Path, index_db_path: str
+) -> None:
+    """The worker's watch hands its handler file creates, edits, moves and
+    deletes, and nothing else: no directory events, and no open or close
+    events for a file that is only read. Those extra events are what
+    overflowed the inotify queue while the reconcile walk listed every folder.
+
+    A recorder is attached to the worker's own watch through watchdog's
+    public add_handler_for_watch, so it is given exactly what the worker's
+    handler is given. Each step waits for its own file event; the last one
+    waits for a file created after the folder is removed, so every directory
+    event the earlier steps could raise has been dispatched by then.
+    """
+    service = FileIndexService(scan_root=str(scan_root), db_path=index_db_path)
+    observer = _start_worker_observer(service)
+    recorder = _Recorder()
+    (watch,) = [emitter.watch for emitter in observer.emitters]
+    observer.add_handler_for_watch(recorder, watch)
+
+    folder = scan_root / "folder"
+    note = folder / "note.md"
+    renamed = folder / "renamed.md"
+    last = scan_root / "last.md"
+    try:
+        folder.mkdir()
+        note.write_text("first")
+        assert _poll_until(lambda: recorder.delivered(FileCreatedEvent, note))
+
+        note.read_text()
+        note.write_text("second")
+        assert _poll_until(lambda: recorder.delivered(FileModifiedEvent, note))
+
+        note.rename(renamed)
+        assert _poll_until(lambda: recorder.delivered(FileMovedEvent, note))
+
+        renamed.unlink()
+        assert _poll_until(lambda: recorder.delivered(FileDeletedEvent, renamed))
+
+        folder.rmdir()
+        last.write_text("last")
+        assert _poll_until(lambda: recorder.delivered(FileCreatedEvent, last))
+    finally:
+        _stop_observer(observer)
+
+    unexpected = {type(e) for e in recorder.events} - {
+        FileCreatedEvent, FileModifiedEvent, FileMovedEvent, FileDeletedEvent,
+    }
+    assert not unexpected, f"the watch delivered events the handler never acts on: {unexpected}"
 
 
 def test_index_file_extracts_pdf_text_directly(tmp_path: Path) -> None:
@@ -251,7 +325,7 @@ def test_concurrent_observer_and_reconcile_do_not_corrupt_the_index(
     final on-disk state.
     """
     service = FileIndexService(scan_root=str(scan_root), db_path=index_db_path)
-    observer = _start_observer(_FileIndexHandler(service), scan_root)
+    observer = _start_worker_observer(service)
 
     watched = scan_root / "storm.md"
     stable = scan_root / "stable.md"

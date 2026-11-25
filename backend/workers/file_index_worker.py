@@ -8,7 +8,14 @@ import logging
 import os
 import time
 
-from watchdog.events import FileSystemEvent, FileSystemEventHandler
+from watchdog.events import (
+    FileCreatedEvent,
+    FileDeletedEvent,
+    FileModifiedEvent,
+    FileMovedEvent,
+    FileSystemEvent,
+    FileSystemEventHandler,
+)
 from watchdog.observers import Observer
 from watchdog.observers.api import BaseObserver
 
@@ -21,15 +28,17 @@ RECONCILE_INTERVAL = 3600  # Re-run reconcile() every hour as the truth path
 
 
 class _FileIndexHandler(FileSystemEventHandler):
-    """Dispatch watchdog events to FileIndexService methods."""
+    """Dispatch watchdog file events to FileIndexService methods.
+
+    The watch is scheduled for file events only, so no directory event
+    reaches these methods.
+    """
 
     def __init__(self, service: FileIndexService) -> None:
         self._service = service
 
     def on_created(self, event: FileSystemEvent) -> None:
         """A new file was created."""
-        if event.is_directory:
-            return
         path = os.fsdecode(event.src_path)
         try:
             if self._service.should_index(path):
@@ -39,8 +48,6 @@ class _FileIndexHandler(FileSystemEventHandler):
 
     def on_modified(self, event: FileSystemEvent) -> None:
         """A file was modified."""
-        if event.is_directory:
-            return
         path = os.fsdecode(event.src_path)
         try:
             if self._service.should_index(path):
@@ -50,8 +57,6 @@ class _FileIndexHandler(FileSystemEventHandler):
 
     def on_deleted(self, event: FileSystemEvent) -> None:
         """A file was deleted."""
-        if event.is_directory:
-            return
         path = os.fsdecode(event.src_path)
         try:
             self._service.remove_file(path)
@@ -60,8 +65,6 @@ class _FileIndexHandler(FileSystemEventHandler):
 
     def on_moved(self, event: FileSystemEvent) -> None:
         """A file was moved or renamed."""
-        if event.is_directory:
-            return
         src = os.fsdecode(event.src_path)
         dest = os.fsdecode(event.dest_path)
         try:
@@ -78,11 +81,17 @@ def _start_observer(service: FileIndexService) -> BaseObserver | None:
 
     Failure (e.g. inotify watch limits on Linux) is logged loudly, once; the
     hourly reconcile loop still converges the index without live events.
+
+    The watch asks only for the file events the handler acts on. Left at the
+    default, inotify also queues an open and a close event for every folder
+    the reconcile walk lists and every file it reads, which overflows its
+    queue on Linux.
     """
     try:
         observer = Observer()
         observer.schedule(
             _FileIndexHandler(service), service.scan_root, recursive=True,
+            event_filter=[FileCreatedEvent, FileModifiedEvent, FileDeletedEvent, FileMovedEvent],
         )
         observer.start()
     except Exception as e:
