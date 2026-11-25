@@ -110,7 +110,9 @@ def _console(url: str, *, verify_ssl: bool) -> rest.Console:
         username="admin",
         password="not-a-real-password",
         verify_ssl=verify_ssl,
-        stored=lambda: rest.Session(cookie="TOKEN=t", csrf="c"),
+        stored=lambda: rest.Session(
+            url=url, username="admin", cookie="TOKEN=t", csrf="c"
+        ),
         keep=lambda session: None,
         origin=None,
         should_stop=None,

@@ -48,10 +48,17 @@ _sign_in_lock = threading.Lock()
 
 
 class Session(NamedTuple):
-    """A signed-in console session: the cookie header and the CSRF token sent with every call."""
+    """A signed-in console session: the console address and username it was made
+    with, and the cookie header and the CSRF token sent with every call."""
 
+    url: str
+    username: str
     cookie: str
     csrf: str
+
+    def made_with(self, url: str, username: str) -> bool:
+        """Whether this session came from signing in to *url* as *username*."""
+        return (self.url, self.username) == (url, username)
 
 
 @dataclass(frozen=True)
@@ -72,6 +79,12 @@ class Console:
     keep: Callable[[Session], None]
     origin: dict[str, object] | None
     should_stop: Callable[[], bool] | None
+
+    def kept_session(self) -> Session | None:
+        """The stored session when it was made with this console and username, else ``None``:
+        a session is never sent to another console or used for another account."""
+        session = self.stored()
+        return session if session is not None and session.made_with(self.url, self.username) else None
 
 
 # ── Sign-in ──────────────────────────────────────────────────────────────────
@@ -135,6 +148,8 @@ def _log_in(console: Console) -> Session:
         raise UnifiCallFailed(_TOO_MANY)
     resp.raise_for_status()
     session = Session(
+        url=console.url,
+        username=console.username,
         cookie="; ".join(f"{c.name}={c.value}" for c in resp.cookies),
         csrf=resp.headers.get("x-csrf-token", ""),
     )
@@ -149,7 +164,7 @@ def _sign_in(console: Console, stale: Session | None) -> Session:
         if console.should_stop is not None and console.should_stop():
             raise UnifiCallFailed(_CANCELLED)
     try:
-        latest = console.stored()
+        latest = console.kept_session()
         if latest is not None and latest != stale:
             return latest
         return _log_in(console)
@@ -201,7 +216,7 @@ def _call(
 def _request(
     method: str, console: Console, path: str, body: dict[str, object] | None = None,
 ) -> requests.Response:
-    session = console.stored()
+    session = console.kept_session()
     if session is None:
         session = _sign_in(console, None)
     resp = _call(method, console, path, session, body)

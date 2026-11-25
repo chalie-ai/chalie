@@ -178,10 +178,10 @@ class AbstractCapability(ABC):
             )
             return None
 
-    def delete_credentials(self) -> None:
-        """Remove ALL ``tool_configs`` rows associated with this capability.
+    def delete_credentials(self, *, keep: tuple[str, ...] = ()) -> None:
+        """Remove this capability's ``tool_configs`` rows, all but the *keep* keys.
 
-        This is equivalent to calling
+        With nothing kept this removes ALL of them; it is equivalent to calling
         :meth:`~models.tool_config.ToolConfig.delete_all`
         with ``self.get_id()`` as the tool name.
 
@@ -189,7 +189,7 @@ class AbstractCapability(ABC):
             None
         """
         try:
-            ToolConfig.delete_all(self.get_id())
+            ToolConfig.delete_all(self.get_id(), keep=keep)
         except Exception as exc:
             logger.error(
                 "[%s] delete_credentials() failed: %s",

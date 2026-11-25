@@ -311,14 +311,18 @@ def client(
 
 
 def set_up_unifi(
-    client: FlaskClient, url: str, *, verify_ssl: bool = False
+    client: FlaskClient,
+    url: str,
+    *,
+    verify_ssl: bool = False,
+    username: str = USERNAME,
 ) -> TestResponse:
     """Save the UniFi form as the Brain does, and wait out the first sync it starts."""
     resp = client.post(
         "/api/capabilities/setup/ubiquiti",
         json={
             "url": url,
-            "username": USERNAME,
+            "username": username,
             "password": PASSWORD,
             "site": "default",
             "verify_ssl": verify_ssl,

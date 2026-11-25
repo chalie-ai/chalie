@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import TYPE_CHECKING, cast
 
@@ -21,8 +22,7 @@ _K_USERNAME = "ubiquiti:username"
 _K_PASSWORD = "ubiquiti:password"
 _K_SITE = "ubiquiti:site"
 _K_VERIFY_SSL = "ubiquiti:verify_ssl"
-_K_SESSION_COOKIE = "ubiquiti:session_cookie"
-_K_SESSION_CSRF = "ubiquiti:session_csrf"
+_K_SESSION = "ubiquiti:session"
 
 
 class UbiquitiCapability(AbstractCapability):
@@ -61,8 +61,7 @@ class UbiquitiCapability(AbstractCapability):
 
     def _keep_session(self, session: rest.Session) -> None:
         """Store a fresh console session over the one it replaces."""
-        self.store_credential(_K_SESSION_COOKIE, session.cookie)
-        self.store_credential(_K_SESSION_CSRF, session.csrf)
+        self.store_credential(_K_SESSION, json.dumps(session._asdict()))
         self._session = session
 
     def _require_mac_cmd(self, params: dict[str, object], action_name: str) -> dict[str, object] | None:
@@ -94,6 +93,11 @@ class UbiquitiCapability(AbstractCapability):
             url, site, verify_ssl, credentials.get("verify_ssl"),
         )
 
+        # A kept session belongs to the console and username it was made with.
+        if self._session is not None and not self._session.made_with(url, username):
+            self.delete_credentials()
+            self._session = None
+
         self.store_credential(_K_URL, url)
         self.store_credential(_K_USERNAME, username)
         self.store_credential(_K_PASSWORD, password)
@@ -113,16 +117,17 @@ class UbiquitiCapability(AbstractCapability):
         self._password = self.load_credential(_K_PASSWORD) or ""
         self._site = self.load_credential(_K_SITE) or "default"
         self._verify_ssl = self.load_credential(_K_VERIFY_SSL) == "1"
-        cookie = self.load_credential(_K_SESSION_COOKIE)
-        csrf = self.load_credential(_K_SESSION_CSRF)
-        self._session = None if cookie is None or csrf is None else rest.Session(cookie, csrf)
+        session = self.load_credential(_K_SESSION)
+        self._session = None if session is None else rest.Session(**json.loads(session))
         self._connected = bool(self._url and self._username and self._password)
         return self._connected
 
     def disconnect(self) -> None:
+        """Forget the setup but keep the console session, so setting up the same
+        console and username again needs no new sign-in."""
         self._connected = False
-        self.delete_credentials()
-        logger.info("[ubiquiti] Disconnected and credentials removed.")
+        self.delete_credentials(keep=(_K_SESSION,))
+        logger.info("[ubiquiti] Disconnected; setup removed, console session kept.")
 
     # ── Cognitive pipeline ───────────────────────────────────────────
 

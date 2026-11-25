@@ -563,6 +563,122 @@ def test_two_calls_with_no_session_share_one_sign_in_and_one_code(
     ]
 
 
+# ── Disconnecting and setting up again ───────────────────────────────────────
+
+# Disconnect forgets the setup and keeps the signed-in session; a setup of the
+# same console and username uses it again, and any other setup starts without it.
+
+_SESSION_KEY = "ubiquiti:session"
+
+
+def disconnect(client: FlaskClient) -> int:
+    """The user presses Disconnect on the UniFi card; the reply's status."""
+    return client.post("/api/capabilities/disconnect/ubiquiti").status_code
+
+
+def saved_keys(db: sqlite3.Connection) -> list[str]:
+    """Every UniFi row in the credential store, by key."""
+    return sorted(
+        row["config_key"]
+        for row in db.execute(
+            "SELECT config_key FROM tool_configs WHERE tool_name = 'ubiquiti'"
+        ).fetchall()
+    )
+
+
+def test_after_a_disconnect_the_same_console_and_username_are_set_up_again_with_no_new_sign_in(
+    client: FlaskClient,
+    console: Console,
+    chat_provider: sqlite3.Connection,
+) -> None:
+    list_devices(client, typed=CODE)
+
+    assert disconnect(client) == 204
+    assert saved_keys(chat_provider) == [_SESSION_KEY]
+    assert set_up_unifi(client, console.url).status_code == 204
+    again = list_devices(client)
+    assert of_type(again.ui, "ask_opened") == []
+    assert console.requests()[3:] == [(*_DEVICES, 200)]
+    assert reads_devices(chat_provider)
+
+    # As after a restart between the disconnect and the new setup.
+    assert disconnect(client) == 204
+    capabilities._capabilities_cache = None
+    assert not capabilities.load_capabilities()["ubiquiti"].connect()
+    assert set_up_unifi(client, console.url).status_code == 204
+    after_restart = list_devices(client)
+    assert of_type(after_restart.ui, "ask_opened") == []
+    assert console.requests()[4:] == [(*_DEVICES, 200)]
+    assert reads_devices(chat_provider)
+
+
+@pytest.mark.parametrize(
+    "disconnect_first", [True, False], ids=["after a disconnect", "by an edit"]
+)
+def test_setting_up_another_console_starts_with_no_session(
+    client: FlaskClient,
+    console: Console,
+    chat_provider: sqlite3.Connection,
+    disconnect_first: bool,
+) -> None:
+    list_devices(client, typed=CODE)
+    if disconnect_first:
+        assert disconnect(client) == 204
+
+    with serve(UnifiHandler, None) as other:
+        other.code = CODE
+        assert set_up_unifi(client, other.url).status_code == 204
+        assert _SESSION_KEY not in saved_keys(chat_provider)
+        list_devices(client, typed=CODE)
+        assert other.requests() == [(*_SIGN_IN, 499), (*_SIGN_IN, 200), (*_DEVICES, 200)]
+    assert reads_devices(chat_provider)
+    assert console.requests() == [(*_SIGN_IN, 499), (*_SIGN_IN, 200), (*_DEVICES, 200)]
+
+
+@pytest.mark.parametrize(
+    "disconnect_first", [True, False], ids=["after a disconnect", "by an edit"]
+)
+def test_setting_up_another_username_on_the_same_console_starts_with_no_session(
+    client: FlaskClient,
+    console: Console,
+    chat_provider: sqlite3.Connection,
+    disconnect_first: bool,
+) -> None:
+    list_devices(client, typed=CODE)
+    if disconnect_first:
+        assert disconnect(client) == 204
+
+    assert set_up_unifi(client, console.url, username="someone-else").status_code == 204
+    assert _SESSION_KEY not in saved_keys(chat_provider)
+    turn = list_devices(client)
+
+    # Signed in afresh as the new username, which this console does not know.
+    assert of_type(turn.ui, "ask_opened") == []
+    state, lines = model_read(chat_provider)
+    assert state == "error" and REJECTED in lines, lines
+    assert console.requests()[3:] == [(*_SIGN_IN, 403)]
+
+
+def test_a_session_signed_in_while_the_setup_moves_to_another_console_is_never_sent_there(
+    client: FlaskClient,
+    console: Console,
+    chat_provider: sqlite3.Connection,
+) -> None:
+    with serve(UnifiHandler, None) as other:
+        other.code = CODE
+        with listing_devices() as turn:
+            ask_id = turn.ask_id()
+            assert set_up_unifi(client, other.url).status_code == 204
+            assert answer(client, ask_id, CODE) == 204
+        # The waiting call finishes on the console it signed in to.
+        assert reads_devices(chat_provider)
+        assert console.requests() == [(*_SIGN_IN, 499), (*_SIGN_IN, 200), (*_DEVICES, 200)]
+
+        list_devices(client, typed=CODE)
+        assert other.requests() == [(*_SIGN_IN, 499), (*_SIGN_IN, 200), (*_DEVICES, 200)]
+    assert reads_devices(chat_provider)
+
+
 # ── Secrets ──────────────────────────────────────────────────────────────────
 
 
@@ -587,7 +703,7 @@ def test_the_code_and_the_half_made_sign_in_are_never_written_down(
         ).fetchall()
     ]
     # The session the console handed out is what was kept.
-    assert "TOKEN=session-1" in stored
+    assert any("TOKEN=session-1" in value for value in stored)
     written = [
         *(logging.Formatter().format(record) for record in caplog.records),
         json.dumps(turn.ui.frames),
