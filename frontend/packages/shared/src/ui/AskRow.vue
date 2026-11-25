@@ -1,19 +1,17 @@
 <!-- One open ask as a row: where it came from, what it asks, how long it has
-     waited. A permission is answered right here (Deny/Allow), and so are a
-     question, whose answers sit under the row, and a sign-in code ask (its
-     code typed in); a hand-off is answered with Done on its browser tab. Open
-     is the caller's to act on: a hand-off always has one (its tab), a
-     permission, a question or a code ask only when it has a turn the user can
-     open. -->
+     waited. A permission is answered right here (Deny/Allow), and so is a
+     sign-in code ask (its code typed in); a hand-off is answered with Done on
+     its browser tab. A question has a card of its own (QuestionCard). Open is
+     the caller's to act on: a hand-off always has one (its tab), a permission
+     or a code ask only when it has a turn the user can open. -->
 <script setup lang="ts">
 import { computed } from 'vue';
-import { useAsksStore, type Ask } from '../stores/asks';
+import { useAsksStore, type RowAsk } from '../stores/asks';
 import { actionLabel, CODE_ASK_WORDS, originLabel, waitedSeconds } from '../utils/askLabels';
 import AskCodeEntry from './AskCodeEntry.vue';
-import QuestionControls from './QuestionControls.vue';
 
 const props = defineProps<{
-  ask: Ask;
+  ask: RowAsk;
   /** The clock the "waiting for you" age is read against. */
   now: number;
 }>();
@@ -24,7 +22,6 @@ const asks = useAsksStore();
 
 const label = computed(() => {
   if (props.ask.kind === 'permission') return props.ask.data.summary || actionLabel(props.ask.data.action_id);
-  if (props.ask.kind === 'question') return 'Chalie has a question';
   if (props.ask.kind === 'code') return CODE_ASK_WORDS[props.ask.data.service].heading;
   return props.ask.data.reason || 'Chalie needs you in the browser';
 });
@@ -60,7 +57,6 @@ const label = computed(() => {
       <span v-else-if="ask.kind === 'handoff'" class="activity__ask">Browser</span>
       <button v-if="ask.kind === 'handoff' || ask.data.origin" type="button" class="activity__stop" @click="emit('open')">Open</button>
     </span>
-    <QuestionControls v-if="ask.kind === 'question'" :ask="ask" />
   </div>
 </template>
 

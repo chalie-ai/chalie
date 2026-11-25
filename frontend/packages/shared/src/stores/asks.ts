@@ -1,6 +1,6 @@
 /**
  * Asks store — everything Chalie is waiting on the user to answer: a
- * permission ask (Deny/Allow), a question (pick an answer, or type one), a
+ * permission ask (Deny/Allow), a question (pick an answer, type one, or skip it), a
  * sign-in code ask (the code typed on its row) or a browser hand-off (Done on
  * its tab).
  *
@@ -13,14 +13,16 @@
  * overlapping is harmless. An ask without an origin (a run no chat turn
  * shows) is kept: its row has no origin prefix and no Open.
  *
- * In the chat app a permission ask, a question or a code ask is shown and
- * answered on the live activity line of its origin's turn while that turn works. Each mounted
- * live line calls `markShown(askId)` on mount and `unmarkShown(askId)` on unmount — a
- * count, since the same turn can render twice, on the main chat and in the
- * thread panel — and the input dock lists `offScreen`, where each ask can be
- * answered too: the queued asks no mounted line is showing (a scheduled task,
- * a thread whose panel is closed, or a subagent asking after the turn that
- * started it ended).
+ * In the chat app a permission ask or a code ask is shown and answered on
+ * the live activity line of its origin's turn while that turn works, and a
+ * question waits there too. Each mounted live line calls `markShown(askId)` on
+ * mount and `unmarkShown(askId)` on unmount — a count, since the same turn can
+ * render twice, on the main chat and in the thread panel — and the input dock
+ * lists `offScreen`, where each ask can be answered too: the permission and
+ * code asks no mounted line is showing (a scheduled task, a thread whose panel
+ * is closed, or a subagent asking after the turn that started it ended).
+ * Every open question is answered on one card, `questions` paged through it,
+ * above the input dock in the chat and pinned to the Brain's bottom edge.
  */
 import { defineStore } from 'pinia';
 import { api } from '../composables/useApiClient';
@@ -112,8 +114,11 @@ export interface CodeAsk extends AskBase {
 /** One open ask — an `ask_opened` frame or open-asks listing item as kept here. */
 export type Ask = PermissionAsk | QuestionAsk | HandoffAsk | CodeAsk;
 
-/** An ask answered on its own row: a permission, a question or a sign-in code. */
+/** An ask a turn's live line waits on: a permission, a question or a sign-in code. */
 export type InlineAsk = PermissionAsk | QuestionAsk | CodeAsk;
+
+/** An ask shown as a row of its own: every kind but a question, which has its card. */
+export type RowAsk = PermissionAsk | HandoffAsk | CodeAsk;
 
 interface ListingEnvelope<T> {
   success: true;
@@ -124,8 +129,8 @@ interface ListingEnvelope<T> {
 /**
  * Asks an open-asks read must not bring back, since its listing is a snapshot
  * that can predate their close: each read in flight collects the ids closed
- * while it runs, and `replying` holds the asks whose answer is still on its
- * way to the server.
+ * while it runs, and `replying` holds the asks whose answer or dismissal is
+ * still on its way to the server.
  */
 const closedDuringRead = new Set<Set<string>>();
 const replying = new Set<string>();
@@ -135,9 +140,9 @@ function noteClosed(askId: string): void {
 }
 
 /**
- * How a failed reply is told to the user. This package has no toast, so each
- * app registers its own once at startup; until one does, a failed reply is
- * only logged.
+ * How a failed reply or dismissal is told to the user. This package has no
+ * toast, so each app registers its own once at startup; until one does, a
+ * failure is only logged.
  */
 let reportReplyFailure: (message: string) => void = () => {};
 
@@ -145,10 +150,9 @@ export function registerReplyFailureReporter(report: (message: string) => void):
   reportReplyFailure = report;
 }
 
-/** The server's own words for a failed reply, or a short line for when it sent none. */
-function replyFailureMessage(err: unknown, kind: Ask['kind'] | undefined): string {
-  if (err instanceof HttpError && err.error) return err.error;
-  return kind === 'handoff' ? "Couldn't finish the hand-off" : "Couldn't send your answer";
+/** The server's own words for a failed reply or dismiss, or `fallback` when it sent none. */
+function failureMessage(err: unknown, fallback: string): string {
+  return err instanceof HttpError && err.error ? err.error : fallback;
 }
 
 const idOf = (item: unknown): unknown => (item as { ask_id?: unknown } | null)?.ask_id;
@@ -217,21 +221,32 @@ export const useAsksStore = defineStore('asks', {
     /** ask_id → how many mounted live lines show that ask. */
     shown: {} as Record<string, number>,
     /**
-     * ask_id → what the user has typed as their own answer to a question. Kept
-     * here, not in the row, so it is still there when the row comes back after
-     * an answer fails to send.
+     * ask_id → a question's answer as the user has it so far: the answers
+     * picked on a multi-select question, or their own words as typed. Kept
+     * here, not on the card, so it is still there when the question comes
+     * back after its answer fails to send, or on another screen's card.
      */
-    otherDrafts: {} as Record<string, string>,
+    drafts: {} as Record<string, QuestionReply>,
   }),
 
   getters: {
-    /** The permission asks, questions and code asks — the kinds answered on their own row — in queue order. */
+    /** The permission asks, questions and code asks — the kinds a turn's live line waits on — in queue order. */
     inline(state): InlineAsk[] {
       return state.queue.filter((a): a is InlineAsk => a.kind !== 'handoff');
     },
-    /** The queued asks answered on their own row that no mounted live line is showing, in queue order. */
-    offScreen(state): InlineAsk[] {
-      return this.inline.filter((a) => (state.shown[a.ask_id] ?? 0) <= 0);
+    /** Every open ask but the questions, in queue order. */
+    rows(state): RowAsk[] {
+      return state.queue.filter((a): a is RowAsk => a.kind !== 'question');
+    },
+    /** The open questions, in queue order — the pages of their one card. */
+    questions(state): QuestionAsk[] {
+      return state.queue.filter((a): a is QuestionAsk => a.kind === 'question');
+    },
+    /** The permission asks and code asks no mounted live line is showing, in queue order. */
+    offScreen(state): (PermissionAsk | CodeAsk)[] {
+      return this.rows.filter(
+        (a): a is PermissionAsk | CodeAsk => a.kind !== 'handoff' && (state.shown[a.ask_id] ?? 0) <= 0,
+      );
     },
     handoffs(state): HandoffAsk[] {
       return state.queue.filter((a): a is HandoffAsk => a.kind === 'handoff');
@@ -276,16 +291,16 @@ export const useAsksStore = defineStore('asks', {
       else this.shown[askId] = n;
     },
 
-    /** The user's own answer to a question, as typed so far. */
-    typeOther(askId: string, text: string): void {
-      if (text) this.otherDrafts[askId] = text;
-      else delete this.otherDrafts[askId];
+    /** A question's answer as the user has it so far; none picked or typed clears it. */
+    draft(askId: string, answer: QuestionReply): void {
+      if ('labels' in answer ? answer.labels.length : answer.other) this.drafts[askId] = answer;
+      else delete this.drafts[askId];
     },
 
     /** Drop an ask — answered, cancelled or dismissed, here or elsewhere. No-op if absent. */
     remove(askId: string): void {
       this.queue = this.queue.filter((a) => a.ask_id !== askId);
-      delete this.otherDrafts[askId];
+      delete this.drafts[askId];
       noteClosed(askId);
     },
 
@@ -326,21 +341,38 @@ export const useAsksStore = defineStore('asks', {
      * labels picked or the user's own words, a code ask with the code as
      * typed (sent in the body only, never kept or logged here), a hand-off
      * with null.
-     * Optimistic: the row leaves before the round-trip. A 404 means the ask
-     * was already answered or closed elsewhere (the first reply wins), so it
-     * stays gone quietly. Any other failure is told to the user through the
-     * registered reporter and re-reads the open asks, which brings the row
-     * back only if the ask is still open, with the user's own answer still
-     * typed in it.
      */
     async reply(askId: string, value: boolean | null | QuestionReply | CodeReply): Promise<void> {
       const kind = this.queue.find((a) => a.ask_id === askId)?.kind;
-      const draft = this.otherDrafts[askId];
+      await this.settle(
+        askId,
+        `/api/asks/reply/${encodeURIComponent(askId)}`,
+        { value },
+        kind === 'handoff' ? "Couldn't finish the hand-off" : "Couldn't send your answer",
+      );
+    },
+
+    /** Close a question unanswered — Skip or the close button on its card. */
+    async dismiss(askId: string): Promise<void> {
+      await this.settle(askId, `/api/asks/dismiss/${encodeURIComponent(askId)}`, undefined, "Couldn't skip the question");
+    },
+
+    /**
+     * The one round-trip `reply` and `dismiss` share. Optimistic: the ask
+     * leaves before it. A 404 means the ask was already answered or closed
+     * elsewhere (the first reply wins), so it stays gone quietly. Any other
+     * failure is told to the user through the registered reporter — the
+     * server's reason, else `fallback` — and re-reads the open asks, which
+     * brings the ask back only if it is still open, with a question's answer
+     * still picked or typed in it.
+     */
+    async settle(askId: string, path: string, body: unknown, fallback: string): Promise<void> {
+      const draft = this.drafts[askId];
       this.remove(askId);
       replying.add(askId);
       let failure: unknown = null;
       try {
-        await api.post(`/api/asks/reply/${encodeURIComponent(askId)}`, { value });
+        await api.post(path, body);
       } catch (err) {
         if (!(err instanceof HttpError && err.status === 404)) failure = err;
       } finally {
@@ -350,9 +382,9 @@ export const useAsksStore = defineStore('asks', {
         noteClosed(askId);
         return;
       }
-      console.warn('[asks] reply failed:', failure);
-      if (draft) this.otherDrafts[askId] = draft;
-      reportReplyFailure(replyFailureMessage(failure, kind));
+      console.warn(`[asks] ${path} failed:`, failure);
+      if (draft) this.drafts[askId] = draft;
+      reportReplyFailure(failureMessage(failure, fallback));
       void this.refreshOpen();
     },
   },

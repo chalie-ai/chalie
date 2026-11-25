@@ -1,14 +1,16 @@
-<!-- One dock row per open ask no live line on screen shows: a scheduled
-     task's, one from a thread whose panel is closed, or a subagent's raised
-     after the turn that started it ended. Deny and Allow, a question's
-     answers, or a typed sign-in code answer the ask right here; Open shows its turn in the thread panel. A browser hand-off gets a
-     row while the browser panel is closed, or while it is open on behalf of
-     another turn; its Open shows the tab in the browser panel, where Done
-     answers it. -->
+<!-- One dock row per open permission or sign-in code ask no live line on
+     screen shows: a scheduled task's, one from a thread whose panel is closed,
+     or a subagent's raised after the turn that started it ended. Deny and
+     Allow, or a typed code, answer the ask right here; Open shows its turn in
+     the thread panel. A browser hand-off gets a row while the browser panel is
+     closed, or while it is open on behalf of another turn; its Open shows the
+     tab in the browser panel, where Done answers it. Every open question is
+     answered on the one card under the rows, nearest the message box. -->
 <script setup lang="ts">
 import { computed } from 'vue';
 import {
   AskRow,
+  QuestionCard,
   useAsksStore,
   useWaitClock,
   type InlineAsk,
@@ -23,7 +25,7 @@ const browserAway = computed(() =>
   browser.awayFrom({ turnId: session.panelThreadId, type: session.panelType }),
 );
 
-const now = useWaitClock(() => asks.offScreen.length + browserAway.value.length);
+const now = useWaitClock(() => asks.offScreen.length + browserAway.value.length + asks.questions.length);
 
 function openTurn(ask: InlineAsk): void {
   if (ask.data.origin) session.openThreadPanel(ask.data.origin.turn_id, ask.data.origin.type);
@@ -48,5 +50,6 @@ function openTurn(ask: InlineAsk): void {
       :now="now"
       @open="browser.openPanel(ask.data.tab_id)"
     />
+    <QuestionCard :questions="session.historyLoading ? [] : asks.questions" :now="now" @open="openTurn" />
   </div>
 </template>

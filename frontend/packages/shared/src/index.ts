@@ -32,6 +32,7 @@ export type {
   QuestionAnswer,
   QuestionAsk,
   QuestionReply,
+  RowAsk,
 } from './stores/asks';
 export { actionLabel, CODE_ASK_WORDS, originLabel, waitedSeconds } from './utils/askLabels';
 export { useTheme } from './composables/useTheme';
@@ -43,4 +44,4 @@ export type { AsyncResource, AsyncResourceOptions } from './composables/useAsync
 export { default as ChalieMark } from './ui/ChalieMark.vue';
 export { default as AskRow } from './ui/AskRow.vue';
 export { default as AskCodeEntry } from './ui/AskCodeEntry.vue';
-export { default as QuestionControls } from './ui/QuestionControls.vue';
+export { default as QuestionCard } from './ui/QuestionCard.vue';

@@ -111,7 +111,7 @@ async function load(): Promise<void> {
 
 const refocus = (): Promise<void> => page.evaluate(() => void globalThis.dispatchEvent(new Event('focus')));
 
-const askLabel = () => page.locator('.ask-dock .activity__label');
+const questionTitle = () => page.locator('.ask-dock .qcard__title');
 
 describe('the Brain heals a dead live connection when its window is focused again', () => {
   beforeAll(async () => {
@@ -155,9 +155,8 @@ describe('the Brain heals a dead live connection when its window is focused agai
     await expect.poll(() => openReads).toBe(2);
 
     sockets[1].route.send(JSON.stringify(QUESTION));
-    await askLabel().waitFor();
-    expect(await askLabel().textContent()).toBe('Chalie has a question');
-    expect(await page.locator('.ask-dock .question__text').textContent()).toBe('Which ferry should I book?');
+    await questionTitle().waitFor();
+    expect(await questionTitle().textContent()).toBe('Which ferry should I book?');
   });
 
   it('a focus while the socket is live keeps it', async () => {
@@ -165,7 +164,7 @@ describe('the Brain heals a dead live connection when its window is focused agai
 
     await refocus();
     sockets[0].route.send(JSON.stringify(QUESTION));
-    await askLabel().waitFor();
+    await questionTitle().waitFor();
 
     expect(sockets).toHaveLength(1);
     expect(sockets[0].closed).toBe(false);

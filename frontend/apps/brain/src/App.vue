@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted } from 'vue';
 import { RouterView } from 'vue-router';
-import { AskRow, getWebSocket, useAsksStore, useTheme, useWaitClock } from '@chalie/shared';
+import { AskRow, getWebSocket, QuestionCard, useAsksStore, useTheme, useWaitClock } from '@chalie/shared';
 import { useShellStore } from './stores/shell';
 import { useHeartbeat } from './composables/useHeartbeat';
 import BrainSidebar from './ui/BrainSidebar.vue';
@@ -66,7 +66,8 @@ onBeforeUnmount(() => {
     </main>
 
     <div class="ask-dock" aria-live="polite">
-      <AskRow v-for="ask in asks.queue" :key="ask.ask_id" :ask="ask" :now="now" @open="openChat" />
+      <AskRow v-for="ask in asks.rows" :key="ask.ask_id" :ask="ask" :now="now" @open="openChat" />
+      <QuestionCard :questions="asks.questions" :now="now" @open="openChat" />
     </div>
   </div>
 

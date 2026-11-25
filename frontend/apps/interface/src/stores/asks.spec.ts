@@ -3,12 +3,14 @@
  * user. Two feeds fill one queue: the `ask_opened` / `ask_closed` frames off
  * the socket, and the open-asks listing read on every connect. The listing is
  * a snapshot, so a read must never bring back an ask that closed while it was
- * in flight; an answer leaves its row at once and posts the user's choice.
+ * in flight; an answer leaves its row at once and posts the user's choice,
+ * and a skipped question leaves at once and is dismissed.
  *
  * Real Pinia, real store, real socket dispatcher, real REST client. Only the
  * network is stood in for: `fetch` answers `GET /api/asks/open`,
- * `POST /api/asks/reply/<id>` and `GET /api/browser/tabs` the way the backend
- * does, and a test can hold an answer back to land a frame or a reply while
+ * `POST /api/asks/reply/<id>`, `POST /api/asks/dismiss/<id>` and
+ * `GET /api/browser/tabs` the way the backend does (a 502 the way a proxy
+ * does, with no body), and a test can hold an answer back to land a frame or a reply while
  * that request is in flight.
  *
  * The store keeps its in-flight bookkeeping at module level, so each test
@@ -53,9 +55,9 @@ async function fakeBackend(input: RequestInfo | URL, init?: RequestInit): Promis
     await held.open.shift();
     return json(200, { success: true, result: listing, pagination: { page: 1, limit: 50, total: listing.length } });
   }
-  if (method === 'POST' && path.startsWith('/api/asks/reply/')) {
+  if (method === 'POST' && (path.startsWith('/api/asks/reply/') || path.startsWith('/api/asks/dismiss/'))) {
     await held.reply.shift();
-    if (replyStatus === 204) return new Response(null, { status: 204 });
+    if (replyStatus === 204 || replyStatus === 502) return new Response(null, { status: replyStatus });
     return json(replyStatus, { error: replyStatus === 404 ? 'That ask was already answered' : 'Server error' });
   }
   if (method === 'GET' && path === '/api/browser/tabs') {
@@ -171,7 +173,7 @@ describe('asks store — what waits on the user', () => {
     expect(asks.offScreen.map((a) => a.data.origin)).toEqual([null, null]);
   });
 
-  it('a question waits with its answers as sent, and the dock lists it while no line shows it; one with no question, too few or too many answers, or an answer with no label is dropped loudly', async () => {
+  it('a question waits with its answers as sent, on its card and never among the rows; one with no question, too few or too many answers, or an answer with no label is dropped loudly', async () => {
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
     const { asks, frame } = await loadPage();
 
@@ -204,8 +206,8 @@ describe('asks store — what waits on the user', () => {
     expect(dropped).toEqual(
       ['no-question', 'one-answer', 'five-answers', 'blank-label', 'not-a-list'].map((id) => ['[asks] unreadable ask dropped:', id]),
     );
-    expect(asks.offScreen.map((a) => a.ask_id)).toEqual(['send-report', 'which-days']);
-    asks.markShown('which-days');
+    expect(asks.questions.map((a) => a.ask_id)).toEqual(['which-days']);
+    expect(asks.rows.map((a) => a.ask_id)).toEqual(['send-report', 'sign-in']);
     expect(asks.offScreen.map((a) => a.ask_id)).toEqual(['send-report']);
   });
 
@@ -224,6 +226,80 @@ describe('asks store — what waits on the user', () => {
       { method: 'POST', path: '/api/asks/reply/pick-day', body: { value: { labels: ['Tuesday', 'Friday'] } } },
       { method: 'POST', path: '/api/asks/reply/own-words', body: { value: { other: 'Any evening next week' } } },
     ]);
+  });
+
+  it("what is picked or typed on a question is held until it is sent; picked or typed away to nothing, nothing is held", async () => {
+    const { asks, frame } = await loadPage();
+    frame(opened(questionAsk('pick-days', { multi_select: true })));
+
+    asks.draft('pick-days', { labels: ['Tuesday', 'Friday'] });
+    expect(asks.drafts).toEqual({ 'pick-days': { labels: ['Tuesday', 'Friday'] } });
+    asks.draft('pick-days', { other: 'Any evening' });
+    expect(asks.drafts).toEqual({ 'pick-days': { other: 'Any evening' } });
+    asks.draft('pick-days', { other: '' });
+    expect(asks.drafts).toEqual({});
+    asks.draft('pick-days', { labels: ['Friday'] });
+    asks.draft('pick-days', { labels: [] });
+    expect(asks.drafts).toEqual({});
+
+    asks.draft('pick-days', { labels: ['Friday'] });
+    await asks.reply('pick-days', { labels: ['Friday'] });
+    expect(asks.drafts).toEqual({});
+  });
+
+  it("a question whose answer fails to send comes back with what the user had typed, and the failure is told in the server's words or a plain line when it gave none", async () => {
+    const { asks, frame } = await loadPage();
+    frame(opened(questionAsk('own-words')));
+    listing = [questionAsk('own-words')];
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    asks.draft('own-words', { other: 'Any evening next week' });
+    replyStatus = 500;
+    await asks.reply('own-words', { other: 'Any evening next week' });
+    await flushPromises();
+    expect(told).toEqual(['Server error']);
+    expect(waiting(asks)).toEqual(['own-words']);
+    expect(asks.drafts['own-words']).toEqual({ other: 'Any evening next week' });
+
+    replyStatus = 502;
+    await asks.reply('own-words', { other: 'Any evening next week' });
+    await flushPromises();
+    expect(told).toEqual(['Server error', "Couldn't send your answer"]);
+    expect(asks.drafts['own-words']).toEqual({ other: 'Any evening next week' });
+  });
+
+  it('a skipped question leaves at once and is dismissed on the server; one already closed elsewhere stays gone quietly; a failed skip brings it back with its picks and says why', async () => {
+    const { asks, frame } = await loadPage();
+    frame(opened(questionAsk('skip-me')));
+    frame(opened(questionAsk('closed-elsewhere')));
+    frame(opened(questionAsk('skip-fails', { multi_select: true })));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const confirm = holdNext('reply');
+    const skipped = asks.dismiss('skip-me');
+    expect(waiting(asks)).toEqual(['closed-elsewhere', 'skip-fails']);
+    await confirm();
+    await skipped;
+
+    replyStatus = 404;
+    await asks.dismiss('closed-elsewhere');
+    await flushPromises();
+    expect(told).toEqual([]);
+    expect(warn).not.toHaveBeenCalled();
+    expect(waiting(asks)).toEqual(['skip-fails']);
+
+    listing = [questionAsk('skip-fails', { multi_select: true })];
+    asks.draft('skip-fails', { labels: ['Tuesday'] });
+    replyStatus = 502;
+    await asks.dismiss('skip-fails');
+    await flushPromises();
+    expect(told).toEqual(["Couldn't skip the question"]);
+    expect(waiting(asks)).toEqual(['skip-fails']);
+    expect(asks.drafts['skip-fails']).toEqual({ labels: ['Tuesday'] });
+
+    expect(requests.filter((r) => r.method === 'POST')).toEqual(
+      ['skip-me', 'closed-elsewhere', 'skip-fails'].map((id) => ({ method: 'POST', path: `/api/asks/dismiss/${id}`, body: {} })),
+    );
   });
 
   it('on reconnect, an ask the server no longer lists is dropped, a listed one comes back once, and one that arrived during the read stays', async () => {

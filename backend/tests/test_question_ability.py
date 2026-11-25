@@ -5,7 +5,8 @@ an ask of its own kind on the asks every screen hears and lists — no permissio
 ask comes first, since the seeded policy allows it — and the run waits. The user
 answers from their signed-in session: one answer, several, or their own text.
 An answer that does not fit the question is refused and the question keeps
-waiting. A stopped run closes the question unanswered. A call the model gets
+waiting. A question the user skips, or a stopped run, closes it unanswered,
+and the model reads that it went unanswered. A call the model gets
 wrong opens nothing and tells the model what to fix. Neither the question nor
 the answer is ever written to a log line.
 
@@ -318,6 +319,33 @@ def test_a_run_stopped_while_the_question_waits_closes_it_and_the_model_hears_it
     # The stopped run never calls the model again.
     assert len(provider.read("chat")) == 1
     assert execution(USER, run.turn_id).state == TurnExecution.CANCELLED
+
+
+def test_a_question_the_user_skips_closes_unanswered_and_the_model_reads_exactly_that(
+    app: Flask, chat_provider: sqlite3.Connection
+) -> None:
+    client, _token = signed_in(app)
+    statuses: list[int] = []
+
+    def skip(ask_id: str) -> None:
+        statuses.append(client.post(f"/api/asks/dismiss/{ask_id}").status_code)
+        # A second screen skipping the same question finds it already closed.
+        statuses.append(client.post(f"/api/asks/dismiss/{ask_id}").status_code)
+
+    asked = _ask_and_answer(client, {"question": _QUESTION, "answers": _ANSWERS}, skip)
+
+    [opened] = asked.opened
+    assert statuses == [204, 404]
+    assert asked.closed == [{"type": "ask_closed", "ask_id": opened["ask_id"]}]
+    assert _listing(client) == []
+    unanswered = (
+        f"[{QuestionAbility.NAME}(status=error, code=question-unanswered)]\n"
+        f"Failed - the question closed before the user answered.\n[end:{QuestionAbility.NAME}]"
+    )
+    assert unanswered in asked.read[1]
+    assert [(r["state"], r["result"]) for r in calls_of(chat_provider, QuestionAbility.NAME)] == [(ToolCall.ERROR, unanswered)]
+    # The run carries on past the skipped question to the model's reply.
+    assert execution(USER, asked.turn_id).state == TurnExecution.COMPLETED
 
 
 @pytest.mark.parametrize(

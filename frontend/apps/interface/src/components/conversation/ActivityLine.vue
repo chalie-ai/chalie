@@ -4,11 +4,11 @@
  * settled row shows (ThinkingAndCalls), live — the stored row's thinking and
  * calls once a refetch returned it, then the act-trail pills running now — its
  * head carrying the turn's controls. Stop always; while the turn is parked on
- * an ask, the head names the ask, a ticking "· waiting for you · Ns" note
- * follows — aged from the server's `asked_at` stamp, so it survives a reload —
- * and the ask is answered on the line itself: a permission on the head
- * (Deny/Allow), a sign-in code typed on the head, a question with its answers
- * under the head.
+ * an ask, a ticking "· waiting for you · Ns" note follows — aged from the
+ * server's `asked_at` stamp, so it survives a reload. A permission or a
+ * sign-in code ask is named on the head and answered there (Deny/Allow, the
+ * code typed in); a question is answered on its card above the message box,
+ * so the head reads on as the step does.
  */
 import { computed, onUnmounted, ref, watch } from 'vue';
 import { readDomContext } from '../../utils/domContext';
@@ -20,7 +20,6 @@ import {
   AskCodeEntry,
   actionLabel,
   CODE_ASK_WORDS,
-  QuestionControls,
   useAsksStore,
   waitedSeconds,
   type InlineAsk,
@@ -49,8 +48,7 @@ const asks = useAsksStore();
 const rootRef = ref<HTMLElement | null>(null);
 
 const askLabel = computed(() => {
-  if (props.ask == null) return null;
-  if (props.ask.kind === 'question') return 'Chalie has a question';
+  if (props.ask == null || props.ask.kind === 'question') return null;
   if (props.ask.kind === 'code') return CODE_ASK_WORDS[props.ask.data.service].heading;
   return props.ask.data.summary || actionLabel(props.ask.data.action_id);
 });
@@ -140,6 +138,5 @@ async function onStop(): Promise<void> {
         @click="onStop"
       >Stop</button>
     </span>
-    <QuestionControls v-if="ask?.kind === 'question'" :ask="ask" />
   </ThinkingAndCalls>
 </template>

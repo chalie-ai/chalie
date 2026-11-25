@@ -1,0 +1,1 @@
+import{a}from"./system-Lcv8g7Y6.js";const e={redirectOnAuthError:!1},i={login(r,t){return a.post("/api/auth/login",{username:r,password:t},e)},register(r,t){return a.post("/api/auth/register",{username:r,password:t},e)}};export{i as a};

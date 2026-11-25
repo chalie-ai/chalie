@@ -20,9 +20,15 @@
  *     it did not go through; one the server says came after the ask was
  *     already answered elsewhere leaves the row gone, with nothing to tell;
  *   - Open shows the ask's turn in the thread panel and answers nothing;
- *   - a question gets a row too, with the question, each answer over its
- *     description and a field for the user's own answer; a picked answer is
- *     sent as its label and its row goes;
+ *   - every open question waits on one card under the rows, a page each: the
+ *     question as its title, where it came from with Open, one numbered row
+ *     per answer over its description, and a "Something else" field with
+ *     Skip; a single-select pick is sent as its label, a multi-select's picks
+ *     are sent together by one button, the user's own words are sent as
+ *     theirs, and Skip or close dismisses the question; each closes its page
+ *     and the next question shows;
+ *   - an answer or skip the server fails on tells the user why and brings the
+ *     question back as the user left it;
  *   - an ask from a run no chat turn shows has no origin before its words; its
  *     row still offers Open when it is a hand-off, whose tab can be shown, and
  *     not when it is a permission ask, which has no turn to open.
@@ -67,12 +73,13 @@ async function fakeBackend(input: RequestInfo | URL, init?: RequestInit): Promis
   if (url.pathname === '/api/browser/tabs' && (init?.method ?? 'GET') === 'GET') {
     return json({ success: true, result: { tabs: backend.tabs } });
   }
-  if (url.pathname.startsWith('/api/asks/reply/') && init?.method === 'POST') {
+  const settled = /^\/api\/asks\/(?:reply|dismiss)\/(.+)$/.exec(url.pathname);
+  if (settled && init?.method === 'POST') {
     backend.answers.push({ path: url.pathname, body: JSON.parse(String(init.body)) });
     const answer = backend.replyAnswer;
     if (answer === 'offline') throw new TypeError('Failed to fetch');
     if (answer !== 204 && answer !== 404) return json({ error: 'Could not answer the ask' }, answer);
-    const answered = decodeURIComponent(url.pathname.slice('/api/asks/reply/'.length));
+    const answered = decodeURIComponent(settled[1]);
     backend.open = backend.open.filter((a) => (a as { ask_id: string }).ask_id !== answered);
     if (answer === 404) return json({ error: 'That ask was already answered' }, 404);
     return new Response(null, { status: 204 });
@@ -86,14 +93,24 @@ function ask(ask_id: string, action_id: string, summary: string, origin: AskOrig
 }
 
 /** A question the chat asked, as the backend lists it. */
-function question(ask_id: string, text: string, answers: { label: string; description: string }[]) {
+function question(ask_id: string, text: string, answers: { label: string; description: string }[], multi_select = false) {
   return {
     ask_id,
     kind: 'question',
     asked_at: new Date().toISOString(),
-    data: { question: text, answers, multi_select: false, origin: ON_CHAT },
+    data: { question: text, answers, multi_select, origin: ON_CHAT },
   };
 }
+
+const FERRIES = [
+  { label: 'The 08:15', description: 'Arrives before noon' },
+  { label: 'The 17:40', description: '' },
+];
+const DAYS = [
+  { label: 'Monday', description: '' },
+  { label: 'Tuesday', description: '' },
+  { label: 'Friday', description: '' },
+];
 
 /** A hand-off of a browser tab Chalie opened, as the backend lists it. */
 function handoff(ask_id: string, tab: BrowserTab, reason: string) {
@@ -126,6 +143,10 @@ const rowNamed = (w: VueWrapper, label: string) => {
   if (!found) throw new Error(`no dock row for "${label}"`);
   return found;
 };
+const card = (w: VueWrapper) => w.find('.offscreen-asks > .qcard');
+const title = (w: VueWrapper) => card(w).find('.qcard__title').text();
+const answerButtons = (w: VueWrapper) => card(w).findAll('.qcard__answer');
+const sendButton = (w: VueWrapper) => card(w).find('.qcard__other .btn');
 const toast = () => document.querySelector('.chalie-toast')?.textContent ?? null;
 
 beforeEach(() => {
@@ -266,31 +287,175 @@ describe('an ask no live line shows', () => {
     expect(labels(w)).toEqual(['Read the ferry booking email']);
   });
 
-  it("a question gets a row naming its turn, with the question, each answer over its description, a field for the user's own answer and Open; a picked answer is sent as its label and its row goes", async () => {
-    const w = await mountDock(
-      question('q1', 'Which ferry should I book?', [
-        { label: 'The 08:15', description: 'Arrives before noon' },
-        { label: 'The 17:40', description: '' },
-      ]),
-      ask('r1', 'email.read', 'Read the ferry booking email'),
-    );
-    const row = rowNamed(w, 'Chalie has a question');
+  it('a question waits on a card under the rows: its title, where it came from with Open, one numbered row per answer over its description, and a Something else field with Skip', async () => {
+    const w = await mountDock(question('q1', 'Which ferry should I book?', FERRIES), ask('r1', 'email.read', 'Read the ferry booking email'));
 
-    expect(row.find('.activity__origin').text()).toBe(`Chat · #${CHAT_TURN} ·`);
-    expect(row.find('.activity__ask').exists()).toBe(false);
-    expect(row.find('.question__text').text()).toBe('Which ferry should I book?');
-    expect(row.findAll('.question__answer').map((b) => b.findAll('span').map((s) => s.text()))).toEqual([
-      ['The 08:15', 'Arrives before noon'],
-      ['The 17:40'],
+    expect(labels(w)).toEqual(['Read the ferry booking email']);
+    expect(w.find('.offscreen-asks').element.lastElementChild?.classList.contains('qcard')).toBe(true);
+    expect(title(w)).toBe('Which ferry should I book?');
+    expect(card(w).findAll('.qcard__meta > *').map((x) => x.text())).toEqual([`Chat · #${CHAT_TURN} ·`, 'waiting for you · 0s', 'Open']);
+    expect(answerButtons(w).map((b) => [b.find('.qcard__badge').text(), ...b.findAll('.qcard__words > span').map((x) => x.text())])).toEqual([
+      ['1', 'The 08:15', 'Arrives before noon'],
+      ['2', 'The 17:40'],
     ]);
-    expect(row.find('.question__field').attributes('placeholder')).toBe('Other…');
-    expect(row.find('.activity__stop').text()).toBe('Open');
+    expect(card(w).find('.qcard__answers').attributes('role')).toBe('group');
+    expect(card(w).find(`#${card(w).find('.qcard__answers').attributes('aria-describedby')}`).text()).toBe('Choose one of 2 options.');
+    expect(card(w).find('.qcard__field').attributes('placeholder')).toBe('Something else');
+    expect(sendButton(w).text()).toBe('Skip');
+    expect(card(w).find('.qcard__pager').exists()).toBe(false);
+    expect(card(w).find('.qcard__hint').text()).toBe('↑↓ to navigate · Enter to select · Esc to skip');
+  });
 
-    await row.findAll('.question__answer')[0].trigger('click');
+  it('a single-select pick is sent as its label at once, and the card goes while the rows stay', async () => {
+    const w = await mountDock(question('q1', 'Which ferry should I book?', FERRIES), ask('r1', 'email.read', 'Read the ferry booking email'));
+
+    await answerButtons(w)[1].trigger('click');
     await flushPromises();
 
-    expect(backend.answers).toEqual([{ path: '/api/asks/reply/q1', body: { value: { labels: ['The 08:15'] } } }]);
+    expect(backend.answers).toEqual([{ path: '/api/asks/reply/q1', body: { value: { labels: ['The 17:40'] } } }]);
+    expect(card(w).exists()).toBe(false);
     expect(labels(w)).toEqual(['Read the ferry booking email']);
+  });
+
+  it("a multi-select's answers pick and unpick without sending, and one Submit sends the picks in the answers' order", async () => {
+    const w = await mountDock(question('q1', 'Which days suit you?', DAYS, true));
+    expect(card(w).find(`#${card(w).find('.qcard__answers').attributes('aria-describedby')}`).text()).toBe('Choose one or more of 3 options.');
+    expect(sendButton(w).attributes('title')).toBe('Select an option to send');
+
+    for (const i of [2, 0, 1, 1]) await answerButtons(w)[i].trigger('click');
+
+    expect(backend.answers).toEqual([]);
+    expect(answerButtons(w).map((b) => b.attributes('aria-pressed'))).toEqual(['true', 'false', 'true']);
+    expect(sendButton(w).text()).toBe('Submit');
+
+    await sendButton(w).trigger('click');
+    await flushPromises();
+
+    expect(backend.answers).toEqual([{ path: '/api/asks/reply/q1', body: { value: { labels: ['Monday', 'Friday'] } } }]);
+    expect(card(w).exists()).toBe(false);
+  });
+
+  it("the user's own words turn Skip into Submit and are sent as theirs, by the button or Enter", async () => {
+    const w = await mountDock(question('q1', 'Which ferry should I book?', FERRIES), question('q2', 'Which days suit you?', DAYS, true));
+    expect(sendButton(w).attributes('title')).toBe('Type an answer to send');
+
+    await card(w).find('.qcard__field').setValue('  The late one on Sunday  ');
+    expect(sendButton(w).text()).toBe('Next');
+    await sendButton(w).trigger('click');
+    await flushPromises();
+
+    await card(w).find('.qcard__field').setValue('Whichever is cheapest');
+    expect(sendButton(w).text()).toBe('Submit');
+    await card(w).find('.qcard__field').trigger('keydown', { key: 'Enter' });
+    await flushPromises();
+
+    expect(backend.answers).toEqual([
+      { path: '/api/asks/reply/q1', body: { value: { other: 'The late one on Sunday' } } },
+      { path: '/api/asks/reply/q2', body: { value: { other: 'Whichever is cheapest' } } },
+    ]);
+    expect(card(w).exists()).toBe(false);
+  });
+
+  it('Skip and the close button each dismiss the question they show, unanswered', async () => {
+    const w = await mountDock(question('q1', 'Which ferry should I book?', FERRIES), question('q2', 'Which days suit you?', DAYS, true));
+
+    await sendButton(w).trigger('click');
+    await flushPromises();
+    expect(title(w)).toBe('Which days suit you?');
+    await card(w).find('[aria-label="Close"]').trigger('click');
+    await flushPromises();
+
+    expect(backend.answers).toEqual([
+      { path: '/api/asks/dismiss/q1', body: {} },
+      { path: '/api/asks/dismiss/q2', body: {} },
+    ]);
+    expect(card(w).exists()).toBe(false);
+  });
+
+  it('several questions page on the one card: the pager reads where it is, its ends are shut, and the page stays put while another question closes', async () => {
+    const w = await mountDock(
+      question('q1', 'Which ferry should I book?', FERRIES),
+      question('q2', 'Which days suit you?', DAYS, true),
+      question('q3', 'Window or aisle?', [{ label: 'Window', description: '' }, { label: 'Aisle', description: '' }]),
+    );
+    const pager = () => card(w).find('.qcard__pager');
+    const prev = () => pager().find('[aria-label="Previous question"]');
+    const next = () => pager().find('[aria-label="Next question"]');
+
+    expect([pager().attributes('aria-label'), pager().find('span').text()]).toEqual(['Question 1 of 3', '1 of 3']);
+    expect([prev().attributes('disabled'), next().attributes('disabled')]).toEqual(['', undefined]);
+
+    await next().trigger('click');
+    await next().trigger('click');
+    expect([title(w), pager().find('span').text(), next().attributes('disabled')]).toEqual(['Window or aisle?', '3 of 3', '']);
+    await prev().trigger('click');
+    expect(title(w)).toBe('Which days suit you?');
+
+    backend.open = backend.open.filter((a) => (a as { ask_id: string }).ask_id !== 'q1');
+    useAsksStore().remove('q1');
+    await flushPromises();
+    expect([title(w), pager().find('span').text()]).toEqual(['Which days suit you?', '1 of 2']);
+
+    await card(w).find('.qcard__field').setValue('Wednesday');
+    await sendButton(w).trigger('click');
+    await flushPromises();
+    expect(title(w)).toBe('Window or aisle?');
+    expect(pager().exists()).toBe(false);
+    expect(sendButton(w).text()).toBe('Skip');
+  });
+
+  it('a number key picks its answer and Escape skips, from anywhere on the card', async () => {
+    const w = await mountDock(question('q1', 'Which ferry should I book?', FERRIES), question('q2', 'Which days suit you?', DAYS, true));
+
+    await answerButtons(w)[0].trigger('keydown', { key: '2' });
+    await flushPromises();
+    await answerButtons(w)[0].trigger('keydown', { key: '9' });
+    await answerButtons(w)[0].trigger('keydown', { key: '3' });
+    expect(answerButtons(w).map((b) => b.attributes('aria-pressed'))).toEqual(['false', 'false', 'true']);
+    await card(w).find('.qcard__field').trigger('keydown', { key: 'Escape' });
+    await flushPromises();
+
+    expect(backend.answers).toEqual([
+      { path: '/api/asks/reply/q1', body: { value: { labels: ['The 17:40'] } } },
+      { path: '/api/asks/dismiss/q2', body: {} },
+    ]);
+  });
+
+  it('an answer the server fails on tells the user why and brings the question back with their words still typed', async () => {
+    const w = await mountDock(question('q1', 'Which ferry should I book?', FERRIES));
+    backend.replyAnswer = 500;
+
+    await card(w).find('.qcard__field').setValue('The late one on Sunday');
+    await sendButton(w).trigger('click');
+    await flushPromises();
+
+    expect(toast()).toBe('Could not answer the ask');
+    expect(title(w)).toBe('Which ferry should I book?');
+    expect((card(w).find('.qcard__field').element as HTMLInputElement).value).toBe('The late one on Sunday');
+    expect(sendButton(w).text()).toBe('Submit');
+  });
+
+  it("a skip the server fails on tells the user why and brings the question back with its picks", async () => {
+    const w = await mountDock(question('q1', 'Which days suit you?', DAYS, true));
+    await answerButtons(w)[1].trigger('click');
+    backend.replyAnswer = 500;
+
+    await card(w).find('[aria-label="Close"]').trigger('click');
+    await flushPromises();
+
+    expect(toast()).toBe('Could not answer the ask');
+    expect(answerButtons(w).map((b) => b.attributes('aria-pressed'))).toEqual(['false', 'true', 'false']);
+  });
+
+  it("a question's Open shows its turn in the thread panel and answers nothing", async () => {
+    const w = await mountDock(question('q1', 'Which ferry should I book?', FERRIES));
+    const session = useSessionStore();
+
+    await card(w).find('.qcard__meta .activity__stop').trigger('click');
+
+    expect([session.panelThreadId, session.panelType]).toEqual([CHAT_TURN, 'user']);
+    expect(backend.answers).toEqual([]);
+    expect(title(w)).toBe('Which ferry should I book?');
   });
 
   it('a hand-off from a run no chat turn shows has no origin before its words, and Open still shows its tab', async () => {
