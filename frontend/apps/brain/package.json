@@ -8,7 +8,8 @@
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "vue-tsc --noEmit",
-    "test": "playwright test"
+    "test": "playwright test",
+    "test:unit": "vitest run"
   },
   "dependencies": {
     "@chalie/shared": "workspace:*",
@@ -22,6 +23,7 @@
     "@vitejs/plugin-vue": "^5.2.4",
     "sass": "^1.80.0",
     "vite": "^6.4.3",
+    "vitest": "^3.2.7",
     "vue-tsc": "^2.1.0"
   }
 }

@@ -45,7 +45,6 @@ const { fakeWs, sendMock, wsCallbacks } = vi.hoisted(() => {
       onDrift: () => { /* not under test */ },
       onAny: () => { /* not under test */ },
       connect: () => { /* not under test */ },
-      ensureAlive: () => { /* not under test */ },
     },
   };
 });

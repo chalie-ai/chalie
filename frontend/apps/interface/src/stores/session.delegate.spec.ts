@@ -63,7 +63,6 @@ const { fakeWs, wsCallbacks } = vi.hoisted(() => {
       onDrift: (cb: (data: unknown) => void): void => { wsCallbacks.onDrift = cb; },
       onAny: (): void => { /* not under test */ },
       connect: (): void => { /* not under test */ },
-      ensureAlive: (): void => { /* not under test */ },
     },
   };
 });

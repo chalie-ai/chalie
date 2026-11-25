@@ -2,7 +2,7 @@
  * Session store — WS coordinator + turn send/stop orchestration.
  *
  * Single WS owner rule: ONLY this store may touch WebSocketService's
- * send/onDrift/ensureAlive handlers, and it is the
+ * send/onDrift handlers, and it is the
  * only place `connect()` is called for the interface app. `onConnect` /
  * `onDisconnect` / `onAny` are NOT exclusive to this store — `@chalie/shared`'s
  * `useWebSocket()` composable also registers them, but only to drive the
@@ -227,9 +227,6 @@ export const useSessionStore = defineStore('session', {
       ws.onDrift((data: WsPushEvent) => {
         dispatchDrift(data);
       });
-
-      // Tab-refocus liveness check.
-      globalThis.addEventListener('focus', () => ws.ensureAlive());
 
       ws.connect();
     },

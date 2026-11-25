@@ -166,6 +166,10 @@ export class WebSocketService {
   private readonly livenessCheckMs = 30000;
   private lastInboundAt = 0;
   private livenessTimer: Interval | null = null;
+  // The watchdog's timers are throttled while the tab is in the background and
+  // stop while the machine sleeps, so a refocused window checks at once. One
+  // function, so adding it on every connect() registers it once.
+  private readonly onFocus = (): void => this.ensureAlive();
 
   constructor(private readonly getHost: GetHost) {}
 
@@ -203,6 +207,7 @@ export class WebSocketService {
       return;
     }
     this.intentionallyClosed = false;
+    globalThis.addEventListener('focus', this.onFocus);
     let ws: WebSocket;
     try {
       ws = new WebSocket(this.buildWsUrl());
@@ -253,6 +258,7 @@ export class WebSocketService {
 
   close(): void {
     this.intentionallyClosed = true;
+    globalThis.removeEventListener('focus', this.onFocus);
     this.stopLivenessWatch();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -316,9 +322,8 @@ export class WebSocketService {
     this.connect();
   }
 
-  /** Heal the connection if it has silently died (tab refocus). */
-  ensureAlive(): void {
-    if (this.intentionallyClosed) return;
+  /** Heal the connection if it has silently died (window refocus). */
+  private ensureAlive(): void {
     if (!this.isConnected) {
       this.connect();
       return;
