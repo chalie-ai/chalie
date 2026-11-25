@@ -180,7 +180,7 @@ export interface ConversationTurnBlock {
   /** First row's content, clipped — the collapsed-pill preview. */
   preview: string;
   last_activity_at: string | null;
-  /** True while the turn is unsettled/in-flight (no settle0 row yet). */
+  /** True while one of the turn's runs has not ended, as of this read. */
   working: boolean;
   /**
    * True when the turn's most recent execution ended CRASHED (an unhandled step
