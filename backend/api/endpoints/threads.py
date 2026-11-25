@@ -221,14 +221,19 @@ class ThreadsEndpoint(Endpoint):
 
     def _summaries(self, threads: list[dict[str, object]], scope: ThreadScope) -> list[ThreadSummary]:
         """Project raw ``recent_threads`` rows into feed DTOs, bulk-injecting
-        each thread's one-sentence gist. Every summary is stamped with the
-        scope's config type so a client refetching a thread found here carries
-        the right type forward. The internal recency sort key is dropped."""
+        each thread's one-sentence gist. A thread is working while it has an
+        execution that has not ended — the same read its turn block makes — so
+        a stopped, crashed or finished turn reads idle whatever rows it left. A
+        legacy thread with no turn_id has no executions and reads idle. Every
+        summary is stamped with the scope's config type so a client refetching
+        a thread found here carries the right type forward. The internal
+        recency sort key is dropped."""
         if not threads:
             return []
 
         turn_ids = [cast("int", t["turn_id"]) for t in threads if t.get("turn_id") is not None]
         gists = _serializer().bulk_gists(scope.channel, turn_ids)
+        working = {tid for tid in turn_ids if TurnExecutionModel.open_turn(scope.channel, tid) is not None}
         return [
             ThreadSummary(
                 turn_id=cast("int | None", t.get("turn_id")),
@@ -236,7 +241,7 @@ class ThreadsEndpoint(Endpoint):
                 preview=cast("str", t.get("preview") or ""),
                 row_count=cast("int", t["row_count"]),
                 gist=gists.get(cast("int", t["turn_id"])) if t.get("turn_id") is not None else None,
-                working=bool(t.get("working", False)),
+                working=t.get("turn_id") in working,
                 type=scope.type,
             )
             for t in threads

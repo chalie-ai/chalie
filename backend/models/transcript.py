@@ -223,11 +223,12 @@ class Transcript(Model):
                        ) -> list[dict[str, object]]:
         """Thread-level metadata for the collapsed feed: one summary per thread
         (turn_id), ordered by last activity (``MAX(id)``). Each dict carries
-        ``turn_id``, ``last_activity_at``, ``last_row_id``, ``row_count``,
-        ``preview`` (first row's content, truncated) and ``working`` (no settled
-        assistant row yet). Legacy NULL-turn_id rows each form their own
-        singleton thread via ``_TURN_KEY``. A non-empty ``query`` restricts the
-        page to threads with a matching user-role row. Page-position facts
+        ``turn_id``, ``last_activity_at``, ``last_row_id``, ``row_count`` and
+        ``preview`` (first row's content, truncated). Legacy NULL-turn_id rows
+        each form their own singleton thread via ``_TURN_KEY``. A non-empty
+        ``query`` restricts the page to threads with a matching user-role row.
+        Whether a thread is still working is not a transcript fact: it is read
+        from its executions (``TurnExecution.open_turn``). Page-position facts
         (total, has-more) come from :meth:`count_turns` — the one authority —
         so this returns the page and nothing else."""
         role_filter = "".join(" AND role != ?" for _ in exclude_roles)
@@ -247,8 +248,7 @@ class Transcript(Model):
         placeholders = cls._placeholders(len(page_keys))
         meta_rows = conn.execute(
             f"SELECT {cls._TURN_KEY} AS k, MAX(id) AS last_id, MAX(created_at) AS last_ts, "
-            f"COUNT(*) AS cnt, "
-            f"MIN(CASE WHEN {cls._SETTLE_PREDICATE} THEN id END) IS NULL AS working "
+            f"COUNT(*) AS cnt "
             f"FROM transcript "
             f"WHERE channel = ?{role_filter} AND {cls._TURN_KEY} IN ({placeholders}) "
             f"GROUP BY k",
@@ -268,7 +268,6 @@ class Transcript(Model):
                 "last_activity_at": r[2],
                 "last_row_id": int(r[1]),
                 "row_count": int(r[3]),
-                "working": bool(r[4]),
             }
         first_content: dict[int, str] = {
             int(r[0]): cast("str", r[1] or "")[:cls._PREVIEW_CHARS] for r in first_rows
@@ -281,7 +280,6 @@ class Transcript(Model):
                 "last_row_id": meta.get(key, {}).get("last_row_id", 0),
                 "row_count": meta.get(key, {}).get("row_count", 0),
                 "preview": first_content.get(key, ""),
-                "working": meta.get(key, {}).get("working", False),
             }
             for key in page_keys
         ]
@@ -406,12 +404,12 @@ class Transcript(Model):
         settled row (a turn's settle0 boundary, :attr:`_SETTLE_PREDICATE`) is
         additionally protected: it is retained whenever its ``(channel,
         turn_id)`` still holds another row that is itself too young to be a
-        candidate or is episode-cited, so a partially-swept turn can never
-        lose its settle marker and misreport as still "working"
-        (:meth:`recent_threads`). A turn that is candidate in full — every one
-        of its rows old and uncited — has no such surviving sibling, so its
-        settle row is included with the rest. Legacy NULL-``turn_id`` rows
-        carry no turn and so no such protection.
+        candidate or is episode-cited, so a partially-swept turn never loses
+        the :meth:`settle0` its surviving rows are read against (the history
+        floor, the thread-gist prompt). A turn that is candidate in full —
+        every one of its rows old and uncited — has no such surviving sibling,
+        so its settle row is included with the rest. Legacy NULL-``turn_id``
+        rows carry no turn and so no such protection.
 
         Two deliberate shapes keep this scan-bound at production row counts
         instead of minutes: the age filter compares ``created_at`` directly
@@ -483,14 +481,12 @@ class Transcript(Model):
     # Any real assistant/tool content already written — including a provider
     # call's empty assistant row carrying its tool calls — likewise leaves a
     # partially-completed turn alone per existing doctrine. The correlated
-    # subquery mirrors ``recent_threads``' own
-    # ``MIN(CASE WHEN {predicate} THEN id END) IS NULL AS working`` idiom —
-    # an aggregate over a per-row expression, not a join, so it costs nothing
-    # on the common case and needs no schema change. COALESCE to '' guards
-    # legacy NULL-``turn_id`` rows (no turn_executions row exists for them at
-    # all): a bare comparison against a NULL subquery result is NULL, not
-    # FALSE, and HAVING drops NULL rows just like FALSE ones — silently
-    # excluding every legacy singleton thread from the feed.
+    # subquery is an aggregate over a per-row expression, not a join, so it
+    # costs nothing on the common case and needs no schema change. COALESCE
+    # to '' guards legacy NULL-``turn_id`` rows (no turn_executions row exists
+    # for them at all): a bare comparison against a NULL subquery result is
+    # NULL, not FALSE, and HAVING drops NULL rows just like FALSE ones —
+    # silently excluding every legacy singleton thread from the feed.
     _CANCELLED_ORPHAN_HAVING: ClassVar[str] = (
         "NOT (MAX(CASE WHEN role != 'user' OR joined = 1 THEN 1 ELSE 0 END) = 0 "
         "AND MAX(COALESCE((SELECT te.state FROM turn_executions te "
