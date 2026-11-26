@@ -8,11 +8,15 @@ import { computed, nextTick, reactive, watch } from 'vue';
 import type { ComponentPublicInstance } from 'vue';
 import { X } from '@lucide/vue';
 import { useQueueStore } from '../../stores/queue';
+import { parseQuoteBlocks } from '../../utils/quoteBlocks';
+import QuoteBlocks from './QuoteBlocks.vue';
 
 const props = withDefaults(defineProps<{ threadId?: number | null }>(), { threadId: null });
 
 const queue = useQueueStore();
 const items = computed(() => queue.queuedFor(props.threadId));
+// Each entry split into the quote blocks it opens with and its typed text.
+const parsed = computed(() => items.value.map((entry) => parseQuoteBlocks(entry.text)));
 
 // Per-item expand state and overflow detection for the 3-line clamp — both
 // keyed by the same index used as the v-for key, so both reset whenever the
@@ -75,7 +79,7 @@ function toggleExpanded(i: number, event: MouseEvent): void {
 
 <template>
   <div v-if="items.length" class="pending">
-    <div v-for="(entry, i) in items" :key="i" class="pending__row">
+    <div v-for="(entry, i) in parsed" :key="i" class="pending__row">
       <button
         type="button"
         class="pending__remove"
@@ -93,7 +97,14 @@ function toggleExpanded(i: number, event: MouseEvent): void {
         @keydown.enter="edit(i)"
         @keydown.space.prevent="edit(i)"
       >
+        <QuoteBlocks
+          v-if="entry.blocks.length"
+          class="pending__quotes"
+          :blocks="entry.blocks"
+          compact
+        />
         <span
+          v-if="entry.text"
           :ref="(el) => setTextRef(i, el)"
           class="pending__text"
           :class="{ 'pending__text--clamped': !expanded.has(i) }"
@@ -164,6 +175,10 @@ function toggleExpanded(i: number, event: MouseEvent): void {
 
 .pending__chip:hover {
   background: var(--cell);
+}
+
+.pending__quotes:not(:last-child) {
+  margin-bottom: 6px;
 }
 
 .pending__text {

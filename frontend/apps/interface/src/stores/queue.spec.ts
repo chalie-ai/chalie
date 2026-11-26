@@ -39,3 +39,25 @@ describe('enqueue / take — queued files survive the flush', () => {
     expect(queue.take(42)).toEqual({ text: '', files: [] });
   });
 });
+
+describe('take — quote blocks in queued messages', () => {
+  it('lifts every queued block to the head of the joined message, oldest first, and joins the texts after them', () => {
+    const queue = useQueueStore();
+    const block = (quote: string): string => `[quote_block]{"quote": "${quote}", "reply": ""}[/quote_block]`;
+
+    queue.enqueue(42, `${block('one')}\n\nfirst line`, ConfigType.USER);
+    queue.enqueue(42, 'plain second line', ConfigType.USER);
+    queue.enqueue(42, block('two'), ConfigType.USER);
+
+    expect(queue.take(42).text).toBe(`${block('one')}\n${block('two')}\n\nfirst line\nplain second line`);
+  });
+
+  it('joins messages without blocks exactly as before, a files-only entry keeping its empty line', () => {
+    const queue = useQueueStore();
+    queue.enqueue(42, 'first', ConfigType.USER);
+    queue.enqueue(42, '', ConfigType.USER, [new File(['x'], 'a.txt')]);
+    queue.enqueue(42, 'third', ConfigType.USER);
+
+    expect(queue.take(42).text).toBe('first\n\nthird');
+  });
+});

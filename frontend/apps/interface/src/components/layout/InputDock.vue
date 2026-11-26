@@ -28,6 +28,14 @@ import { providers, system } from '../../api';
 import type { Provider } from '../../api/providers';
 import ImageAttachStrip from '../upload/ImageAttachStrip.vue';
 import QueuedMessages from '../conversation/QueuedMessages.vue';
+import QuoteComposer from '../conversation/QuoteComposer.vue';
+import {
+  QUOTE_BLOCK_EVENT,
+  encodeQuoteBlocks,
+  parseQuoteBlocks,
+  type QuoteBlock,
+  type QuoteBlockEventDetail,
+} from '../../utils/quoteBlocks';
 import OffScreenAsks from './OffScreenAsks.vue';
 import DockError from './DockError.vue';
 import { Plus, Mic, Send, ChevronDown, ChevronLeft, ChevronRight } from '@lucide/vue';
@@ -69,13 +77,25 @@ const THINKING_ITEMS = [
 const textareaRef = ref<HTMLTextAreaElement | null>(null);
 const sendBtnRef = ref<HTMLButtonElement | null>(null);
 const text = ref('');
+// Quote blocks waiting to go out at the head of the next message.
+const blocks = ref<QuoteBlock[]>([]);
 
 // Restore draft: persisted on every change so a reload/close/navigate recovers it.
-// Keyed per thread so a reply draft never bleeds into the main composer.
+// Keyed per thread so a reply draft never bleeds into the main composer. The
+// draft is stored as the message it would send, quote blocks and all.
 const DRAFT_KEY = props.turnId == null ? 'chalie:draft' : `chalie:draft:t${props.turnId}`;
 const stored = lsGet(DRAFT_KEY);
-if (stored) text.value = stored;
-watch(text, (v) => lsSet(DRAFT_KEY, v));
+if (stored) loadMessage(stored);
+const draft = computed(() => encodeQuoteBlocks(blocks.value, text.value));
+watch(draft, (v) => lsSet(DRAFT_KEY, v));
+
+/** Put a whole message back in the composer: its quote blocks as blocks, the
+ *  rest as text. */
+function loadMessage(message: string): void {
+  const parsed = parseQuoteBlocks(message);
+  blocks.value = parsed.blocks;
+  text.value = parsed.text;
+}
 
 const fileInputRef = ref<HTMLInputElement | null>(null);
 
@@ -123,26 +143,31 @@ const selectWrapRef = ref<HTMLDivElement | null>(null);
 const triggerRef = ref<HTMLButtonElement | null>(null);
 const menuRef = ref<HTMLDivElement | null>(null);
 
-/** True when there is something to send: non-empty text OR ≥1 attachment.
- *  Mirrors the handleSend guard — both gate on getFiles(). */
-const canSend = computed(() => text.value.trim().length > 0 || attachments.getFiles().length > 0);
+/** True when there is something to send: non-empty text, ≥1 quote block OR ≥1
+ *  attachment. Mirrors the handleSend guard — both gate on getFiles(). */
+const canSend = computed(
+  () =>
+    text.value.trim().length > 0 || blocks.value.length > 0 || attachments.getFiles().length > 0,
+);
 
 async function handleSend(): Promise<void> {
   const trimmed = text.value.trim();
   const files = attachments.getFiles();
+  const quoted = blocks.value;
 
   // Guard here too so we don't clear needlessly. Same gate as canSend.
-  if (!trimmed && files.length === 0) return;
+  if (!trimmed && quoted.length === 0 && files.length === 0) return;
 
   // Read the dock's DOM contract at click time — the ref can go null if the
   // dock unmounts across an await, and the send must target the same lane.
   const { turnId, type } = readDomContext(footerRef.value);
 
-  // Clear textarea before awaiting so the UI feels instant.
+  // Clear the composer before awaiting so the UI feels instant.
   text.value = '';
+  blocks.value = [];
   await nextTick();
 
-  await session.sendMessage(trimmed, files, turnId, type);
+  await session.sendMessage(encodeQuoteBlocks(quoted, trimmed), files, turnId, type);
   // A main-dock send may start the channel's first thread, which the menu
   // then has to change.
   if (props.turnId == null) void loadSettings();
@@ -301,7 +326,7 @@ function onBeforeUnload(e: BeforeUnloadEvent): void {
 function onTurnInterrupted(e: Event): void {
   const detail = (e as CustomEvent<{ text: string; turnId: number | null }>).detail;
   if (detail.turnId !== props.turnId) return;
-  text.value = detail.text ?? '';
+  loadMessage(detail.text ?? '');
   nextTick(() => {
     textareaRef.value?.focus();
     // Move cursor to end.
@@ -320,7 +345,27 @@ function onEditQueued(e: Event): void {
   const detail = (e as CustomEvent<{ turnId: number | null; text: string }>).detail;
   if (detail.turnId !== props.turnId) return;
   markActive();
-  text.value = text.value ? `${text.value}\n${detail.text}` : detail.text;
+  const queued = parseQuoteBlocks(detail.text);
+  blocks.value = [...blocks.value, ...queued.blocks];
+  if (queued.text) text.value = text.value ? `${text.value}\n${queued.text}` : queued.text;
+  focusAtEnd();
+}
+
+/** A quote was made in a reply on this dock's surface — add it as a block. */
+function onQuoteBlock(e: Event): void {
+  const detail = (e as CustomEvent<QuoteBlockEventDetail>).detail;
+  if (detail.dockId !== props.dockId) return;
+  markActive();
+  blocks.value = [...blocks.value, detail.block];
+  focusAtEnd();
+}
+
+function removeBlock(index: number): void {
+  blocks.value = blocks.value.filter((_, i) => i !== index);
+  textareaRef.value?.focus();
+}
+
+function focusAtEnd(): void {
   nextTick(() => {
     textareaRef.value?.focus();
     const el = textareaRef.value;
@@ -356,6 +401,7 @@ function onVoiceTranscript({ text: transcript }: { text: string }): void {
 onMounted(() => {
   document.addEventListener('session:turn-interrupted', onTurnInterrupted);
   document.addEventListener('chalie:edit-queued', onEditQueued);
+  document.addEventListener(QUOTE_BLOCK_EVENT, onQuoteBlock);
   _unsubVoiceTranscript = on('chalie:voice-transcript', onVoiceTranscript);
   document.addEventListener('click', onDocumentClick);
   globalThis.addEventListener('beforeunload', onBeforeUnload);
@@ -377,6 +423,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   document.removeEventListener('session:turn-interrupted', onTurnInterrupted);
   document.removeEventListener('chalie:edit-queued', onEditQueued);
+  document.removeEventListener(QUOTE_BLOCK_EVENT, onQuoteBlock);
   _unsubVoiceTranscript?.();
   document.removeEventListener('click', onDocumentClick);
   globalThis.removeEventListener('beforeunload', onBeforeUnload);
@@ -415,6 +462,9 @@ onBeforeUnmount(() => {
 
     <!-- Pending (queued) sends for this dock's scope, floating above the composer. -->
     <QueuedMessages :thread-id="turnId" />
+
+    <!-- Quote blocks made from replies, waiting to go out with the next message. -->
+    <QuoteComposer :blocks="blocks" @remove="removeBlock" />
 
     <div class="input-dock__outer">
       <div class="input-dock__inner">

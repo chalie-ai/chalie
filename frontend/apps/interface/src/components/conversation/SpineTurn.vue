@@ -12,6 +12,7 @@ import { ConfigType } from '@chalie/shared';
 import type { ConversationTurnBlock } from '../../api/conversation';
 import { useSessionStore } from '../../stores/session';
 import { isThreadActive } from '../../utils/threadActivity';
+import { quotePreview } from '../../utils/quoteBlocks';
 import TurnView from './TurnView.vue';
 
 const props = withDefaults(
@@ -33,7 +34,7 @@ const threadPill = computed<{ status: 'thread' | 'idle'; label: string } | null>
   isForked.value
     ? {
         status: isThreadActive(props.block.last_activity_at) ? 'thread' : 'idle',
-        label: props.block.gist || props.block.preview || 'Conversation',
+        label: props.block.gist || quotePreview(props.block.preview) || 'Conversation',
       }
     : null,
 );

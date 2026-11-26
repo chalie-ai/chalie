@@ -141,7 +141,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <main id="conversationFeed" ref="feedRef" class="conversation-spine">
+  <main id="conversationFeed" ref="feedRef" class="conversation-spine" data-quote-dock="main_spine_dock">
     <div v-if="session.historyLoading" class="history-loader">
       <output class="history-loader__spinner" aria-label="Loading history" />
     </div>

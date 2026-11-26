@@ -5,6 +5,7 @@ import { ConfigType } from '@chalie/shared';
 import { useSessionStore } from '../../stores/session';
 import { conversation as convoApi } from '../../api/conversation';
 import type { ConversationThread } from '../../api/conversation';
+import { quotePreview } from '../../utils/quoteBlocks';
 
 const session = useSessionStore();
 
@@ -93,8 +94,8 @@ function pick(item: ConversationThread): void {
             @click="pick(item)"
           >
             <span class="result-body">
-              <span class="result-name">{{ item.gist ?? item.preview }}</span>
-              <span class="result-snippet">{{ item.preview }}</span>
+              <span class="result-name">{{ item.gist ?? quotePreview(item.preview) }}</span>
+              <span class="result-snippet">{{ quotePreview(item.preview) }}</span>
             </span>
             <span class="result-tag">thread</span>
           </button>

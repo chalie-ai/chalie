@@ -18,6 +18,7 @@ import {
   upsertTurnToSurfaces,
 } from '../../utils/turnDom';
 import { delegateName, subagentKind } from '../../utils/delegateChannel';
+import { quotePreview } from '../../utils/quoteBlocks';
 import TurnView from './TurnView.vue';
 import InputDock from '../layout/InputDock.vue';
 import DockError from '../layout/DockError.vue';
@@ -88,7 +89,7 @@ async function _openTurn(turnId: number, type: string): Promise<void> {
         'but was requested as', type, '— trusting the fetched type',
       );
     }
-    heading.value = block.gist || block.preview || 'Thread';
+    heading.value = block.gist || quotePreview(block.preview) || 'Thread';
     upsertTurnToSurfaces(block, block.type, { ticket });
     hydrated.value = true;
   } catch {
@@ -248,7 +249,12 @@ onBeforeUnmount(() => {
         <span class="thread-panel__title">{{ heading }}</span>
       </header>
 
-      <div ref="bodyRef" class="thread-panel__body">
+      <!-- Only a thread has a dock to quote a reply into; a delegate transcript has none. -->
+      <div
+        ref="bodyRef"
+        class="thread-panel__body"
+        :data-quote-dock="session.panelThreadId != null ? 'thread_view_dock' : undefined"
+      >
         <div v-if="!hydrated" class="thread-panel__loader">
           <output class="thread-panel__spinner" aria-label="Loading thread" />
         </div>

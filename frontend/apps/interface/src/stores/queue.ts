@@ -8,6 +8,7 @@
  */
 import { defineStore } from 'pinia';
 import { ConfigType } from '@chalie/shared';
+import { encodeQuoteBlocks, parseQuoteBlocks } from '../utils/quoteBlocks';
 
 /** Scope/lane key: the main spine, or a thread by its turn_id. */
 export function laneKey(threadId: number | null): string {
@@ -56,12 +57,22 @@ export const useQueueStore = defineStore('queue', {
       return this.typeByScope[laneKey(threadId)] ?? ConfigType.USER;
     },
     /** Take the whole scope's queue, clearing it. Texts join into ONE
-     *  newline-joined message (unchanged shape for the send API); every queued
-     *  entry's files concatenate, in order, into one attachment batch. */
+     *  newline-joined message (unchanged shape for the send API), with every
+     *  entry's quote blocks gathered at its head, where a message carries them;
+     *  every queued entry's files concatenate, in order, into one attachment
+     *  batch. */
     take(threadId: number | null): QueuedMessage {
       const k = laneKey(threadId);
       const entries = this.byScope[k] ?? [];
-      const text = entries.map((e) => e.text).join('\n');
+      const parts = entries.map((e) => parseQuoteBlocks(e.text));
+      const text = encodeQuoteBlocks(
+        parts.flatMap((p) => p.blocks),
+        // An entry of quote blocks alone adds no line of text.
+        parts
+          .filter((p) => p.text || !p.blocks.length)
+          .map((p) => p.text)
+          .join('\n'),
+      );
       const files = entries.flatMap((e) => e.files);
       delete this.byScope[k];
       delete this.typeByScope[k];

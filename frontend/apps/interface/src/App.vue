@@ -10,6 +10,7 @@ import ConversationFeed from './components/conversation/ConversationFeed.vue';
 import ThreadPanel from './components/conversation/ThreadPanel.vue';
 import BrowserPanel from './components/browser/BrowserPanel.vue';
 import SearchOverlay from './components/overlays/SearchOverlay.vue';
+import QuoteSelection from './components/conversation/QuoteSelection.vue';
 import InputDock from './components/layout/InputDock.vue';
 import LoadingOverlay from './components/layout/LoadingOverlay.vue';
 import TaskDrawer from './components/overlays/TaskDrawer.vue';
@@ -94,6 +95,7 @@ onBeforeUnmount(() => {
 
   <!-- Thread search overlay — Cmd/Ctrl-K or the top-bar search button. -->
   <SearchOverlay />
+  <QuoteSelection />
 
   <!-- Teleport target for dialogs -->
   <div id="overlayRoot"></div>

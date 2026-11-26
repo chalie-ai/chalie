@@ -92,6 +92,12 @@
   transform: rotate(90deg);
 }
 
+// A faint rule between a message's quote blocks and its own text, drawn as a fill.
+.user-message__divider {
+  height: 1px;
+  background: var(--line);
+}
+
 .user-text {
   // pre-wrap preserves the newlines the composer inserts (Enter adds a newline;
   // only the send button submits).

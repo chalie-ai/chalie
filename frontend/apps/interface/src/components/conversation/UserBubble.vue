@@ -4,6 +4,8 @@ import { ChevronRight, FileText, Image as ImageIcon } from '@lucide/vue';
 import type { ConversationAttachment, ConversationMessage } from '../../api/conversation';
 import ImagePreviewModal from '../overlays/ImagePreviewModal.vue';
 import { subagentKind } from '../../utils/delegateChannel';
+import { parseQuoteBlocks } from '../../utils/quoteBlocks';
+import QuoteBlocks from './QuoteBlocks.vue';
 
 const props = withDefaults(defineProps<{
   message: ConversationMessage;
@@ -13,11 +15,17 @@ const props = withDefaults(defineProps<{
   collapsible?: boolean;
 }>(), { label: null, collapsible: false });
 
+// A message may open with quote blocks; they render above its text, apart.
+const parsed = computed(() => parseQuoteBlocks(props.message.content));
+
 // File-only messages carry the '[File attached]' placeholder text — drop the
-// empty bubble and let the attachment list stand on its own.
-const showText = computed(
-  () => !(props.message.content === '[File attached]' && props.message.attachments?.length),
-);
+// empty bubble and let the attachment list stand on its own. A message of
+// quote blocks alone has no text to show.
+const showText = computed(() => {
+  const { blocks, text } = parsed.value;
+  if (blocks.length && !text) return false;
+  return !(text === '[File attached]' && props.message.attachments?.length);
+});
 
 // A subagent's reply reads "Reply from <b>{name}</b> agent", and a message it
 // sent while still working "Message from <b>{name}</b> agent": the name is the
@@ -103,6 +111,11 @@ function openAttachment(att: ConversationAttachment): void {
     </button>
     <span v-else-if="label" class="user-message__label">{{ label }}</span>
 
+    <template v-if="parsed.blocks.length">
+      <QuoteBlocks v-show="showBody" :blocks="parsed.blocks" />
+      <div v-if="showText" v-show="showBody" class="user-message__divider" aria-hidden="true"></div>
+    </template>
+
     <div
       v-if="showText"
       v-show="showBody"
@@ -110,7 +123,7 @@ function openAttachment(att: ConversationAttachment): void {
       class="user-text"
       :class="{ 'user-text--clamped': overflowing && collapsed }"
     >
-      {{ message.content }}
+      {{ parsed.text }}
     </div>
 
     <button
