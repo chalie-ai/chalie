@@ -53,6 +53,7 @@ from services.memory_step_service import (
     _in_scope,
     memory_step_config,
 )
+from tests.helpers import NO_PLAN, is_planning_request
 
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider", "real_memory_step")]
 
@@ -137,6 +138,8 @@ class _ScriptedProvider:
         return 120_000
 
     def send(self, request: ProviderRequest) -> ProviderResponse:
+        if is_planning_request(request):
+            return NO_PLAN
         self.requests.append(request)
         if _is_step_request(request):
             if self._step_gate is not None:

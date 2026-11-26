@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from abilities.plan import PlanAbility
 from configs.channels._common import DEFAULT_ALWAYS_AVAILABLE
 from configs.enums.channels import Channel
 from configs.enums.policy_channel import PolicyChannel
@@ -34,7 +35,7 @@ class EAMPConfig(ProcessorConfig):
             channel=Channel.for_external_agent(agent_name),
             role="external_agent",
             policy_channel=PolicyChannel.EXTERNAL_AGENT,
-            always_available=DEFAULT_ALWAYS_AVAILABLE,
+            always_available=[*DEFAULT_ALWAYS_AVAILABLE, PlanAbility.NAME],
             skip_transcript=False,
             skip_input_row=False,
             suppress_history=False,

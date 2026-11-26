@@ -100,6 +100,18 @@ class Agent(Model):
         return cls.filter_in("status", (cls.RUNNING, cls.WAITING)).order_by("agent_id ASC").get()
 
     @classmethod
+    def in_progress(cls, channel: str, turn_id: int, messaged: Sequence[int]) -> list[Agent]:
+        """Every agent turn ``turn_id`` on ``channel`` spawned, and every one
+        of the agents ``messaged`` — those that turn sent a message — that is
+        still running or waiting for its caller's reply."""
+        active = (cls.RUNNING, cls.WAITING)
+        spawned = cls.filter("spawned_by_channel", channel).filter("spawned_in_turn", turn_id)
+        return [
+            *spawned.filter_in("status", active).get(),
+            *cls.filter_in("agent_id", messaged).filter_in("status", active).get(),
+        ]
+
+    @classmethod
     def resume(cls, agent_id: int, turn_id: int) -> bool:
         """Move an agent that ended done or waiting onto its next turn,
         ``turn_id``, as running again — in the transaction that opens that

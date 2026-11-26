@@ -31,6 +31,7 @@ from controllers.message_processor import MessageProcessor
 from models.provider_response import ProviderResponse
 from models.queued_message import QueuedMessage
 from services.provider_api import ProviderApiRequest
+from tests.helpers import NO_PLAN, is_planning_request
 
 pytestmark = pytest.mark.unit
 
@@ -58,8 +59,9 @@ class _Provider:
     """Answers every call with a short text reply. Each ``hold_next`` gate is
     taken by the next call to arrive, in order, and parks it until released —
     the window in which a test delivers messages to a chat whose turn is
-    working. Every call a user turn with a text-only reply makes is its own
-    drive thread's single step, so the next call to arrive is the next turn's."""
+    working. A turn's planning pre-pass is answered at once with no plan and
+    takes no gate, so every gated call is a turn's single step and the next one
+    to arrive is the next turn's."""
 
     _REPLY = ProviderResponse(text="Noted.", model="scripted", tool_calls=None)
 
@@ -86,6 +88,8 @@ class _Provider:
         return 200000
 
     def send(self, dto: ProviderApiRequest) -> ProviderResponse:
+        if is_planning_request(dto):
+            return NO_PLAN
         with self._lock:
             gate = self._waiting.pop(0) if self._waiting else None
         if gate is not None:

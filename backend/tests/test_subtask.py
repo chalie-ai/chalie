@@ -441,8 +441,9 @@ def test_boot_tells_a_cut_off_subtask_s_caller_once_and_a_cut_off_memory_step_no
 def test_a_scheduled_task_waits_for_its_subtask_and_ends_once(db: sqlite3.Connection) -> None:
     """A scheduled task can start a subtask, and it waits for it. The
     ``subtask`` tool its turn is sent can only start one and says the call
-    waits, while the chat — asked while the schedule waits — is sent the same
-    single action and told the answer arrives later. The start ends with the
+    waits, while the chat — asked while the schedule waits, and looking the
+    tool up the same way — is sent the same single action and told the answer
+    arrives later. The start ends with the
     subtask's answer and nothing in front of it, the schedule's model reads
     that answer on its next step, nothing is sent back to the schedule's
     thread or to the user's conversation, and the schedule's turn ends once —
@@ -453,6 +454,7 @@ def test_a_scheduled_task_waits_for_its_subtask_and_ends_once(db: sqlite3.Connec
         chat=[
             calls(tool("find_tools", query=["subtask"])),
             _START,
+            calls(tool("find_tools", query=["subtask"])),
             text("Nothing to report yet."),
             text("Status: the primes are listed."),
         ],
@@ -478,7 +480,8 @@ def test_a_scheduled_task_waits_for_its_subtask_and_ends_once(db: sqlite3.Connec
         assert params == {"action", "instructions", "act_summary"}
         assert "waits" in description
         assert "Reply from" not in description
-    chat_sent = provider.definitions("chat", "subtask", "what is the schedule doing?")
+    chat_before_discovery, *chat_sent = provider.definitions("chat", "subtask", "what is the schedule doing?")
+    assert chat_before_discovery is None
     assert len(chat_sent) == 1
     for description, actions, params in map(as_sent, chat_sent):
         assert actions == ["start"]

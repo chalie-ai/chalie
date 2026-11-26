@@ -47,7 +47,7 @@ from models.thread import Thread
 from models.turn_execution import TurnExecution
 from services.provider_api import ProviderApiRequest
 from services.turn_serializer_service import get_service as _serializer
-from tests.helpers import drain_background_turns
+from tests.helpers import NO_PLAN, drain_background_turns, is_planning_request
 
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 
@@ -117,6 +117,8 @@ class _ScriptedProvider:
         return 200000
 
     def send(self, dto: ProviderApiRequest) -> ProviderResponse:
+        if is_planning_request(dto):
+            return NO_PLAN
         self.bodies.append(str(dto.messages[0]["content"]))
         if self.sends >= len(self._responses):
             return self._TERMINAL
@@ -234,6 +236,8 @@ class _RunsOutOfRoomProvider:
         return 200000
 
     def send(self, dto: ProviderApiRequest) -> ProviderResponse:
+        if is_planning_request(dto):
+            return NO_PLAN
         system = dto.system
         if _HANDOVER_MARK in system:
             self.handover_bodies.append("\n".join(str(m.get("content") or "") for m in dto.messages))

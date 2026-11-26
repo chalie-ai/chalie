@@ -30,7 +30,7 @@ from unittest.mock import patch
 import pytest
 
 from models.provider_response import ProviderResponse
-from tests.helpers import drain_background_turns
+from tests.helpers import NO_PLAN, drain_background_turns, is_planning_request
 
 if TYPE_CHECKING:
     from controllers.message_processor import MessageProcessor
@@ -64,6 +64,8 @@ class _RecordingProvider:
         return 200000
 
     def send(self, dto: object) -> ProviderResponse:
+        if is_planning_request(dto):
+            return NO_PLAN
         self.requests.append(dto)
         if self.sends >= len(self._responses):
             return self._TERMINAL

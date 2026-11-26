@@ -82,8 +82,8 @@ class _TokenReportingProvider:
     client protocol (``get_context_limit``/``send``)
     and answers every send with one benign terminal response (non-empty text,
     no tool calls), counting the sends: one CHAT call is one expected move of
-    the meter. A chat turn does not plan, so it makes one. The text must be
-    non-empty: an empty completion trips the
+    the meter. A user turn makes two — the planning pre-pass, then one loop
+    step. The text must be non-empty: an empty completion trips the
     processor's empty-completion steer, which re-sends. ``tokens_input=None``
     models a provider whose native payload exposes no usage counter."""
 

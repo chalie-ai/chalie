@@ -40,7 +40,7 @@ from controllers.message_processor import (
 from models.provider_response import ProviderResponse
 from models.transcript import Transcript
 from models.turn_execution import TurnExecution
-from tests.helpers import drain_background_turns
+from tests.helpers import NO_PLAN, drain_background_turns, is_planning_request
 
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 
@@ -64,6 +64,8 @@ class _ScriptedProvider:
         return 200000
 
     def send(self, dto: object) -> ProviderResponse:
+        if is_planning_request(dto):
+            return NO_PLAN
         self.requests.append(dto)
         if len(self.requests) > len(self._responses):
             return self._TERMINAL

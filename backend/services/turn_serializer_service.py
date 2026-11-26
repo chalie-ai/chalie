@@ -523,9 +523,10 @@ class TurnSerializerService:
         # delegate's input row (the stamp linking it to the call that spawned
         # the turn) or a subtask's reply on its caller's channel. Both are
         # input to their turn, so both read as user rows whatever the role of
-        # the config that wrote them.
+        # the config that wrote them. So does a joined row, a message sent into
+        # the turn while it works, plan nudges included.
         for r in rows:
-            if r["tool_call_id"] is not None:
+            if r["tool_call_id"] is not None or r["joined"]:
                 r["role"] = "user"
         messages = _rows_to_messages(rows)
 

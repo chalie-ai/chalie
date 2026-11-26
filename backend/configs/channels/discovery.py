@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-from abilities.find_skills import FindSkillsAbility
 from abilities.find_tools import FindToolsAbility
-from abilities.mcp_manager import McpManagerAbility
-from abilities.recall import Recall
 from configs.channels.user import UserConfig
 from configs.enums.channels import Channel
 from configs.enums.config_type import ConfigTypeEnum
@@ -37,10 +34,10 @@ class DiscoveryConfig(UserConfig):
     to the ``discovery`` channel. The system prompt is the inherited UserConfig
     persona/voice prompt, less the chat's section on handing work to subagents
     (a pass waits for its subagents' answers); the user turn is the research
-    task only (``DISCOVERY_PROMPT``). Only the routing identity, the tool
-    surface, the stable turn_id, and the silent-background-loop overrides
-    differ from UserConfig. Fired at most once every few hours by the
-    subconscious worker.
+    task only (``DISCOVERY_PROMPT``). Only the routing identity, the stable
+    turn_id, and the silent-background-loop overrides differ from UserConfig:
+    it has the chat's ready tools and plans its pass like the chat. Fired at
+    most once every few hours by the subconscious worker.
 
     Memory: the pass itself only reads — ``recall`` grounds the research in
     what is already known; it never writes memory inline. Each settled fire
@@ -67,19 +64,6 @@ class DiscoveryConfig(UserConfig):
         object.__setattr__(self, "channel", Channel.DISCOVERY.value)
         object.__setattr__(self, "read_channel", Channel.USER.value)
         object.__setattr__(self, "prompt_channel", Channel.USER.value)
-        # Tool surface: the framework discovery pair + MCP manager, plus recall
-        # so the pass can ground its research in what is already known. Memory
-        # WRITES happen in the settle-triggered memory step, never inline.
-        object.__setattr__(
-            self,
-            "always_available",
-            [
-                FindSkillsAbility.NAME,
-                FindToolsAbility.NAME,
-                McpManagerAbility.NAME,
-                Recall.NAME,
-            ],
-        )
         # The discovery turn_id is a stable, box-owned key (persisted by the cron
         # job on first fire): the first research pass opens the turn, every later
         # fire forks into it, so the whole research log is one thread.

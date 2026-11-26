@@ -26,6 +26,7 @@ the call returns what the subagent last gave
 
 from __future__ import annotations
 
+import json
 from typing import ClassVar, cast
 
 from abilities._agents import AgentAbility, label
@@ -35,6 +36,8 @@ from configs.enums.param_key import Keys
 from contracts.params.agent_params_bag import AgentMessageParams
 from contracts.params.param_bag import ParamBag
 from exceptions import AgentStopped
+from models.agent import Agent
+from models.tool_call import ToolCall
 from services.agent_service import AgentService
 
 _SENT = 'Message sent to subagent {label}. Its reply will reach you as "{reply}".'
@@ -90,3 +93,19 @@ class MessageSubagentAbility(AgentAbility[AgentMessageParams]):
             # A cancelled or failed agent's last output is always its notice.
             return ToolResult.err(cast("str", AgentService.last_output(stopped.agent)), code="agent-stopped")
         return ToolResult.ok(_SENT.format(label=label(agent), reply=reply_label(agent.type, agent.agent_id)))
+
+
+def awaits_reply(channel: str, turn_id: int) -> bool:
+    """Whether turn ``turn_id`` on ``channel`` still has an answer to come
+    from a subagent: one it spawned, or one it sent a message with this tool,
+    is still running or waiting for its caller's reply
+    (:meth:`~models.agent.Agent.in_progress`) — less an archived one, which no
+    tool can reply to any more (:meth:`AgentService.archived`). Both calls
+    return at once, and that answer opens a turn of its own on ``channel``
+    later."""
+    messaged = [
+        cast("AgentMessageParams", AgentMessageParams.from_params(json.loads(call.params))).agent_id
+        for call in ToolCall.by_turn(channel, turn_id)
+        if call.tool_name == MessageSubagentAbility.NAME and call.state == ToolCall.DONE
+    ]
+    return any(not AgentService.archived(agent) for agent in Agent.in_progress(channel, turn_id, messaged))

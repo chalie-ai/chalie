@@ -34,10 +34,11 @@ if TYPE_CHECKING:
 
 def plans(config: ProcessorConfig) -> bool:
     """Whether a turn on ``config`` plans its message — the planning pass, the
-    ``plan`` tool and the plan section of its prompt. The one rule the
-    processor and the prompt builder both read. Each kind of turn declares it
-    in code by pinning ``plan`` among its ready tools: a subagent's own turn
-    and a scheduled task do; the person's chat does not."""
+    ``plan`` tool, the plan section of its prompt and the nudge to finish an
+    open plan. The one rule the processor and the prompt builder both read.
+    Each kind of turn declares it in code by pinning ``plan`` among its ready
+    tools: the person's chat, a discovery pass, an outside agent's message, a
+    subagent's own turn and a scheduled task do; housekeeping turns do not."""
     return PlanAbility.NAME in config.always_available
 
 

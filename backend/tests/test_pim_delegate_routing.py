@@ -42,7 +42,6 @@ from configs.channels import UserConfig
 from contracts.params.find_tools_params_bag import FindToolsParamsBag
 from configs.channels._common import DEFAULT_ALWAYS_AVAILABLE
 from configs.channels.pim import PimConfig
-from configs.channels.scheduled import ScheduledConfig
 from configs.enums.policy_channel import PolicyChannel
 from controllers.message_processor import MessageProcessor
 from services.processor_config import ProcessorConfig
@@ -62,12 +61,11 @@ _VERBATIM = (
 )
 
 
-def _injected(query: object, config: ProcessorConfig | None = None) -> list[str]:
-    """Drive the real find_tools cascade on a real MessageProcessor — the chat's
-    unless *config* names another — and return the tools the call added to
-    ``active_tools`` (the mutation the dispatcher acts on). ``hidden_input``
-    skips the turn-0 transcript row."""
-    mp = MessageProcessor(config or UserConfig({"hidden_input": True}), raw_input="find a tool for me")
+def _injected(query: object) -> list[str]:
+    """Drive the real find_tools cascade on a real user-channel MessageProcessor
+    and return the tools the call added to ``active_tools`` (the mutation the
+    dispatcher acts on). ``hidden_input`` skips the turn-0 transcript row."""
+    mp = MessageProcessor(UserConfig({"hidden_input": True}), raw_input="find a tool for me")
     mp.active_tools = list(mp.config.always_available or [])
     base = set(mp.active_tools)
     ability = FindToolsAbility()
@@ -86,10 +84,8 @@ _PIM_INTENTS = ["email", "calendar", "contacts", "reminders", "mail"]
 @pytest.mark.parametrize("intent", _PIM_INTENTS)
 def test_personal_info_intent_surfaces_the_pim_delegate(db: object, intent: str) -> None:
     """A PIM SEARCHABLE_AS alias must surface ``pim`` — the only door to the
-    personal-information tools now that they are delegate-owned. Looked up from
-    a scheduled task, which reaches ``pim`` only this way; the chat has it
-    ready from the first step."""
-    injected = _injected([intent], ScheduledConfig())
+    personal-information tools now that they are delegate-owned."""
+    injected = _injected([intent])
     assert "pim" in injected, (
         f"intent {intent!r} must route to the pim delegate. injected={injected!r}"
     )

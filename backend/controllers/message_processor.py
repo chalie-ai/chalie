@@ -52,7 +52,9 @@ call with no tool calls, or one that answered while its only calls closed the
 last open tasks of its plan. ``_settle()`` then stores (or, for the latter,
 stamps) that call's row and, in the same transaction, either ends the turn —
 the only row settled — or, when a message joined while the call was in flight,
-takes it in and steps again. The
+takes it in and steps again. An exchange that would end with its plan still
+open is nudged: the nudge is written into the turn as a joined message, which
+the loop takes in the same way. The
 loop runs on the daemon thread ``begin()`` starts; every recursive call is
 synchronous within that thread. Synchronous text-consumers (delegate abilities, mcp_server, the
 user-synthesis generator) call ``process()`` then ``result()`` to join the
@@ -72,7 +74,8 @@ from threading import Thread, get_ident
 from typing import TYPE_CHECKING, Protocol, cast
 
 from abilities._delegate import agent_config, replies_late, reply_to_caller, replying_tools
-from abilities.message_parent import MessageParentAbility, holds, waiting_reminder
+from abilities.message_parent import MessageParentAbility, ended_on_message_parent, holds, waiting_reminder
+from abilities.message_subagent import awaits_reply
 from abilities.plan import PlanAbility, plans
 from abilities.recall import Recall
 from configs.channels.user import UserConfig
@@ -143,6 +146,17 @@ _EMPTY_COMPLETION_STEER = (
     "reply is never a valid answer. Address the user's request now: call the "
     "tools you need, or write your reply."
 )
+
+#: The message sent into a turn whose exchange would end with its plan still
+#: open (:meth:`MessageProcessor._owes_nudge`), the way a person's message
+#: joins a working turn. The exchange is nudged again only once a step after
+#: the nudge has called a tool other than the plan.
+_PLAN_NUDGE = (
+    "Your session was interrupted, continue where you left off. "
+    "If there is nothing left to do mark every open task in your plan as done or cancelled"
+)
+#: The statuses that close a plan task; a task in any other is still open.
+_CLOSED_TASK = (PlanTaskStatus.DONE, PlanTaskStatus.CANCELLED)
 
 #: Consecutive ``ContextLimit`` hits a single turn may recover from before the
 #: error is allowed out. Compaction is the only lever, so a hit that survives it
@@ -272,6 +286,10 @@ class MessageProcessor:
         # _build_messages.
         self._empty_completions: int = 0
         self._empty_completion_steer: bool = False
+        # Raised when the plan nudge is sent, lowered by a step that calls a
+        # tool other than the plan; while raised the exchange is not nudged
+        # again.
+        self._idle_since_nudge: bool = False
         # Reset by every send that gets through, so it counts consecutive
         # failures to fit rather than a turn's lifetime total — a long turn may
         # legitimately outgrow the window more than once as tools add output.
@@ -713,7 +731,8 @@ class MessageProcessor:
         when the call carried no prose — so the call's tool calls and thinking
         trace anchor to it, dispatch the calls, and return it if it answered by
         closing its plan (:meth:`_closes_plan`); else take in any message
-        joined meanwhile, and recurse.
+        joined meanwhile, and recurse. A call that ran a tool other than the
+        plan lets the exchange be nudged again (:meth:`_owes_nudge`).
         A retried send and the empty-completion steer write no row and take
         nothing in: a joined message is consumed only once a call and all its
         tools have returned. A cancel observed before any send aborts the
@@ -759,6 +778,8 @@ class MessageProcessor:
         self._dispatch_tools(tool_calls)
         if self._closes_plan(response.text, tool_calls):
             return response
+        if any(call["name"] != PlanAbility.NAME for call in tool_calls):
+            self._idle_since_nudge = False
         self._consume_joined()
         return self._step()
 
@@ -777,9 +798,26 @@ class MessageProcessor:
         ):
             return False
         tasks = PlanTask.for_transcript(self.uid)
-        return bool(tasks) and all(
-            task.status in (PlanTaskStatus.DONE, PlanTaskStatus.CANCELLED) for task in tasks
-        )
+        return bool(tasks) and all(task.status in _CLOSED_TASK for task in tasks)
+
+    def _owes_nudge(self) -> bool:
+        """Whether the exchange, at its end, is sent the plan nudge instead:
+        its kind of turn plans (:func:`~abilities.plan.plans`); a step since
+        its last nudge, if it had one, called a tool other than the plan —
+        plan calls alone are not work; its plan has a task that is neither
+        done nor cancelled — an exchange with no plan has nothing to finish;
+        no subagent this turn spawned or messaged still has its answer to
+        come, since that answer opens a turn of its own
+        (:func:`~abilities.message_subagent.awaits_reply`); and the turn did
+        not end on a message to its caller, since that subagent is waiting for
+        the reply (:func:`~abilities.message_parent.ended_on_message_parent`)."""
+        if not plans(self.config) or self._idle_since_nudge or self.uid is None:
+            return False
+        if all(task.status in _CLOSED_TASK for task in PlanTask.for_transcript(self.uid)):
+            return False
+        if awaits_reply(self.channel, self.turn_id):
+            return False
+        return not ended_on_message_parent(self.channel, self.turn_id)
 
     def _send_fitting(self) -> "ProviderResponse":
         """Send this step's request, checking for a cancel before every attempt
@@ -812,15 +850,21 @@ class MessageProcessor:
         is stored settled and the execution closes COMPLETED, together, so a
         message can never join a turn that has already answered for the last
         time. One waiting: the row is stored settled=0, the message is taken
-        in, and the caller steps again. A call that answered while closing its
-        plan was already stored and its calls run by :meth:`_step`, so its row
-        is only stamped settled, under the same rule. Frames for these writes
-        go out only after the commit; a cancel that landed first aborts before
-        anything is written. Returns whether the turn is settled."""
+        in, and the caller steps again. An exchange whose plan is still open
+        (:meth:`_owes_nudge`) is waiting too: its row is stored settled=0 and
+        the plan nudge is written into the turn after it, the same joined
+        write a person's message takes (:meth:`join`). A call that answered
+        while closing its plan was already stored and its calls run by
+        :meth:`_step`, so its row is only stamped settled, under the same
+        rule. Frames for these writes go out only after the commit; a cancel
+        that landed first aborts before anything is written. Returns whether
+        the turn is settled."""
         with self._atomic():
             if self.turn_execution_service.should_stop():
                 raise _TurnCancelled()
             waiting = bool(Transcript.joined_since(self.channel, self.turn_id, self._consumed_through))
+            nudge = not waiting and self._owes_nudge()
+            waiting = waiting or nudge
             if not response.tool_calls:
                 formatted = self._store(response.text, settled=not waiting)
                 self._capture_thinking_trace(response)
@@ -828,6 +872,9 @@ class MessageProcessor:
                 formatted = self._format(response.text or "")
                 if not waiting and not self.config.skip_transcript:
                     self.transcript_service.settle(cast("int", self.current_transcript_id))
+            if nudge:
+                self.transcript_service.append_input(_PLAN_NUDGE, joined=True)
+                self._idle_since_nudge = True
             if not waiting:
                 closed = self.turn_execution_service.finish(TurnExecution.COMPLETED)
                 if closed is None and self.execution is not None:
@@ -857,12 +904,11 @@ class MessageProcessor:
 
     def _offer_replying_tools(self, rows: Sequence[Transcript]) -> None:
         """Activate, on a turn whose message is a delegate's late reply, the
-        tools its follow-up instruction names
-        (:func:`~abilities._delegate.replying_tools`); the delegate itself is
-        already pinned, so the turn can follow up without looking it up. A
-        reply's row carries its delegate call's ``tool_calls`` id. Only a turn
-        that is replied to late gets them — a subtask's or a delegate's own
-        turn never does."""
+        tools that reply needs (:func:`~abilities._delegate.replying_tools`):
+        the delegate itself, so the turn can follow up without looking it up,
+        and the tools its follow-up instruction names. A reply's row carries
+        its delegate call's ``tool_calls`` id. Only a turn that is replied to
+        late gets them — a subtask's or a delegate's own turn never does."""
         if not replies_late(self.config.type()):
             return
         for row in rows:

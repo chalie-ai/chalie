@@ -9,11 +9,11 @@
 """Subtask configs — a background turn that runs with its caller's settings.
 
 A subtask is an ordinary turn on its own ``delegate:subtask:{agent_id}``
-channel, one turn per subtask. It thinks as the turn that started it: the same system prompt,
-permissions and provider, because each config here IS its caller's config with
-only the routing, the background posture and the ready tools changed
-(``DiscoveryConfig``'s shape). The one part of the chat's system prompt
-a subtask is not given is its section on handing work to subagents: a subtask
+channel, one turn per subtask. It thinks as the turn that started it: the same
+system prompt, tools, permissions and provider, because each config here IS its
+caller's config with only the routing and the background posture changed
+(``DiscoveryConfig``'s shape). The one part of the chat's system prompt a
+subtask is not given is its section on handing work to subagents: a subtask
 waits for its own subagents' answers. They must stay subclasses: the prompt
 builder picks the user persona by ``isinstance(config, UserConfig)`` and the
 outside agent's by ``isinstance(config, EAMPConfig)``, so a copy or a fresh
@@ -25,8 +25,6 @@ and none of another subtask's work, only its own turns.
 
 from __future__ import annotations
 
-from abilities.plan import PlanAbility
-from configs.channels._common import DEFAULT_ALWAYS_AVAILABLE
 from configs.channels.external_agent import EAMPConfig
 from configs.channels.scheduled import ScheduledConfig
 from configs.channels.user import UserConfig
@@ -56,9 +54,7 @@ class UserSubtaskConfig(UserConfig):
     (a watched delegate streams by channel instead), it pairs no rich-media
     cards (its reply goes to its caller, whose ordinals a card would collide
     with), and its spend is background — the user did not start it. It has no
-    routing type, like every delegate, so nothing addresses it as a spine.
-    Its ready tools are re-declared too: it plans, which the chat does not, and
-    the subagents the chat has ready are not ready on a subtask."""
+    routing type, like every delegate, so nothing addresses it as a spine."""
 
     BROADCASTS_STATE = False
     RENDERS_CARDS = False
@@ -67,7 +63,6 @@ class UserSubtaskConfig(UserConfig):
     def __init__(self) -> None:
         super().__init__()
         _as_subtask(self)
-        object.__setattr__(self, "always_available", [*DEFAULT_ALWAYS_AVAILABLE, PlanAbility.NAME])
 
     def type(self) -> None:
         return None
@@ -93,10 +88,9 @@ class ScheduledSubtaskConfig(ScheduledConfig):
 class ExternalAgentSubtaskConfig(EAMPConfig):
     """A subtask started by an outside agent: that agent's turn settings — its
     prompt, which names the agent and the project, and the ``external_agent``
-    permissions — on the subtask channel. Same re-declarations as
-    :class:`UserSubtaskConfig`; it plans like every subtask. It never loops the
-    human in: the outside agent's own turn does that once, for the exchange
-    its answer belongs to."""
+    permissions — on the subtask channel. It never loops the human in: the
+    outside agent's own turn does that once, for the exchange its answer
+    belongs to."""
 
     BROADCASTS_STATE = False
     RENDERS_CARDS = False
@@ -105,4 +99,3 @@ class ExternalAgentSubtaskConfig(EAMPConfig):
     def __init__(self, agent_name: str, project: str) -> None:
         super().__init__(agent_name, project, loop_in_human=False)
         _as_subtask(self)
-        object.__setattr__(self, "always_available", [*DEFAULT_ALWAYS_AVAILABLE, PlanAbility.NAME])

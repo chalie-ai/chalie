@@ -16,9 +16,9 @@ cutting it off included). The next step a subagent suggests reaches the model on
 answers that reply — directly after the answer — never in what the person
 reads, never in a later exchange, and never on a notice. It is the next step
 of the answer that reply carries, whatever turn the subagent has moved on to
-while the reply waited. The chat is offered the subagent on
-every request; the turn that answers the reply is offered, besides, the tools
-the subagent's next step names. A subagent's own turn is never offered itself.
+while the reply waited. The turn that answers the reply can use the subagent
+and the tools its next step names; a subagent's own turn is never offered
+itself.
 
 Drives the real production entry point (construct inertly, ``begin()``,
 ``result()``), the real boot sweep and the real Flask routes against the real,
@@ -153,13 +153,12 @@ def test_a_subagent_called_from_the_chat_returns_at_once_and_its_answer_comes_ba
     also all the person reads under that label. The model answering it reads
     the label, then the answer, then — directly after it — the suggested
     next step the subagent carries and nothing else (only ``web_browse``
-    carries one). The subagent is on offer on every chat
-    request; the tools its next step names are on offer only while the chat
-    answers the reply. A later, unrelated exchange still reads the label and
+    carries one), with the subagent and every tool its next step names on
+    offer, none of which the chat had before the call. A later, unrelated exchange still reads the label and
     the answer in its history, without the next step."""
     client, db, _store = authed_client
     ability = cast("DelegateAbility[DelegateParamsBag]", AbilityRegistry.get(delegate))
-    follow_up_tools = set(ability.FOLLOW_UP_TOOLS)
+    follow_up_tools = {delegate, *ability.FOLLOW_UP_TOOLS}
     nudge = ability.get_follow_up(ToolResult.ok(_ANSWER))
     held = Held(text(_ANSWER))
     script: list[Entry] = [held]
@@ -209,9 +208,8 @@ def test_a_subagent_called_from_the_chat_returns_at_once_and_its_answer_comes_ba
     else:
         assert follow_up is None and _BLOCK_OPENER not in answering
     offered = provider.offered("chat")
-    assert all(ability.NAME in names for names in offered), offered
-    assert follow_up_tools <= offered[2]
-    assert not any(names & follow_up_tools for names in (*offered[:2], *offered[3:])), offered
+    assert not offered[0] & follow_up_tools, offered[0]
+    assert follow_up_tools <= offered[2], offered[2]
 
     assert label in unrelated and _ANSWER in unrelated
     assert _BLOCK_OPENER not in unrelated
@@ -311,9 +309,10 @@ def test_two_subagents_that_answer_while_their_caller_works_are_each_answered_on
     own, the browse's first, so each answer is answered exactly once. The
     turn answering the browse reads its answer followed directly by its
     suggested next step and nothing else; the turn answering ``code_agent``,
-    which carries none, reads no next step. Every request is offered both
-    subagents; only the turn answering the browse is offered, as well, the
-    tool its next step names (``web_fetch``)."""
+    which carries none, reads no next step. Each turn answering a reply is
+    offered its subagent, and the one answering the browse, as well, the tool
+    its next step names (``web_fetch``); the caller's first request is offered
+    none of them."""
     caller = Held(text("Both started."))
     browse = Held(text("Browse: Paris."))
     code = Held(text("Code: the script prints Paris."))
@@ -373,8 +372,9 @@ def test_two_subagents_that_answer_while_their_caller_works_are_each_answered_on
     assert _block_opening(code_tail) is None
     assert _BLOCK_OPENER not in answering_code
     offered = provider.offered("chat")
-    assert all({WebBrowseAbility.NAME, CodeAgentAbility.NAME} <= names for names in offered), offered
-    assert WebFetchAbility.NAME in offered[2], offered[2]
+    assert not offered[0] & {WebBrowseAbility.NAME, CodeAgentAbility.NAME, WebFetchAbility.NAME}, offered[0]
+    assert {WebBrowseAbility.NAME, WebFetchAbility.NAME} <= offered[2], offered[2]
+    assert CodeAgentAbility.NAME in offered[3], offered[3]
     assert not any(WebFetchAbility.NAME in names for names in (*offered[:2], offered[3])), offered
 
 
@@ -633,8 +633,8 @@ def test_boot_tells_the_chat_a_subagent_was_cut_off_by_a_restart(db: sqlite3.Con
 @pytest.mark.parametrize("delegate", ["web_search", "web_browse", "code_agent", "pim", "subtask"])
 def test_a_subagents_own_turn_is_never_offered_itself(authed_client: _Client, delegate: str) -> None:
     """A subagent's own turn opens with a row carrying the call that started it,
-    just as a reply does — yet while the chat is offered the subagent on every
-    request, the subagent's own turn never is."""
+    just as a reply does — yet only the chat's turn answering the reply is
+    offered the subagent; the subagent's own turn never is."""
     client, db, _store = authed_client
     route = "subtask" if delegate == "subtask" else delegate
     start = (
