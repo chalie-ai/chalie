@@ -2,8 +2,9 @@
 worked with its plan in view.
 
 A new message on a config that pins the ``plan`` tool gets a planning pre-pass:
-one or more provider calls that may call only ``recall`` and ``plan`` and that
-show the other tools as a catalogue. The loop that follows sees the plan as a
+one or more provider calls that may call only ``recall``, ``plan`` and — where
+the config pins it — ``find_tools``, and that show the other tools as a
+catalogue; what ``find_tools`` loads there is offered from the loop's first step. The loop that follows sees the plan as a
 ``[plan]`` block that tracks every update, keyed by the message's input row;
 once the exchange settles the plan leaves the context and stays on its message,
 where the thread view returns it. A message joined into a working turn adds
@@ -30,10 +31,12 @@ from flask.testing import FlaskClient
 
 import services.provider_service as provider_service
 from abilities.code_agent import CodeAgentAbility
+from abilities.find_skills import FindSkillsAbility
 from abilities.find_tools import FindToolsAbility
 from abilities.pim import PimAbility
 from abilities.plan import PlanAbility
 from abilities.recall import Recall
+from abilities.search_files import SearchFilesAbility
 from abilities.web_browse import WebBrowseAbility
 from abilities.web_search import WebSearchAbility
 from configs.channels.code_agent import CodeAgentConfig
@@ -52,7 +55,13 @@ from models.tool_call import ToolCall
 from models.transcript import Transcript
 from services.file_mapper_service import FileMapperService
 from services.processor_config import ProcessorConfig
-from services.prompt_service import _NO_PLAN, _PLAN_INSTRUCTION, _PLANNING_INSTRUCTION
+from services.prompt_service import (
+    _NO_PLAN,
+    _PLAN_INSTRUCTION,
+    _PLANNING_CALLS,
+    _PLANNING_CALLS_AND_LOADS,
+    _PLANNING_INSTRUCTION,
+)
 from tests.test_turn_join import (
     AuthedClient,
     _drain,
@@ -65,7 +74,7 @@ from tests.test_turn_join import (
 pytestmark = pytest.mark.unit
 
 _CHANNEL = "user"
-_PLANNING = frozenset({Recall.NAME, PlanAbility.NAME})
+_PLANNING = frozenset({Recall.NAME, PlanAbility.NAME, FindToolsAbility.NAME})
 _MIGRATION_KEY = "plan-tasks-table-v1"
 
 
@@ -136,6 +145,10 @@ def _plan(**params: object) -> dict[str, object]:
     return {"name": PlanAbility.NAME, "input": params}
 
 
+def _load(*names: str) -> dict[str, object]:
+    return {"name": FindToolsAbility.NAME, "input": {"query": list(names)}}
+
+
 def _calls(*calls: dict[str, object]) -> ProviderResponse:
     return ProviderResponse(text="", model="scripted", tool_calls=list(calls))
 
@@ -174,8 +187,8 @@ _ANSWER = _task("Answer", "Tell the user the departure time")
 def test_a_new_message_is_planned_first_then_worked_with_its_plan_in_view(
     authed_client: AuthedClient, provider: _PlanningProvider,
 ) -> None:
-    """The first call may only recall and plan, and sees the planning ask and
-    the other tools as a catalogue. Every loop step after it offers the full
+    """The first call may only recall, plan and load tools, and sees the
+    planning ask and the other tools as a catalogue. Every loop step after it offers the full
     toolset and shows the plan as it stands — each update is in the very next
     request. The pre-pass writes no assistant row and its call anchors to the
     message; the plan is stored on the message and returned with it."""
@@ -194,7 +207,12 @@ def test_a_new_message_is_planned_first_then_worked_with_its_plan_in_view(
     prepass = provider.bodies[0]
     assert "when does my flight leave?" in prepass
     assert _PLANNING_INSTRUCTION in prepass
-    assert f"- `{FindToolsAbility.NAME}`:" in prepass.split("[tool_catalogue]", 1)[1]
+    assert _PLANNING_CALLS_AND_LOADS in prepass
+    catalogue = prepass.split("[tool_catalogue]", 1)[1]
+    assert f"- `{FindSkillsAbility.NAME}`:" in catalogue
+    assert f"- `{FindToolsAbility.NAME}`:" not in catalogue  # callable now, not a tool for later
+    assert f"Tools `{FindToolsAbility.NAME}` can load:" in catalogue
+    assert f"`{SearchFilesAbility.NAME}`" in catalogue
     assert "[plan]\n" not in prepass
 
     first_step = provider.bodies[1]
@@ -243,7 +261,7 @@ def test_a_new_message_is_planned_first_then_worked_with_its_plan_in_view(
     assert reply["plan"] is None
 
 
-# ── 2. the pre-pass runs nothing but recall and plan ─────────────────────────
+# ── 2. the pre-pass runs nothing but its planning tools ──────────────────────
 
 
 def test_a_planning_call_to_any_other_tool_is_never_run(
@@ -255,7 +273,7 @@ def test_a_planning_call_to_any_other_tool_is_never_run(
     client, _db, _store = authed_client
     caplog.set_level(logging.WARNING)
     provider.script(
-        _calls({"name": FindToolsAbility.NAME, "input": {"query": "weather"}}),
+        _calls({"name": FindSkillsAbility.NAME, "input": {"query": "weather"}}),
         _say("It is sunny."),
     )
     turn_id = cast("int", _result(_post(client, -1, "what is the weather?"))["turn_id"])
@@ -264,8 +282,59 @@ def test_a_planning_call_to_any_other_tool_is_never_run(
     assert provider.tools == [_PLANNING, frozenset(UserConfig().always_available)]
     assert _NO_PLAN in provider.bodies[1]
     assert [c.tool_name for c in ToolCall.by_turn(_CHANNEL, turn_id)] == [Recall.NAME]  # the memory seed alone
-    assert f"planning skipped calls to ['{FindToolsAbility.NAME}']" in caplog.text
+    assert f"planning skipped calls to ['{FindSkillsAbility.NAME}']" in caplog.text
     assert _assistant_rows(turn_id) == [("It is sunny.", 1)]
+
+
+def test_a_tool_loaded_in_the_response_that_saves_the_plan_is_offered_from_the_first_step(
+    authed_client: AuthedClient, provider: _PlanningProvider,
+) -> None:
+    """The model loads the tool its plan needs in the same response that saves
+    the plan. Both run, and the loop's very first step offers the loaded tool
+    beside the pinned ones — the turn spends no step looking it up."""
+    client, _db, _store = authed_client
+    provider.script(
+        _calls(_load(SearchFilesAbility.NAME), _plan(action="create", tasks=[_task("List", "List the files")])),
+        _calls(_plan(action="update", task=1, status="done")),
+        _say("Here are the files."),
+    )
+    turn_id = cast("int", _result(_post(client, -1, "what files are in my project?"))["turn_id"])
+    _drain()
+
+    loop = frozenset(UserConfig().always_available) | {SearchFilesAbility.NAME}
+    assert provider.tools == [_PLANNING] + [loop] * 2
+    assert f"`{SearchFilesAbility.NAME}`" in provider.bodies[1]  # the load's result, in the first step
+    [message_id] = _input_rows(turn_id)
+    assert [c.tool_name for c in ToolCall.by_transcript(message_id)] == [
+        Recall.NAME, FindToolsAbility.NAME, PlanAbility.NAME,
+    ]
+    assert _plan_rows(message_id) == [(1, "List", "List the files", "done")]
+    assert _assistant_rows(turn_id) == [("", 0), ("Here are the files.", 1)]
+
+
+def test_a_tool_loaded_while_planning_is_never_run_before_the_plan_is_saved(
+    authed_client: AuthedClient, provider: _PlanningProvider, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The model loads a tool on one planning send and calls it on the next.
+    The next planning send still offers only the planning tools, so the call is
+    dropped and logged, never run; the loaded tool is still offered once the
+    loop starts, beside the ask to create the plan."""
+    client, _db, _store = authed_client
+    caplog.set_level(logging.WARNING)
+    provider.script(
+        _calls(_load(SearchFilesAbility.NAME)),
+        _calls({"name": SearchFilesAbility.NAME, "input": {"pattern": "*.py"}}),
+        _say("No files found."),
+    )
+    turn_id = cast("int", _result(_post(client, -1, "what files are in my project?"))["turn_id"])
+    _drain()
+
+    loop = frozenset(UserConfig().always_available) | {SearchFilesAbility.NAME}
+    assert provider.tools == [_PLANNING, _PLANNING, loop]
+    assert _NO_PLAN in provider.bodies[2]
+    assert f"planning skipped calls to ['{SearchFilesAbility.NAME}']" in caplog.text
+    assert [c.tool_name for c in ToolCall.by_turn(_CHANNEL, turn_id)] == [Recall.NAME, FindToolsAbility.NAME]
+    assert _assistant_rows(turn_id) == [("No files found.", 1)]
 
 
 # ── 3. refusals reach the model, and planning gives up after three sends ─────
@@ -377,9 +446,10 @@ def test_a_delegate_plans_its_brief_before_working_it(
     provider: _PlanningProvider, make_config: Callable[[], ProcessorConfig],
 ) -> None:
     """Each subagent, and a subtask a scheduled task starts, is handed a brief:
-    memory is recalled for it, it plans it with only recall and plan callable,
-    then works it with its own toolset and the plan in view, and the plan is
-    stored on the brief's input row."""
+    memory is recalled for it, it plans it with only recall, plan and — where
+    its config pins it — find_tools callable, told so, then works it with its
+    own toolset and the plan in view, and the plan is stored on the brief's
+    input row."""
     config = make_config()
     provider.script(
         _calls(_plan(action="create", tasks=[_task("Search", "Find the final score")])),
@@ -391,7 +461,10 @@ def test_a_delegate_plans_its_brief_before_working_it(
     mp.result()
     _drain()
 
-    assert provider.tools == [_PLANNING] + [frozenset(config.always_available)] * 2
+    pinned = frozenset(config.always_available)
+    assert provider.tools == [_PLANNING & pinned] + [pinned] * 2
+    loads = FindToolsAbility.NAME in pinned
+    assert (_PLANNING_CALLS_AND_LOADS if loads else _PLANNING_CALLS) in provider.bodies[0]
     assert "1. [todo] Search — Find the final score" in provider.bodies[1]
     assert mp.uid is not None
     assert _plan_rows(mp.uid) == [(1, "Search", "Find the final score", "done")]

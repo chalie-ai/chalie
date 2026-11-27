@@ -6,6 +6,7 @@ import re
 import shlex
 import signal
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
 
@@ -64,6 +65,61 @@ _FILE_MOD_WORDS: frozenset[str] = frozenset({
 
 _COMPOUND_OPERATORS: tuple[str, ...] = ("&&", "||", ";", "|", "$(", "`")
 _COMPOUND_KEYWORDS: frozenset[str] = frozenset({"eval", "exec", "source", "."})
+
+# Inspection commands. A pipeline or list made only of these is ``read`` — so
+# looking around never asks — as long as none is given an argument that writes
+# a file or runs another program, and no redirection writes a file.
+_READ_ONLY_WORDS: frozenset[str] = frozenset({
+    "basename", "cat", "cd", "cut", "df", "diff", "dirname", "du", "echo",
+    "egrep", "fgrep", "file", "find", "grep", "head", "ls", "nl", "printf",
+    "pwd", "readlink", "realpath", "rg", "sort", "stat", "tail", "tr", "uniq",
+    "wc", "which", "xargs",
+})
+_FIND_WRITE_FLAGS: frozenset[str] = frozenset({
+    "-delete", "-exec", "-execdir", "-ok", "-okdir",
+    "-fls", "-fprint", "-fprint0", "-fprintf",
+})
+# xargs flags whose value is the next word.
+_XARGS_VALUE_FLAGS: frozenset[str] = frozenset({"-a", "-d", "-E", "-I", "-L", "-n", "-P", "-s"})
+
+
+def _long_flag(arg: str, *names: str) -> bool:
+    """Whether ``arg`` is one of the long options ``names``, or a prefix of one.
+
+    GNU tools take any unambiguous prefix (``sort --out=x`` is ``--output=x``).
+    """
+    name = arg.split("=", 1)[0]
+    return name.startswith("--") and len(name) > 2 and any(full.startswith(name) for full in names)
+
+
+# What makes an inspection command write a file or run another program.
+_WRITES_OR_RUNS: dict[str, Callable[[list[str]], bool]] = {
+    "find": lambda args: not _FIND_WRITE_FLAGS.isdisjoint(args),
+    "sort": lambda args: any(
+        _long_flag(arg, "--output", "--compress-program")
+        or (arg.startswith("-") and not arg.startswith("--") and "o" in arg)
+        for arg in args
+    ),
+    "rg": lambda args: any(_long_flag(arg, "--pre") for arg in args),
+    "file": lambda args: any(arg == "-C" or _long_flag(arg, "--compile") for arg in args),
+    # ``uniq IN OUT`` writes OUT.
+    "uniq": lambda args: sum(arg == "-" or not arg.startswith("-") for arg in args) > 1,
+}
+
+# Shell punctuation the tokenizer splits on, and the operators built from it
+# that a read-only pipeline or list may use.
+_SHELL_PUNCTUATION: frozenset[str] = frozenset("();<>|&")
+_SEPARATORS: frozenset[str] = frozenset({"|", "|&", "||", "&&", ";"})
+_REDIRECTS: frozenset[str] = frozenset({"<", ">", ">>", ">|", "&>", "&>>", ">&"})
+_NULL_REDIRECTS: frozenset[str] = frozenset({">", ">>", ">|", "&>", "&>>"})
+_NULL_DEVICE = "/dev/null"
+# Characters bash takes literally inside quotes or after a backslash. Masking
+# them there keeps the tokenizer from reading them as operators or expansions.
+_LITERAL_WHEN_QUOTED: frozenset[str] = _SHELL_PUNCTUATION | {"$", "`", "\n"}
+_MASK_BASE = 0xE000  # Unicode private use area
+# Runs something that is not on the line: command substitution, an expansion
+# beyond a plain ``$NAME`` (a ``$`` before a space is just text), or a second line.
+_HIDDEN_COMMAND = re.compile(r"[`\n]|\$[^A-Za-z0-9_\s]")
 
 _DESTRUCTIVE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"rm\s+(-\w*r\w*\s+.*)?(-\w*f\w*\s+.*)?/(\s|$)"),
@@ -230,7 +286,7 @@ class BashAbility(Ability[BashParamsBag]):
 def _classify_heuristic(command: str) -> str | None:
     for op in _COMPOUND_OPERATORS:
         if _has_unquoted(command, op):
-            return "compound"
+            return None if _is_read_only_compound(command) else "compound"
 
     try:
         tokens = shlex.split(command)
@@ -281,7 +337,126 @@ def _has_unquoted(command: str, needle: str) -> bool:
 
 
 def _has_redirect(command: str) -> bool:
-    return _has_unquoted(command, ">")
+    tokens = _tokens(_mask_quoted(command))
+    return tokens is None or _writes_file(tokens)
+
+
+def _is_read_only_compound(command: str) -> bool:
+    """Whether every command in a pipeline or list only reads.
+
+    Each must be an inspection command (``_READ_ONLY_WORDS``) given nothing that
+    writes a file or runs another program, and no redirection may write a file.
+    A command substitution, an expansion beyond a plain ``$NAME`` or a second
+    line is never read-only here: what it runs is not on the line.
+    """
+    masked = _mask_quoted(command)
+    if _HIDDEN_COMMAND.search(masked):
+        return False
+    tokens = _tokens(masked)
+    if tokens is None or _writes_file(tokens):
+        return False
+    segments: list[list[str]] = [[]]
+    for token in tokens:
+        if token in _SEPARATORS:
+            segments.append([])
+        else:
+            segments[-1].append(token)
+    return all(_is_read_only(_command_words(segment)) for segment in segments)
+
+
+def _is_read_only(words: list[str] | None) -> bool:
+    if not words or words[0] not in _READ_ONLY_WORDS:
+        return False
+    name, args = words[0], words[1:]
+    if name == "xargs":
+        command = _xargs_command(args)
+        return not command or _is_read_only(command)
+    writes_or_runs = _WRITES_OR_RUNS.get(name)
+    return writes_or_runs is None or not writes_or_runs(args)
+
+
+def _xargs_command(args: list[str]) -> list[str]:
+    """The command xargs runs: what follows its own flags (none means ``echo``)."""
+    i = 0
+    while i < len(args) and args[i].startswith("-"):
+        i += 2 if args[i] in _XARGS_VALUE_FLAGS else 1
+    return args[i:]
+
+
+def _command_words(segment: list[str]) -> list[str] | None:
+    """A command and its arguments, without subshell parentheses or redirections.
+
+    None when the segment holds any other shell operator (``&``, ``<(``, a heredoc).
+    """
+    words: list[str] = []
+    tokens = iter(segment)
+    for token in tokens:
+        if token in ("(", ")"):
+            continue
+        if token in _REDIRECTS:
+            next(tokens, None)  # the target, already vetted by _writes_file
+        elif token[:1] in _SHELL_PUNCTUATION:
+            return None
+        else:
+            words.append(token)
+    return words
+
+
+def _writes_file(tokens: list[str]) -> bool:
+    """Whether a redirection writes a file: anything but a stream sent to the
+    null device (``2>/dev/null``) or copied onto another (``2>&1``)."""
+    for token, target in zip(tokens, [*tokens[1:], ""]):
+        if ">" not in token:
+            continue
+        if token in _NULL_REDIRECTS and target == _NULL_DEVICE:
+            continue
+        if token == ">&" and target.isdigit():
+            continue
+        return True
+    return False
+
+
+def _tokens(masked: str) -> list[str] | None:
+    """Split a masked command into words and operators; None if it does not parse."""
+    lexer = shlex.shlex(masked, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    try:
+        return list(lexer)
+    except ValueError:
+        return None
+
+
+def _mask_quoted(command: str) -> str:
+    """Replace each character bash takes literally — inside quotes or after a
+    backslash — that the tokenizer would otherwise read as an operator or an
+    expansion, so ``grep 'a|b'`` stays one word and ``'$('`` stays text."""
+    out: list[str] = []
+    quote = ""
+    i = 0
+    while i < len(command):
+        ch = command[i]
+        if ch == "\\" and quote != "'" and i + 1 < len(command):
+            out += [ch, _mask(command[i + 1])]
+            i += 2
+            continue
+        if ch in "'\"" and quote in ("", ch):
+            quote = "" if quote else ch
+            out.append(ch)
+        elif quote == "'":
+            out.append(_mask(ch))
+        elif quote:
+            out.append(_mask(ch, ("$", "`")))
+        else:
+            out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _mask(ch: str, keep: tuple[str, ...] = ()) -> str:
+    if ch in _LITERAL_WHEN_QUOTED and ch not in keep:
+        return chr(_MASK_BASE + ord(ch))
+    return ch
 
 
 # ── Destructive detection ──────────────────────────────────────────────────

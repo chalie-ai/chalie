@@ -92,7 +92,7 @@ from tests.test_turn_join import (
 
 pytestmark = pytest.mark.unit
 
-_PLANNING = frozenset({Recall.NAME, PlanAbility.NAME})
+_PLANNING = frozenset({Recall.NAME, PlanAbility.NAME, FindToolsAbility.NAME})
 _PROSE = "Your flight leaves at 9."
 #: Long enough for the first turn of a run, which loads the embedding model.
 _SETTLE_S = 60.0
@@ -290,7 +290,8 @@ def test_every_kind_of_turn_that_plans_is_nudged_to_close_its_plan(
     answer = mp.result()
     _drain(_SETTLE_S)
 
-    assert provider.tools == [_PLANNING] + [frozenset(config.always_available)] * 3
+    pinned = frozenset(config.always_available)
+    assert provider.tools == [_PLANNING & pinned] + [pinned] * 3
     assert provider.nudges == [0, 0, 0, 1]
     assert provider.unused == 0
     assert answer == _CLOSE.text

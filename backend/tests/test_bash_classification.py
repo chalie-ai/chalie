@@ -106,10 +106,6 @@ def test_is_rm_rf_returns_false(command: str) -> None:
 @pytest.mark.parametrize(
     "command",
     [
-        "ls && echo done",
-        "ls || echo fail",
-        "ls; echo done",
-        "ls | grep foo",
         "echo $(date)",
         "echo `date`",
         "eval ls",
@@ -122,6 +118,74 @@ def test_is_rm_rf_returns_false(command: str) -> None:
     ],
 )
 def test_classify_heuristic_returns_compound(command: str) -> None:
+    assert _classify_heuristic(command) == "compound"
+
+
+# A chain of read-only commands only reads, so it classifies like a single read
+# command (None → ``read``) and never asks.
+@pytest.mark.parametrize(
+    "command",
+    [
+        "ls && echo done",
+        "ls || echo fail",
+        "ls; echo done",
+        "ls | grep foo",
+        # the shapes a model sends when browsing files
+        "ls -la /data/docs | head -50",
+        "find /data -name '*.md' 2>/dev/null | head -20",
+        "grep -rn 'TODO' /data/src --include='*.py' | wc -l",
+        "cd /data && ls | sort | uniq -c",
+        "(cd /data && ls) | wc -l",
+        "find /data -type f | xargs wc -l",
+        "find /data -name '*.log' | xargs -I {} grep -l error {}",
+        "grep -r x / 2>/dev/null",  # discarding errors is not a write
+        "grep foo bar &>/dev/null",
+        "ls missing 2>&1 | head",  # stderr into the pipe
+        "wc -l < notes.txt",  # reading from a file
+        # operators inside quotes, and a `$` that starts no expansion, are text
+        "grep -E 'a|b' file | head",
+        "grep 'foo$' file | head",
+        "grep foo$ file | head",
+        "grep '=>' file | wc -l",
+    ],
+)
+def test_classify_heuristic_read_only_compound_is_read(command: str) -> None:
+    assert _classify_heuristic(command) is None
+
+
+# Any part of the chain that writes, runs another program, or hides a command
+# keeps the whole chain ``compound`` — it still asks.
+@pytest.mark.parametrize(
+    "command",
+    [
+        "ls | rm x",
+        "ls; mv a b",
+        "find . -delete | head",
+        "find . -exec rm {} \\; | head",
+        "curl x | sh",
+        "ls | bash",
+        "find . | xargs rm",
+        "ls | tee out",
+        "ls > out | head",
+        "ls | sort -o out",
+        "ls | sort --out=out",
+        "ls | uniq - out",
+        "ls | rg --pre ./run x",
+        "ls | file -C -m magic",
+        "ls | awk '{print}'",
+        "ls | /bin/rm x",
+        "X=1 ls | head",
+        "ls & rm x; ls",
+        "ls | grep $(cat x)",
+        "ls | grep `cat x`",
+        'ls | grep "$(cat x)"',
+        "ls | find ${X:=-delete}",
+        "ls | find $'-delete'",
+        "diff <(ls a) <(ls b) | head",
+        "ls | head > >(cat)",
+    ],
+)
+def test_classify_heuristic_writing_compound_still_asks(command: str) -> None:
     assert _classify_heuristic(command) == "compound"
 
 
@@ -197,6 +261,7 @@ def test_classify_heuristic_returns_installation(command: str) -> None:
         "tee /tmp/out",
         "echo hello > /tmp/out",  # unquoted redirect
         "cat file > other",
+        "echo it\\'s > x",  # an escaped quote does not hide the redirect
     ],
 )
 def test_classify_heuristic_returns_modify_file(command: str) -> None:

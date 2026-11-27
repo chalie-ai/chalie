@@ -74,6 +74,7 @@ from threading import Thread, get_ident
 from typing import TYPE_CHECKING, Protocol, cast
 
 from abilities._delegate import agent_config, replies_late, reply_to_caller, replying_tools
+from abilities.find_tools import FindToolsAbility
 from abilities.message_parent import MessageParentAbility, ended_on_message_parent, holds, waiting_reminder
 from abilities.message_subagent import awaits_reply
 from abilities.plan import PlanAbility, plans
@@ -169,8 +170,8 @@ _CONTEXT_LIMIT_RECOVERY_LIMIT = 3
 #: trail's format into its text, not prose for the user.
 _ECHOED_CALL = re.compile(r"^\[(\w+)\] \{")
 # The planning pre-pass offers only these tools, and sends at most this many
-# requests: room for a recall or two before the plan, never an open loop.
-_PLANNING_TOOLS = (Recall.NAME, PlanAbility.NAME)
+# requests: room for a recall or a tool lookup before the plan, never an open loop.
+_PLANNING_TOOLS = (Recall.NAME, PlanAbility.NAME, FindToolsAbility.NAME)
 _PLANNING_STEP_LIMIT = 3
 
 
@@ -1278,13 +1279,17 @@ class MessageProcessor:
 
     def _plan_turn(self) -> None:
         """The planning pre-pass: before the loop's first step, the model plans
-        the message with only ``recall`` and ``plan`` callable, while
-        ``PromptService`` shows it the planning instruction and every other tool
-        as a catalogue. Runs on a config that plans
-        (:func:`~abilities.plan.plans`), for a message with an input row. Stops
-        once a plan is stored, when the model calls no tool it may call, or
-        after ``_PLANNING_STEP_LIMIT`` sends; a message left unplanned reaches
-        the loop with the instruction to create its plan first.
+        the message with only ``recall``, ``plan`` and — where the config pins
+        it — ``find_tools`` callable, while ``PromptService`` shows it the
+        planning instruction and every other tool as a catalogue. Runs on a
+        config that plans (:func:`~abilities.plan.plans`), for a message with an
+        input row. Stops once a plan is stored, when the model calls no tool it
+        may call, or after ``_PLANNING_STEP_LIMIT`` sends; a message left
+        unplanned reaches the loop with the instruction to create its plan first.
+
+        A tool ``find_tools`` loads while planning is held back until planning
+        ends, so the pre-pass never runs it, and is offered from the loop's
+        first step on — the loop need not look it up again.
 
         Writes no assistant row and no thinking trace and leaves the runaway
         tallies alone: its calls anchor to the input row, where the act trail
@@ -1295,27 +1300,30 @@ class MessageProcessor:
         if not plans(self.config) or message_id is None:
             return
         pinned = self.active_tools
-        self.active_tools = [name for name in pinned if name in _PLANNING_TOOLS]
+        offered = [name for name in pinned if name in _PLANNING_TOOLS]
+        loaded: list[str] = []
         self.planning = True
         try:
             for _ in range(_PLANNING_STEP_LIMIT):
+                self.active_tools = list(offered)
                 tool_calls = self._send_fitting().tool_calls
                 if not tool_calls:
                     return
-                allowed = [call for call in tool_calls if call["name"] in self.active_tools]
+                allowed = [call for call in tool_calls if call["name"] in offered]
                 if len(allowed) < len(tool_calls):
                     logger.warning(
                         "[MessageProcessor] turn %s: planning skipped calls to %s",
                         self.turn_id,
-                        sorted({cast("str", call["name"]) for call in tool_calls} - set(self.active_tools)),
+                        sorted({cast("str", call["name"]) for call in tool_calls} - set(offered)),
                     )
                 if not allowed:
                     return
                 self._dispatch_tools(allowed)
+                loaded += [name for name in self.active_tools if name not in offered and name not in loaded]
                 if PlanTask.next_position(message_id) > 1:
                     return
         finally:
-            self.active_tools = pinned
+            self.active_tools = pinned + [name for name in loaded if name not in pinned]
             self.planning = False
 
     def _run_thinking_gate(self) -> None:

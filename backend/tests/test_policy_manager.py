@@ -4,11 +4,14 @@ import sqlite3
 import threading
 from collections.abc import Iterator
 from pathlib import Path
+from typing import cast
 from unittest.mock import patch
 
 import pytest
 
 import services.database as _db_gateway
+from abilities.bash import BashAbility
+from configs.enums.param_key import Keys
 from configs.enums.policy_channel import PolicyChannel
 from services.ask_user import AskUser
 from services.file_mapper_service import FileMapperService
@@ -200,3 +203,40 @@ def test_apply_seed_reaps_unseeded_rows(mgr: PolicyManager, db: sqlite3.Connecti
     settings = {(r["channel"], r["permission"]): r["setting"] for r in mgr.get_all()}
     assert settings[("chat", "bash.read")] == "deny"
     assert settings[("external_agent", "run_script")] == "allow"
+
+
+# 7. bash on chat with the shipped seed: a pipeline that only reads keys on the
+#    same permission as a single read command and runs without asking, while a
+#    pipeline that deletes still keys on the compound permission and asks first.
+def test_bash_read_only_pipeline_runs_without_asking_on_chat(
+    mgr: PolicyManager, recorder: _RecordingClient,
+) -> None:
+    mgr.apply_seed()
+    bash = BashAbility()
+
+    def permission(command: str) -> str:
+        return f"{BashAbility.NAME}.{bash.classify_action({Keys.command: command})}"
+
+    reads = permission("find /data -name '*.md' 2>/dev/null | head -20")
+    # should_stop ends any wait at once, so a read that asks fails here instead of hanging
+    assert mgr.authorize(CH.CHAT, reads, _ran, should_stop=lambda: True) == _ran()
+    assert [f for f in recorder.frames if f["type"] == "ask_opened"] == []
+
+    deletes = permission("find /data -name '*.md' | xargs rm")
+    gave_up = threading.Event()
+
+    def deny() -> None:
+        try:
+            AskUser.reply(recorder.opened.get(timeout=5.0), False)
+        except queue.Empty:
+            gave_up.set()
+
+    answerer = threading.Thread(target=deny)
+    answerer.start()
+    out = mgr.authorize(CH.CHAT, deletes, _ran, should_stop=gave_up.is_set)
+    answerer.join()
+
+    assert not gave_up.is_set(), "the gate never asked the user"
+    assert out == f"The {BashAbility.NAME}.compound action is not allowed. Do NOT retry."
+    asked = [cast("dict[str, object]", f["data"])["action_id"] for f in recorder.frames if f["type"] == "ask_opened"]
+    assert asked == [f"{BashAbility.NAME}.compound"]

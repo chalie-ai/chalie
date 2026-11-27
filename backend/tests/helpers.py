@@ -13,6 +13,7 @@ import time
 from datetime import datetime, timezone
 from typing import cast
 
+from abilities.find_tools import FindToolsAbility
 from abilities.plan import PlanAbility
 from abilities.recall import Recall
 from configs.enums.policy_channel import PolicyChannel
@@ -206,12 +207,13 @@ NO_PLAN = ProviderResponse(text="", model="scripted-no-plan", tool_calls=None)
 
 def is_planning_request(request: object) -> bool:
     """Whether a provider request is a turn's planning pre-pass, recognised by
-    its tool set: the plan tool and nothing beyond ``recall``. Every step of a
-    turn's loop offers the config's other pinned tools as well."""
+    its tool set: the plan tool and nothing beyond ``recall`` and
+    ``find_tools``. Every step of a turn's loop offers the config's other
+    pinned tools as well."""
     if not isinstance(request, ProviderRequest):
         return False
     names = {tool["name"] for tool in request.tools or []}
-    return PlanAbility.NAME in names and names <= {Recall.NAME, PlanAbility.NAME}
+    return PlanAbility.NAME in names and names <= {Recall.NAME, PlanAbility.NAME, FindToolsAbility.NAME}
 
 
 # ─── The post-turn background turns ──────────────────────────────────

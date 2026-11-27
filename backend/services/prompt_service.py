@@ -131,17 +131,30 @@ _PLAN_INSTRUCTION = (
     "are about to give it."
 )
 #: The planning pre-pass's ask (``mp.planning``), shown above the catalogue of
-#: the tools the model will have once its plan is saved.
+#: the tools the model will have once its plan is saved, and followed by what
+#: it may call right now (``_PLANNING_CALLS`` or ``_PLANNING_CALLS_AND_LOADS``).
 _PLANNING_INSTRUCTION = (
     "Based on the user message and the memory available, identify a plan of "
     "action. Your plan should be between 1 & 10 steps. The plan should include "
     "the specific tasks you will need to perform to complete the task the user "
     f"asked you to perform. Use the '{PlanAbility.NAME}' tool to organise your thought and keep "
-    "a to-do list of tasks in between compaction.\n\n"
+    "a to-do list of tasks in between compaction."
+)
+_PLANNING_CALLS = (
     f"Right now you can call only `{Recall.NAME}`, to look up more memory, and `{PlanAbility.NAME}`: "
     f'save the plan with {PlanAbility.NAME}(action="create"). The tools in the catalogue below '
     "become available once the plan is saved — plan with them in mind, but do "
     "not call them now."
+)
+#: For a config that pins ``find_tools``: the tools it loads while planning
+#: are offered from the first step on, so loading them in the response that
+#: saves the plan spares the turn a step spent looking them up.
+_PLANNING_CALLS_AND_LOADS = (
+    f"Right now you can call only `{Recall.NAME}`, to look up more memory, `{FindToolsAbility.NAME}`, "
+    f"to load tools from the list below, and `{PlanAbility.NAME}`: save the plan with "
+    f'{PlanAbility.NAME}(action="create"). Load the tools your plan needs with {FindToolsAbility.NAME} '
+    "in the same response that saves the plan — they are ready the moment it is saved. The other "
+    "tools in the catalogue become available then too — plan with them in mind, but do not call them now."
 )
 _NO_PLAN = f'You have no plan for the current message yet — create one first with {PlanAbility.NAME}(action="create").'
 
@@ -519,14 +532,16 @@ class PromptService:
         return f"[plan]\n{lines}\n[end:plan]\n{_PLAN_INSTRUCTION}"
 
     def _planning_section(self) -> str:
-        """The planning pre-pass's ask: the instruction, then every tool the
-        config pins beyond ``recall`` and ``plan`` — and, when it pins
-        ``find_tools``, the roster that tool loads from — as a catalogue the
-        model plans with but cannot call yet."""
+        """The planning pre-pass's ask: the instruction and what may be called
+        now, then every tool the config pins beyond ``recall``, ``plan`` and
+        ``find_tools`` as a catalogue the model plans with but cannot call yet
+        — and, when it pins ``find_tools``, the roster that tool loads from,
+        which the model may load from while it plans."""
         pinned = self.mp.config.always_available
+        loads = FindToolsAbility.NAME in pinned
         lines: list[str] = []
         for name in pinned:
-            if name in (Recall.NAME, PlanAbility.NAME):
+            if name in (Recall.NAME, PlanAbility.NAME, FindToolsAbility.NAME):
                 continue
             try:
                 ability = AbilityRegistry.get(name)
@@ -534,9 +549,10 @@ class PromptService:
                 continue
             lines.append(f"- `{name}`: {ability.get_search_tooltip() or ability.get_summary()}")
         catalogue = "\n".join(lines)
-        if FindToolsAbility.NAME in pinned:
+        if loads:
             catalogue += f"\n\nTools `{FindToolsAbility.NAME}` can load:\n{FindToolsAbility.tools_index()}"
-        return f"{_PLANNING_INSTRUCTION}\n\n[tool_catalogue]\n{catalogue}\n[end:tool_catalogue]"
+        calls = _PLANNING_CALLS_AND_LOADS if loads else _PLANNING_CALLS
+        return f"{_PLANNING_INSTRUCTION}\n\n{calls}\n\n[tool_catalogue]\n{catalogue}\n[end:tool_catalogue]"
 
     def _channel(self) -> str:
         """The dispatch key: the config's ``prompt_channel`` override, or its
