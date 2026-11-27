@@ -55,9 +55,10 @@ test('valid credentials redirect to / and the session is established', async ({ 
   // cannot satisfy the match — the redirect must actually have happened.
   await expect(page).toHaveURL(/^https?:\/\/[^/]+\/(\?|$)/, { timeout: 15_000 });
 
-  // Downstream signal: the real session cookie was issued by /auth/login and
-  // the browser sent it back on the next request. /auth/status confirms it.
-  const status = await page.request.get('/auth/status');
+  // Downstream signal: the real session cookie was issued by /api/auth/login
+  // and the browser sent it back on the next request. /api/auth/status
+  // confirms it.
+  const status = await page.request.get('/api/auth/status');
   expect((await status.json()).has_session).toBe(true);
 });
 

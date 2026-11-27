@@ -114,20 +114,22 @@ async function onStop(): Promise<void> {
       <span v-if="ask" class="activity__wait">· waiting for you · {{ waitedSeconds(ask.asked_at, now) }}s</span>
       <template v-if="ask?.kind === 'permission'">
         <span v-if="ask.data.summary" class="activity__ask">{{ actionLabel(ask.data.action_id) }}</span>
-        <button
-          type="button"
-          class="activity__answer activity__answer--deny"
-          @click="asks.reply(ask.ask_id, false)"
-        >
-          Deny
-        </button>
-        <button
-          type="button"
-          class="activity__answer activity__answer--allow"
-          @click="asks.reply(ask.ask_id, true)"
-        >
-          Allow
-        </button>
+        <span class="activity__answers">
+          <button
+            type="button"
+            class="activity__answer activity__answer--deny"
+            @click="asks.reply(ask.ask_id, false)"
+          >
+            Deny
+          </button>
+          <button
+            type="button"
+            class="activity__answer activity__answer--allow"
+            @click="asks.reply(ask.ask_id, true)"
+          >
+            Allow
+          </button>
+        </span>
       </template>
       <AskCodeEntry v-else-if="ask?.kind === 'code'" :ask="ask" />
       <button

@@ -196,13 +196,14 @@ input[type="checkbox"], input[type="radio"], input[type="range"], progress { acc
   text-decoration: none;
   transition: background-color var(--dur-1) var(--ease-out),
               color var(--dur-1) var(--ease-out),
-              translate var(--dur-1) var(--ease-out);
+              translate var(--dur-1) var(--ease-out),
+              filter var(--dur-1) var(--ease-out);
 }
 .btn:hover:not(:disabled) { background: var(--cell); }
 .btn:active:not(:disabled) { translate: 0 1px; }
 .btn:disabled { opacity: 0.45; }
 .btn-primary { background: var(--pink); color: var(--on-pink); }
-.btn-primary:hover:not(:disabled) { background: var(--text); color: var(--bg); }
+.btn-primary:hover:not(:disabled) { background: var(--pink); filter: brightness(1.1); }
 .btn-danger { background: var(--surface-2); color: var(--deny-text); }
 .btn-danger:hover:not(:disabled) { background: var(--deny); color: var(--on-pink); }
 

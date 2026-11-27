@@ -13,5 +13,7 @@ test('unauthenticated API call is rejected (401)', async ({ page }) => {
     const r = await fetch('/api/threads/all?limit=1', { credentials: 'omit' });
     return r.status;
   });
-  expect(status).toBe(401);
+  // An instance with a credentials.json at its install root logs every
+  // cookieless request straight back in, so that refusal cannot happen there.
+  expect(status, 'cookieless request was not refused (credentials.json auto-login?)').toBe(401);
 });

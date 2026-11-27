@@ -334,8 +334,10 @@ body {
 
 // Mobile sidebar overlay — must come after .sidebar base styles (cascade order).
 @media (max-width: 900px) {
+  // clip, not hidden: hidden makes the page a scroll container of its own, so
+  // the sticky ask dock would pin to it instead of to the window.
   html,
-  body { overflow-x: hidden; }
+  body { overflow-x: clip; }
 
   .app-shell {
     grid-template-columns: 1fr;
@@ -490,7 +492,7 @@ body {
   padding: var(--space-md);
   border-radius: var(--radius-card);
   background: var(--surface);
-  margin-bottom: 8px;
+  margin-bottom: var(--space-sm);
   position: relative;
 }
 
@@ -693,12 +695,12 @@ input[type='checkbox'] {
 .stat-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 12px;
+  gap: var(--space-md);
   margin-bottom: 20px;
 }
 
 .stat-card {
-  padding: 16px;
+  padding: var(--space-md);
   background: var(--surface);
 }
 
@@ -1021,12 +1023,12 @@ input[type='checkbox'] {
   font-variant-numeric: tabular-nums;
   user-select: all;
 }
-.setup-code--card { margin: 0; padding: 8px 12px; font-size: var(--fs-title); }
+.setup-code--card { margin: 0; padding: var(--space-sm) var(--space-md); font-size: var(--fs-title); }
 
 .provider-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: 12px;
+  gap: var(--space-md);
 }
 
 .provider-tile {
@@ -1199,11 +1201,11 @@ input[type='checkbox'] {
 
 .personality-actions { display: flex; justify-content: flex-end; }
 
-.caps-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+.caps-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: var(--space-md); }
 
-.cap-card { flex-direction: column; align-items: flex-start; gap: 8px; padding: 16px; }
+.cap-card { flex-direction: column; align-items: flex-start; gap: var(--space-sm); }
 
-.cap-body { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; width: 100%; }
+.cap-body { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-sm); width: 100%; }
 
 // An unavailable capability stays readable but dimmed, with the reason it
 // cannot run on its own line under it.
@@ -1237,9 +1239,9 @@ input[type='checkbox'] {
 .cap-name { font-weight: 500; font-size: var(--fs-body); }
 .cap-meta { font-size: var(--fs-body); color: var(--muted); overflow-wrap: anywhere; }
 .cap-version { font-size: var(--fs-body); color: var(--muted); }
-.cap-actions { margin-top: 8px; }
+.cap-actions { margin-top: var(--space-sm); }
 
-.policies-grid { display: flex; flex-direction: column; gap: 8px; }
+.policies-grid { display: flex; flex-direction: column; gap: var(--space-sm); }
 .policy-category { margin-bottom: var(--space-md); }
 
 .policy-rule {
@@ -1265,8 +1267,8 @@ input[type='checkbox'] {
   &:hover { background: var(--cell); }
 }
 
-.blocked-list { margin-top: 8px; }
-.blocked-item { gap: 10px; padding: 10px; }
+.blocked-list { margin-top: var(--space-sm); }
+.blocked-item { gap: var(--space-sm); padding: var(--space-sm) var(--space-md); }
 .blocked-time { margin-left: auto; color: var(--muted); font-family: var(--font-mono); font-size: var(--fs-mono); }
 
 .mcp-settings { display: flex; flex-direction: column; gap: 16px; max-width: 600px; }
@@ -1288,23 +1290,23 @@ input[type='checkbox'] {
 
 .mcp-out-card {
   background: var(--surface);
-  padding: 12px 14px;
-  margin-bottom: 10px;
+  padding: var(--space-md);
+  margin-bottom: var(--space-sm);
 }
 
 .mcp-out-card-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 8px;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-sm);
 }
 
 .mcp-out-name { font-size: var(--fs-body); font-weight: 600; color: var(--text); }
 .mcp-out-host { font-family: var(--font-mono); font-size: var(--fs-mono); color: var(--muted); }
-.mcp-out-badges { display: flex; gap: 6px; flex-shrink: 0; }
-.mcp-out-card-actions { display: flex; gap: 6px; flex-wrap: wrap; }
-.mcp-out-card-editing { padding: 16px; }
+.mcp-out-badges { display: flex; gap: var(--space-sm); flex-shrink: 0; }
+.mcp-out-card-actions { display: flex; gap: var(--space-sm); flex-wrap: wrap; }
+.mcp-out-card-editing { padding: var(--space-md); }
 
 .mcp-out-add-form {
   background: var(--surface);
@@ -1344,7 +1346,7 @@ input[type='checkbox'] {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 16px;
+  padding: var(--space-sm) var(--space-md);
   cursor: pointer;
 }
 
@@ -1354,7 +1356,7 @@ input[type='checkbox'] {
 .list-card-title {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-sm);
   margin: 0;
   padding: 0;
   background: none;
@@ -1376,7 +1378,7 @@ input[type='checkbox'] {
   }
 }
 
-.list-card-actions { display: flex; gap: 6px; }
+.list-card-actions { display: flex; gap: var(--space-sm); }
 .list-card-actions .btn { position: relative; }
 .list-chev { display: inline-flex; transition: transform var(--dur-2) var(--ease-out); }
 .list-count { font-family: var(--font-mono); font-size: var(--fs-mono); color: var(--muted); padding: 1px 6px; background: var(--surface-2); }
@@ -1399,7 +1401,7 @@ input[type='checkbox'] {
 .list-add-row { margin-top: 6px; }
 .list-add-input { font-size: var(--fs-body); padding: 6px 10px; }
 
-.schedule-list { display: flex; flex-direction: column; gap: 4px; }
+.schedule-list { display: flex; flex-direction: column; gap: var(--space-xs); }
 .schedule-main { flex: 1; min-width: 0; }
 .schedule-message { font-size: var(--fs-body); font-weight: 500; margin-bottom: 4px; }
 
@@ -1413,10 +1415,10 @@ input[type='checkbox'] {
   flex-wrap: wrap;
 }
 
-.schedule-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.schedule-actions { display: flex; gap: var(--space-sm); flex-shrink: 0; }
 
-.task-cards { display: flex; flex-direction: column; gap: 8px; }
-.task-card { flex-direction: column; align-items: flex-start; gap: 6px; padding: 14px 16px; }
+.task-cards { display: flex; flex-direction: column; gap: var(--space-sm); }
+.task-card { flex-direction: column; align-items: flex-start; gap: var(--space-sm); }
 .task-title { font-weight: 500; font-size: var(--fs-title); }
 .task-meta { font-size: var(--fs-body); color: var(--muted); }
 
@@ -1457,8 +1459,8 @@ input[type='checkbox'] {
   }
 }
 
-.error-list { display: flex; flex-direction: column; gap: 4px; }
-.error-item { padding: 10px 14px; gap: 10px; align-items: flex-start; }
+.error-list { display: flex; flex-direction: column; gap: var(--space-xs); }
+.error-item { padding: var(--space-sm) var(--space-md); gap: var(--space-sm); align-items: flex-start; }
 .error-time { font-size: var(--fs-mono); color: var(--muted); white-space: nowrap; flex-shrink: 0; font-family: var(--font-mono); }
 .error-msg { font-size: var(--fs-body); color: var(--muted); }
 
@@ -1486,16 +1488,16 @@ input[type='checkbox'] {
 .panel-placeholder { padding: 40px; text-align: center; color: var(--muted); }
 .panel-placeholder h2 { color: var(--text); margin: 0 0 8px; }
 
-.skills-grid { display: flex; flex-direction: column; gap: 8px; }
+.skills-grid { display: flex; flex-direction: column; gap: var(--space-sm); }
 
-.skill-card { flex-direction: column; align-items: stretch; gap: 10px; padding: 16px; }
+.skill-card { flex-direction: column; align-items: stretch; gap: var(--space-sm); }
 .skill-card.skill-disabled { color: var(--muted); }
 
 .skill-card-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--space-sm);
   flex-wrap: wrap;
 }
 
@@ -1504,7 +1506,7 @@ input[type='checkbox'] {
 .skill-card-title {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-sm);
   flex-wrap: wrap;
   margin: 0;
   padding: 0;
@@ -1518,7 +1520,7 @@ input[type='checkbox'] {
     padding: 0;
   }
 }
-.skill-card-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.skill-card-actions { display: flex; align-items: center; gap: var(--space-sm); flex-shrink: 0; }
 .skill-use-for { font-size: var(--fs-body); color: var(--muted); line-height: 1.5; }
 .skill-tags { display: flex; flex-wrap: wrap; gap: 4px; }
 .skill-tag { padding: 1px 6px; }
@@ -1565,8 +1567,8 @@ input[type='checkbox'] {
   .panel-header { flex-direction: column; align-items: flex-start; gap: 10px; }
   .panel-header-actions { width: 100%; flex-wrap: wrap; }
   .panel-header-actions .search-input { width: 100%; }
-  .stat-grid { grid-template-columns: 1fr 1fr; gap: 8px; }
-  .stat-card { padding: 12px; }
+  .stat-grid { grid-template-columns: 1fr 1fr; gap: var(--space-sm); }
+  .stat-card { padding: var(--space-sm); }
   .personality-row { flex-direction: column; align-items: stretch; gap: 4px; }
   .pole { width: auto; text-align: left; }
 
@@ -1578,7 +1580,7 @@ input[type='checkbox'] {
 
   .caps-grid { grid-template-columns: 1fr !important; } // stylelint-disable-line declaration-no-important
   .policies-grid { grid-template-columns: 1fr !important; } // stylelint-disable-line declaration-no-important
-  .policy-rule { flex-wrap: wrap; gap: 6px; }
+  .policy-rule { flex-wrap: wrap; gap: var(--space-sm); }
   .policy-label { flex: 1 1 100%; }
 
   .mcp-settings { max-width: none !important; } // stylelint-disable-line declaration-no-important
@@ -1589,7 +1591,7 @@ input[type='checkbox'] {
 
   .chart-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%; }
 
-  .list-card-header { flex-wrap: wrap; gap: 8px; }
+  .list-card-header { flex-wrap: wrap; gap: var(--space-sm); }
   .list-card-actions { width: 100%; justify-content: flex-end; }
 
   .topbar { padding: 0 12px; gap: 8px; }

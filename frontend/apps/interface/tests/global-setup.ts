@@ -3,12 +3,12 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 
 // Two supported preconditions:
 //
-//   1. Fresh env (no master account): /auth/status returns has_master_account=false.
+//   1. Fresh env (no master account): /api/auth/status returns has_master_account=false.
 //      We write an EMPTY storage state so the spec suite can start without any
 //      session cookie. Specs like onboarding.spec.ts that need a no-account env
 //      rely on this path.
 //
-//   2. Normal env (account exists): we POST /auth/login and persist the resulting
+//   2. Normal env (account exists): we POST /api/auth/login and persist the resulting
 //      session cookie as .auth/state.json. A genuine login failure in this branch
 //      still throws — it is a real error, not an expected precondition.
 export default async function globalSetup(): Promise<void> {
@@ -20,7 +20,7 @@ export default async function globalSetup(): Promise<void> {
   const ctx = await request.newContext({ baseURL });
 
   // Probe the instance before attempting login.
-  const statusRes = await ctx.get('/auth/status');
+  const statusRes = await ctx.get('/api/auth/status');
   const status = await statusRes.json();
 
   mkdirSync('.auth', { recursive: true });
@@ -35,7 +35,7 @@ export default async function globalSetup(): Promise<void> {
   }
 
   // Account exists — log in and persist the session cookie.
-  const res = await ctx.post('/auth/login', { data: { username, password } });
+  const res = await ctx.post('/api/auth/login', { data: { username, password } });
   if (!res.ok()) throw new Error(`Login failed: ${res.status()} ${await res.text()}`);
   await ctx.storageState({ path: '.auth/state.json' });
   await ctx.dispose();

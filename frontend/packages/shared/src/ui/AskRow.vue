@@ -35,23 +35,25 @@ const label = computed(() => {
       <span class="activity__label">{{ label }}</span>
     </span>
     <span class="activity__controls">
-      <span class="activity__wait">· waiting for you · {{ waitedSeconds(ask.asked_at, now) }}s</span>
+      <span class="activity__wait">waiting for you · {{ waitedSeconds(ask.asked_at, now) }}s</span>
       <template v-if="ask.kind === 'permission'">
         <span v-if="ask.data.summary" class="activity__ask">{{ actionLabel(ask.data.action_id) }}</span>
-        <button
-          type="button"
-          class="activity__answer activity__answer--deny"
-          @click="asks.reply(ask.ask_id, false)"
-        >
-          Deny
-        </button>
-        <button
-          type="button"
-          class="activity__answer activity__answer--allow"
-          @click="asks.reply(ask.ask_id, true)"
-        >
-          Allow
-        </button>
+        <span class="activity__answers">
+          <button
+            type="button"
+            class="activity__answer activity__answer--deny"
+            @click="asks.reply(ask.ask_id, false)"
+          >
+            Deny
+          </button>
+          <button
+            type="button"
+            class="activity__answer activity__answer--allow"
+            @click="asks.reply(ask.ask_id, true)"
+          >
+            Allow
+          </button>
+        </span>
       </template>
       <AskCodeEntry v-else-if="ask.kind === 'code'" :ask="ask" />
       <span v-else-if="ask.kind === 'handoff'" class="activity__ask">Browser</span>
@@ -141,8 +143,14 @@ const label = computed(() => {
   content: '· ';
 }
 
-/* Deny and Allow are one pair with the regular button's metrics, set apart
-   from the words before them and closer to each other. */
+/* Deny and Allow are one pair with the regular button's metrics: closer to
+   each other than to the words before them, and wrapping together with no indent. */
+.activity__answers {
+  display: inline-flex;
+  gap: var(--space-xs);
+  flex-shrink: 0;
+}
+
 .activity__answer {
   height: var(--control-h);
   padding: 0 var(--space-md);
@@ -166,7 +174,6 @@ const label = computed(() => {
 
 /* Allow is the screen's primary action, so it takes the one accent. */
 .activity__answer--allow {
-  margin-inline-start: calc(var(--space-xs) - var(--space-sm));
   background: var(--pink);
   color: var(--on-pink);
 }
@@ -176,7 +183,6 @@ const label = computed(() => {
 }
 
 .activity__answer--deny {
-  margin-inline-start: var(--space-sm);
   background: var(--surface-2);
   color: var(--text);
 }
