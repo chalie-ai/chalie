@@ -30,9 +30,11 @@ pytestmark = pytest.mark.unit
 def _bare_mp(channel: str, turn_id: int, uid: int) -> "MessageProcessor":
     """A stand-in exercising the real ``PromptService.act_trail`` read path —
     ``channel``/``turn_id``/``uid`` are the only mp state it touches (via
-    ``ToolCallService.by_exchange``). ``uid`` is the current exchange's input
-    row: the fork boundary. Everything else the real ctor wires is irrelevant to
-    the render and is skipped via ``__new__``."""
+    ``ToolCallService.by_exchange``), plus ``consumed_joins``, the messages a
+    running loop has taken in from the turn (empty here: nothing joined).
+    ``uid`` is the current exchange's input row: the fork boundary. Everything
+    else the real ctor wires is irrelevant to the render and is skipped via
+    ``__new__``."""
     from controllers.message_processor import MessageProcessor
     from services.tool_call_service import ToolCallService
     from services.transcript_service import TranscriptService
@@ -41,6 +43,7 @@ def _bare_mp(channel: str, turn_id: int, uid: int) -> "MessageProcessor":
     mp.channel = channel
     mp.turn_id = turn_id
     mp.uid = uid
+    mp.consumed_joins = {}
     mp.transcript_service = TranscriptService(mp)
     mp.tool_call_service = ToolCallService(mp)
     return mp

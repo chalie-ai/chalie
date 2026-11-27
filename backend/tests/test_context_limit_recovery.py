@@ -41,8 +41,6 @@ Five claims, one per branch the recovery actually carries:
 """
 
 import sqlite3
-import threading
-import time
 from typing import cast
 from unittest.mock import patch
 
@@ -58,6 +56,7 @@ from models.turn_execution import TurnExecution
 from services.database import Database
 from services.provider_api import MAX_CONTEXT_WINDOW
 from services.provider_db_service import ProviderDbService
+from tests.helpers import drain_background_turns
 
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 
@@ -115,23 +114,6 @@ class _ReportingProvider:
         )
 
 
-def _drain_background_turns(timeout_s: float = 10.0) -> None:
-    """Join the fire-and-forget post-turn daemon turns a completed turn spawns
-    so they run to completion inside THIS test's provider patch and never leak
-    into the next — left running, each would call ``build_client`` while the
-    NEXT test holds the patch."""
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        pending = [
-            t for t in threading.enumerate()
-            if t.name in ("skill-suggest", "thread-gist") or t.name.startswith("turn-")
-        ]
-        if not pending:
-            return
-        for t in pending:
-            t.join(timeout=deadline - time.monotonic())
-
-
 def _terminal_state(mp: MessageProcessor) -> str:
     """The turn's stamped terminal state, read back off the real row — the same
     record the UI and the crash toast are driven from."""
@@ -147,7 +129,7 @@ def _run(provider: _ReportingProvider, raw_input: str) -> MessageProcessor:
     with patch(_BUILD_CLIENT, return_value=provider):
         mp.begin()
         mp.result()
-        _drain_background_turns()
+        drain_background_turns()
     return mp
 
 
@@ -164,9 +146,13 @@ def test_previous_reported_usage_at_the_line_compacts_the_next_turn(
 
     The gate is *reactive* by design: it can only know a request was too big
     after one came back. That is why the first turn completes untouched and the
-    second is the one that pays."""
+    second is the one that pays.
+
+    A user turn's first send is its planning pre-pass, and the gate reads every
+    send's report — so the first turn's pre-pass comes in under the line, and
+    only its last send, the loop step, reports at it."""
     assert db is not None  # fixture taken for its binding side effect (real DB gateway)
-    provider = _ReportingProvider(reports=[_OVER_CAP])
+    provider = _ReportingProvider(reports=[_UNDER_CAP, _OVER_CAP])
 
     first = _run(provider, "a first turn the provider serves normally")
     assert _terminal_state(first) == TurnExecution.COMPLETED

@@ -81,22 +81,21 @@ async function save(): Promise<void> {
 
 <template>
   <div class="panel-header">
-    <h2><Network :size="20" /> System</h2>
+    <h2><Network :size="16" /> System</h2>
   </div>
 
   <div v-if="loading" class="loading">Loading…</div>
 
   <div v-else-if="restarting" class="network-restart-banner">
-    <Lock :size="18" />
+    <Lock :size="16" />
     <span>Chalie is restarting… the page will reconnect automatically.</span>
   </div>
 
   <div v-else class="brain-overview">
     <!-- Domain card -->
-    <div class="export-card">
-      <div class="export-card-icon"><Network :size="24" /></div>
-      <div class="export-card-label">Domain</div>
-      <p class="form-hint">
+    <section>
+      <h4 class="section-head">Domain</h4>
+      <p class="panel-desc">
         The public domain Chalie is served from. Used for CORS: leave blank to allow same-origin
         requests only, or set to your external domain (e.g. <code>chalie.example.com</code>) to
         allow cross-origin access.
@@ -110,14 +109,13 @@ async function save(): Promise<void> {
           placeholder="e.g. chalie.example.com (blank = same-origin only)"
         />
       </label>
-      <button class="btn btn-primary" @click="save"><Network :size="14" /> Save Domain</button>
-    </div>
+      <button class="btn" @click="save"><Network :size="16" /> Save Domain</button>
+    </section>
 
     <!-- SSL / TLS card -->
-    <div class="export-card">
-      <div class="export-card-icon"><Lock :size="24" /></div>
-      <div class="export-card-label">SSL / TLS</div>
-      <p class="form-hint">
+    <section>
+      <h4 class="section-head">SSL / TLS</h4>
+      <p class="panel-desc">
         Enable HTTPS. Upload a PEM certificate and private key. After saving, Chalie restarts and
         the site switches to <code>https://</code> — you will need to reconnect at the new address.
       </p>
@@ -146,10 +144,10 @@ async function save(): Promise<void> {
         before saving.
       </p>
 
-      <button class="btn btn-primary" :disabled="sslSaveBlocked" @click="save">
-        <Lock :size="14" /> Save SSL Settings
+      <button class="btn" :disabled="sslSaveBlocked" @click="save">
+        <Lock :size="16" /> Save SSL Settings
       </button>
-    </div>
+    </section>
   </div>
 </template>
 
@@ -166,11 +164,8 @@ async function save(): Promise<void> {
 }
 
 .network-ssl-warn {
-  font-size: 12px;
-  color: var(--error);
-  background: rgba(var(--bs-danger-rgb), 0.1);
-  border: 1px solid rgba(var(--bs-danger-rgb), 0.25);
-  border-radius: 6px;
+  color: var(--deny-text);
+  background: var(--surface);
   padding: 8px 12px;
   margin: 8px 0;
   text-align: left;
@@ -181,11 +176,8 @@ async function save(): Promise<void> {
   align-items: center;
   gap: 10px;
   padding: 20px 24px;
-  border-radius: 10px;
-  background: rgba(var(--bs-warning-rgb), 0.1);
-  border: 1px solid rgba(var(--bs-warning-rgb), 0.25);
-  color: var(--warning-banner-text);
-  font-size: 14px;
+  background: var(--surface);
+  color: var(--ask-text);
   font-weight: 500;
 }
 </style>

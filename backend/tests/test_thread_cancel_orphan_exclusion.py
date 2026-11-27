@@ -34,7 +34,7 @@ from flask.testing import FlaskClient
 
 from configs.channels.user import UserConfig
 from controllers.message_processor import MessageProcessor
-from models.thread_gist import ThreadGist
+from models.thread import Thread
 from models.transcript import Transcript
 from models.turn_execution import TurnExecution
 
@@ -52,7 +52,7 @@ def _open_exchange(turn_id: int, question: str, answer: str) -> tuple[int, int]:
     user_id = mp.transcript_service.append_input(mp.raw_input)
     mp.uid = user_id
     mp.current_transcript_id = user_id
-    answer_id = mp.transcript_service.append_assistant(answer)
+    answer_id = mp.transcript_service.append_assistant(answer, settled=True)
     return user_id, answer_id
 
 
@@ -181,7 +181,7 @@ def test_recent_threads_search_matches_thread_gist_label_not_just_user_content(
     plain_turn_id = 8502
 
     _open_exchange(gisted_turn_id, "Send an email to Jane about the invoice.", "Sent.")
-    ThreadGist(channel=_CHANNEL, turn_id=gisted_turn_id, gist="Testing and Debugging", created_at="").upsert()
+    assert Thread.set_summary(_CHANNEL, gisted_turn_id, "Testing and Debugging")
 
     _open_exchange(plain_turn_id, "What's the weather tomorrow?", "Sunny, 22C.")
 

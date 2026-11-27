@@ -42,8 +42,11 @@ class LlmLogService:
         flag on the request. Probe calls (candidate-provider checks in
         ``vision_service`` / ``provider_probe``) build their own client and
         never route through ``send``, which is exactly why they are absent from
-        the ledger: spend the user did not incur is not spend.
+        the ledger: spend the user did not incur is not spend. A ``TRANSIENT``
+        config keeps no row at all.
         """
+        if self.mp.config.TRANSIENT:
+            return
         try:
             LlmCallLog(
                 type=self.mp.config.USAGE_TYPE,

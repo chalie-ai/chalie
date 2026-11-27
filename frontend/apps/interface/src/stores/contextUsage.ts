@@ -4,8 +4,9 @@
  * One writer: `record`, fed by the `context_usage` turn signal the backend
  * pushes once per CHAT provider call (see services/provider_service.py), routed
  * here by `utils/driftDispatcher.ts::_dispatchTurnSignal`. A dock reads its own
- * thread via `usageDisplayFor(type, turnId)`; two docks on different threads
- * never interfere, since every entry is keyed by `type:turnId`.
+ * thread via `percentUsedFor(type, turnId, modelWindow)`; two docks on
+ * different threads never interfere, since every entry is keyed by
+ * `type:turnId`.
  *
  * A `turnId` of null means "whatever this channel spent last" — the spine dock,
  * which is not bound to a thread. That resolves through `latestByType`, written
@@ -13,7 +14,7 @@
  * turn ids. A key with no entry renders no meter, which is the intended state
  * for a thread that has spent nothing yet.
  */
-import { computed, ref } from 'vue';
+import { ref } from 'vue';
 import { defineStore } from 'pinia';
 
 export const useContextUsageStore = defineStore('contextUsage', () => {
@@ -37,26 +38,16 @@ export const useContextUsageStore = defineStore('contextUsage', () => {
   }
 
   /**
-   * Returns a function that, given a (type, turnId), yields the display string
-   * for that dock's thread (or '' until the first reading lands).
+   * The whole percentage of the context window that dock's thread has used,
+   * 0..100, or null until a reading with a real window lands. Measured against
+   * `modelWindow` when the dock knows it — the window of the model its next
+   * message goes to — else against the window the reading was taken on.
    */
-  const usageDisplayFor = computed<
-    (type: string, turnId: number | null) => string
-  >(() => (type: string, turnId: number | null): string => {
+  function percentUsedFor(type: string, turnId: number | null, modelWindow: number | null): number | null {
     const entry = entryFor(type, turnId);
-    if (!entry || (entry.tokens === 0 && entry.window === 0)) return '';
-    return `${(entry.tokens / 1000).toFixed(1)}/${(entry.window / 1000).toFixed(1)}k`;
-  });
-
-  /**
-   * Clamped 0..1 ratio of tokens used vs. context window. Mirrors
-   * `usageDisplayFor` but yields a number suitable for a meter-bar width.
-   * Returns 0 when there is no entry or the window is zero (divide-by-zero).
-   */
-  function usageRatioFor(type: string, turnId: number | null): number {
-    const entry = entryFor(type, turnId);
-    if (!entry || entry.window === 0) return 0;
-    return Math.min(1, Math.max(0, entry.tokens / entry.window));
+    if (!entry || entry.window === 0) return null;
+    const against = modelWindow || entry.window;
+    return Math.round(Math.min(1, Math.max(0, entry.tokens / against)) * 100);
   }
 
   /**
@@ -72,8 +63,7 @@ export const useContextUsageStore = defineStore('contextUsage', () => {
   return {
     byKey,
     latestByType,
-    usageDisplayFor,
-    usageRatioFor,
+    percentUsedFor,
     record,
   };
 });

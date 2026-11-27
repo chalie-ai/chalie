@@ -32,12 +32,14 @@ import pytest
 
 from configs.channels.user import UserConfig
 from controllers.message_processor import MessageProcessor
+from models.provider_request import ProviderRequest
 from models.provider_response import ProviderResponse
 from models.transcript import Transcript
 from models.voice_transcript import VoiceTranscript
 from services.file_mapper_service import FileMapperService
 from services.voice_transcript_service import VoiceTranscriptService
 from services.websocket import Websocket
+from tests.helpers import NO_PLAN, drain_background_turns, is_planning_request
 
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 
@@ -55,6 +57,9 @@ class _RecordingClient:
     def __init__(self) -> None:
         self.frames: list[dict[str, object]] = []
 
+    def close(self) -> None:
+        """Nothing to release: the captured frames stay readable after the registry lets go."""
+
     def send(self, data: str) -> None:
         self.frames.append(json.loads(data))
 
@@ -70,6 +75,38 @@ class _ReplyingProvider:
         return 120_000
 
     def send(self, _dto: object) -> ProviderResponse:
+        return ProviderResponse(
+            text=_REPLY, model="scripted-presynthesis", tool_calls=None, tokens_input=1,
+        )
+
+
+class _ToolThenReplyProvider:
+    """A reply that first runs a tool-only step, then answers: the exchange's
+    terminal row is NOT the first row the call stores.
+
+    The reply's thread gist runs concurrently through this same double, so only
+    the reply's act-loop sends — the ones carrying tools — are counted; the
+    gist's toolless send can never take the tool-only step."""
+
+    def __init__(self) -> None:
+        self._sent = 0
+
+    def get_context_limit(self) -> int:
+        return 120_000
+
+    def send(self, dto: object) -> ProviderResponse:
+        if is_planning_request(dto):
+            return NO_PLAN
+        if not cast(ProviderRequest, dto).tools:
+            return ProviderResponse(
+                text=_REPLY, model="scripted-presynthesis", tool_calls=None, tokens_input=1,
+            )
+        self._sent += 1
+        if self._sent == 1:
+            return ProviderResponse(
+                text="", model="scripted-presynthesis",
+                tool_calls=[{"name": "noop_probe", "input": {"q": "x"}}], tokens_input=1,
+            )
         return ProviderResponse(
             text=_REPLY, model="scripted-presynthesis", tool_calls=None, tokens_input=1,
         )
@@ -143,6 +180,40 @@ class TestSettleKicksSynthesis:
         if row.file_path is not None:
             assert (voice_dir / row.file_path).exists()
             assert states[-1] == "ready"
+
+    def test_a_reply_is_spoken_from_its_own_answer_not_the_openers(
+        self, db: sqlite3.Connection, voice_dir: Path,
+    ) -> None:
+        """A reply forks into the opener's turn, where the turn's first settled
+        row is still the OPENER's answer — already spoken. The reply's own final
+        answer, written after a tool-only step of its own, must still be spoken
+        into storage: the hook follows the exchange that just ended, not the
+        turn's first settled row."""
+        assert db is not None  # taken for its binding side effect (real DB gateway)
+        opener = MessageProcessor(UserConfig(), raw_input="is the kettle on")
+        with patch(_BUILD_CLIENT, return_value=_ReplyingProvider()):
+            opener.begin()
+            opener.result()
+            drain_background_turns()
+        opener_answer_id = Transcript.settle0("user", opener.turn_id)
+        assert opener_answer_id is not None
+        assert _await_outcome(opener_answer_id) is not None, "the opener's own answer is spoken first"
+
+        reply = MessageProcessor(UserConfig(), raw_input="and the toaster?", turn_id=opener.turn_id)
+        with patch(_BUILD_CLIENT, return_value=_ToolThenReplyProvider()):
+            reply.begin()
+            reply.result()
+            drain_background_turns()
+
+        reply_rows = [
+            r for r in Transcript.by_turn("user", opener.turn_id)
+            if r["role"] == "assistant" and cast(int, r["id"]) > opener_answer_id
+        ]
+        assert [r["settled"] for r in reply_rows] == [0, 1], "a tool-only step, then the final answer"
+        reply_answer_id = cast(int, reply_rows[-1]["id"])
+        row = _await_outcome(reply_answer_id)
+        assert row is not None, "the reply's own final answer must be spoken"
+        assert row.transcript_id == reply_answer_id
 
     def test_an_unsettled_turn_is_left_alone(
         self, db: sqlite3.Connection, voice_dir: Path,

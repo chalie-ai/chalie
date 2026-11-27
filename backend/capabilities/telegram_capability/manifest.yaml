@@ -1,0 +1,18 @@
+id: telegram
+name: Telegram
+version: 1.0.0
+entry_class: TelegramCapability
+description: >-
+  Lets Chalie message you on Telegram through your own bot. In Telegram,
+  message @BotFather, send /newbot and follow its steps, then paste the token
+  it gives you here and press Connect. Chalie then shows a 6-digit code: open
+  your new bot, press Start and send it the code within 5 minutes. Chalie will
+  message only you.
+providers:
+  - cloud
+fields:
+  - name: bot_token
+    label: Bot token
+    type: password
+    placeholder: "123456789:AAE..."
+    required: true

@@ -19,6 +19,8 @@ const blockedOpen = ref(false);
 
 interface PolicyCategory {
   cat: string;
+  /** The heading: an MCP server's own name, or a built-in category id in words. */
+  title: string;
   isMcp: boolean;
   rows: { r: PolicyRow; label: string }[];
 }
@@ -28,7 +30,12 @@ const categories = computed<PolicyCategory[]>(() => {
   for (const r of rows.value) {
     if (r.channel !== props.channel) continue;
     const cat = r.group || r.permission.split('.')[0];
-    (byCat[cat] ??= { cat, isMcp: !!r.group, rows: [] }).rows.push({
+    (byCat[cat] ??= {
+      cat,
+      title: r.group || capitalize(cat.replace(/_/g, ' ')),
+      isMcp: !!r.group,
+      rows: [],
+    }).rows.push({
       r,
       label: r.label || r.permission,
     });
@@ -51,12 +58,12 @@ async function load(): Promise<void> {
   }
 }
 
-async function setPermission(r: PolicyRow, value: string): Promise<void> {
+async function setPermission(r: PolicyRow, value: string, name: string): Promise<void> {
   const previous = r.setting;
   r.setting = value;
   try {
     await policies.update({ channel: props.channel, permission: r.permission, setting: value });
-    showToast(`${r.permission} → ${value}`, 'success');
+    showToast(`${name}: ${capitalize(value)}`, 'success');
   } catch (e) {
     r.setting = previous;
     showToast(e instanceof HttpError ? 'Failed to update policy' : 'Network error', 'error');
@@ -66,7 +73,7 @@ async function setPermission(r: PolicyRow, value: string): Promise<void> {
 async function setAll(setting: string): Promise<void> {
   const targets = rows.value.filter((r) => r.channel === props.channel && r.setting !== setting);
   if (targets.length === 0) {
-    showToast(`All already ${setting}`, 'success');
+    showToast(`All already ${capitalize(setting)}`, 'success');
     return;
   }
   const results = await Promise.all(
@@ -81,7 +88,7 @@ async function setAll(setting: string): Promise<void> {
     if (results[i]) r.setting = setting;
   });
   const ok = results.filter(Boolean).length;
-  if (ok === targets.length) showToast(`All ${props.channel} → ${setting} (${ok})`, 'success');
+  if (ok === targets.length) showToast(`All ${ok} set to ${capitalize(setting)}`, 'success');
   else showToast(`Updated ${ok}/${targets.length} — some failed`, 'error');
 }
 
@@ -110,8 +117,8 @@ onMounted(load);
   <div v-else class="policies-grid">
     <div v-for="c in categories" :key="c.cat" class="policy-category">
       <h4 class="section-head">
-        <span v-if="c.isMcp" class="badge badge-cyan">MCP</span>
-        {{ c.cat }}
+        <span v-if="c.isMcp" class="badge">MCP</span>
+        {{ c.title }}
       </h4>
       <div v-for="{ r, label } in c.rows" :key="r.permission" class="policy-rule">
         <span class="policy-label">{{ label }}</span>
@@ -121,7 +128,7 @@ onMounted(load);
             :key="v"
             class="seg-btn"
             :class="{ active: v === r.setting }"
-            @click="setPermission(r, v)"
+            @click="setPermission(r, v, `${c.title} › ${label}`)"
           >
             {{ capitalize(v) }}
           </button>

@@ -34,7 +34,6 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
-import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -64,6 +63,7 @@ from services.memory_hygiene_service import (
     render_listing,
 )
 from services.memory_step_service import _in_scope
+from tests.helpers import drain_background_turns
 
 pytestmark = pytest.mark.unit
 
@@ -730,32 +730,6 @@ class _Clock:
         monkeypatch.setattr(memory_hygiene_service, "utc_now", lambda: self.now)
 
 
-def _drain_turns(timeout_s: float = 30.0) -> None:
-    """Join every turn thread a tick left running.
-
-    ``MemoryHygieneService._run_turn`` joins each pass before the next fires,
-    but a settled turn spawns daemons of its own (``thread-gist``,
-    ``skill-suggest``) which start turns of their own — and those would
-    outlive both the provider patch and this test's database. Loops rather
-    than joins once for exactly that reason.
-    """
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        live = [
-            thread for thread in threading.enumerate()
-            if thread.name.startswith("turn-")
-            or thread.name in ("thread-gist", "skill-suggest")
-        ]
-        if not live:
-            return
-        for thread in live:
-            thread.join(timeout=max(0.0, deadline - time.monotonic()))
-    raise AssertionError(
-        f"turn threads still running after {timeout_s}s: "
-        f"{[t.name for t in threading.enumerate()]}",
-    )
-
-
 def _transcript(db: sqlite3.Connection, role: str) -> list[tuple[int, int, str]]:
     """``(id, turn_id, content)`` for every hygiene-channel row of one role,
     oldest first — the durable record each assertion below is made against."""
@@ -799,7 +773,7 @@ class TestFirstRunChainStart:
         provider = _ScriptedProvider()
         with patch(_BUILD_CLIENT, return_value=provider):
             status = MemoryHygieneService().tick()
-            _drain_turns()
+            drain_background_turns()
 
         listings = _listings(provider)
         assert listings, f"no listing request was served (tick said {status!r})"
@@ -842,7 +816,7 @@ class TestEmptyStore:
         provider = _ScriptedProvider()
         with patch(_BUILD_CLIENT, return_value=provider):
             status = MemoryHygieneService().tick()
-            _drain_turns()
+            drain_background_turns()
 
         assert status == "empty store"
         assert provider.requests == [], (
@@ -894,7 +868,7 @@ class TestTwoWindowCatchUp:
 
         with patch(_BUILD_CLIENT, return_value=provider):
             status = service.tick()
-            _drain_turns()
+            drain_background_turns()
 
         assert status == "processed=2 skipped=0"
         assert len(_listings(provider)) == 2, (
@@ -929,7 +903,7 @@ class TestTwoWindowCatchUp:
         served = len(_listings(provider))
         with patch(_BUILD_CLIENT, return_value=provider):
             second = service.tick()
-            _drain_turns()
+            drain_background_turns()
 
         assert second == "no pending windows"
         assert len(_listings(provider)) == served, (
@@ -953,7 +927,7 @@ class TestTwoWindowCatchUp:
 
         with patch(_BUILD_CLIENT, return_value=provider):
             MemoryHygieneService().tick()
-            _drain_turns()
+            drain_background_turns()
 
         listings = _listings(provider)
         assert len(listings) == 2
@@ -998,7 +972,7 @@ class TestEmptyWindowSkipped:
         # A first, ordinary pass — the cheapest way to lay down real coverage.
         with patch(_BUILD_CLIENT, return_value=provider):
             assert service.tick() == "processed=1 skipped=0"
-            _drain_turns()
+            drain_background_turns()
         served = len(_listings(provider))
         assert served == 1
 
@@ -1010,7 +984,7 @@ class TestEmptyWindowSkipped:
 
         with patch(_BUILD_CLIENT, return_value=provider):
             status = service.tick()
-            _drain_turns()
+            drain_background_turns()
 
         assert status == "processed=1 skipped=1"
 
@@ -1067,7 +1041,7 @@ class TestCrashedPassIsSkipped:
 
         with patch(_BUILD_CLIENT, return_value=provider):
             service.tick()
-            _drain_turns()
+            drain_background_turns()
 
         alpha_line = _window_line(_ALPHA_AT, _BOUNDARY_1)
         beta_line = _window_line(_BOUNDARY_1, _BOUNDARY_2)
@@ -1089,7 +1063,7 @@ class TestCrashedPassIsSkipped:
         served = len(_listings(provider))
         with patch(_BUILD_CLIENT, return_value=provider):
             second = service.tick()
-            _drain_turns()
+            drain_background_turns()
 
         assert second == "no pending windows"
         assert not [
@@ -1113,7 +1087,7 @@ class TestCrashedPassIsSkipped:
         with caplog.at_level("ERROR", logger=memory_hygiene_service.__name__):
             with patch(_BUILD_CLIENT, return_value=provider):
                 MemoryHygieneService().tick()
-                _drain_turns()
+                drain_background_turns()
 
         reported = [
             record for record in caplog.records
@@ -1180,7 +1154,7 @@ class TestOverLimitWindowSplit:
 
         with patch(_BUILD_CLIENT, return_value=provider):
             MemoryHygieneService().tick()
-            _drain_turns()
+            drain_background_turns()
 
         both = [
             r for r in _listings(provider)
@@ -1214,7 +1188,7 @@ class TestOverLimitWindowSplit:
 
         with patch(_BUILD_CLIENT, return_value=provider):
             MemoryHygieneService().tick()
-            _drain_turns()
+            drain_background_turns()
 
         window = _window_line(_ALPHA_AT, _BOUNDARY_1)
         alpha_only = [
@@ -1267,7 +1241,7 @@ class TestToolActivePassHandsOff:
 
         with patch(_BUILD_CLIENT, return_value=provider):
             assert service.tick() == "processed=1 skipped=0"
-            _drain_turns()
+            drain_background_turns()
 
         assert alpha_lane.served >= 2, (
             f"the pass settled without running the tool round ({alpha_lane.served} round(s))"
@@ -1291,7 +1265,7 @@ class TestToolActivePassHandsOff:
         clock.now = datetime(2026, 3, 6, 12, 0, 0, tzinfo=timezone.utc)
         with patch(_BUILD_CLIENT, return_value=provider):
             service.tick()
-            _drain_turns()
+            drain_background_turns()
 
         beta_request = next(
             (r for r in _listings(provider) if _BETA in _listing_of(r)), None,
@@ -1333,7 +1307,7 @@ class TestCleanTurnCarriesNoCrash:
         with patch(_BUILD_CLIENT, return_value=provider):
             mp = MessageProcessor.process(MemoryHygieneConfig(), listing)
             mp.result()
-            _drain_turns()
+            drain_background_turns()
 
         assert mp.crash_exception is None
         assert _listings(provider), "the pass never reached the provider"
@@ -1462,7 +1436,7 @@ class TestDueGate:
         # empty and skipped, which leaves coverage at Mar 4 04:00.
         with patch(_BUILD_CLIENT, return_value=provider):
             assert service.tick() == "processed=1 skipped=1"
-            _drain_turns()
+            drain_background_turns()
         served = len(_listings(provider))
         assert served == 1
 
@@ -1474,7 +1448,7 @@ class TestDueGate:
 
         with patch(_BUILD_CLIENT, return_value=provider):
             assert service.tick() == "processed=0 skipped=1"
-            _drain_turns()
+            drain_background_turns()
         assert len(_listings(provider)) == served, (
             "the all-empty tick fired a pass on a window with nothing in it"
         )
@@ -1571,9 +1545,9 @@ class TestJobGates:
         provider = _ScriptedProvider()
         with patch(_BUILD_CLIENT, return_value=provider):
             assert job._run() == "processed=1 skipped=1"
-            _drain_turns()
+            drain_background_turns()
             assert job._run() == "processed=0 skipped=1"
-            _drain_turns()
+            drain_background_turns()
 
         assert job.should_run() is False, (
             "the job forgot the empty tick and re-offered the same window"
@@ -1610,7 +1584,7 @@ class TestJobWiring:
         provider = _ScriptedProvider()
         with patch(_BUILD_CLIENT, return_value=provider):
             status = job._run()
-            _drain_turns()
+            drain_background_turns()
 
         assert status == "processed=1 skipped=0"
         listings = _listings(provider)
@@ -1684,7 +1658,7 @@ class TestHygieneDoesNotLookLikeUserActivity:
 
         with patch(_BUILD_CLIENT, return_value=provider):
             assert MemoryHygieneService().tick() == "processed=1 skipped=0"
-            _drain_turns()
+            drain_background_turns()
 
         # The pass really ran — otherwise "no user rows" would be vacuous.
         assert _listings(provider), "the pass never reached the provider"

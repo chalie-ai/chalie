@@ -30,19 +30,9 @@ class BlockedEntryResponse(Response):
 
 
 class PermissionOriginResponse(Response):
-    """The interactive turn a pending permission prompt belongs to — where the
-    interface shows the card (main spine, thread panel or scheduled panel)."""
+    """The interactive turn an open ask or a browsing run's tab belongs to — where
+    the interface shows it (main spine, thread panel or scheduled panel)."""
 
     type: str
     turn_id: int
     forked: bool
-
-
-class PermissionRequestResponse(Response):
-    """Read shape for one parked ask-gate: the fields of the ``permission_request``
-    socket frame, so a client restoring over REST gets the card it missed."""
-
-    request_id: str
-    action_id: str
-    summary: str
-    origin: PermissionOriginResponse

@@ -9,25 +9,26 @@
 """CodeAgentConfig — delegate channel for the ``code_agent`` tool.
 
 Mirrors WebSearchConfig/PimConfig's transcript wiring: a real per-turn row on
-its own ``delegate:code_agent`` channel so the delegate can render its own
+the subagent's own ``delegate:code_agent:{agent_id}`` channel so the delegate can render its own
 act-trail across ACT iterations (``skip_transcript=False`` /
 ``skip_input_row=False``). Unlike those two, this channel does NOT set
 ``uses_delegate_provider`` — it stays on the default ``False`` and therefore
-runs on the brain's globally selected (main) provider, not the Delegate
-Provider slot. Coding work benefits from the same model quality the user's
+runs on the model and thinking level of the thread that started it, not the
+Delegate Provider slot, and keeps them when it is messaged again. Coding work benefits from the same model quality the user's
 own conversation gets, and there is no separate "delegate-grade" model tier
 worth carving out for it. Paired with ``CodeAgentAbility`` (abilities/code_agent.py).
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from abilities.delete import DeleteAbility
 from abilities.edit_file import EditFileAbility
 from abilities.make_dir import MakeDirAbility
 from abilities.recall import Recall
 from abilities.move import MoveAbility
+from abilities.plan import PlanAbility
 from abilities.programming_docs_search import ProgrammingDocsSearchAbility
 from abilities.read import ReadAbility
 from abilities.run_script import RunScriptAbility
@@ -64,17 +65,24 @@ class CodeAgentConfig(ProcessorConfig):
     """``policy_channel`` is supplied by the caller (inherited from whoever
     invoked the tool) rather than hardcoded."""
 
+    RENDERS_HTML: ClassVar[bool] = True
+
     def __init__(self, policy_channel: "PolicyChannel") -> None:
         super().__init__(
             channel=Channel.DELEGATE_CODE_AGENT.value,
             role="code_agent",
             policy_channel=policy_channel,
-            always_available=[*_PINNED_TOOLS, Recall.NAME, WebSearchAbility.NAME, ProgrammingDocsSearchAbility.NAME],
+            always_available=[
+                *_PINNED_TOOLS, Recall.NAME, WebSearchAbility.NAME, ProgrammingDocsSearchAbility.NAME, PlanAbility.NAME,
+            ],
             skip_transcript=False,  # write a delegate-channel transcript row so
             skip_input_row=False,   # _setup assigns the uid the act-trail needs
-            suppress_history=True,
-            memory_seed=False,
+            suppress_history=False,
+            memory_seed=True,
         )
+        # The spawning turn rebinds ``channel`` to the subagent's own; the
+        # prompt is chosen by the kind's bare channel.
+        object.__setattr__(self, "prompt_channel", Channel.DELEGATE_CODE_AGENT.value)
 
     @property
     def system_prompt(self) -> str:
@@ -85,7 +93,7 @@ All file paths passed to tools must be absolute.
 
 Files SHOULD be created and modified inside {workspace} unless the task says otherwise — it is a convention, not an enforced boundary.
 
-Prefer {EditFileAbility.NAME} for targeted edits and {WriteFileAbility.NAME} for full rewrites; verify your own work by running it before declaring done; no conversation history, work only from the task.
+Prefer {EditFileAbility.NAME} for targeted edits and {WriteFileAbility.NAME} for full rewrites; verify your own work by running it before declaring done.
 
 Your final answer is a hand-off — the caller sees only what you write, so it must stand alone. It must ALWAYS be one of the following:
 - If you created a new script, describe in detail what it does and how it works.

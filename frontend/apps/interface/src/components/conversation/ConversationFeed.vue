@@ -8,20 +8,18 @@ import { ConfigType } from '@chalie/shared';
 import { conversation as convoApi } from '../../api/conversation';
 import { useSessionStore } from '../../stores/session';
 import { useAutoscroll } from '../../composables/useAutoscroll';
-import { registerSurface, unregisterSurface, upsertTurnToSurfaces, evictOldestAbove, SPINE_SURFACE_ID } from '../../utils/turnDom';
+import { registerSurface, unregisterSurface, upsertTurnToSurfaces, nextTicket, SPINE_SURFACE_ID } from '../../utils/turnDom';
 import { syncDaymarks } from '../../utils/daymarks';
+import { preloadRichCards } from '../rich/richRegistry';
 import SpineTurn from './SpineTurn.vue';
 
-const PAGE_SIZE = 20;
-// Retained-turn window: while pinned near the bottom, older off-screen turns
-// past this many are evicted and lazy-reloaded on scroll-up (bounds the DOM).
-const KEEP_RENDERED = 30;
+const PAGE_SIZE = 10;
 
 const session = useSessionStore();
 
 const feedRef = ref<HTMLElement | null>(null);
 const turnsRef = ref<HTMLElement | null>(null);
-const { scrollToBottom, forceScrollToBottom, userScrolledUp } = useAutoscroll(feedRef);
+const { scrollToBottom, forceScrollToBottom } = useAutoscroll(feedRef);
 
 // D17 — the pagination cursor (offset/hasMore) is UI-local, owned here.
 const offset = ref(0);
@@ -35,9 +33,16 @@ async function _fetchPage(pageOffset: number): Promise<number> {
   const ids = threads.map((t) => t.turn_id).filter((id): id is number => id != null);
   if (!ids.length) return threads.length;
 
+  // Ticketed: a running turn in this page can settle while the read is out,
+  // and its settle must not be repainted by this older snapshot (see turnDom's
+  // `UpsertOptions.ticket`).
+  const ticket = nextTicket();
   const { blocks } = await convoApi.batch(ids, ConfigType.USER);
+  // The scroll that follows a page load measures final heights only if the
+  // page's rich cards are already in the DOM, not still fetching their chunks.
+  await preloadRichCards(blocks.flatMap((b) => b.messages.flatMap((m) => m.segments ?? [])));
   for (const block of blocks) {
-    upsertTurnToSurfaces(block, ConfigType.USER);
+    upsertTurnToSurfaces(block, ConfigType.USER, { ticket });
   }
   return threads.length;
 }
@@ -53,33 +58,33 @@ async function _loadRecent(): Promise<{ isInitialLoad: boolean; loadedAny: boole
   return { isInitialLoad, loadedAny: loaded > 0 };
 }
 
-async function _loadMore(): Promise<void> {
-  if (!hasMoreRef.value) return;
-  const loaded = await _fetchPage(offset.value);
-  offset.value += loaded;
+// The top of the feed is in view: within 150px of it, or the page is too
+// short to scroll at all (no scroll event will ever come to reach it).
+function _topInView(): boolean {
+  const scrollable = document.documentElement.scrollHeight > window.innerHeight + 100;
+  return !scrollable || window.scrollY < 150;
 }
 
-// History pagination: on scroll within 150px of the top (and not already
-// loading/exhausted), anchor-preserve then paginate.
+// History pagination: while the top is in view and history remains, load the
+// next older page and keep the reader's place, so a page too short to push the
+// top out of view is followed by the next one.
 let _paginating = false;
 
 async function _onScrollPaginate(): Promise<void> {
   if (_paginating) return;
-  if (session.historyLoading || !hasMoreRef.value) return;
-
-  const scrollable = document.documentElement.scrollHeight > window.innerHeight + 100;
-  if (!scrollable) return;
-  if (window.scrollY >= 150) return;
-
   _paginating = true;
   try {
-    const prevHeight = document.body.scrollHeight;
-    const prevScrollY = window.scrollY;
-    await _loadMore();
-    await nextTick();
-    const added = document.body.scrollHeight - prevHeight;
-    if (added > 0) {
-      window.scrollTo({ top: prevScrollY + added, behavior: 'instant' });
+    while (hasMoreRef.value && !session.historyLoading && _topInView()) {
+      const prevHeight = document.body.scrollHeight;
+      const prevScrollY = window.scrollY;
+      const loaded = await _fetchPage(offset.value);
+      if (!loaded) break;
+      offset.value += loaded;
+      await nextTick();
+      const added = document.body.scrollHeight - prevHeight;
+      if (added > 0) {
+        window.scrollTo({ top: prevScrollY + added, behavior: 'instant' });
+      }
     }
   } finally {
     _paginating = false;
@@ -87,25 +92,20 @@ async function _onScrollPaginate(): Promise<void> {
 }
 
 // Autoscroll: turnDom dispatches 'turn-upserted' after every DOM render
-// (initial load, WS-driven refetch, live growth mid-turn) — replaces the old
-// deep watch on the buffer's sortedBlocks. Reconcile the day dividers first so
-// their height is already in the layout when autoscroll measures the bottom.
+// (initial load, WS-driven refetch, live growth mid-turn). Turns are only ever
+// added or refreshed here, never taken off the page, however long it stays
+// open. Reconcile the day dividers first so their height is already in the
+// layout when autoscroll measures the bottom.
 function onTurnUpserted(): void {
   const c = turnsRef.value;
-  // Bound the DOM: while pinned near the bottom, drop the oldest off-screen
-  // turns past the retained window and resync the pagination cursor so scroll-up
-  // re-fetches exactly what was evicted. Gated on !userScrolledUp so reading
-  // history is never trimmed underneath the user.
-  if (c && !userScrolledUp.value) {
-    const before = c.childElementCount;
-    evictOldestAbove(c, KEEP_RENDERED);
-    if (c.childElementCount < before) {
-      offset.value = c.querySelectorAll(':scope > [data-version]').length;
-      hasMoreRef.value = true;
-    }
-  }
   if (c) syncDaymarks(c);
   scrollToBottom();
+}
+
+// The first load's jump to the bottom, settled once the jump has been made.
+let landed: Promise<void> = Promise.resolve();
+function onInitialLoaded(): void {
+  landed = forceScrollToBottom();
 }
 
 onMounted(async () => {
@@ -118,31 +118,36 @@ onMounted(async () => {
     });
   }
 
-  document.addEventListener('session:history-initial-loaded', forceScrollToBottom);
+  document.addEventListener('session:history-initial-loaded', onInitialLoaded);
   document.addEventListener('turn-upserted', onTurnUpserted);
 
   session.registerHistoryLoader(_loadRecent);
   await session.loadRecentConversation();
 
+  // Pagination starts only once the first load has landed at the bottom: the
+  // autoscroll that follows each rendered turn sets off from the top, and its
+  // first step would otherwise read as the reader reaching the top.
+  await landed;
   window.addEventListener('scroll', _onScrollPaginate, { passive: true });
+  void _onScrollPaginate();
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener('scroll', _onScrollPaginate);
-  document.removeEventListener('session:history-initial-loaded', forceScrollToBottom);
+  document.removeEventListener('session:history-initial-loaded', onInitialLoaded);
   document.removeEventListener('turn-upserted', onTurnUpserted);
   unregisterSurface(SPINE_SURFACE_ID);
 });
 </script>
 
 <template>
-  <main id="conversationFeed" ref="feedRef" class="conversation-spine">
+  <main id="conversationFeed" ref="feedRef" class="conversation-spine" data-quote-dock="main_spine_dock">
     <div v-if="session.historyLoading" class="history-loader">
       <output class="history-loader__spinner" aria-label="Loading history" />
     </div>
 
     <div v-if="!hasMoreRef" class="history-end-pill">
-      <span class="history-end-pill__label">End of thread history</span>
+      <span class="tag">End of thread history</span>
     </div>
 
     <div ref="turnsRef" class="conversation-spine__turns" />
@@ -159,8 +164,8 @@ onBeforeUnmount(() => {
 .history-loader__spinner {
   width: 18px;
   height: 18px;
-  border: 2px solid color-mix(in oklab, var(--violet) 20%, transparent);
-  border-top-color: var(--violet);
+  border: 2px solid var(--line);
+  border-top-color: var(--pink-text);
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
 }
@@ -171,13 +176,11 @@ onBeforeUnmount(() => {
   padding: 16px 0 8px;
 }
 
-.history-end-pill__label {
-  font-size: 11px;
-  color: var(--text-muted);
-  background: color-mix(in oklab, var(--text) 3%, transparent);
-  border: 1px solid color-mix(in oklab, var(--text) 7%, transparent);
-  border-radius: 20px;
-  padding: 4px 14px;
-  letter-spacing: 0.04em;
+// The end-of-history note reads as a sentence, not a shouted label.
+.history-end-pill .tag {
+  font-family: var(--font-ui);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: none;
 }
 </style>

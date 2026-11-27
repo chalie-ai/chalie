@@ -18,19 +18,28 @@ from .response import Response
 
 
 class CapabilitySummaryResponse(Response):
-    """One row in the capability list — manifest metadata plus connection state."""
+    """One row in the capability list — manifest metadata plus connection
+    state, with ``setup_code`` while a setup waits for the user to send one,
+    and ``unavailable_reason`` when the capability cannot work where Chalie
+    runs."""
 
     id: str
     name: str
     version: str
+    description: str | None
+    available: bool
+    unavailable_reason: str | None
     connected: bool
+    status_note: str | None
+    setup_code: str | None
     last_sync_at: str | None
     providers: list[str]
     fields: list[dict[str, object]] | None
 
 
 class CapabilityDetailResponse(Response):
-    """Detail view: non-secret stored field values only (passwords excluded)."""
+    """Detail view: non-secret stored field values only (passwords excluded),
+    a checkbox field's as a boolean."""
 
     id: str
     name: str
@@ -41,8 +50,17 @@ class CapabilityDetailResponse(Response):
 
 
 class CapabilityStatusResponse(Response):
-    """Connectivity status for a capability."""
+    """Connectivity status for a capability; ``pending`` while its setup is
+    still being confirmed, with ``status_note`` saying what it waits for and
+    ``setup_code`` the code the user must send, when it waits for one;
+    ``unavailable_reason`` says why a capability cannot work where Chalie
+    runs."""
 
     id: str
+    available: bool
+    unavailable_reason: str | None
     connected: bool
+    pending: bool
+    status_note: str | None
+    setup_code: str | None
     last_sync_at: str | None

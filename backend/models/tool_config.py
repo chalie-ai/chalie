@@ -139,10 +139,13 @@ class ToolConfig(Model):
             raise
 
     @classmethod
-    def delete_all(cls, tool_name: str) -> None:
-        """Delete ALL ``tool_configs`` rows for a tool (uninstall wipe).
+    def delete_all(cls, tool_name: str, *, keep: tuple[str, ...] = ()) -> None:
+        """Delete a tool's ``tool_configs`` rows, all but the *keep* keys.
 
-        Removes every row where ``tool_name`` matches, including any reserved
-        system keys — this is the intended behavior for uninstall."""
+        With nothing kept this is the uninstall wipe: every row where
+        ``tool_name`` matches, including any reserved system keys."""
+        rows = cls.filter("tool_name", tool_name)
+        for key in keep:
+            rows = rows.filter("config_key", key, "!=")
         with Database.transaction():
-            cls.filter("tool_name", tool_name).delete()
+            rows.delete()

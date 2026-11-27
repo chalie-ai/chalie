@@ -26,8 +26,11 @@ export interface WsPingEvent {
 export type WsTurnStatus = 'updated' | 'provider_retry' | 'context_usage';
 export interface WsTurnSignal {
   status: WsTurnStatus;
-  /** ConfigType — the ProcessorConfig identity the FE routes by. */
-  type: string;
+  /** ConfigType — the ProcessorConfig identity the FE routes by. Absent on a
+   *  delegate turn's frames, which are addressed by `channel` instead. */
+  type?: string | null;
+  /** Delegate turns only: the full transcript channel (`delegate:<name>:<agent_id>`). */
+  channel?: string;
   turn_id?: number | null;
   /** `context_usage` only — tokens the sent request measured, and the window it
    *  was measured against. Absent on every other status. */
@@ -42,20 +45,48 @@ export interface WsTurnSignal {
  *  frame by the presence of `tool_name` (checked BEFORE `state` and `status`). One
  *  emit function fires all three phases: `started` the instant the call begins,
  *  `done` on success/placeholder return, `error` on a failure/denial/pre-validation
- *  bounce. `params`/`result` never cross the wire — the surface refetches the turn
- *  block over REST for the persisted trail; this frame drives the live pill timer
- *  only. */
+ *  bounce. `params` rides the frame; `result` never does — the surface refetches the
+ *  turn block over REST for the persisted trail; this frame drives the live pill
+ *  only. A delegate tool's frame is re-emitted, state unchanged, once the child
+ *  turn it spawned exists, so `delegate` can arrive on a later frame for the same
+ *  `id`. */
 export type WsToolCallState = 'started' | 'done' | 'error';
 export interface WsToolCallEvent {
   id: number;
   tool_name: string;
+  /** The arguments the call was made with. */
+  params: Record<string, unknown> | null;
   summary: string;
   created_at: string;
   ended_at: string | null;
   state: WsToolCallState;
-  /** ConfigType — the ProcessorConfig identity the FE routes by. */
-  type: string | null;
+  /** ConfigType — the ProcessorConfig identity the FE routes by. Absent on a
+   *  delegate turn's frames, which are addressed by `channel` instead. */
+  type?: string | null;
+  /** Delegate turns only: the full transcript channel (`delegate:<name>:<agent_id>`). */
+  channel?: string;
   turn_id: number | null;
+  /** The transcript row this call anchors to. */
+  transcript_row_id?: number | null;
+  /** The delegate turn this call spawned, once that turn has written rows. */
+  delegate?: DelegateRef | null;
+}
+
+/** Address of one delegate (subagent) turn. A delegate's turn_id is allocated
+ *  per channel, so it collides with user turn ids — the full channel
+ *  (`delegate:<name>:<agent_id>`) is part of the identity, never optional. */
+export interface DelegateRef {
+  channel: string;
+  turn_id: number;
+  /** Set only on a REST read's chip: whether that delegate turn still ran as
+   *  of the read (on the person's chat a subagent outlives the call that
+   *  started it). Live frames never carry it. */
+  working?: boolean;
+  /** Set only on a REST read's chip, like `working`: that turn's most recent
+   *  run crashed, or was stopped — as on the turn's own block. Both false
+   *  while it runs. */
+  crashed?: boolean;
+  cancelled?: boolean;
 }
 
 /** One `turn_executions` row, pushed whole on every state flip (see
@@ -69,9 +100,12 @@ export interface WsToolCallEvent {
 export type TurnExecutionState = 'working' | 'completed' | 'cancelled' | 'crashed';
 export interface WsTurnExecutionEvent {
   id: number;
+  /** The transcript channel the turn runs on (`user`, a scheduled channel, or
+   *  `delegate:<name>:<agent_id>` for a delegate turn). */
   channel: string;
-  /** ConfigType — the ProcessorConfig identity the FE routes by. */
-  type: string | null;
+  /** ConfigType — the ProcessorConfig identity the FE routes by. Absent on a
+   *  delegate turn's frames, which are addressed by `channel` instead. */
+  type?: string | null;
   turn_id: number;
   started_at: string;
   ended_at: string | null;
@@ -87,9 +121,12 @@ export interface WsTurnExecutionEvent {
  *  push. */
 export type WsPushType =
   | 'task'
-  | 'permission_request'
+  | 'ask_opened'
+  | 'ask_closed'
   | 'intent'
-  | 'capability_alert';
+  | 'capability_alert'
+  | 'browser_tabs_changed'
+  | 'agent_changed';
 export interface WsPushEvent {
   type: WsPushType;
   [k: string]: unknown;
@@ -117,7 +154,6 @@ export class WebSocketService {
   private readonly maxReconnectDelay = 30000;
   private reconnectTimer: Timer | null = null;
   private driftHandler: ((data: WsPushEvent) => void) | null = null;
-  private anyHandler: ((data: WsInboundEvent) => void) | null = null;
   private disconnectHandler: (() => void) | null = null;
   private connectHandler: (() => void) | null = null;
   private connected = false;
@@ -129,29 +165,20 @@ export class WebSocketService {
   private readonly livenessCheckMs = 30000;
   private lastInboundAt = 0;
   private livenessTimer: Interval | null = null;
+  // The watchdog's timers are throttled while the tab is in the background and
+  // stop while the machine sleeps, so a refocused window checks at once. One
+  // function, so adding it on every connect() registers it once.
+  private readonly onFocus = (): void => this.ensureAlive();
 
-  constructor(
-    private readonly getHost: GetHost,
-    private readonly getToken: GetHost,
-  ) {}
-
-  /**
-   * Bearer header when a token is configured, else `{}`. Spreading the empty
-   * object is a no-op, so the web (cookie) path is unchanged.
-   */
-  private authHeaders(): Record<string, string> {
-    const token = this.getToken();
-    return token ? { Authorization: `Bearer ${token}` } : {};
-  }
+  constructor(private readonly getHost: GetHost) {}
 
   private baseUrl(): string {
     const host = this.getHost();
     return host ? host.replace(/\/$/, '') : globalThis.location.origin;
   }
   private buildWsUrl(): string {
-    // The bearer token is NOT carried in the URL — a query-string credential
-    // leaks into reverse-proxy/access logs, Referer, and history. The native
-    // client sends it as the first WS frame instead (see ``connect``).
+    // The session cookie rides the handshake — no credential is ever carried in
+    // the URL, where it would leak into reverse-proxy/access logs and history.
     return this.baseUrl().replace(/^http/, 'ws') + '/ws';
   }
   private buildHttpUrl(path: string): string {
@@ -160,9 +187,6 @@ export class WebSocketService {
 
   onDrift(handler: (data: WsPushEvent) => void): void {
     this.driftHandler = handler;
-  }
-  onAny(handler: (data: WsInboundEvent) => void): void {
-    this.anyHandler = handler;
   }
   onDisconnect(handler: () => void): void {
     this.disconnectHandler = handler;
@@ -179,6 +203,7 @@ export class WebSocketService {
       return;
     }
     this.intentionallyClosed = false;
+    globalThis.addEventListener('focus', this.onFocus);
     let ws: WebSocket;
     try {
       ws = new WebSocket(this.buildWsUrl());
@@ -200,16 +225,6 @@ export class WebSocketService {
       this.reconnectDelay = 1000;
       this.lastInboundAt = Date.now();
       this.startLivenessWatch();
-      // Native clients have no cookie, so they present the bearer token as the
-      // first WS frame — never in the URL. The web (cookie) path sends none.
-      const token = this.getToken();
-      if (token) {
-        try {
-          ws.send(JSON.stringify({ type: 'auth', token }));
-        } catch {
-          /* frame send failure surfaces as onclose → reconnect */
-        }
-      }
       try {
         this.connectHandler?.();
       } catch {
@@ -239,6 +254,7 @@ export class WebSocketService {
 
   close(): void {
     this.intentionallyClosed = true;
+    globalThis.removeEventListener('focus', this.onFocus);
     this.stopLivenessWatch();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -302,9 +318,8 @@ export class WebSocketService {
     this.connect();
   }
 
-  /** Heal the connection if it has silently died (tab refocus). */
-  ensureAlive(): void {
-    if (this.intentionallyClosed) return;
+  /** Heal the connection if it has silently died (window refocus). */
+  private ensureAlive(): void {
     if (!this.isConnected) {
       this.connect();
       return;
@@ -319,7 +334,11 @@ export class WebSocketService {
    *  no signal will ever arrive — so the surface can release its send guard.
    *
    *  Resolves with the POST body `{turn_id, type}` so the caller can bind the
-   *  lane handle the moment the server allocates it (no WS round-trip needed). */
+   *  lane handle the moment the server allocates it (no WS round-trip needed).
+   *
+   *  `join` sends a main-conversation follow-up into the still-working turn
+   *  `threadId`; the server starts a new thread instead if that turn's own
+   *  work already finished. */
   send(
     text: string,
     onSendFailure: (message: string) => void = () => {
@@ -328,13 +347,13 @@ export class WebSocketService {
     files: File[] = [],
     threadId: number | null = null,
     type: string = ConfigType.USER,
-    thinkingLevel: string | null = null,
+    join = false,
   ): Promise<{ turn_id: number; type: string } | null> {
     if (!this.isConnected) {
       onSendFailure('Not connected. Please wait...');
       return Promise.resolve(null);
     }
-    return this.postChat(text, files, threadId, onSendFailure, type, thinkingLevel);
+    return this.postChat(text, files, threadId, onSendFailure, type, join);
   }
 
   private postChat(
@@ -343,12 +362,12 @@ export class WebSocketService {
     threadId: number | null,
     onSendFailure: (message: string) => void,
     type: string = ConfigType.USER,
-    thinkingLevel: string | null = null,
+    join = false,
   ): Promise<{ turn_id: number; type: string } | null> {
     const form = new FormData();
     form.append('text', text);
     form.append('type', type);
-    if (thinkingLevel) form.append('thinking_level', thinkingLevel);
+    if (join) form.append('join', '1');
     for (const file of files) form.append('files', file, file.name);
     // POST /api/threads/<turn_id> — -1 creates a new thread, a real id replies
     // into it. Both answer 200 with the turn_execution row under the standard
@@ -359,7 +378,6 @@ export class WebSocketService {
     return fetch(this.buildHttpUrl(path), {
       method: 'POST',
       credentials: 'same-origin',
-      headers: { ...this.authHeaders() },
       body: form,
     })
       .then(async (resp) => {
@@ -377,13 +395,6 @@ export class WebSocketService {
   }
 
   private dispatch(data: WsInboundEvent): void {
-    if (this.anyHandler) {
-      try {
-        this.anyHandler(data);
-      } catch {
-        /* never break the WS pipe */
-      }
-    }
     if (data.type === 'ping') {
       if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ type: 'pong' }));
       return;

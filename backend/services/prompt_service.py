@@ -33,21 +33,32 @@ import base64
 import logging
 from typing import TYPE_CHECKING, cast
 
+from abilities._delegate import replies_late, reply_follow_up
+from abilities._registry import AbilityRegistry
+from abilities.code_agent import CodeAgentAbility
+from abilities.find_tools import FindToolsAbility
+from abilities.message_parent import chat_turn, first_turn, later_turn
+from abilities.pim import PimAbility
+from abilities.plan import PlanAbility, plans
 from abilities.recall import Recall
+from abilities.subtask import SubtaskAbility, speaker
+from abilities.web_browse import WebBrowseAbility
+from abilities.web_search import WebSearchAbility
 from configs.channels.external_agent import EAMPConfig
 from configs.channels.memory_step import PROMPT_CHANNEL as MEMORY_STEP_PROMPT_CHANNEL
 from configs.channels.user import UserConfig
-from configs.enums.channels import Channel
+from configs.enums.channels import Channel, delegate_type
 from exceptions import UnroutedPromptChannel
+from models.agent import Agent
+from models.plan_task import PlanTask
 from models.tool_call import ToolCall
 from models.transcript import Transcript
 from models.transcript_thinking import TranscriptThinking
 from models.user_synthesis import UserSynthesisRow
-from services.locale_service import CHAT_TIMESTAMP_FMT, format_date
 from services.markup import PROMPT_TAGS
 from services.personality.personality_service import personality_service
+from services.locale_service import get_timezone_abbreviation, read_locale_fields
 from services.time_formatter_service import TimeFormatterService
-from services.world_state import world_state
 
 if TYPE_CHECKING:
     from typing import Protocol
@@ -65,6 +76,7 @@ _CHANNEL_USER = Channel.USER
 _CHANNEL_SCHEDULE = Channel.SCHEDULE
 _CHANNEL_SKILLS_BUILDING = Channel.SKILLS_BUILDING
 _CHANNEL_THREAD_GIST = Channel.DELEGATE_THREAD_GIST
+_CHANNEL_VOICE_CLEANUP = Channel.DELEGATE_VOICE_CLEANUP
 _CHANNEL_VISION = Channel.DELEGATE_VISION
 _CHANNEL_WEB_BROWSE = Channel.DELEGATE_WEB_BROWSE
 _CHANNEL_WEB_SEARCH = Channel.DELEGATE_WEB_SEARCH
@@ -80,13 +92,90 @@ _USER_DEFINITION_FALLBACK = (
     "The user is a real human. Treat this conversation as peer-to-peer dialogue."
 )
 _CONTENT_FIELD_PLACEHOLDER = "{{provider_content_field_name}}"
-_MISSING_TS_PLACEHOLDER = "????-??-?? ??:??"
+_MISSING_TS_PLACEHOLDER = "??? ????-??-?? ??:??"
+
+#: The one timestamp shape every model-facing line PromptService builds is
+#: stamped with: weekday, date, hour:minute in the user's local timezone
+#: (e.g. ``Fri 2026-09-04 10:12``). History rows, the thread-gist rows and
+#: the current input line all render through it, and the stamp is the
+#: model's only time source.
+_STAMP_FORMAT = "%a %Y-%m-%d %H:%M"
 
 _HANDOVER_FRAME = (
     "You hit your context limit mid-task and are continuing the same task — "
     "this is not a new conversation. Below is the hand-over you produced. "
     "Trust it: do not re-verify or repeat completed work; continue from the "
     "pending list.\n\n{handover}"
+)
+
+#: Under the plan block on every step of a message's exchange: how to keep the
+#: plan current. The block is re-read from the database each step, so a status
+#: change shows on the very next request. A step's tool calls run in order, so
+#: a status change riding just before the call it tracks costs no step of its
+#: own and shows while that call runs. The closing updates ride with the
+#: answer, which still ends the turn (``MessageProcessor._closes_plan``).
+_PLAN_INSTRUCTION = (
+    "Above is your plan for the current message: your own scratchpad for "
+    "staying on track. The user already sees it, so never describe, restate or "
+    "recap it in what you write. Keep it current as you work, but never spend "
+    "a response on the plan alone. Tool calls in one response run in order, "
+    "so put each status change in the same response as the work it tracks, "
+    "just before that work's call: "
+    f'{PlanAbility.NAME}(action="update", task=<number>, status="in_progress") as a '
+    'task starts, status="done" once it is finished, "cancelled" when it is no '
+    "longer needed. When new work appears — including a message the user sends "
+    f'while you work — add it with {PlanAbility.NAME}(action="add"). Close the '
+    "tasks still open in the same response as your final answer: that response "
+    "ends your turn. A response's text comes before its tool calls and nothing "
+    "follows them, so write the whole answer first, never a line saying you "
+    "are about to give it."
+)
+#: The planning pre-pass's ask (``mp.planning``), shown above the catalogue of
+#: the tools the model will have once its plan is saved, and followed by what
+#: it may call right now (``_PLANNING_CALLS`` or ``_PLANNING_CALLS_AND_LOADS``).
+_PLANNING_INSTRUCTION = (
+    "Based on the user message and the memory available, identify a plan of "
+    "action. Your plan should be between 1 & 10 steps. The plan should include "
+    "the specific tasks you will need to perform to complete the task the user "
+    f"asked you to perform. Use the '{PlanAbility.NAME}' tool to organise your thought and keep "
+    "a to-do list of tasks in between compaction."
+)
+_PLANNING_CALLS = (
+    f"Right now you can call only `{Recall.NAME}`, to look up more memory, and `{PlanAbility.NAME}`: "
+    f'save the plan with {PlanAbility.NAME}(action="create"). The tools in the catalogue below '
+    "become available once the plan is saved — plan with them in mind, but do "
+    "not call them now."
+)
+#: For a config that pins ``find_tools``: the tools it loads while planning
+#: are offered from the first step on, so loading them in the response that
+#: saves the plan spares the turn a step spent looking them up.
+_PLANNING_CALLS_AND_LOADS = (
+    f"Right now you can call only `{Recall.NAME}`, to look up more memory, `{FindToolsAbility.NAME}`, "
+    f"to load tools from the list below, and `{PlanAbility.NAME}`: save the plan with "
+    f'{PlanAbility.NAME}(action="create"). Load the tools your plan needs with {FindToolsAbility.NAME} '
+    "in the same response that saves the plan — they are ready the moment it is saved. The other "
+    "tools in the catalogue become available then too — plan with them in mind, but do not call them now."
+)
+_NO_PLAN = f'You have no plan for the current message yet — create one first with {PlanAbility.NAME}(action="create").'
+
+#: Added after the body on a turn whose subagent calls are answered
+#: later (``replies_late``): hand longer work to a subagent, end the turn, and
+#: pass its reply on when it arrives. Gated by the same rule that makes the
+#: calls reply late, so being told so and doing so cannot drift apart.
+_KEEPING_THE_CHAT_MOVING = (
+    "\n\n## Keeping the chat moving\n\n"
+    "Answer straight away when you already know the answer or can get it with "
+    "one or two tool calls. Anything longer — research, browsing, coding, any "
+    "job of several steps — goes to a subagent: "
+    f"`{CodeAgentAbility.NAME}` for coding, `{WebBrowseAbility.NAME}` for working a website, "
+    f"`{WebSearchAbility.NAME}` for research on the web, `{PimAbility.NAME}` for email, "
+    f"calendar and contacts, `{SubtaskAbility.NAME}` for anything else. Load it with "
+    f"`{FindToolsAbility.NAME}` when it is not among your tools yet, then start it, tell the "
+    "user in a sentence or two what you started and that you will come back to "
+    "them when it is done, and end your turn there. Never wait for a subagent and "
+    "never guess its result. Its answer arrives later as a message labelled "
+    '"Reply from <tool> #N": pass that result on to the user straight away — '
+    "that is a quick answer, not new work to hand off."
 )
 
 #: The tag list the model is given, rendered from the sanitiser's own authority
@@ -98,7 +187,8 @@ _HANDOVER_FRAME = (
 _TAG_LIST = ", ".join(f"<{tag}>" for tag in PROMPT_TAGS)
 
 #: The single source of the HTML output contract, shared by every channel whose
-#: output is rendered to a human, and gated by ``ProcessorConfig.RENDERS_HTML``.
+#: output is rendered to a human but a subagent's own, and gated by
+#: ``ProcessorConfig.RENDERS_HTML``.
 _RESPONSE_FORMAT = (
     """
 
@@ -116,6 +206,13 @@ Avoid using table structures to represent data. If you do need to use tables, ou
 ────────────────────────────────"""
 )
 
+#: What a subagent is told in place of the HTML contract: its answer reaches its
+#: caller as text — on the chat, a reply shown as plain text, where markup would
+#: show as raw tags.
+#: Its stored rows are still sanitized (``RENDERS_HTML``), because the subagent
+#: panel renders them as HTML.
+_PLAIN_TEXT_REPLY = "\n\nReply with plain text, no markdown, formatting of any kind."
+
 
 
 class PromptService:
@@ -129,24 +226,60 @@ class PromptService:
     # ── public dispatch (channel-keyed, zero-param) ─────────────────────────
 
     def system_prompt(self) -> str:
-        """The turn's system instruction block: the per-channel body, plus the
-        shared response-format contract on any channel that renders to a human
-        (``RENDERS_HTML``) — the one place all
+        """The turn's system instruction block: the per-channel body, the
+        hand-off section on a turn whose subagent calls are answered later
+        (``replies_late``: the person's chat, never a discovery pass or a
+        subtask though they share its body), the shared response-format
+        contract on any channel that renders to a human (``RENDERS_HTML``) —
+        a subagent's own turn is told to reply in plain text instead — then
+        the user's locale line on every channel — the one place all
         system-prompt assembly and placeholder substitution lands."""
         base = self._system_prompt_body()
+        if replies_late(self.mp.config.type()):
+            base += _KEEPING_THE_CHAT_MOVING
         if self.mp.config.RENDERS_HTML:
-            base += _RESPONSE_FORMAT
+            subagent = delegate_type(self.mp.config.channel) is not None
+            base += _PLAIN_TEXT_REPLY if subagent else _RESPONSE_FORMAT
+        if locale := self.locale_line():
+            base += f"\n\n{locale}"
         return self._substitute_content_field(base)
+
+    @staticmethod
+    def locale_line() -> str:
+        """The user's locale as one trailing system-prompt line: where they
+        are, their timezone as an abbreviation, their language and currency —
+        read from the persisted heartbeat, so it lives in the cache-warm system
+        block on every channel instead of riding the user message. Each clause
+        appears only when the heartbeat carries it; no heartbeat, no line. The
+        heartbeat's device groups never render — the model asks ``user_device``
+        for them."""
+        fields = read_locale_fields()
+        clauses: list[str] = []
+        if fields.get("location_name"):
+            clauses.append(f"User is currently in {fields['location_name']}.")
+        if abbreviation := get_timezone_abbreviation():
+            clauses.append(f"The timezone is {abbreviation}.")
+        language, currency = fields.get("language"), fields.get("currency")
+        if language and currency:
+            clauses.append(f"They prefer {language} and use the currency {currency}.")
+        elif language:
+            clauses.append(f"They prefer {language}.")
+        elif currency:
+            clauses.append(f"They use the currency {currency}.")
+        if not clauses:
+            return ""
+        return " ".join(clauses) + " Use this information to better tailor your response."
 
     def _system_prompt_body(self) -> str:
         """The per-channel system block.
 
         Static channels carry their prompt as the ``system_prompt`` property on
         their ProcessorConfig (pure declarative data). The two dynamic channels
-        — ``UserConfig`` (and its ``DiscoveryConfig`` subclass) and
+        — ``UserConfig`` (and its subclasses: discovery and a user subtask) and
         ``EAMPConfig`` — wrap that base literal with runtime data (voice line,
         provider content-field, resolved names) here. Branching is on the config
-        class, never the channel string, so subclass routing is automatic."""
+        class, never the channel string, so subclass routing is automatic; what
+        only one kind of turn is told is added by :meth:`system_prompt`."""
         config = self.mp.config
         if isinstance(config, UserConfig):
             return self._user_system_prompt()
@@ -160,6 +293,15 @@ class PromptService:
         return UserSynthesisRow.latest_content() or _USER_DEFINITION_FALLBACK
 
     def user_prompt(self) -> str:
+        """The turn's user-message body (:meth:`_channel_prompt`), followed by
+        the current message's plan (:meth:`_plan_section`) on a config that
+        plans. The plan goes last so the history and trail above it stay a
+        stable, cacheable prefix while its statuses change."""
+        body = self._channel_prompt()
+        plan = self._plan_section()
+        return f"{body}\n\n{plan}" if plan else body
+
+    def _channel_prompt(self) -> str:
         """The turn's user-message body, ported from each config's
         ``get_user_prompt``.
 
@@ -192,10 +334,11 @@ class PromptService:
             return self._code_agent_prompt()
         if channel == _CHANNEL_EXTERNAL_AGENT:
             return self._external_agent_prompt()
-        # vision, compaction and user_synthesis pass the raw input straight
-        # through.
+        # vision, voice clean-up, compaction and user_synthesis pass the raw
+        # input straight through.
         if channel in (
             _CHANNEL_VISION,
+            _CHANNEL_VOICE_CLEANUP,
             _CHANNEL_COMPACTION,
             _CHANNEL_USER_SYNTHESIS,
         ):
@@ -220,31 +363,38 @@ class PromptService:
     def previous_messages(self, drop_oldest: int = 0) -> str:
         """The ``## Previous Messages`` block body (no header): this turn's
         history view (``self.mp.transcript_service.read()``), each row formatted
-        ``[local-ts] Role: content``. ``drop_oldest`` lets a caller (e.g. the
-        history compactor, shrinking its own input) drop the N oldest rows — a
-        genuine external count, not mp-reachable."""
+        ``[local-ts] Role: content``. ``drop_oldest`` lets a caller (e.g. the history compactor, shrinking its
+        own input) drop the N oldest rows — a genuine external count, not
+        mp-reachable. Each row is its stored content alone: the compactor, the
+        memory step and memory hygiene write what they read here into stored
+        prose, so nothing worked out per turn rides it."""
         rows = self.mp.transcript_service.read()[drop_oldest:]
         if not rows:
             return ""
         lines: list[str] = []
         for row in rows:
             fields = row.to_dict()
-            ts = self._format_ts(cast("str | None", fields.get("created_at")))
             raw_role = cast("str", fields.get("role") or "unknown")
-            role_label = "Assistant" if raw_role == "assistant" else raw_role
             content = cast("str", fields.get("content") or "").replace("\n", " ").strip()
+            ts = self._format_ts(cast("str | None", fields.get("created_at")))
+            role_label = speaker(row) or ("Assistant" if raw_role == "assistant" else raw_role)
             lines.append(f"[{ts}] {role_label}: {content}")
         return "\n".join(lines)
 
     def act_trail(self) -> str:
         """The current exchange's tool-call trail, rendered ``[tool] params →
         result`` one call per line. Scoped to this MP recursion instance
-        (``by_exchange``), so a reply or async re-entry sharing the turn sees
-        only its own calls — a prior exchange's raw trail lives on in the DB but
+        (``by_exchange``), so a reply sharing the turn sees only its own
+        calls — a prior exchange's raw trail lives on in the DB but
         leaves context once that exchange synthesises (its synthesis carries
         forward via Previous Messages). A mid-exchange compaction resets the
         visible trail: only calls after the most recent ``chat_history_compactor``
         marker render, mirroring the pre-rewrite ``_render_act_trail``.
+
+        Each call renders as the model was shown it when it ran
+        (``tool_call_service.shown``): the stored bare result plus any
+        follow-up block or loop-guard steer, which are held for this exchange
+        only and never stored.
 
         The turn-0 auto-seed recall (``"_auto": true`` in its params) renders as
         a ``[background_memory]`` context block instead of a tool-call row — a
@@ -258,7 +408,8 @@ class PromptService:
         ``[interim_response] <row content with newlines flattened to spaces>``.
         Calls anchored directly to the input row (``transcript_id == mp.uid``)
         render without an interim prefix; an assistant row anchoring no calls
-        (the final synthesis) never triggers an interim line; assistant rows
+        (the final synthesis) never triggers an interim line unless a joined
+        message was taken in after it (below); assistant rows
         from a prior exchange never surface — ``exchange_assistant_rows``
         floors at ``mp.uid`` so only this exchange's steps are in the lookup.
         A chat-history compaction anchors to one assistant row and becomes the
@@ -275,7 +426,20 @@ class PromptService:
         input row, or a trace-only exchange) are emitted before the call trail —
         chronologically they precede every call-bearing anchor — so no step's
         trace is dropped and the prompt-level guard still renders a trace-only
-        trail."""
+        trail.
+
+        Joined messages: each message the loop has taken in
+        (``mp.consumed_joins``) renders as a stamped ``user:`` line — the same
+        shape as this turn's own input line — right after the last line of the
+        assistant row it was filed under (that row's thinking and prose lead
+        in when no call did). That is the order the model saw them in, not
+        the order they arrived: a message sent while a call was in flight
+        follows that call's reply and tool results. A message taken in before
+        a compaction still renders — the compaction folds earlier turns, never
+        this exchange — and one not yet taken in does not. A joined message
+        renders its own text alone: the waiting reminder follows only this
+        turn's input line (:meth:`_user_prompt`). With nothing joined the trail
+        is unchanged."""
         calls = self.mp.tool_call_service.by_exchange()
         last_compaction = max(
             (cast("int", call.id) for call in calls if call.tool_name == "chat_history_compactor"),
@@ -302,28 +466,41 @@ class PromptService:
             if not trace or not trace.strip():
                 continue
             thinking.setdefault(tid, []).append(trace)
+        joins = self.mp.consumed_joins
         emitted: set[int] = set()
         parts: list[str] = []
+
+        def lead_in(tid: int) -> None:
+            if tid not in emitted and tid > cutoff:
+                parts.extend(f"[thinking]{trace}[end_thinking]" for trace in thinking.get(tid, ()))
+                if tid in interim:
+                    parts.append(f"[interim_response] {interim[tid]}")
+                emitted.add(tid)
+
+        def joined_after(tid: int) -> None:
+            lead_in(tid)
+            parts.extend(
+                f"[{self._format_ts(row.created_at)}] {speaker(row) or 'user'}: {row.content}"
+                for row in joins[tid]
+            )
+
         # Traces anchored to rows that never got a call (an empty-completion
         # steer at the exchange input row) precede every call-bearing anchor
         # chronologically — emit them first so no step's trace is dropped.
         called_tids = {call.transcript_id for call in calls}
-        for tid in sorted(t for t in thinking if t not in called_tids):
+        for tid in sorted(t for t in thinking if t not in called_tids and t not in joins):
             for trace in thinking[tid]:
                 parts.append(f"[thinking]{trace}[end_thinking]")
             emitted.add(tid)
+        pending = sorted(joins, reverse=True)
         for call in calls:
             if call.tool_name == "chat_history_compactor" or cast("int", call.id) <= last_compaction:
                 continue
-            result = call.result
+            result = self.mp.tool_call_service.shown(call)
             tid = call.transcript_id
-            if tid not in emitted and tid > cutoff:
-                if tid in thinking:
-                    for trace in thinking[tid]:
-                        parts.append(f"[thinking]{trace}[end_thinking]")
-                if tid in interim:
-                    parts.append(f"[interim_response] {interim[tid]}")
-                emitted.add(tid)
+            while pending and pending[-1] < tid:
+                joined_after(pending.pop())
+            lead_in(tid)
             if call.tool_name == Recall.NAME and '"_auto": true' in call.params:
                 body = result.split("\n", 1)[1] if "\n" in result else result
                 parts.append(
@@ -331,9 +508,51 @@ class PromptService:
                 )
                 continue
             parts.append(f"[{call.tool_name}] {call.params} → {result}")
+        while pending:
+            joined_after(pending.pop())
         return "\n".join(parts)
 
     # ── dispatch + safe-fragment helpers ─────────────────────────────────────
+
+    def _plan_section(self) -> str:
+        """The current message's plan as a ``[plan]`` block plus how to keep it
+        current, or the instruction to create one when there is none yet.
+        Read from the database on every step, keyed by this exchange's input
+        row, so it reflects the latest update and leaves the context once the
+        exchange settles. ``""`` when the config does not plan
+        (:func:`~abilities.plan.plans`) or the turn has no input row."""
+        if not plans(self.mp.config) or self.mp.uid is None:
+            return ""
+        if self.mp.planning:
+            return self._planning_section()
+        tasks = PlanTask.for_transcript(self.mp.uid)
+        if not tasks:
+            return _NO_PLAN
+        lines = "\n".join(f"{t.position}. [{t.status}] {t.title} — {t.task}" for t in tasks)
+        return f"[plan]\n{lines}\n[end:plan]\n{_PLAN_INSTRUCTION}"
+
+    def _planning_section(self) -> str:
+        """The planning pre-pass's ask: the instruction and what may be called
+        now, then every tool the config pins beyond ``recall``, ``plan`` and
+        ``find_tools`` as a catalogue the model plans with but cannot call yet
+        — and, when it pins ``find_tools``, the roster that tool loads from,
+        which the model may load from while it plans."""
+        pinned = self.mp.config.always_available
+        loads = FindToolsAbility.NAME in pinned
+        lines: list[str] = []
+        for name in pinned:
+            if name in (Recall.NAME, PlanAbility.NAME, FindToolsAbility.NAME):
+                continue
+            try:
+                ability = AbilityRegistry.get(name)
+            except KeyError:  # build_tools logs an unknown pinned name every request
+                continue
+            lines.append(f"- `{name}`: {ability.get_search_tooltip() or ability.get_summary()}")
+        catalogue = "\n".join(lines)
+        if loads:
+            catalogue += f"\n\nTools `{FindToolsAbility.NAME}` can load:\n{FindToolsAbility.tools_index()}"
+        calls = _PLANNING_CALLS_AND_LOADS if loads else _PLANNING_CALLS
+        return f"{_PLANNING_INSTRUCTION}\n\n{calls}\n\n[tool_catalogue]\n{catalogue}\n[end:tool_catalogue]"
 
     def _channel(self) -> str:
         """The dispatch key: the config's ``prompt_channel`` override, or its
@@ -350,8 +569,8 @@ class PromptService:
             return ""
 
     def _trail(self) -> str:
-        """:meth:`act_trail`, guarded — the exception-safety the delegate
-        channels' ``render_trail`` wrapper used to provide."""
+        """:meth:`act_trail`, guarded: a trail-render failure logs and must
+        not crash the turn."""
         try:
             return self.act_trail()
         except Exception as exc:  # noqa: BLE001 — a trail-render hiccup must not crash the turn
@@ -365,22 +584,37 @@ class PromptService:
             return ""
         return _HANDOVER_FRAME.format(handover=self.mp.turn_handover)
 
-    def _world(self) -> str:
-        """``world_state.render()``, guarded — the turn's telemetry block, whose
-        ``local_time`` line is the ONLY date anchor any channel receives. Off-spine
-        telemetry, so a render hiccup must never crash the turn."""
-        try:
-            return world_state.render()
-        except Exception as exc:  # noqa: BLE001 — off-spine telemetry render must not crash the turn
-            logger.debug("[PromptService] world_state.render failed: %s", exc)
-            return ""
-
     # ── UserConfig (channel="user") ──────────────────────────────────────────
+
+    def _task(self) -> str:
+        """This turn's input as the model reads it — the one read of it every
+        builder goes through. The stored row always keeps the bare input, so
+        later history shows it alone; what wraps it is added here, on read:
+
+        * a subagent's first turn (a spawn's ``metadata["agent"]``): the task
+          in its first-turn template, with the first row of the turn that
+          spawned it as context (:func:`~abilities.message_parent.first_turn`);
+        * a subagent's later turn (``mp.previous_turn_id``, its turn before
+          this one): the chat's message beside what that turn last delivered
+          with ``message_parent``, or, when it delivered nothing, the message
+          word for word — a steer (:func:`~abilities.message_parent.later_turn`);
+        * a chat turn a subagent's ``message_parent`` message opened (its
+          ``metadata["tool_call_id"]`` is that call): the message in the
+          template asking for the reply
+          (:func:`~abilities.message_parent.chat_turn`);
+        * every other turn: the input itself."""
+        mp = self.mp
+        if mp.agent is not None and isinstance(mp.metadata.get("agent"), Agent):
+            return first_turn(mp.agent, mp.raw_input)
+        if mp.previous_turn_id is not None:
+            return later_turn(mp.channel, mp.previous_turn_id, mp.raw_input)
+        return chat_turn(cast("int | None", mp.metadata.get("tool_call_id")), mp.raw_input)
 
     def _user_system_prompt(self) -> str:
         """``UserConfig``: the voice line (cache-warm prefix) over the config's
-        ``system_prompt`` base literal. Runs for ``UserConfig`` and its
-        ``DiscoveryConfig`` subclass."""
+        ``system_prompt`` base literal. Runs for ``UserConfig`` and every
+        subclass (discovery, a user subtask), so nothing here is the chat's
+        alone: the chat's hand-off section is added by :meth:`system_prompt`."""
         try:
             voice_line = f"When responding; {personality_service.get_voice()}"
             prompt = f"{voice_line}\n\n{self.mp.config.system_prompt}"
@@ -390,18 +624,23 @@ class PromptService:
             return ""
 
     def _user_prompt(self) -> str:
-        """``UserConfig.get_user_prompt``: user_def, World State, Previous
-        Messages, blank, (post-compaction banner), input line, act trail —
-        same section order as the pre-rewrite assembly."""
+        """``UserConfig.get_user_prompt``: user definition, the ``## Previous
+        Messages`` block, a blank line, the post-compaction banner (when
+        present), the stamped input line, then this turn's act trail. The
+        input line carries the turn's stamp (the model's only time source);
+        the heartbeat never rides the user message — its locale line sits at
+        the bottom of the system prompt. A delegate reply carrying an answer
+        is followed by its tool's follow-up block, built from the answer row
+        this turn holds in its metadata (:func:`reply_follow_up`). On every
+        step the input line, whoever sent it, is followed by the waiting
+        reminder this turn worked out as it opened (``mp.waiting_reminder``,
+        :func:`~abilities.message_parent.waiting_reminder`) when it names any
+        subagent — read here alone, never stored."""
         parts: list[str] = []
 
         user_def = self.user_definition()
         if user_def:
             parts.append(user_def)
-
-        rendered_ws = self._world()
-        if rendered_ws:
-            parts.append(rendered_ws)
 
         prev = self._prev()
         if prev:
@@ -413,7 +652,15 @@ class PromptService:
         if handover:
             parts.append(handover)
 
-        parts.append(f"user: {self.mp.raw_input}")
+        anchor = self.mp.transcript_service.anchor_row()
+        response_id = cast("int | None", self.mp.metadata.get("response_id"))
+        label, follow_up = (
+            (speaker(anchor), reply_follow_up(anchor, response_id))
+            if anchor is not None else (None, "")
+        )
+        parts.append(f"[{self._input_stamp(anchor)}] {label or 'user'}: {self._task()}{follow_up}")
+        if self.mp.waiting_reminder:
+            parts.append(self.mp.waiting_reminder)
 
         trail = self._trail()
         if trail:
@@ -437,8 +684,9 @@ class PromptService:
     # ── ScheduledConfig (channel="schedule") ─────────────────────────────────
 
     def _schedule_prompt(self) -> str:
-        """``ScheduledConfig.get_user_prompt``: previous messages, the scheduled
-        task, then this turn's act trail — joined by blank lines."""
+        """``ScheduledConfig.get_user_prompt``: previous messages, the
+        (stamped) scheduled task, then this turn's act trail — joined by blank
+        lines."""
         parts: list[str] = []
         prev = self._prev()
         if prev:
@@ -446,7 +694,9 @@ class PromptService:
         handover = self._handover()
         if handover:
             parts.append(handover)
-        parts.append(f"Scheduled task:\n{self.mp.raw_input}")
+        anchor = self.mp.transcript_service.anchor_row()
+        label = speaker(anchor) if anchor is not None else None
+        parts.append(f"[{self._input_stamp(anchor)}] {label or 'Scheduled task'}:\n{self._task()}")
         trail = self._trail()
         if trail:
             parts.append(trail)
@@ -537,67 +787,66 @@ class PromptService:
         picked = [rows[0]] + ([beyond] if beyond is not None and beyond is not rows[0] else [])
         lines = ["# User Message Prompt", "## User Messages"]
         for r in picked:
-            ts = format_date(cast("str | None", r.get("created_at")), CHAT_TIMESTAMP_FMT, for_ui=True) or ""
+            ts = self._format_ts(cast("str | None", r.get("created_at")))
             content = cast("str", r.get("content") or "").replace("\n", " ").strip()
             lines.append(f"[{ts}] {content}")
         return "\n".join(lines)
 
-    # ── WebBrowseConfig (channel="delegate:web_browse") ──────────────────────
+    # ── typed subagents (web_browse, web_search, pim, code_agent) ────────────
+
+    def _delegate_prompt(self, heading: str) -> str:
+        """A typed subagent's prompt: its own earlier turns under ``## Previous
+        Messages`` (the guarded history read, so compaction and the context
+        limit apply), the stamped input under ``heading``, then this turn's act
+        trail — joined by blank lines. The stamped line is the subagent's only
+        clock."""
+        parts: list[str] = []
+        prev = self._prev()
+        if prev:
+            parts.append(f"## Previous Messages\n{prev}")
+        parts.append(f"[{self._input_stamp()}] {heading}:\n{self._task()}")
+        trail = self._trail()
+        if trail:
+            parts.append(trail)
+        return "\n\n".join(parts)
+
+    # ── WebBrowseConfig (channel="delegate:web_browse:{agent_id}", prompt_channel="delegate:web_browse") ──
 
     def _web_browse_prompt(self) -> str:
-        """``WebBrowseConfig.get_user_prompt``: the browsing goal then this
-        turn's act trail."""
-        parts = [f"Browsing goal:\n{self.mp.raw_input}"]
-        trail = self._trail()
-        if trail:
-            parts.append(trail)
-        return "\n\n".join(parts)
+        """``WebBrowseConfig.get_user_prompt``: :meth:`_delegate_prompt` under
+        the browsing goal."""
+        return self._delegate_prompt("Browsing goal")
 
-    # ── WebSearchConfig (channel="delegate:web_search") ──────────────────────
+    # ── WebSearchConfig (channel="delegate:web_search:{agent_id}", prompt_channel="delegate:web_search") ──
 
     def _web_search_prompt(self) -> str:
-        """``WebSearchConfig.get_user_prompt``: the research query then this
-        turn's act trail."""
-        parts = [f"Research query:\n{self.mp.raw_input}"]
-        trail = self._trail()
-        if trail:
-            parts.append(trail)
-        return "\n\n".join(parts)
+        """``WebSearchConfig.get_user_prompt``: :meth:`_delegate_prompt` under
+        the research query."""
+        return self._delegate_prompt("Research query")
 
-    # ── PimConfig (channel="delegate:pim") ───────────────────────────────────
+    # ── PimConfig (channel="delegate:pim:{agent_id}", prompt_channel="delegate:pim") ──
 
     def _pim_prompt(self) -> str:
-        """``PimConfig.get_user_prompt``: the personal-information instruction
-        then this turn's act trail."""
-        parts = [f"Instruction:\n{self.mp.raw_input}"]
-        trail = self._trail()
-        if trail:
-            parts.append(trail)
-        return "\n\n".join(parts)
+        """``PimConfig.get_user_prompt``: :meth:`_delegate_prompt` under the
+        personal-information instruction."""
+        return self._delegate_prompt("Instruction")
 
-    # ── CodeAgentConfig (channel="delegate:code_agent") ──────────────────────
+    # ── CodeAgentConfig (channel="delegate:code_agent:{agent_id}", prompt_channel="delegate:code_agent") ──
 
     def _code_agent_prompt(self) -> str:
-        """``CodeAgentConfig.get_user_prompt``: World State, the coding task,
-        then this turn's act trail.
+        """``CodeAgentConfig.get_user_prompt``: :meth:`_delegate_prompt` under
+        the coding task.
 
-        ``suppress_history=True`` makes this string the delegate's ENTIRE input,
-        so World State rides along deliberately: it carries the only date anchor
-        any channel receives, and a coding agent that cannot date its own work
+        This string is the delegate's ENTIRE input — its own earlier turns,
+        the task, its trail — and the stamped Task line is its only clock: the
+        World State block no longer rides along (the input stamp is the model's
+        only time source), and a coding agent that cannot date its own work
         writes wrong dates into the files it creates. Kept as its own builder
         rather than remapped onto the user channel through ``prompt_channel`` —
-        a task is a hand-off, not a user utterance, and that assembly would also
-        inject the user-identity synthesis and a post-compaction banner naming a
-        tool this channel does not pin."""
-        parts: list[str] = []
-        rendered_ws = self._world()
-        if rendered_ws:
-            parts.append(rendered_ws)
-        parts.append(f"Task:\n{self.mp.raw_input}")
-        trail = self._trail()
-        if trail:
-            parts.append(trail)
-        return "\n\n".join(parts)
+        a task is a hand-off, not a user utterance, and that assembly would
+        also inject the user-identity synthesis and a post-compaction banner
+        naming a tool this channel does not pin."""
+        return self._delegate_prompt("Task")
 
     # ── EAMPConfig (channel="external-agent:{name}", prompt_channel="external_agent") ──
 
@@ -636,14 +885,15 @@ class PromptService:
 
     def _external_agent_prompt(self) -> str:
         """``EAMPConfig.get_user_prompt``: previous messages, a blank line, the
-        input line, then this turn's act trail — joined by single newlines (the
-        input line comes BEFORE the trail, the pre-rewrite ordering)."""
+        stamped input line, then this turn's act trail — joined by single
+        newlines (the input line comes BEFORE the trail, the pre-rewrite
+        ordering)."""
         parts: list[str] = []
         prev = self._prev()
         if prev:
             parts.append(f"## Previous Messages\n{prev}")
         parts.append("")
-        parts.append(f"user: {self.mp.raw_input}")
+        parts.append(f"[{self._input_stamp()}] user: {self._task()}")
         trail = self._trail()
         if trail:
             parts.append(trail)
@@ -651,14 +901,35 @@ class PromptService:
 
     # ── formatting helpers ───────────────────────────────────────────────────
 
+    def _input_stamp(self, anchor: Transcript | None = None) -> str:
+        """The stamp for THIS turn's input line, rendered in :data:`_STAMP_FORMAT`
+        through :meth:`_format_ts` — the same formatter the history rows use:
+        the ``created_at`` of this turn's anchoring input row (id ``mp.uid``,
+        looked up once via :meth:`TranscriptService.anchor_row`), or
+        ``mp.execution.started_at`` — the ISO-8601 UTC stamp
+        :class:`TurnExecutionService.open` wrote — when the channel has no
+        input row (``mp.uid`` is None). This stamp is the model's only time
+        source, so the two paths share the one local-time formatter rather
+        than each carrying its own."""
+        row = anchor if anchor is not None else self.mp.transcript_service.anchor_row()
+        if row is not None:
+            return self._format_ts(row.created_at)
+        execution = self.mp.execution
+        if execution is not None:
+            return self._format_ts(execution.started_at)
+        logger.warning("[PromptService] no input row and no execution to stamp the input line from")
+        return _MISSING_TS_PLACEHOLDER
+
     def _format_ts(self, raw: str | None) -> str:
-        """``_format_ts``: one transcript row's ``created_at`` in the user's local
-        timezone, or the placeholder on a missing/unparseable value."""
+        """``_format_ts``: one timestamp in the user's local timezone rendered
+        in :data:`_STAMP_FORMAT` — the single shape every model-facing line's
+        stamp takes (history rows, thread-gist rows, the current input) — or
+        the placeholder on a missing/unparseable value."""
         if raw is None or not raw.strip():
-            logger.warning("[PromptService] missing created_at on transcript row")
+            logger.warning("[PromptService] missing or blank timestamp")
             return _MISSING_TS_PLACEHOLDER
-        formatted = TimeFormatterService.local(raw)
+        formatted = TimeFormatterService.local(raw, _STAMP_FORMAT)
         if formatted is None:
-            logger.warning("[PromptService] unparseable created_at=%r", raw)
+            logger.warning("[PromptService] unparseable timestamp=%r", raw)
             return _MISSING_TS_PLACEHOLDER
         return formatted

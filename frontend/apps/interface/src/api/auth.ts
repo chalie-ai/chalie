@@ -14,8 +14,8 @@ export interface LoginResult {
 const NO_REDIRECT = { redirectOnAuthError: false } as const;
 
 export const auth = {
-  /** POST /auth/login — unseal the vault with the stored login username + typed
-   *  password. Existing endpoint; called here only from the UnlockVault overlay. */
+  /** POST /auth/login — open a session (and unseal the vault) from a username +
+   *  password. Backs the login page. */
   login(username: string, password: string): Promise<LoginResult> {
     return api.post<LoginResult>('/api/auth/login', { username, password }, NO_REDIRECT);
   },

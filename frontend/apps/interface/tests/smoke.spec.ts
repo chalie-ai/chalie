@@ -12,8 +12,8 @@ test('interface boots against the real backend and renders the shell', async ({ 
   // typed ApiClient reached a live backend (LoadingOverlay.vue).
   await expect(page.locator('#loadingOverlay')).toBeHidden({ timeout: 15_000 });
 
-  // The real app shell is mounted directly by App.vue (no RouterView): the
-  // conversation spine, the compose dock, and the presence bar are all present.
+  // The real app shell is mounted by App.vue: the conversation spine, the
+  // compose dock, and the presence bar are all present.
   await expect(page.locator('#conversationFeed.conversation-spine')).toBeVisible();
   await expect(page.locator('#chatInput')).toBeVisible();
   await expect(page.locator('.presence-bar')).toBeVisible();

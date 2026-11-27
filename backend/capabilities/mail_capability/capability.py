@@ -217,7 +217,7 @@ class MailCapability(AbstractCapability):
 
     def configure(self, credentials: dict[str, object]) -> None:
         email = (cast(str, credentials.get("email") or credentials.get("username") or "")).strip()
-        password = (cast(str, credentials.get("password")) or "").strip()
+        password = cast(str, credentials.get("password")) or ""
         if not email:
             raise ValueError("[mail] configure(): 'email' is required.")
         if not password:

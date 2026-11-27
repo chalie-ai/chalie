@@ -35,17 +35,17 @@ const hasMore = computed(() => data.value.has_more ?? false);
 function selectSource(s: MemorySource): void {
   source.value = s;
   offset.value = 0;
-  reload();
+  void reload();
 }
 
 function submitSearch(): void {
   offset.value = 0;
-  reload();
+  void reload();
 }
 
 function loadMore(): void {
   offset.value += 50;
-  reload();
+  void reload();
 }
 </script>
 
@@ -95,7 +95,7 @@ function loadMore(): void {
         </tbody>
       </table>
       <div v-if="hasMore" class="records-footer">
-        <button class="btn btn-secondary" @click="loadMore">Load more</button>
+        <button class="btn" @click="loadMore">Load more</button>
       </div>
     </template>
   </template>

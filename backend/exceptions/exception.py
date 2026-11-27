@@ -20,6 +20,7 @@ from exceptions.chalie_exception import ChalieException
 
 if TYPE_CHECKING:
     from controllers.message_processor import MessageProcessor
+    from models.agent import Agent
 
 logger = logging.getLogger(__name__)
 
@@ -155,15 +156,6 @@ class RateLimitError(ProviderResponseError):
         super().__init__(message, response_code=429, provider=provider)
 
 
-class ProviderTimeoutError(ProviderResponseError):
-    """The provider call exceeded PROVIDER_CALL_TIMEOUT_S at the HTTP boundary.
-
-    Every thin client maps its SDK's native timeout to this type. The provider
-    layer never retries; this (like any provider error) bubbles up to the
-    MessageProcessor, which owns the resend policy.
-    """
-
-
 class ProviderRetriesExhaustedError(ProviderResponseError):
     """Raised by the MessageProcessor after every provider resend attempt failed.
 
@@ -197,6 +189,21 @@ class EmptyCompletionLoop(ChalieException):
     a bounded retry first; when the model stays empty past the limit it
     trips this loudly and ``_drive`` stamps the turn CRASHED.
     """
+
+
+class AgentStopped(ChalieException):
+    """A message was sent to a subagent that ended cancelled or failed, which
+    opens no turn again.
+
+    Raised by :meth:`MessageProcessor.deliver` inside its transaction, before
+    anything is queued or opened, carrying the subagent's row as that
+    transaction read it. :class:`~abilities.message_subagent.MessageSubagentAbility`
+    maps this to ``code=agent-stopped``.
+    """
+
+    def __init__(self, agent: Agent) -> None:
+        super().__init__(f"subagent #{agent.agent_id} is {agent.status}: no turn of its can open")
+        self.agent = agent
 
 
 # ── Search layer ──────────────────────────────────────────────────────────────
@@ -280,6 +287,40 @@ class NewsFetchError(ChalieException):
 
     Per-feed RSS failures inside :meth:`NewsService._parse_feed` are NOT raised:
     a single dead feed in a multi-feed aggregate is normal and tolerated.
+    """
+
+
+# ── Telegram layer ────────────────────────────────────────────────────────────
+
+
+class TelegramApiError(ChalieException):
+    """A Telegram Bot API call failed: unreachable, an unreadable reply, or a
+    refusal.
+
+    The bot token is part of every Bot API URL, so the message is built to
+    never contain it — this exception logs itself on construction.
+    """
+
+
+# ── UniFi layer ───────────────────────────────────────────────────────────────
+
+
+class UnifiCallFailed(ChalieException):
+    """A UniFi call that could not run: its sign-in failed or was cancelled, or
+    the console could not be reached.
+
+    The message is the exact text the model reads. It never carries a code, a
+    cookie or the console's reply.
+    """
+
+
+# ── Ask layer ─────────────────────────────────────────────────────────────────
+
+
+class AskReplyInvalid(ChalieException):
+    """A reply whose value is wrong for its ask's kind; the ask stays open.
+
+    The message names the kind only, never the value.
     """
 
 

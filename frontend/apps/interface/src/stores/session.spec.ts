@@ -9,7 +9,8 @@
  * Real DOM (happy-dom — the project's established Vue-mounting environment,
  * see turnDom.spec.ts), real Pinia, real turnDom/queue modules. Only the
  * WS/network boundary is mocked: `getWebSocket` (send/abort are the only
- * stubbed calls, per convention), `getHost`, and the REST `conversation` API
+ * stubbed calls, per convention),
+ * `getHost`, and the REST `conversation` API
  * (`api/conversation.ts`) — the actual `fetch`/XHR transport this app would
  * otherwise hit.
  *
@@ -20,6 +21,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
+import { flushPromises } from '@vue/test-utils';
 import { h } from 'vue';
 import type { Component } from 'vue';
 
@@ -41,20 +43,14 @@ const { fakeWs, sendMock, wsCallbacks } = vi.hoisted(() => {
       onConnect: (cb: () => void) => { wsCallbacks.onConnect = cb; },
       onDisconnect: (cb: () => void) => { wsCallbacks.onDisconnect = cb; },
       onDrift: () => { /* not under test */ },
-      onAny: () => { /* not under test */ },
       connect: () => { /* not under test */ },
-      ensureAlive: () => { /* not under test */ },
     },
   };
 });
 
-vi.mock('@chalie/shared', () => ({
-  ConfigType: { USER: 'user', SCHEDULED: 'scheduled', DISCOVERY: 'discovery' },
-  AuthError: class AuthError extends Error {},
+vi.mock('@chalie/shared', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@chalie/shared')>()),
   getWebSocket: () => fakeWs,
-  useConnectionStore: () => ({ setConnected: () => { /* not under test */ } }),
-  platform: {},
-  api: {},
   getHost: () => '',
 }));
 
@@ -63,25 +59,34 @@ vi.mock('@chalie/shared', () => ({
 // per the boundary rule (everything downstream of the response, including
 // the real turnDom/liveActTrail DOM effects, runs unmocked).
 const threadMock = vi.fn();
+// The stop's DELETE (`requestStop`), at the same edge.
+const stopMock = vi.fn();
 vi.mock('../api/conversation', () => ({
   conversation: {
     thread: (...args: unknown[]) => threadMock(...args),
+    stop: (...args: unknown[]) => stopMock(...args),
     threads: vi.fn(),
     batch: vi.fn(),
   },
 }));
 
-// The pending permission-gate listing `refreshPending()` re-reads on every
-// connect (`api/policies.ts`) — the same network edge, mocked the same way.
-const pendingMock = vi.fn();
-vi.mock('../api/policies', () => ({
-  policies: {
-    pending: () => pendingMock(),
-    respond: vi.fn(),
-  },
-}));
+// The open-asks listing every connect re-reads, served at the `fetch` edge:
+// `GET /api/asks/open` answers with `openAsks` and counts each read.
+let openAsks: object[] = [];
+let asksReads = 0;
+async function fakeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  if ((init?.method ?? 'GET') === 'GET' && String(input) === '/api/asks/open') {
+    asksReads += 1;
+    return new Response(
+      JSON.stringify({ success: true, result: openAsks, pagination: { page: 1, limit: 50, total: openAsks.length } }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    );
+  }
+  return { ok: true } as Response;
+}
 
 import { ConfigType } from '@chalie/shared';
+import type { ConversationTurnBlock } from '../api/conversation';
 
 /** A minimal but well-formed ConversationTurnBlock for the mocked thread() calls. */
 function stubBlock(turnId: number, working: boolean): unknown {
@@ -134,9 +139,11 @@ async function freshSession() {
 beforeEach(() => {
   sendMock.mockReset();
   threadMock.mockReset();
-  pendingMock.mockReset();
-  pendingMock.mockResolvedValue([]);
-  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true } as Response));
+  stopMock.mockReset();
+  stopMock.mockResolvedValue({ cancelled: true, reason: null });
+  openAsks = [];
+  asksReads = 0;
+  vi.stubGlobal('fetch', fakeFetch);
   document.body.innerHTML = '';
 });
 
@@ -203,7 +210,7 @@ describe('isSurfaceBusy', () => {
     // hitting the dead transport and losing the draft.
     await session.sendMessage('typed while offline', [], 7, ConfigType.USER);
     expect(sendMock).not.toHaveBeenCalled();
-    expect(queue.queuedFor(7)).toEqual([{ text: 'typed while offline', files: [], thinkingLevel: null }]);
+    expect(queue.queuedFor(7)).toEqual([{ text: 'typed while offline', files: [] }]);
 
     // Reconcile settles the turn on reconnect and drops the blanket flags.
     threadMock.mockResolvedValue(stubBlock(7, false));
@@ -246,14 +253,14 @@ describe('sendMessage — surface-scoped busy gate', () => {
     // the queue, not touch the network again.
     await session.sendMessage('second message while busy', [], null, ConfigType.USER);
     expect(sendMock).toHaveBeenCalledTimes(1);
-    expect(queue.queuedFor(null)).toEqual([{ text: 'second message while busy', files: [], thinkingLevel: null }]);
+    expect(queue.queuedFor(null)).toEqual([{ text: 'second message while busy', files: [] }]);
 
     // A send on a DIFFERENT scope (a thread, not busy) must post immediately.
     sendMock.mockResolvedValueOnce({ turn_id: 909, type: ConfigType.USER });
     await session.sendMessage('thread message', [], 555, ConfigType.USER);
     expect(sendMock).toHaveBeenCalledTimes(2);
     expect(sendMock).toHaveBeenLastCalledWith(
-      'thread message', expect.any(Function), [], 555, ConfigType.USER, null,
+      'thread message', expect.any(Function), [], 555, ConfigType.USER, false,
     );
     expect(queue.queuedFor(555)).toEqual([]);
 
@@ -294,7 +301,7 @@ describe('sendMessage — surface-scoped busy gate', () => {
     await session.sendMessage('a new top-level message', [], null, ConfigType.USER);
     expect(queue.queuedFor(null)).toEqual([]);
     expect(sendMock).toHaveBeenLastCalledWith(
-      'a new top-level message', expect.any(Function), [], null, ConfigType.USER, null,
+      'a new top-level message', expect.any(Function), [], null, ConfigType.USER, false,
     );
 
     // ...and so does a second thread, in parallel with the first.
@@ -303,15 +310,213 @@ describe('sendMessage — surface-scoped busy gate', () => {
     expect(queue.queuedFor(43)).toEqual([]);
     expect(sendMock).toHaveBeenCalledTimes(3);
 
-    // A second reply into the STILL-working thread 42 does queue — its own
-    // lane is the one thing that is genuinely busy.
+    // A second reply into the STILL-working thread 42 posts to that thread
+    // too — a text sent while its lane's turn works joins the turn.
     await session.sendMessage('second reply in thread 42', [], 42, ConfigType.USER);
-    expect(sendMock).toHaveBeenCalledTimes(3);
-    expect(queue.queuedFor(42)).toEqual([
-      { text: 'second reply in thread 42', files: [], thinkingLevel: null },
-    ]);
+    expect(sendMock).toHaveBeenCalledTimes(4);
+    expect(sendMock).toHaveBeenLastCalledWith(
+      'second reply in thread 42', expect.any(Function), [], 42, ConfigType.USER, false,
+    );
+    expect(queue.queuedFor(42)).toEqual([]);
 
     spineContainer.remove();
+  });
+});
+
+describe('sendMessage — a text sent while the lane\'s turn works joins it', () => {
+  /** A registered spine whose rendered DOM is exactly `html`. */
+  async function spineWith(html: string) {
+    const ctx = await freshSession();
+    const spine = document.body.appendChild(document.createElement('div'));
+    ctx.turnDom.registerSurface({
+      id: ctx.turnDom.SPINE_SURFACE_ID,
+      type: ConfigType.USER,
+      container: spine,
+      component: {},
+    });
+    spine.innerHTML = html;
+    return { ...ctx, spine };
+  }
+
+  const WORKING_7 = '<div data-working data-turn-id="7" data-type="user"></div>';
+  const JOINED_OK = { turn_id: 7, type: ConfigType.USER };
+
+  it('a spine follow-up is sent as a join of the unclaimed working turn: no lane claim, no echo, nothing queued', async () => {
+    // Turn 5 is a forked thread's work rendered on the spine (lane-claimed);
+    // turn 7 is the spine's own working turn. The join must pick 7.
+    const { session, queue, spine } = await spineWith(
+      '<div data-working data-turn-id="5" data-type="user" data-lane-type="user" data-lane-turn-id="5"></div>'
+      + WORKING_7,
+    );
+    sendMock.mockResolvedValue(JOINED_OK);
+
+    await session.sendMessage('and add the chart too', [], null, ConfigType.USER);
+
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(sendMock).toHaveBeenCalledWith(
+      'and add the chart too', expect.any(Function), [], 7, ConfigType.USER, true,
+    );
+    expect(queue.queuedFor(null)).toEqual([]);
+    // The joined turn stays the spine's: only the pre-existing claim on 5.
+    expect(Array.from(spine.querySelectorAll('[data-lane-turn-id]')).map((e) => e.getAttribute('data-turn-id')))
+      .toEqual(['5']);
+    // No echo — the real row paints with the `updated` refetch the join triggers.
+    expect(spine.querySelector('[data-send-echo]')).toBeNull();
+  });
+
+  it('a failed join POST surfaces the error and leaves the lane free to join again (no stuck hold, nothing queued)', async () => {
+    const { session, queue } = await spineWith(WORKING_7);
+    sendMock.mockImplementationOnce((_text: string, onSendFailure: (m: string) => void) => {
+      onSendFailure('Chat request failed.');
+      return Promise.resolve(null);
+    });
+
+    await session.sendMessage('lost in transit', [], null, ConfigType.USER);
+
+    expect(session.errorMessage).toBe('Chat request failed.');
+    expect(queue.queuedFor(null)).toEqual([]);
+
+    sendMock.mockResolvedValue(JOINED_OK);
+    await session.sendMessage('try again', [], null, ConfigType.USER);
+    expect(sendMock).toHaveBeenCalledTimes(2);
+    expect(sendMock).toHaveBeenLastCalledWith(
+      'try again', expect.any(Function), [], 7, ConfigType.USER, true,
+    );
+    expect(queue.queuedFor(null)).toEqual([]);
+  });
+
+  it('two texts sent one after the other both join the working turn — the first join does not hold the lane', async () => {
+    const { session, queue } = await spineWith(WORKING_7);
+    sendMock.mockResolvedValue(JOINED_OK);
+
+    await session.sendMessage('first follow-up', [], null, ConfigType.USER);
+    await session.sendMessage('second follow-up', [], null, ConfigType.USER);
+
+    expect(sendMock).toHaveBeenCalledTimes(2);
+    expect(sendMock).toHaveBeenLastCalledWith(
+      'second follow-up', expect.any(Function), [], 7, ConfigType.USER, true,
+    );
+    expect(queue.queuedFor(null)).toEqual([]);
+  });
+
+  it('a text typed while the lane\'s own join POST is still in flight queues, even though a working turn is on screen', async () => {
+    const { session, queue } = await spineWith(WORKING_7);
+    let resolveFirst: (v: unknown) => void = () => { /* replaced below */ };
+    sendMock.mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }));
+
+    const first = session.sendMessage('first follow-up', [], null, ConfigType.USER);
+    await session.sendMessage('typed before the first POST resolved', [], null, ConfigType.USER);
+
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(queue.queuedFor(null)).toEqual([
+      { text: 'typed before the first POST resolved', files: [] },
+    ]);
+
+    resolveFirst(JOINED_OK);
+    await first;
+  });
+
+  it('a spine text sent offline queues, even if a refetch repainted the working turn before the reconnect reconcile', async () => {
+    const { session, queue, spine } = await spineWith(WORKING_7);
+    session.init();
+    wsCallbacks.onDisconnect();
+    // The reconnect's first `updated` refetch re-renders the still-working
+    // turn before `_reconcileWorking` has dropped the offline flags.
+    spine.querySelector('[data-turn-id="7"]')?.setAttribute('data-working', 'true');
+
+    await session.sendMessage('typed while offline', [], null, ConfigType.USER);
+
+    expect(sendMock).not.toHaveBeenCalled();
+    expect(queue.queuedFor(null)).toEqual([{ text: 'typed while offline', files: [] }]);
+  });
+
+  it('a busy lane queues a message with files — a join refuses attachments — on the spine and in a thread alike', async () => {
+    const { session, queue } = await spineWith(
+      WORKING_7 + '<div data-working data-turn-id="42" data-type="user" data-lane-turn-id="42"></div>',
+    );
+    const file = new File(['bytes'], 'chart.png', { type: 'image/png' });
+
+    await session.sendMessage('see attached', [file], null, ConfigType.USER);
+    await session.sendMessage('and here, in the thread', [file], 42, ConfigType.USER);
+
+    expect(sendMock).not.toHaveBeenCalled();
+    expect(queue.queuedFor(null)).toEqual([{ text: 'see attached', files: [file] }]);
+    expect(queue.queuedFor(42)).toEqual([{ text: 'and here, in the thread', files: [file] }]);
+  });
+
+  it('a spine whose only working marker names no turn has nothing to join, so the text queues', async () => {
+    const { session, queue } = await spineWith('<div data-working></div>');
+
+    await session.sendMessage('nothing to join yet', [], null, ConfigType.USER);
+
+    expect(sendMock).not.toHaveBeenCalled();
+    expect(queue.queuedFor(null)).toEqual([{ text: 'nothing to join yet', files: [] }]);
+  });
+
+  /** A thread panel registered over the spine, rendering turn 42 as `html`. */
+  async function panelOver(spineHtml: string, panelHtml: string) {
+    const ctx = await spineWith(spineHtml);
+    const panel = document.body.appendChild(document.createElement('div'));
+    panel.innerHTML = panelHtml;
+    ctx.turnDom.registerSurface({
+      id: 'panel', type: ConfigType.USER, container: panel, component: {}, accepts: (id) => id === 42,
+    });
+    return { ...ctx, panel };
+  }
+
+  it('a reply into a working thread goes to that thread over the wire — never a spine join, no echo, nothing queued', async () => {
+    const claimed = '<div data-working data-turn-id="42" data-type="user" data-lane-type="user" data-lane-turn-id="42"></div>';
+    const { session, queue, panel } = await panelOver(claimed, claimed);
+    sendMock.mockResolvedValueOnce({ turn_id: 42, type: ConfigType.USER });
+
+    await session.sendMessage('one more thing for the thread', [], 42, ConfigType.USER);
+
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(sendMock).toHaveBeenCalledWith(
+      'one more thing for the thread', expect.any(Function), [], 42, ConfigType.USER, false,
+    );
+    expect(queue.queuedFor(42)).toEqual([]);
+    expect(panel.querySelector('[data-send-echo]')).toBeNull();
+  });
+
+  it('a reply into a turn still working its opener joins that exchange: no lane claim, so the spine still reads the work as its own', async () => {
+    const working = '<div data-working data-turn-id="42" data-type="user"></div>';
+    const { session, turnDom, spine, panel } = await panelOver(working, working);
+    sendMock.mockResolvedValueOnce({ turn_id: 42, type: ConfigType.USER });
+
+    await session.sendMessage('a reply typed in the panel', [], 42, ConfigType.USER);
+
+    expect(sendMock).toHaveBeenCalledWith(
+      'a reply typed in the panel', expect.any(Function), [], 42, ConfigType.USER, false,
+    );
+    expect(panel.querySelector('[data-send-echo]')).toBeNull();
+    // A join is no fork: neither copy is claimed for a thread lane.
+    expect(spine.querySelector('[data-turn-id="42"]')?.hasAttribute('data-lane-turn-id')).toBe(false);
+    expect(panel.querySelector('[data-turn-id="42"]')?.hasAttribute('data-lane-turn-id')).toBe(false);
+    expect(turnDom.isLaneWorking(turnDom.SPINE_LANE_TYPE, turnDom.SPINE_LANE_TURN_ID)).toBe(true);
+  });
+
+  it('idle lanes start as before — a new spine turn and a thread reply go over the wire with an echo, never as a join', async () => {
+    const { session, queue, turnDom, spine } = await spineWith('');
+    const panel = document.body.appendChild(document.createElement('div'));
+    turnDom.registerSurface({
+      id: 'panel', type: ConfigType.USER, container: panel, component: {}, accepts: (id) => id === 555,
+    });
+    sendMock.mockResolvedValue({ turn_id: 20, type: ConfigType.USER });
+
+    await session.sendMessage('a fresh question', [], null, ConfigType.USER);
+    await session.sendMessage('reply into a settled thread', [], 555, ConfigType.USER);
+
+    expect(sendMock).toHaveBeenNthCalledWith(
+      1, 'a fresh question', expect.any(Function), [], null, ConfigType.USER, false,
+    );
+    expect(sendMock).toHaveBeenNthCalledWith(
+      2, 'reply into a settled thread', expect.any(Function), [], 555, ConfigType.USER, false,
+    );
+    expect(queue.queuedFor(null)).toEqual([]);
+    expect(queue.queuedFor(555)).toEqual([]);
+    expect(spine.querySelector('[data-send-echo]')).not.toBeNull();
+    expect(panel.querySelector('[data-send-echo]')).not.toBeNull();
   });
 });
 
@@ -332,7 +537,7 @@ describe('_drainLane — queued sends replay their files, not just their text', 
 
     expect(sendMock).toHaveBeenCalledTimes(1);
     expect(sendMock).toHaveBeenCalledWith(
-      'queued while the thread was busy', expect.any(Function), [file], 77, ConfigType.USER, null,
+      'queued while the thread was busy', expect.any(Function), [file], 77, ConfigType.USER, false,
     );
   });
 });
@@ -356,6 +561,219 @@ describe('requestStop — undo event', () => {
   });
 });
 
+describe('requestStop — only a message the cancel removes goes back to the dock', () => {
+  // The real TurnView renders every copy, so the rows a cancel would drop carry
+  // the same `data-dropped-on-cancel` marker the app paints: the working turn's
+  // trailing user rows nothing has answered, stopping at one that joined it.
+  async function spineRendering(block: ConversationTurnBlock) {
+    const ctx = await freshSession();
+    const { default: TurnView } = await import('../components/conversation/TurnView.vue');
+    const spine = document.body.appendChild(document.createElement('div'));
+    ctx.turnDom.registerSurface({
+      id: ctx.turnDom.SPINE_SURFACE_ID, type: ConfigType.USER, container: spine, component: TurnView,
+    });
+    ctx.turnDom.upsertTurnToSurfaces(block, ConfigType.USER);
+    return { ...ctx, spine, TurnView };
+  }
+
+  function row(
+    id: number,
+    role: 'user' | 'assistant',
+    content: string,
+    extra: Partial<ConversationTurnBlock['messages'][number]> = {},
+  ): ConversationTurnBlock['messages'][number] {
+    return {
+      id: String(id), role, content, timestamp: '2026-01-01 00:00:00', day: '2026-01-01', created_at: '2026-01-01T00:00:00Z', turn_id: 12, ...extra,
+    };
+  }
+
+  function turn12(messages: ConversationTurnBlock['messages'], working: boolean): ConversationTurnBlock {
+    return {
+      turn_id: 12, gist: null, preview: 'turn 12', last_activity_at: null, working, duration_ms: 0,
+      type: ConfigType.USER, messages,
+    };
+  }
+
+  /** Collects every `session:turn-interrupted` the stop dispatches. */
+  function listenForRestores(): { received: Array<{ text: string; turnId: number | null }>; stop: () => void } {
+    const received: Array<{ text: string; turnId: number | null }> = [];
+    const onInterrupted = (e: Event): void => {
+      received.push((e as CustomEvent<{ text: string; turnId: number | null }>).detail);
+    };
+    document.addEventListener('session:turn-interrupted', onInterrupted);
+    return { received, stop: () => document.removeEventListener('session:turn-interrupted', onInterrupted) };
+  }
+
+  it('a message joined into the turn stays in the transcript after Stop, so it is NOT handed back to the dock', async () => {
+    const rows = [row(1, 'user', 'plan my trip to Rome'), row(2, 'user', 'make it three days', { joined: true })];
+    const { session, turnDom, spine } = await spineRendering(turn12(rows, true));
+    // What the dock hands over: the last user row, read off the DOM before the stop.
+    const restoreText = turnDom.lastUserText(spine);
+    expect(restoreText).toBe('make it three days');
+    // The cancel strands the joined row unread but keeps it, and the opener before it.
+    threadMock.mockResolvedValue(turn12(rows, false));
+    const { received, stop } = listenForRestores();
+
+    await session.requestStop(12, ConfigType.USER, null, restoreText);
+    stop();
+
+    expect(received).toEqual([]);
+    expect(Array.from(spine.querySelectorAll('[data-user-text]')).map((r) => (r as HTMLElement).dataset.userText))
+      .toEqual(['plan my trip to Rome', 'make it three days']);
+  });
+
+  it('a message the turn already answered stays too: a stop after an interim reply hands nothing back', async () => {
+    const rows = [row(1, 'user', 'plan my trip to Rome'), row(2, 'assistant', 'looking at flights first')];
+    const { session, turnDom, spine } = await spineRendering(turn12(rows, true));
+    threadMock.mockResolvedValue(turn12(rows, false));
+    const { received, stop } = listenForRestores();
+
+    await session.requestStop(12, ConfigType.USER, null, turnDom.lastUserText(spine));
+    stop();
+
+    expect(received).toEqual([]);
+  });
+
+  it('a cancelled opener the backend strips (nothing after it) IS handed back — once the server accepts the stop, never while it could still refuse it', async () => {
+    const { session, turnDom, spine } = await spineRendering(turn12([row(1, 'user', 'plan my trip to Rome')], true));
+    const restoreText = turnDom.lastUserText(spine);
+    // Nothing answered or joined after the opener: the cancel strips it, and a
+    // turn with no rows left is removed from every surface.
+    threadMock.mockResolvedValue(turn12([], false));
+    let accept: (ack: unknown) => void = () => { /* replaced below */ };
+    stopMock.mockImplementationOnce(() => new Promise((resolve) => { accept = resolve; }));
+    const { received, stop } = listenForRestores();
+
+    const stopping = session.requestStop(12, ConfigType.USER, null, restoreText);
+    await Promise.resolve();
+    expect(received).toEqual([]);
+    accept({ cancelled: true, reason: null });
+    await stopping;
+    stop();
+
+    expect(received).toEqual([{ text: 'plan my trip to Rome', turnId: null }]);
+    expect(turnDom.getTurnEl(12, ConfigType.USER, spine)).toBeNull();
+  });
+
+  it('what the cancel strips is judged from the copy as it stood before the stop: the cancelled frame that redraws the copy without it lands before the server answers', async () => {
+    const opener = [row(1, 'user', 'plan my trip to Rome'), row(2, 'assistant', 'Rome it is', { settled: true })];
+    const { session, turnDom, TurnView } = await spineRendering(turn12(opener, false));
+    const panel = document.body.appendChild(document.createElement('div'));
+    turnDom.registerSurface({
+      id: 'panel', type: ConfigType.USER, container: panel, component: TurnView,
+      props: { fullThread: true }, accepts: (id) => id === 12,
+    });
+    turnDom.upsertTurnToSurfaces(
+      turn12([...opener, row(3, 'user', 'what about Florence?', { thread_message: true })], true), ConfigType.USER,
+    );
+    const restoreText = turnDom.lastUserText(panel);
+    // The cancel strips the unanswered reply but keeps the opener, so the
+    // turn's copy survives the redraw — just without the reply.
+    threadMock.mockResolvedValue(turn12(opener, false));
+    const { reconcileCancelledTurn } = await import('../utils/cancelReconcile');
+    stopMock.mockImplementationOnce(async () => {
+      await reconcileCancelledTurn(12, ConfigType.USER);
+      expect(panel.querySelector('[data-user-text="what about Florence?"]')).toBeNull();
+      return { cancelled: true, reason: null };
+    });
+    const { received, stop } = listenForRestores();
+
+    await session.requestStop(12, ConfigType.USER, 12, restoreText);
+    stop();
+
+    expect(received).toEqual([{ text: 'what about Florence?', turnId: 12 }]);
+  });
+
+  it('a stop whose answer is lost after its cancelled frame already redrew the copy still hands the stripped reply back, with no failure banner', async () => {
+    const opener = [row(1, 'user', 'plan my trip to Rome'), row(2, 'assistant', 'Rome it is', { settled: true })];
+    const { session, turnDom, TurnView } = await spineRendering(turn12(opener, false));
+    const panel = document.body.appendChild(document.createElement('div'));
+    turnDom.registerSurface({
+      id: 'panel', type: ConfigType.USER, container: panel, component: TurnView,
+      props: { fullThread: true }, accepts: (id) => id === 12,
+    });
+    turnDom.upsertTurnToSurfaces(
+      turn12([...opener, row(3, 'user', 'what about Florence?', { thread_message: true })], true), ConfigType.USER,
+    );
+    const restoreText = turnDom.lastUserText(panel);
+    threadMock.mockResolvedValue(turn12(opener, false));
+    vi.spyOn(console, 'error').mockImplementation(() => { /* the lost answer is still logged */ });
+    const { reconcileCancelledTurn } = await import('../utils/cancelReconcile');
+    // The server commits the cancel and its frame redraws the copy — then the
+    // answer to the stop is lost on the way back.
+    stopMock.mockImplementationOnce(async () => {
+      await reconcileCancelledTurn(12, ConfigType.USER);
+      expect(panel.querySelector('[data-user-text="what about Florence?"]')).toBeNull();
+      throw new Error('HTTP 504');
+    });
+    const { received, stop } = listenForRestores();
+
+    await session.requestStop(12, ConfigType.USER, 12, restoreText);
+    stop();
+
+    expect(session.errorMessage).toBeNull();
+    expect(received).toEqual([{ text: 'what about Florence?', turnId: 12 }]);
+  });
+
+  it('a failed refetch after the cancel still leaves the opener handed back to the dock', async () => {
+    const { session, turnDom, spine } = await spineRendering(turn12([row(1, 'user', 'plan my trip to Rome')], true));
+    threadMock.mockRejectedValue(new Error('network down'));
+    const { received, stop } = listenForRestores();
+
+    await session.requestStop(12, ConfigType.USER, null, turnDom.lastUserText(spine));
+    stop();
+
+    expect(received).toEqual([{ text: 'plan my trip to Rome', turnId: null }]);
+  });
+
+  it('a thread reply\'s joined follow-up is kept by judging the thread panel\'s own copy, since the spine\'s copy hides thread rows', async () => {
+    const opener = [row(1, 'user', 'plan my trip to Rome'), row(2, 'assistant', 'Rome it is', { settled: true })];
+    const { session, turnDom, spine, TurnView } = await spineRendering(turn12(opener, false));
+    const panel = document.body.appendChild(document.createElement('div'));
+    turnDom.registerSurface({
+      id: 'panel', type: ConfigType.USER, container: panel, component: TurnView,
+      props: { fullThread: true }, accepts: (id) => id === 12,
+    });
+    const rows = [
+      ...opener,
+      row(3, 'user', 'what about Florence?', { thread_message: true }),
+      row(4, 'user', 'and Venice?', { thread_message: true, joined: true }),
+    ];
+    turnDom.upsertTurnToSurfaces(turn12(rows, true), ConfigType.USER);
+    // Only the panel shows the thread rows.
+    const restoreText = turnDom.lastUserText(panel);
+    expect(restoreText).toBe('and Venice?');
+    expect(spine.querySelectorAll('[data-user-text]')).toHaveLength(1);
+    // The reply's cancel keeps the joined 'and Venice?' row and what precedes it.
+    threadMock.mockResolvedValue(turn12(rows, false));
+    const { received, stop } = listenForRestores();
+
+    await session.requestStop(12, ConfigType.USER, 12, restoreText);
+    stop();
+
+    expect(received).toEqual([]);
+  });
+
+  it('a thread reply the turn has not answered is handed back from the panel\'s copy', async () => {
+    const opener = [row(1, 'user', 'plan my trip to Rome'), row(2, 'assistant', 'Rome it is', { settled: true })];
+    const { session, turnDom, TurnView } = await spineRendering(turn12(opener, false));
+    const panel = document.body.appendChild(document.createElement('div'));
+    turnDom.registerSurface({
+      id: 'panel', type: ConfigType.USER, container: panel, component: TurnView,
+      props: { fullThread: true }, accepts: (id) => id === 12,
+    });
+    const rows = [...opener, row(3, 'user', 'what about Florence?', { thread_message: true })];
+    turnDom.upsertTurnToSurfaces(turn12(rows, true), ConfigType.USER);
+    threadMock.mockResolvedValue(turn12(opener, false));
+    const { received, stop } = listenForRestores();
+
+    await session.requestStop(12, ConfigType.USER, 12, turnDom.lastUserText(panel));
+    stop();
+
+    expect(received).toEqual([{ text: 'what about Florence?', turnId: 12 }]);
+  });
+});
+
 describe('requestStop — DELETE only fires for a confirmed in-flight turn', () => {
   it('skips the DELETE for a turnId with no rendered element and no live signal, but fires it once the turn is confirmed working', async () => {
     const { session, turnDom } = await freshSession();
@@ -364,76 +782,175 @@ describe('requestStop — DELETE only fires for a confirmed in-flight turn', () 
     // Turn 10 was never confirmed working (stale/late click on an
     // already-settled turn) — must not hit the network.
     await session.requestStop(10, ConfigType.USER, null, '');
-    expect(fetch).not.toHaveBeenCalled();
+    expect(stopMock).not.toHaveBeenCalled();
 
     // Turn 11 is confirmed working via a live setTurnWorking signal alone
     // (no rendered element) — the DELETE must fire.
     turnDom.setTurnWorking(11, ConfigType.USER, true);
     await session.requestStop(11, ConfigType.USER, null, '');
-    expect(fetch).toHaveBeenCalledWith(
-      '/api/threads/11?type=user',
-      expect.objectContaining({ method: 'DELETE' }),
-    );
+    expect(stopMock).toHaveBeenCalledWith(11, ConfigType.USER);
   });
 
-  it('clears working optimistically but starts the content refetch only AFTER the DELETE resolves (stale pre-cancel content must never be fetched ahead of the cancel)', async () => {
+  it('undoes nothing while the DELETE is in flight, then clears working and refetches (stale pre-cancel content must never be fetched ahead of the cancel)', async () => {
     const { session, turnDom } = await freshSession();
     threadMock.mockResolvedValue(stubBlock(12, false));
+    const handBacks: unknown[] = [];
+    document.addEventListener('session:turn-interrupted', (e) => { handBacks.push((e as CustomEvent).detail); });
 
     let resolveDelete: (v: unknown) => void = () => { /* replaced below */ };
-    vi.stubGlobal('fetch', vi.fn().mockImplementationOnce(
-      () => new Promise((resolve) => { resolveDelete = resolve; }),
-    ));
+    stopMock.mockImplementationOnce(() => new Promise((resolve) => { resolveDelete = resolve; }));
 
     turnDom.setTurnWorking(12, ConfigType.USER, true);
-    const stopping = session.requestStop(12, ConfigType.USER, null, '');
+    const stopping = session.requestStop(12, ConfigType.USER, 12, 'draft');
 
-    // Spinner drops immediately (optimistic), but the reconcile fetch is
-    // held while the DELETE round-trip is still in flight.
-    expect(turnDom.isTurnWorking(12, ConfigType.USER)).toBe(false);
+    // Until the server accepts the stop the turn may still be running, so its
+    // spinner (and stop control), its draft and its content all stay put.
     await Promise.resolve();
+    expect(turnDom.isTurnWorking(12, ConfigType.USER)).toBe(true);
+    expect(handBacks).toEqual([]);
     expect(threadMock).not.toHaveBeenCalled();
 
-    resolveDelete({ ok: true });
+    resolveDelete({ cancelled: true, reason: null });
     await stopping;
+    expect(turnDom.isTurnWorking(12, ConfigType.USER)).toBe(false);
+    expect(handBacks).toEqual([{ text: 'draft', turnId: 12 }]);
     expect(threadMock).toHaveBeenCalledWith(12, ConfigType.USER);
   });
 });
 
+describe('requestStop — a stop that fails', () => {
+  it('says so in the dock banner and undoes nothing, leaving the turn running and stoppable; a retry then stops it and takes the banner down', async () => {
+    const { session, turnDom } = await freshSession();
+    // The re-read after the refused DELETE finds the turn still running; the
+    // retry's reconcile then reads it stopped.
+    threadMock.mockResolvedValueOnce(stubBlock(14, true)).mockResolvedValue(stubBlock(14, false));
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => { /* asserted below */ });
+    const handBacks: unknown[] = [];
+    document.addEventListener('session:turn-interrupted', (e) => { handBacks.push((e as CustomEvent).detail); });
+    stopMock.mockRejectedValueOnce(new Error('HTTP 500'));
+
+    turnDom.setTurnWorking(14, ConfigType.USER, true);
+    await session.requestStop(14, ConfigType.USER, 14, 'draft');
+
+    expect(session.errorMessage).toBe("Couldn't stop and undo. Try again.");
+    expect(logged).toHaveBeenCalled();
+    expect(turnDom.isTurnWorking(14, ConfigType.USER)).toBe(true);
+    expect(handBacks).toEqual([]);
+    // The one read is the re-read that found it still running: nothing reconciled.
+    expect(threadMock).toHaveBeenCalledTimes(1);
+
+    await session.requestStop(14, ConfigType.USER, 14, 'draft');
+
+    expect(stopMock).toHaveBeenCalledTimes(2);
+    expect(session.errorMessage).toBeNull();
+    expect(turnDom.isTurnWorking(14, ConfigType.USER)).toBe(false);
+    expect(handBacks).toEqual([{ text: 'draft', turnId: 14 }]);
+  });
+
+  it('stays quiet when the turn had already ended (no_active_turn), and leaves an unrelated error on the banner alone', async () => {
+    const { session, turnDom } = await freshSession();
+    threadMock.mockResolvedValue(stubBlock(15, false));
+    stopMock.mockResolvedValueOnce({ cancelled: null, reason: 'no_active_turn' });
+    session.errorMessage = 'Provider quota exceeded';
+
+    turnDom.setTurnWorking(15, ConfigType.USER, true);
+    await session.requestStop(15, ConfigType.USER, null, '');
+
+    expect(session.errorMessage).toBe('Provider quota exceeded');
+    expect(turnDom.isTurnWorking(15, ConfigType.USER)).toBe(false);
+    expect(threadMock).toHaveBeenCalledWith(15, ConfigType.USER);
+  });
+
+  /** A spine to render into, with the dock's send echo standing in for the
+   *  message the turn is working on. */
+  async function spineWithEcho(text: string) {
+    const ctx = await freshSession();
+    const spine = document.body.appendChild(document.createElement('div'));
+    ctx.turnDom.registerSurface({
+      id: ctx.turnDom.SPINE_SURFACE_ID, type: ConfigType.USER, container: spine, component: StubComponent,
+    });
+    ctx.sendEcho.mountSendEcho(text, null, ConfigType.USER);
+    expect(spine.querySelector('[data-send-echo]')).not.toBeNull();
+    return { ...ctx, spine };
+  }
+
+  it('takes a stop whose answer was lost as accepted when the turn is found stopped: the banner an earlier refusal left comes down, the message goes back to the dock and its echo is gone', async () => {
+    const { session, turnDom, spine } = await spineWithEcho('draft');
+    vi.spyOn(console, 'error').mockImplementation(() => { /* the lost answer is still logged */ });
+    const handBacks: unknown[] = [];
+    document.addEventListener('session:turn-interrupted', (e) => { handBacks.push((e as CustomEvent).detail); });
+    // The first stop is refused and the turn keeps running; the retry stops
+    // it, but its answer never arrives.
+    stopMock.mockRejectedValueOnce(new Error('HTTP 500')).mockRejectedValueOnce(new Error('HTTP 502'));
+    threadMock
+      .mockResolvedValueOnce(stubBlock(16, true))
+      .mockResolvedValue({ ...(stubBlock(16, false) as object), cancelled: true, type: ConfigType.USER });
+
+    turnDom.setTurnWorking(16, ConfigType.USER, true);
+    await session.requestStop(16, ConfigType.USER, null, 'draft');
+    expect(session.errorMessage).toBe("Couldn't stop and undo. Try again.");
+    expect(handBacks).toEqual([]);
+
+    await session.requestStop(16, ConfigType.USER, null, 'draft');
+
+    expect(session.errorMessage).toBeNull();
+    expect(handBacks).toEqual([{ text: 'draft', turnId: null }]);
+    expect(spine.querySelector('[data-send-echo]')).toBeNull();
+    expect(turnDom.isTurnWorking(16, ConfigType.USER)).toBe(false);
+  });
+
+  it('still says the stop failed when the answer was lost and the turn cannot be re-read: the message and its echo stay put', async () => {
+    const { session, turnDom, spine } = await spineWithEcho('draft');
+    vi.spyOn(console, 'error').mockImplementation(() => { /* both failures are logged */ });
+    const handBacks: unknown[] = [];
+    document.addEventListener('session:turn-interrupted', (e) => { handBacks.push((e as CustomEvent).detail); });
+    stopMock.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    threadMock.mockRejectedValue(new TypeError('Failed to fetch'));
+
+    turnDom.setTurnWorking(17, ConfigType.USER, true);
+    await session.requestStop(17, ConfigType.USER, null, 'draft');
+
+    expect(session.errorMessage).toBe("Couldn't stop and undo. Try again.");
+    expect(handBacks).toEqual([]);
+    expect(spine.querySelector('[data-send-echo]')).not.toBeNull();
+    expect(turnDom.isTurnWorking(17, ConfigType.USER)).toBe(true);
+  });
+});
+
 describe('reconnect reconcile', () => {
-  it('onConnect re-reads the pending permission gates, so a gate still open across a reload or a dropped socket gets its card back', async () => {
+  it('onConnect re-reads the open asks, so an ask still open across a reload or a dropped socket waits again — once, and only while the server still has it', async () => {
     const { session } = await freshSession();
-    const { usePermissionsStore } = await import('./permissions');
-    const permissions = usePermissionsStore();
-    pendingMock.mockResolvedValue([
-      {
-        request_id: 'gate-1',
-        action_id: 'pim',
-        summary: 'Read the inbox',
-        origin: { type: ConfigType.USER, turn_id: 7, forked: true },
-      },
-    ]);
+    const { useAsksStore } = await import('@chalie/shared');
+    const asks = useAsksStore();
+    const readInbox = {
+      ask_id: 'ask-1',
+      kind: 'permission',
+      asked_at: '2026-10-07T06:32:11+00:00',
+      data: { action_id: 'email.read', summary: 'Read the inbox', origin: { type: ConfigType.USER, turn_id: 7, forked: true } },
+    };
+    openAsks = [readInbox];
 
     session.init();
-    expect(permissions.queue).toEqual([]);
+    expect(asks.queue).toEqual([]);
     wsCallbacks.onConnect();
-    await new Promise((resolve) => setTimeout(resolve, 0)); // flush pending() -> enqueue
+    await flushPromises();
 
-    expect(pendingMock).toHaveBeenCalledTimes(1);
-    expect(permissions.queue).toEqual([
-      {
-        request_id: 'gate-1',
-        action_id: 'pim',
-        summary: 'Read the inbox',
-        origin: { type: 'user', turn_id: 7, forked: true },
-      },
-    ]);
+    expect(asksReads).toBe(1);
+    expect(asks.queue).toEqual([readInbox]);
 
-    // A second connect (reconnect) re-reads and dedupes — the same gate is not queued twice.
+    // A second connect (reconnect) re-reads and dedupes — the same ask is not queued twice.
     wsCallbacks.onConnect();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(pendingMock).toHaveBeenCalledTimes(2);
-    expect(permissions.queue.map((r) => r.request_id)).toEqual(['gate-1']);
+    await flushPromises();
+    expect(asksReads).toBe(2);
+    expect(asks.queue.map((a) => a.ask_id)).toEqual(['ask-1']);
+
+    // An ask answered elsewhere while the socket was down: its close frame was
+    // missed, so the next connect's read drops it.
+    openAsks = [];
+    wsCallbacks.onConnect();
+    await flushPromises();
+    expect(asksReads).toBe(3);
+    expect(asks.queue).toEqual([]);
   });
 
   it('onDisconnect snapshots every in-flight turn (rendered AND live-only) into _offlineWorking, then clears all visual working state', async () => {
@@ -450,6 +967,38 @@ describe('reconnect reconcile', () => {
     expect(container.querySelector('[data-turn-id="5"]')?.hasAttribute('data-working')).toBe(false);
     expect(turnDom.isTurnWorking(5, ConfigType.USER)).toBe(false);
     expect(turnDom.isTurnWorking(6, ConfigType.USER)).toBe(false);
+  });
+
+  it('onDisconnect drops every delegate call\'s live pills, whose settling frame died with the socket, and leaves a user turn\'s pills for the reconcile', async () => {
+    const { session } = await freshSession();
+    const { liveTrailsFor, startLiveTool } = await import('../utils/liveActTrail');
+    session.init();
+    startLiveTool('delegate:web_search', 12, 31, 'fetch_url', 'museum.example/hours');
+    startLiveTool('delegate:code_agent', 4, 32, 'read_file');
+    startLiveTool(ConfigType.USER, 12, 33, 'web_search', 'museum hours');
+
+    wsCallbacks.onDisconnect();
+
+    expect(liveTrailsFor('delegate:web_search', 12)).toEqual([]);
+    expect(liveTrailsFor('delegate:code_agent', 4)).toEqual([]);
+    // Same turn id on the user channel: a different turn, not swept up.
+    expect(liveTrailsFor(ConfigType.USER, 12)[0]?.pills.map((p) => p.id)).toEqual(['33']);
+  });
+
+  it('onDisconnect lets go of speech still being prepared, whose ready frame may have died with the socket, and keeps what is settled', async () => {
+    const { session } = await freshSession();
+    const { useVoiceTranscriptsStore } = await import('./voiceTranscripts');
+    const voice = useVoiceTranscriptsStore();
+    session.init();
+    voice.record(58, 'pending');
+    voice.record(59, 'ready');
+    voice.record(60, 'failed');
+
+    wsCallbacks.onDisconnect();
+
+    expect(voice.stateFor(58)).toBeNull();
+    expect(voice.stateFor(59)).toBe('ready');
+    expect(voice.stateFor(60)).toBe('failed');
   });
 
   it('_reconcileWorking settles a snapshotted turn whose refetch says it is no longer working (drains queues), and restores the spinner for one still working', async () => {
@@ -480,7 +1029,7 @@ describe('reconnect reconcile', () => {
     expect(turnDom.isTurnWorking(6, ConfigType.USER)).toBe(true); // restored
     expect(threadPhase(6, ConfigType.USER)).toBe('working');
     expect(sendMock).toHaveBeenCalledWith(
-      'queued while offline', expect.any(Function), [], 909, ConfigType.USER, null,
+      'queued while offline', expect.any(Function), [], 909, ConfigType.USER, false,
     );
   });
 
@@ -528,5 +1077,72 @@ describe('reconnect reconcile', () => {
     expect(spineContainer.querySelector('[data-send-echo]')).toBeNull();
 
     spineContainer.remove();
+  });
+});
+
+describe('the slide-over panel target — a thread (turn id + type) or a delegate transcript (channel + turn id)', () => {
+  const SEARCH = { channel: 'delegate:web_search', turn_id: 12 };
+  const AGENT = { channel: 'delegate:code_agent', turn_id: 3 };
+
+  it('opening a delegate transcript replaces an open thread: the delegate is the target and no thread id is left behind', async () => {
+    const { session } = await freshSession();
+    session.openThreadPanel(5, ConfigType.USER);
+    expect(session.panelThreadId).toBe(5);
+    expect(session.panelType).toBe(ConfigType.USER);
+    expect(session.panelDelegate).toBeNull();
+
+    session.openDelegatePanel(SEARCH);
+
+    expect(session.panelDelegate).toEqual(SEARCH);
+    expect(session.panelThreadId).toBeNull();
+  });
+
+  it('opening a thread replaces an open delegate transcript and takes the thread\'s own type', async () => {
+    const { session } = await freshSession();
+    session.openDelegatePanel(SEARCH);
+
+    session.openThreadPanel(9, ConfigType.SCHEDULED);
+
+    expect(session.panelDelegate).toBeNull();
+    expect(session.panelThreadId).toBe(9);
+    expect(session.panelType).toBe(ConfigType.SCHEDULED);
+  });
+
+  it('a second delegate click replaces the first, even for the same turn id on another channel', async () => {
+    const { session } = await freshSession();
+    session.openDelegatePanel(SEARCH);
+    session.openDelegatePanel(AGENT);
+    expect(session.panelDelegate).toEqual(AGENT);
+
+    session.openDelegatePanel({ channel: 'delegate:code_agent', turn_id: SEARCH.turn_id });
+    expect(session.panelDelegate).toEqual({ channel: 'delegate:code_agent', turn_id: 12 });
+    expect(session.panelThreadId).toBeNull();
+  });
+
+  it('closing clears whichever target was open, thread or delegate', async () => {
+    const { session } = await freshSession();
+
+    session.openThreadPanel(5, ConfigType.USER);
+    session.closeThreadPanel();
+    expect(session.panelThreadId).toBeNull();
+    expect(session.panelDelegate).toBeNull();
+
+    session.openDelegatePanel(SEARCH);
+    session.closeThreadPanel();
+    expect(session.panelThreadId).toBeNull();
+    expect(session.panelDelegate).toBeNull();
+  });
+
+  it('opening a thread clears its standing "done" marker, but opening a delegate transcript with the same turn id leaves the user turn\'s marker alone', async () => {
+    const { session, turnDom } = await freshSession();
+    turnDom.setTurnDone(12, ConfigType.USER, true);
+    expect(turnDom.isTurnDone(12, ConfigType.USER)).toBe(true);
+
+    // A delegate's turn 12 is not the user's turn 12.
+    session.openDelegatePanel(SEARCH);
+    expect(turnDom.isTurnDone(12, ConfigType.USER)).toBe(true);
+
+    session.openThreadPanel(12, ConfigType.USER);
+    expect(turnDom.isTurnDone(12, ConfigType.USER)).toBe(false);
   });
 });

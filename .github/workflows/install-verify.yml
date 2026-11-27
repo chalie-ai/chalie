@@ -4,8 +4,10 @@ name: Install Verification
 # (see installer/verify/), then proves the installed instance actually works:
 # /ready green, the interface served, Chromium driving a live page, a Kokoro →
 # Moonshine voice round trip, and Deno executing a script. A row passes only if
-# every one of those does. Guards the install experience against both our own
-# regressions and upstream drift (a stock-Python bump, a wheel disappearing).
+# every one of those does. Rows whose host has no python3 3.11+ additionally
+# require the venv to come from the uv-managed CPython the installer provisions
+# there. Guards the install experience against both our own regressions and
+# upstream drift (a stock-Python bump, a wheel disappearing).
 
 on:
   workflow_dispatch:
@@ -33,14 +35,16 @@ jobs:
         include:
           # Native arm64 runners for the arm64 rows, native amd64 for the amd64
           # rows — no emulation, so a failure is always the installer's.
-          - { row: debian12,         runner: ubuntu-24.04-arm }
-          - { row: ubuntu2404,       runner: ubuntu-24.04-arm }
-          - { row: ubuntu2204,       runner: ubuntu-24.04-arm }
-          - { row: fedora41,         runner: ubuntu-24.04-arm }
-          - { row: fedora40,         runner: ubuntu-24.04-arm }
-          - { row: alma9,            runner: ubuntu-24.04-arm }
-          - { row: debian12-amd64,   runner: ubuntu-latest }
-          - { row: ubuntu2404-amd64, runner: ubuntu-latest }
+          - { row: debian12,           runner: ubuntu-24.04-arm }
+          - { row: debian12-nopython,  runner: ubuntu-24.04-arm }
+          - { row: ubuntu2404,         runner: ubuntu-24.04-arm }
+          - { row: ubuntu2204,         runner: ubuntu-24.04-arm }
+          - { row: fedora41,           runner: ubuntu-24.04-arm }
+          - { row: fedora41-nopython,  runner: ubuntu-24.04-arm }
+          - { row: fedora40,           runner: ubuntu-24.04-arm }
+          - { row: alma9,              runner: ubuntu-24.04-arm }
+          - { row: debian12-amd64,     runner: ubuntu-latest }
+          - { row: ubuntu2404-amd64,   runner: ubuntu-latest }
     timeout-minutes: 40
     steps:
       - name: Checkout

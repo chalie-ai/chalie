@@ -34,6 +34,7 @@ from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 from contracts.params.capability_params_bag import CapabilityParamsBag
 from configs.enums.ability_category import AbilityCategory
+from exceptions import UnifiCallFailed
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[UBIQUITI ABILITY]"
@@ -276,7 +277,15 @@ class UbiquitiAbility(CapabilityAbility):
             for key, value in spec.inject.items():
                 handler_params.setdefault(key, value)
 
-        result = self._dispatch(action, handler_params)
+        try:
+            result = self._dispatch(
+                action,
+                handler_params,
+                origin=self.mp.origin if self.mp else None,
+                should_stop=self.mp.turn_execution_service.should_stop if self.mp else None,
+            )
+        except UnifiCallFailed as exc:
+            return ToolResult.err(str(exc), code="capability-error", action=action)
         if result.status != "success" or not isinstance(result.body, dict):
             # not-connected / unknown-action / handler-unavailable already carry a
             # canonical code from the base — surface them untouched.

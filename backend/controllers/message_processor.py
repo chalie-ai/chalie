@@ -22,7 +22,9 @@ on lands here:
   a service (SQL only in Model/Query), every external effect (WS emit) fires from
   those services, and this controller never emits WS itself. The terminal-state
   frame and (on a crash) the user-facing crash toast are both broadcast by
-  :meth:`TurnExecutionService.finish`, not from here.
+  :meth:`TurnExecutionService.finish`, not from here; this controller only
+  holds back the frames pushed inside one of its own transactions until that
+  transaction commits.
 
 **The process/begin/_step contract (Dylan's ruling, §4.3):**
 
@@ -37,17 +39,24 @@ returns: a POST handler reads the WORKING execution handle instantly and live
 output then streams over WS, while fire-and-forget callers (scheduler) read the
 allocated id off ``mp.metadata``.
 
-The thinking override is resolved per-turn in ``_setup`` (after ``begin()`` has
-allocated ``turn_id`` and written the input row) by reading the transcript's
-``thinking_level`` column for the current (channel, turn_id); ``medium``/``high``
-becomes the override, ``auto``/NULL leaves it unset so the deliberation gate
-decides normally.
+The model and thinking level are read per-turn in ``_setup`` (after ``begin()``
+has allocated ``turn_id`` and written the input row) from the turn's own thread
+row. A model that is unset or no longer configured falls back to the default,
+which is then stored on the thread. ``medium``/``high`` becomes the thinking
+override; ``auto`` leaves it unset so the deliberation gate decides normally.
 
 ``_step()`` is the **recursive** step loop: send → (compact-and-continue on
-over-cap) → store any prose → dispatch tool calls → recurse; it bottoms out when
-the model returns a turn with no tool calls. The first ``_step()`` is isolated onto
-the daemon thread by ``begin()``; every recursive call is synchronous within that
-thread. Synchronous text-consumers (delegate abilities, mcp_server, the
+over-cap) → store the call's own assistant row → dispatch tool calls → take in
+any message joined meanwhile → recurse; it bottoms out when the model returns a
+call with no tool calls, or one that answered while its only calls closed the
+last open tasks of its plan. ``_settle()`` then stores (or, for the latter,
+stamps) that call's row and, in the same transaction, either ends the turn —
+the only row settled — or, when a message joined while the call was in flight,
+takes it in and steps again. An exchange that would end with its plan still
+open is nudged: the nudge is written into the turn as a joined message, which
+the loop takes in the same way. The
+loop runs on the daemon thread ``begin()`` starts; every recursive call is
+synchronous within that thread. Synchronous text-consumers (delegate abilities, mcp_server, the
 user-synthesis generator) call ``process()`` then ``result()`` to join the
 thread and read the final text.
 """
@@ -58,35 +67,55 @@ import json
 import logging
 import re
 from collections import Counter
-from threading import Thread
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
+from functools import partial
+from threading import Thread, get_ident
 from typing import TYPE_CHECKING, Protocol, cast
 
+from abilities._delegate import agent_config, replies_late, reply_to_caller, replying_tools
+from abilities.find_tools import FindToolsAbility
+from abilities.message_parent import MessageParentAbility, ended_on_message_parent, holds, waiting_reminder
+from abilities.message_subagent import awaits_reply
+from abilities.plan import PlanAbility, plans
+from abilities.recall import Recall
 from configs.channels.user import UserConfig
-from configs.enums.channels import Channel
+from configs.enums.channels import Channel, delegate_type
+from configs.enums.param_key import Keys
+from configs.enums.plan_task_status import PlanTaskStatus
 from configs.enums.provider_type import ProviderType
 from configs.enums.thinking_level import ThinkingLevel
 from exceptions import (
+    AgentStopped,
     ContextLimit,
     EmptyCompletionLoop,
     ProviderResponseError,
     ProviderRetriesExhaustedError,
     RunAwayLoop,
 )
+from models.agent import Agent
+from models.plan_task import PlanTask
 from models.provider_request import ProviderRequest
+from models.queued_message import QueuedMessage
+from models.tool_call import ToolCall
+from models.thread import Thread as ThreadRow
 from models.turn_execution import TurnExecution
 from models.transcript import Transcript
 from models.transcript_thinking import TranscriptThinking
+from services.agent_service import AgentService
 from services.compaction_service import CompactionService
 from services.database import Database
 from services.dispatch_service import DispatchService
 from services.gist_service import GistService
 from services.llm_log_service import LlmLogService
 from services.prompt_service import PromptService
+from services.provider_cache_service import ProviderCacheService
 from services.provider_service import ProviderService
 from services.tool_call_service import ToolCallService
 from services.transcript_service import TranscriptService
 from services.turn_execution_service import TurnExecutionService
 from services.websocket import Websocket
+from tools.browser.session import close_session
 
 if TYPE_CHECKING:
     from contracts.json_serializable import JsonSerializable
@@ -119,11 +148,60 @@ _EMPTY_COMPLETION_STEER = (
     "tools you need, or write your reply."
 )
 
+#: The message sent into a turn whose exchange would end with its plan still
+#: open (:meth:`MessageProcessor._owes_nudge`), the way a person's message
+#: joins a working turn. The exchange is nudged again only once a step after
+#: the nudge has called a tool other than the plan.
+_PLAN_NUDGE = (
+    "Your session was interrupted, continue where you left off. "
+    "If there is nothing left to do mark every open task in your plan as done or cancelled"
+)
+#: The statuses that close a plan task; a task in any other is still open.
+_CLOSED_TASK = (PlanTaskStatus.DONE, PlanTaskStatus.CANCELLED)
+
 #: Consecutive ``ContextLimit`` hits a single turn may recover from before the
 #: error is allowed out. Compaction is the only lever, so a hit that survives it
 #: will survive the next one too — recursing past this is an infinite loop, not
 #: persistence.
 _CONTEXT_LIMIT_RECOVERY_LIMIT = 3
+
+#: A response line written in the act trail's own call notation —
+#: ``[tool_name] {params}`` (``PromptService.act_trail``): the model copying the
+#: trail's format into its text, not prose for the user.
+_ECHOED_CALL = re.compile(r"^\[(\w+)\] \{")
+# The planning pre-pass offers only these tools, and sends at most this many
+# requests: room for a recall or a tool lookup before the plan, never an open loop.
+_PLANNING_TOOLS = (Recall.NAME, PlanAbility.NAME, FindToolsAbility.NAME)
+_PLANNING_STEP_LIMIT = 3
+
+
+def _without_echoed_calls(text: str, tool_calls: list[dict[str, object]]) -> str:
+    """The response text without the lines that echo one of its own tool calls
+    in the act trail's notation — so an echo is never stored, spoken, or taken
+    for the prose that answers a turn. Unchanged when it echoes none."""
+    names = {call["name"] for call in tool_calls}
+    lines = (text or "").splitlines()
+    kept = [line for line in lines if not ((match := _ECHOED_CALL.match(line.strip())) and match[1] in names)]
+    return text if len(kept) == len(lines) else "\n".join(kept).strip()
+
+
+def _queued_config(channel: str) -> ProcessorConfig:
+    """The config the turn of a message queued on ``channel`` runs on: the
+    chat's, or a subagent's on its own channel (:func:`agent_config`). A
+    message queued anywhere else cannot open its turn."""
+    if channel == Channel.USER:
+        return UserConfig()
+    agent = AgentService.of_channel(channel)
+    if agent is not None:
+        return agent_config(agent)
+    raise ValueError(f"no config opens the turn of a message queued on {channel}")
+
+
+def _working(channel: str, agent: Agent | None) -> bool:
+    """Whether a turn works on ``channel``: its execution is open, or the
+    subagent the channel belongs to (``agent``) is running — a spawn's turn
+    runs before its execution opens."""
+    return TurnExecution.open_on(channel) is not None or (agent is not None and agent.status == Agent.RUNNING)
 
 
 class _TurnCancelled(Exception):
@@ -167,11 +245,22 @@ class MessageProcessor:
         self.uid: int | None = None
         self.current_transcript_id: int | None = None
         self.execution: TurnExecution | None = None
+        # The ``agents`` row this turn runs as, when a spawn opened it.
+        self.agent: Agent | None = None
+        # That subagent's turn before this one, when a message opened this
+        # turn on its channel (_resume); kept in memory only, never stored.
+        self.previous_turn_id: int | None = None
         self.active_tools: list[str] = []
         self.thinking_level: str = "low"
         self.thinking_override: str | None = None
+        # The chat model this turn runs on, read from its thread in _setup;
+        # None = the default.
+        self.provider_id: int | None = None
         self.turn_handover: str = ""
         self.seeding_turn_zero: bool = False
+        # Raised while the planning pre-pass runs (``_plan_turn``): the prompt
+        # then asks for a plan instead of showing one.
+        self.planning: bool = False
         self._placed_attachments: list[str] = []
         self._trigger_channel: str | None = cast("str | None", self.metadata.get("trigger_channel"))
         self._trigger_turn_id: int | None = cast("int | None", self.metadata.get("trigger_turn_id"))
@@ -198,10 +287,29 @@ class MessageProcessor:
         # _build_messages.
         self._empty_completions: int = 0
         self._empty_completion_steer: bool = False
+        # Raised when the plan nudge is sent, lowered by a step that calls a
+        # tool other than the plan; while raised the exchange is not nudged
+        # again.
+        self._idle_since_nudge: bool = False
         # Reset by every send that gets through, so it counts consecutive
         # failures to fit rather than a turn's lifetime total — a long turn may
         # legitimately outgrow the window more than once as tools add output.
         self._context_limit_hits: int = 0
+
+        # Messages joined into this turn while it works. The loop takes them in
+        # only once a provider call and all its tools have returned: everything
+        # up to ``_consumed_through`` has been handed to the model, each batch
+        # filed under the assistant row it followed (the act trail renders it
+        # there, in the order the model saw it rather than the order it arrived).
+        self._consumed_through: int = 0
+        self.consumed_joins: dict[int, list[Transcript]] = {}
+        # The subagents waiting for this channel's reply when the turn opened,
+        # worked out once in _setup and read on every step's input line, so one
+        # answered mid-turn stays named until the turn ends; '' when none.
+        self.waiting_reminder: str = ""
+        # Sends of frames pushed by one thread while it holds an ``_atomic``
+        # block, made only once that block commits.
+        self._held: tuple[int, list[Callable[[], None]]] | None = None
 
         # Infrastructure handles.
         self.db = Database()
@@ -221,29 +329,86 @@ class MessageProcessor:
     # ── websocket ────────────────────────────────────────────────────────────────
 
     def push_websocket(self, instance: "JsonSerializable | None") -> None:
-        """Emit ``instance`` to the frontend, gated by this turn's config — the one
-        pre-flight every spine service shares, so no emit site re-inlines it. A
-        turn broadcasts only when its config opts in (``BROADCASTS_STATE`` — the
-        ``user`` and ``scheduled`` types) AND carries an addressable routing type;
-        an internal channel (``type_value() is None``) never reaches the wire. Past
-        the gate this is a thin pass to ``Websocket.broadcast`` (itself a no-op on
-        ``None`` and when nobody is listening)."""
-        if not self.config.BROADCASTS_STATE or self.config.type_value() is None:
+        """Emit ``instance`` to the frontend, gated by this turn's channel and
+        config — the one pre-flight every spine service shares, so no emit site
+        re-inlines it (see :meth:`broadcast_as`). Inside :meth:`_atomic` the
+        frame is held until the writes it announces commit."""
+        self._send(partial(self.broadcast_as, instance, self.channel, self.config))
+
+    def announce(self, instance: "JsonSerializable") -> None:
+        """Emit ``instance`` to every surface, whatever this turn's channel — a
+        frame about state the whole app shows (an agent's row), not about this
+        turn. Held inside :meth:`_atomic` like :meth:`push_websocket`."""
+        self._send(partial(Websocket.broadcast, instance))
+
+    def _send(self, emit: "Callable[[], None]") -> None:
+        """Make ``emit`` now, or once the ``_atomic`` block this thread holds
+        commits."""
+        held = self._held
+        if held is not None and held[0] == get_ident():
+            held[1].append(emit)
             return
-        Websocket.broadcast(instance)
+        emit()
+
+    @staticmethod
+    def broadcast_as(
+        instance: "JsonSerializable | None", channel: str, config: "ProcessorConfig | None",
+    ) -> None:
+        """Emit ``instance`` the way a turn on ``channel`` driven by ``config``
+        does — the one place that decides it, shared by :meth:`push_websocket`
+        and a cancel addressed to a turn this process does not hold (which knows
+        only the row's channel and the config its type resolves to, if any).
+
+        A watchable delegate turn (:func:`delegate_type`) broadcasts
+        addressed by its channel, so a surface following it can stream it live.
+        Any other turn broadcasts only when its config opts in
+        (``BROADCASTS_STATE`` — the ``user`` and ``scheduled`` types) AND carries
+        an addressable routing type; an internal channel (no config, or
+        ``type_value() is None``) never reaches the wire. Past the gate this is
+        a thin pass to ``Websocket.broadcast`` (itself a no-op on ``None`` and
+        when nobody is listening)."""
+        if delegate_type(channel) is not None:
+            Websocket.broadcast(instance, channel=channel)
+        elif config is not None and config.BROADCASTS_STATE and config.type_value() is not None:
+            Websocket.broadcast(instance)
+
+    @contextmanager
+    def _atomic(self) -> Iterator[None]:
+        """One ``BEGIN IMMEDIATE`` transaction whose frames reach the wire only
+        after it commits: a surface told to refetch mid-transaction would read
+        the state from before it. A rollback drops them with the writes they
+        announced."""
+        sends: list[Callable[[], None]] = []
+        self._held = (get_ident(), sends)
+        try:
+            with self.db.transaction():
+                yield
+        finally:
+            self._held = None
+        for emit in sends:
+            emit()
 
     # ── entrypoint ─────────────────────────────────────────────────────────────
 
     @property
-    def origin(self) -> dict[str, object] | None:
-        """The interactive turn a policy prompt raised by this turn belongs to,
-        or ``None`` when nobody could answer one.
+    def fork_view(self) -> bool:
+        """True when this turn's history is its own thread's rows (the FORK
+        view) rather than every turn on the channel (the MAIN view): a reply
+        into an existing turn. The history read, the compaction watermark and
+        the compactor all key on this one answer, so the rows a checkpoint
+        folds and the floor that cuts them never sit on different axes."""
+        return self._forked
 
-        A turn has a surface iff its config streams live state
+    @property
+    def origin(self) -> dict[str, object] | None:
+        """The interactive turn an ask raised by this turn belongs to, or
+        ``None`` when it has none; an ask is made either way.
+
+        A turn is interactive iff its config streams live state
         (``BROADCASTS_STATE``) and it owns a real turn id — exactly the turns
-        the interface can render and reply to. A nested delegate inherits its
-        caller's origin through ``metadata["origin"]``, so the prompt lands where
-        the user is rather than on the delegate's own hidden turn."""
+        the interface can render. A nested delegate inherits its caller's
+        origin through ``metadata["origin"]``, so the ask names the turn the
+        user is on rather than the delegate's own hidden turn."""
         inherited = self.metadata.get("origin")
         if inherited is not None:
             return cast("dict[str, object]", inherited)
@@ -267,11 +432,139 @@ class MessageProcessor:
         mp.begin()
         return mp
 
+    @classmethod
+    def send(
+        cls,
+        config: ProcessorConfig,
+        text: str,
+        metadata: dict[str, object] | None = None,
+        turn_id: int = -1,
+        *,
+        spine_only: bool = False,
+    ) -> TurnExecution | None:
+        """The one input function every sender uses: a send into a turn that
+        is still working joins it — its working execution comes back — and
+        only when there is nothing to join does one open through
+        :meth:`process`. Files never join: a send whose ``metadata`` carries
+        truthy ``attachments`` always opens. ``spine_only`` narrows the join
+        to the thread's first exchange, and a missed join degrades the send
+        into a new thread rather than a reply. Returns the execution now
+        carrying the message (joined or opened); ``None`` only when the
+        opened turn's execution row failed to write."""
+        meta: dict[str, object] = metadata if metadata is not None else {}
+        joined: TurnExecution | None = None
+        if turn_id != -1 and not meta.get("attachments"):
+            joined = cls(config, turn_id).join(text, spine_only=spine_only)
+        if joined is not None:
+            return joined
+        if turn_id != -1 and spine_only:
+            turn_id = -1
+        return cls.process(config, text, metadata, turn_id).execution
+
+    @classmethod
+    def deliver(
+        cls,
+        config: ProcessorConfig,
+        text: str,
+        tool_call_id: int | None,
+        origin: dict[str, object] | None = None,
+        response_id: int | None = None,
+    ) -> MessageProcessor | None:
+        """Send an agent's message to ``config``'s channel as a turn of its
+        own — it never joins one. An idle channel opens the turn at once; a
+        channel with a turn working, or with a message already waiting, queues
+        it behind them, for a turn's end to open (:meth:`drain`). The check,
+        the queued row and the new turn's rows — its number, input row and
+        execution — share one ``BEGIN IMMEDIATE`` transaction with every other
+        deliver and drain, so a message either queues before the working
+        turn's end commits, and that end opens it, or finds the channel idle
+        after and opens at once. An agent's message carries no attachments,
+        so its execution opens inside that transaction too. On a subagent's
+        own channel a running subagent counts as a working turn, and the turn
+        opened is the subagent's next one (:meth:`_resume`). A subagent that
+        ended cancelled or failed opens no turn again and takes no message:
+        the same transaction raises :class:`~exceptions.AgentStopped`, with
+        the row it read, before anything is queued or opened, so a stop lands
+        wholly before that check or wholly after the message. ``origin`` is
+        the sender's surface (:attr:`origin`), which the opened turn's prompts
+        land on. ``response_id`` is the transcript row of the subagent answer
+        a late reply carries, ``None`` for any other message: the opened
+        turn's prompt follows the reply with that answer's follow-up block
+        (:func:`~abilities._delegate.reply_follow_up`). The queued row keeps
+        both for the turn :meth:`drain` opens. Returns the opened turn, or
+        ``None`` when queued."""
+        mp = cls(
+            config, raw_input=text,
+            metadata={"tool_call_id": tool_call_id, "origin": origin, "response_id": response_id},
+        )
+        with mp._atomic():
+            agent = AgentService.of_channel(mp.channel)
+            if agent is not None and agent.status in (Agent.CANCELLED, Agent.FAILED):
+                raise AgentStopped(agent)
+            if _working(mp.channel, agent) or QueuedMessage.oldest(mp.channel) is not None:
+                QueuedMessage(
+                    channel=mp.channel, text=text, tool_call_id=tool_call_id,
+                    origin=None if origin is None else json.dumps(origin), response_id=response_id,
+                ).save()
+                return None
+            mp._open_turn()
+            mp._resume(agent)
+            mp.turn_execution_service.open()
+        mp._start()
+        return mp
+
+    @classmethod
+    def drain(cls, channel: str) -> MessageProcessor | None:
+        """Open the turn of the message that has waited longest on
+        ``channel``, when one waits and no turn is working there — run as
+        every turn ends and, at boot, for every channel holding one. One
+        message per call: the turn it opens drains the next as it ends. The
+        check, the row's removal and the new turn's rows share one
+        ``BEGIN IMMEDIATE`` transaction with :meth:`deliver`. The opened turn
+        prompts on the origin the row kept, and carries the answer row it
+        kept, as it would have had it opened at once. On a subagent's own
+        channel the turn opened is the subagent's next one (:meth:`_resume`);
+        a subagent that ended cancelled or failed opens no turn again, so
+        every message waiting for it is deleted instead. Never
+        raises: a failure is logged and rolled back, and the message waits for
+        the channel's next turn end or the next boot. Returns the opened turn,
+        or ``None``."""
+        try:
+            if QueuedMessage.oldest(channel) is None:
+                return None
+            mp = cls(_queued_config(channel))
+            with mp._atomic():
+                agent = AgentService.of_channel(channel)
+                if agent is not None and agent.status in (Agent.CANCELLED, Agent.FAILED):
+                    QueuedMessage.filter("channel", channel).delete()
+                    return None
+                queued = None if _working(channel, agent) else QueuedMessage.oldest(channel)
+                if queued is None:
+                    return None
+                queued.delete()
+                mp.raw_input = queued.text
+                mp.metadata["tool_call_id"] = queued.tool_call_id
+                mp.metadata["origin"] = None if queued.origin is None else json.loads(queued.origin)
+                mp.metadata["response_id"] = queued.response_id
+                mp._open_turn()
+                mp._resume(agent)
+                mp.turn_execution_service.open()
+        except Exception:  # noqa: BLE001 — the message waits; log, never raise
+            logger.exception("[MessageProcessor] %s: opening the turn of its oldest queued message failed", channel)
+            return None
+        mp._start()
+        return mp
+
     def begin(self) -> None:
         """Synchronous turn setup, then hand off to the drive thread. The
         turn-id allocation, fork guard and input row land in one single-writer
-        transaction (§6.8). Attachments land *after* that transaction commits
-        and *before* the execution row opens: after, because copying a file of
+        transaction — with, for a turn a spawn opened, its ``agents``
+        row (``metadata["agent"]``), so a subagent's number exists the moment
+        its turn does. That row is written first: its number names the
+        subagent's own channel (:attr:`Agent.channel`), which the turn is
+        rebound to and opens on as that channel's first turn. Attachments land
+        *after* that transaction commits and *before* the execution row opens:
+        after, because copying a file of
         arbitrary size inside ``BEGIN IMMEDIATE`` would hold SQLite's write
         lock for the length of the copy; before, because the ``working`` frame
         ``open()`` emits is the cue clients refetch on — a turn announced
@@ -281,18 +574,70 @@ class MessageProcessor:
         the thread starts. ``begin()`` never joins — it returns the instant the
         daemon is running."""
         with self.db.transaction():
-            self.turn_id = self.transcript_service.allocate_turn()
-            if self.config.external_turn_id:
-                # turn_id came from a key space the caller owns (schedule id). Its first
-                # use opens a MAIN turn; a repeat appends as FORK. Derive forked-ness from
-                # existence, never reject — a fresh external key is legitimately new.
-                self._forked = self.transcript_service.turn_exists()
-            elif self._forked and not self.transcript_service.turn_exists():
-                raise ValueError("Invalid turn_id specified")
-            self.uid = self._open_input_row()
-            self.current_transcript_id = self.uid
+            self._open_turn()
         self._land_attachments()
         self.turn_execution_service.open()
+        self._start()
+
+    def _open_turn(self) -> None:
+        """Write this turn's opening rows inside the caller's transaction: the
+        ``agents`` row a spawn carries, the allocated turn id, the fork guard
+        and the input row. A spawn on the chat lane passes its caller's model
+        and thinking level, and its thread starts on them."""
+        agent = self.metadata.get("agent")
+        if isinstance(agent, Agent):
+            agent.turn_id = 1
+            self.agent = agent.insert()
+            self.config = self.config.on_channel(self.agent.channel)
+            self.channel = self.config.channel
+        self.turn_id = self.transcript_service.allocate_turn()
+        if self.agent is not None and self.turn_id != self.agent.turn_id:
+            raise RuntimeError(
+                f"subagent {self.agent.agent_id}: its own channel {self.channel} "
+                f"already holds turns; its first opened as turn {self.turn_id}"
+            )
+        if self.config.external_turn_id:
+            # turn_id came from a key space the caller owns (schedule id). Its first
+            # use opens a MAIN turn; a repeat appends as FORK. Derive forked-ness from
+            # existence, never reject — a fresh external key is legitimately new.
+            self._forked = self.transcript_service.turn_exists()
+        elif self._forked and not self.transcript_service.turn_exists():
+            raise ValueError("Invalid turn_id specified")
+        self.uid = self._open_input_row()
+        level = self.metadata.get("thinking_level")
+        if isinstance(level, str) and self._provider_type() is ProviderType.CHAT:
+            ThreadRow.set_settings(self.channel, self.turn_id, cast("int | None", self.metadata.get("provider_id")), level)
+        self.current_transcript_id = self.uid
+        if self.uid is not None:
+            self._consumed_through = self.uid
+
+    def _resume(self, agent: Agent | None) -> None:
+        """Move ``agent`` — the subagent whose channel this turn opened on, if
+        any — onto this turn as running, inside the caller's transaction, so
+        the turn and its agent's row land together; :meth:`TurnExecutionService.open`
+        then announces the row. A subagent that ended cancelled or failed is
+        never resumed: :meth:`deliver` and :meth:`drain` turn one away in that
+        same transaction before reaching here, so a move that fails here is a
+        broken invariant — it raises, and the transaction rolls back.
+
+        ``agent`` still holds the turn it last ran, so before the move that
+        turn is kept as :attr:`previous_turn_id`, in memory only: this turn's
+        input is read against it (:meth:`PromptService._task`) — beside the
+        last message it delivered with ``message_parent``, which this message
+        answers, or, when it delivered none, word for word, a steer. It cannot
+        be read back later as the latest turn before this one: other turns
+        share the subagent's channel."""
+        if agent is None:
+            return
+        self.previous_turn_id = agent.turn_id
+        if not Agent.resume(agent.agent_id, self.turn_id):
+            current = Agent.by_id(agent.agent_id)
+            status = current.status if current is not None else "gone"
+            raise RuntimeError(f"subagent #{agent.agent_id} is {status}: no turn of its can open")
+        self.agent = Agent.by_id(agent.agent_id)
+
+    def _start(self) -> None:
+        """Record the allocated turn id and start the drive thread."""
         self.metadata["turn_id"] = self.turn_id
         self._thread = Thread(target=self._drive, daemon=True, name=f"turn-{self.turn_id}")
         self._thread.start()
@@ -302,10 +647,27 @@ class MessageProcessor:
         config skips it (channels whose input is not a transcript utterance)."""
         if self.config.skip_input_row:
             return None
-        raw_level = self.metadata.get("thinking_level")
         return self.transcript_service.append_input(
-            self.raw_input, thinking_level=raw_level if isinstance(raw_level, str) else None,
+            self.raw_input,
+            tool_call_id=cast("int | None", self.metadata.get("tool_call_id")),
         )
+
+    def join(self, text: str, *, spine_only: bool) -> TurnExecution | None:
+        """Send ``text`` into this thread's turn while it is still working,
+        instead of starting another: the message is written as a joined input
+        row, and the running loop takes it in at its next boundary. Returns the execution it joined, or ``None`` when
+        there is nothing to join — no execution working (or one already asked
+        to stop), or, with ``spine_only``, the one working is a reply rather
+        than the thread's own first exchange. The check and the write share one
+        ``BEGIN IMMEDIATE`` transaction with the loop's settle and with cancel,
+        so the row lands either before the turn ends — and the loop answers it
+        — or not at all. Built on an inert instance: no turn is driven here."""
+        with self._atomic():
+            execution = TurnExecution.joinable(self.channel, self.turn_id, spine_only=spine_only)
+            if execution is None:
+                return None
+            self.transcript_service.append_input(text, joined=True)
+        return execution
 
     def result(self) -> str:
         """Join the drive thread and return the turn's final text — the
@@ -318,56 +680,71 @@ class MessageProcessor:
     # ── the drive thread ───────────────────────────────────────────────────────
 
     def _drive(self) -> None:
-        """The daemon-thread body: run setup + the recursive step loop, then
-        stamp the terminal execution state. This is the ONLY place a turn's
-        terminal state is written — COMPLETED on a clean return, CANCELLED on a
-        mid-turn stop, CRASHED (with the reason) on any other exception. The WS
-        lifecycle frame for that terminal state — and, for CRASHED, the
-        user-facing crash toast — both fire inside ``finish`` (Rule 7)."""
+        """The daemon-thread body: run setup + the recursive step loop until a
+        call settles the turn, then run the post-turn work. This is the ONLY
+        path that writes a turn's terminal state — COMPLETED through
+        :meth:`_settle`, in the same transaction as the turn's terminal row,
+        CANCELLED on a mid-turn stop, CRASHED (with the reason) on any other
+        exception. The WS lifecycle frame for that terminal state — and, for
+        CRASHED, the user-facing crash toast — both fire inside ``finish``
+        (Rule 7). A call that would have ended the turn while a joined message
+        waits does not settle it: the loop steps again with that message in
+        view. Only a COMPLETED turn then runs its post-turn work and is
+        offered to the memory step, and only once its execution row is
+        closed: the step is a background turn of its own on this channel, so
+        it can never open beside a live loop or a row still marked working,
+        and this thread never waits on it. After every ending (completed,
+        stopped, crashed) the turn closes the browser tab it opened, then a
+        delegate's turn reports its outcome to a caller that did not wait for
+        it, the reply carrying the model's raw final text — the reply is
+        delivered to the caller's channel as the input of a turn of its own,
+        and input rows are raw text — rather than the HTML-formatted result.
+        Last, the message waiting longest on this channel, if any, opens its
+        turn (:meth:`drain`)."""
+        answer = ""
         try:
             self._setup()
-            self._result_text = self._step()
-            self.turn_execution_service.finish(TurnExecution.COMPLETED)
+            response = self._step()
+            while not self._settle(response):
+                response = self._step()
         except _TurnCancelled:
             self.turn_execution_service.finish(TurnExecution.CANCELLED)
         except Exception as exc:  # noqa: BLE001 — the drive thread is the last line of defence
             logger.exception("[MessageProcessor] turn %s crashed", self.turn_id)
             self.crash_exception = exc
             self.turn_execution_service.finish(TurnExecution.CRASHED, str(exc))
+        else:
+            answer = response.text or ""
+            self._post_turn(response.text)
+            self._offer_memory_step()
+        self._close_browser_tab()
+        self._report_to_caller(answer)
+        self.drain(self.channel)
 
-    def _step(self) -> str:
-        """One provider step, recursing until the model stops calling tools.
+    def _step(self) -> "ProviderResponse":
+        """One provider step, recursing until the model stops calling tools,
+        and returning that last call's response for :meth:`_settle` to store.
 
-        Send → on ``ContextLimit``, compact and continue (re-enter with the
-        transcript reviewer armed; a payload that will not shrink is let out
-        after ``_CONTEXT_LIMIT_RECOVERY_LIMIT`` attempts rather than spun on)
-        → store any prose the model emitted → if it made no tool
-        calls the turn is done (end); otherwise dispatch the calls and recurse.
-        A cancel observed at the top of any step aborts the whole turn. Every
-        provider client is a single blocking, non-streaming call (§ llm_clients/*)
-        with no mid-flight abort hook, so a cancel requested while that call is
-        in flight can only be observed once it returns — the checkpoint right
-        after it, BEFORE the response is stored, is what makes that observation
-        count: without it a cancel that lands mid-generation is silently
-        ignored and the full response is persisted and rendered as if the turn
-        had completed normally."""
-        if self.turn_execution_service.should_stop():
-            raise _TurnCancelled()
-        try:
-            response = self._send_with_retry(self._build_request())
-        except ContextLimit as limit:
-            # Compaction is the only lever here, so a hit that survives it is
-            # not a retry — it is a request that cannot be made to fit (one
-            # oversized turn, a window smaller than the prompt itself). Let it
-            # out rather than recursing forever on an unshrinkable payload.
-            self._context_limit_hits += 1
-            if self._context_limit_hits > _CONTEXT_LIMIT_RECOVERY_LIMIT:
-                raise
-            limit.recover()
-            return self._step()
-        self._context_limit_hits = 0
-        if self.turn_execution_service.should_stop():
-            raise _TurnCancelled()
+        Send through :meth:`_send_fitting` (compacting on ``ContextLimit``)
+        → if the call made no tool calls, return it unstored; otherwise drop
+        any line of its text that echoes one of its own calls in the act
+        trail's notation, store its own assistant row with settled=0 — empty
+        when the call carried no prose — so the call's tool calls and thinking
+        trace anchor to it, dispatch the calls, and return it if it answered by
+        closing its plan (:meth:`_closes_plan`); else take in any message
+        joined meanwhile, and recurse. A call that ran a tool other than the
+        plan lets the exchange be nudged again (:meth:`_owes_nudge`).
+        A retried send and the empty-completion steer write no row and take
+        nothing in: a joined message is consumed only once a call and all its
+        tools have returned. A cancel observed before any send aborts the
+        whole turn. A cancel requested while a call is in flight aborts that
+        call (:meth:`ProviderService._abort_on_stop`), but one whose response
+        came back before the abort landed is only observed once it returns —
+        the checkpoint in :meth:`_send_fitting` right after it, BEFORE the
+        response is stored, is what makes that observation count: without it
+        that response is persisted and rendered as if the turn had completed
+        normally."""
+        response = self._send_fitting()
         tool_calls = response.tool_calls
         if not tool_calls:
             if not (response.text or "").strip() and not self._tool_invocations:
@@ -394,16 +771,157 @@ class MessageProcessor:
                 )
                 self._empty_completion_steer = True
                 return self._step()
-            formatted = self._store(response.text)
-            self._capture_thinking_trace(response)
-            self._end(response.text)
-            return formatted
+            return response
+        response.text = _without_echoed_calls(response.text, tool_calls)
         self._guard_runaway(response.text, tool_calls)
-        if response.text:
-            self._store(response.text)
+        self._store(response.text, settled=False)
         self._capture_thinking_trace(response)
         self._dispatch_tools(tool_calls)
+        if self._closes_plan(response.text, tool_calls):
+            return response
+        if any(call["name"] != PlanAbility.NAME for call in tool_calls):
+            self._idle_since_nudge = False
+        self._consume_joined()
         return self._step()
+
+    def _closes_plan(self, text: str, tool_calls: list[dict[str, object]]) -> bool:
+        """Whether a call that made tool calls is still the turn's answer: it
+        wrote prose, its calls only updated plan tasks, and no task is left
+        open — the plan instruction's close-with-the-answer. Read once those
+        calls have run, so an update that failed never passes for a closed
+        plan."""
+        if not (text or "").strip() or self.uid is None:
+            return False
+        if any(
+            call["name"] != PlanAbility.NAME
+            or cast("dict[str, object]", call["input"]).get(Keys.action) != "update"
+            for call in tool_calls
+        ):
+            return False
+        tasks = PlanTask.for_transcript(self.uid)
+        return bool(tasks) and all(task.status in _CLOSED_TASK for task in tasks)
+
+    def _owes_nudge(self) -> bool:
+        """Whether the exchange, at its end, is sent the plan nudge instead:
+        its kind of turn plans (:func:`~abilities.plan.plans`); a step since
+        its last nudge, if it had one, called a tool other than the plan —
+        plan calls alone are not work; its plan has a task that is neither
+        done nor cancelled — an exchange with no plan has nothing to finish;
+        no subagent this turn spawned or messaged still has its answer to
+        come, since that answer opens a turn of its own
+        (:func:`~abilities.message_subagent.awaits_reply`); and the turn did
+        not end on a message to its caller, since that subagent is waiting for
+        the reply (:func:`~abilities.message_parent.ended_on_message_parent`)."""
+        if not plans(self.config) or self._idle_since_nudge or self.uid is None:
+            return False
+        if all(task.status in _CLOSED_TASK for task in PlanTask.for_transcript(self.uid)):
+            return False
+        if awaits_reply(self.channel, self.turn_id):
+            return False
+        return not ended_on_message_parent(self.channel, self.turn_id)
+
+    def _send_fitting(self) -> "ProviderResponse":
+        """Send this step's request, checking for a cancel before every attempt
+        and again once the answer lands, before anything is stored. On
+        ``ContextLimit``, compact and send again; compaction is the only lever
+        here, so a hit that survives it is not a retry — it is a request that
+        cannot be made to fit (one oversized turn, a window smaller than the
+        prompt itself) — and it is let out after
+        ``_CONTEXT_LIMIT_RECOVERY_LIMIT`` attempts rather than spun on."""
+        while True:
+            if self.turn_execution_service.should_stop():
+                raise _TurnCancelled()
+            try:
+                response = self._send_with_retry(self._build_request())
+            except ContextLimit as limit:
+                self._context_limit_hits += 1
+                if self._context_limit_hits > _CONTEXT_LIMIT_RECOVERY_LIMIT:
+                    raise
+                limit.recover()
+                continue
+            self._context_limit_hits = 0
+            if self.turn_execution_service.should_stop():
+                raise _TurnCancelled()
+            return response
+
+    def _settle(self, response: "ProviderResponse") -> bool:
+        """Store the row of a call that made no tool calls and decide, in one
+        ``BEGIN IMMEDIATE`` transaction shared with :meth:`join` and with
+        cancel, whether it ends the turn. No joined message waiting: the row
+        is stored settled and the execution closes COMPLETED, together, so a
+        message can never join a turn that has already answered for the last
+        time. One waiting: the row is stored settled=0, the message is taken
+        in, and the caller steps again. An exchange whose plan is still open
+        (:meth:`_owes_nudge`) is waiting too: its row is stored settled=0 and
+        the plan nudge is written into the turn after it, the same joined
+        write a person's message takes (:meth:`join`). A call that answered
+        while closing its plan was already stored and its calls run by
+        :meth:`_step`, so its row is only stamped settled, under the same
+        rule. Frames for these writes go out only after the commit; a cancel
+        that landed first aborts before anything is written. Returns whether
+        the turn is settled."""
+        with self._atomic():
+            if self.turn_execution_service.should_stop():
+                raise _TurnCancelled()
+            waiting = bool(Transcript.joined_since(self.channel, self.turn_id, self._consumed_through))
+            nudge = not waiting and self._owes_nudge()
+            waiting = waiting or nudge
+            if not response.tool_calls:
+                formatted = self._store(response.text, settled=not waiting)
+                self._capture_thinking_trace(response)
+            else:
+                formatted = self._format(response.text or "")
+                if not waiting and not self.config.skip_transcript:
+                    self.transcript_service.settle(cast("int", self.current_transcript_id))
+            if nudge:
+                self.transcript_service.append_input(_PLAN_NUDGE, joined=True)
+                self._idle_since_nudge = True
+            if not waiting:
+                closed = self.turn_execution_service.finish(TurnExecution.COMPLETED)
+                if closed is None and self.execution is not None:
+                    # finish() logged and swallowed a failed write: roll the
+                    # terminal row back with it so the crash path closes the
+                    # turn, rather than commit a reply under a row still open.
+                    raise RuntimeError("the turn's execution could not be closed")
+        if waiting:
+            self._consume_joined()
+            return False
+        self._result_text = formatted
+        return True
+
+    def _consume_joined(self) -> None:
+        """Take in every message joined since the last boundary: file it under
+        the assistant row the model just wrote, so the act trail shows it after
+        that row's tool calls — the order the model sees it in."""
+        rows = Transcript.joined_since(self.channel, self.turn_id, self._consumed_through)
+        if not rows:
+            return
+        self._offer_replying_tools(rows)
+        anchor = self.current_transcript_id
+        if anchor is None:
+            raise RuntimeError(f"turn {self.turn_id}: joined messages arrived with no row to file them under")
+        self.consumed_joins.setdefault(anchor, []).extend(rows)
+        self._consumed_through = cast("int", rows[-1].id)
+
+    def _offer_replying_tools(self, rows: Sequence[Transcript]) -> None:
+        """Activate, on a turn whose message is a delegate's late reply, the
+        tools that reply needs (:func:`~abilities._delegate.replying_tools`):
+        the delegate itself, so the turn can follow up without looking it up,
+        and the tools its follow-up instruction names. A reply's row carries
+        its delegate call's ``tool_calls`` id. Only a turn that is replied to
+        late gets them — a subtask's or a delegate's own turn never does."""
+        if not replies_late(self.config.type()):
+            return
+        for row in rows:
+            link = row.tool_call_id
+            if link is None or not link.isdecimal():
+                continue
+            call = ToolCall.get(int(link))
+            if call is None:
+                continue
+            for name in replying_tools(call.tool_name):
+                if name not in self.active_tools:
+                    self.active_tools.append(name)
 
     # ── provider send ──────────────────────────────────────────────────────────
 
@@ -423,7 +941,7 @@ class MessageProcessor:
                 raise
             except Exception as exc:  # noqa: BLE001 — resend policy lives here, not in the provider
                 last_exc = exc
-                if self.turn_execution_service.should_stop():
+                if self.provider_service.aborted.is_set() or self.turn_execution_service.should_stop():
                     raise _TurnCancelled() from exc
                 logger.warning(
                     "[MessageProcessor] provider attempt %s/%s failed: %s",
@@ -484,26 +1002,28 @@ class MessageProcessor:
 
     # ── transcript writes ──────────────────────────────────────────────────────
 
-    def _store(self, text: str) -> str:
+    def _store(self, text: str, *, settled: bool) -> str:
         """Format the model's prose for its channel and, unless the config skips
-        the transcript, append it as this turn's assistant row (which pokes open
-        surfaces itself). Returns the formatted text."""
+        the transcript, append it as this provider call's assistant row (which
+        pokes open surfaces itself) — ``settled`` only for the turn's terminal
+        call. The new row becomes the anchor for everything the call goes on
+        to write. Returns the formatted text."""
         formatted = self._format(text or "")
         if self.config.skip_transcript:
             return formatted
-        self.current_transcript_id = self.transcript_service.append_assistant(formatted)
+        self.current_transcript_id = self.transcript_service.append_assistant(formatted, settled=settled)
         return formatted
 
     def _capture_thinking_trace(self, response: "ProviderResponse") -> None:
         """Persist one ``transcript_thinking`` row when the provider returned a
         non-empty ``thinking_block``. Skips entirely when ``skip_transcript`` is
         set (same gate as ``_store`` — those channels have no transcript anchor).
-        The trace is captured after the cancel checkpoint and after any prose
-        storage for this response, so the anchor is fresh:
+        The trace is captured after the cancel checkpoint and after this
+        response's row is stored, so the anchor is fresh:
         ``current_transcript_id if set else uid`` — exactly the rule
-        ``ToolCallService._transcript_id`` uses. A settled response anchors to
-        its own stored row; a tool-calls-only response (no prose) anchors to the
-        prior anchor, same as its tool calls."""
+        ``ToolCallService._transcript_id`` uses. A stored response anchors to
+        its own row, same as its tool calls; a thinking-only empty completion
+        stores no row and anchors to the turn's current anchor."""
         if self.config.skip_transcript:
             return
         trace = response.thinking_block
@@ -521,8 +1041,8 @@ class MessageProcessor:
         TranscriptThinking.insert(transcript_id, trace, duration_ms, tokens)
 
     def _format(self, text: str) -> str:
-        """Render markdown to HTML for surface-broadcasting channels; pass raw
-        text through for background/silent channels (``RENDERS_HTML`` False).
+        """Render markdown to HTML for channels whose reply is rendered as HTML
+        (``RENDERS_HTML``); pass raw text through for every other channel.
         HTML branch is sanitized at the persist-time boundary so both the live
         WS send and the GET/refresh read paths inherit it."""
         if self.config.RENDERS_HTML:
@@ -604,15 +1124,6 @@ class MessageProcessor:
 
     # ── turn end ───────────────────────────────────────────────────────────────
 
-    def _end(self, response_text: str) -> str:
-        """The terminal (no-tool) step: run the channel's post-turn work and the
-        episodic check, then return the raw response text. A cancel observed here
-        still aborts before any post-turn side-effect."""
-        if self.turn_execution_service.should_stop():
-            raise _TurnCancelled()
-        self._post_turn(response_text)
-        return response_text
-
     def _post_turn(self, response_text: str) -> None:
         """Dispatch this config's post-turn handler (§4.2), keyed on its stable
         transcript ``role``. The proactive-suggestion handler additionally
@@ -623,10 +1134,7 @@ class MessageProcessor:
         nowhere to surface; scheduled self-surfaces in its own thread and the
         scheduler dock, with no user-channel relay, §13.9). Every handler is
         isolated — a failure is logged, never propagated, so post-turn work can
-        never fail an otherwise-complete turn. After the role dispatch, every
-        settle is offered to the memory-step service, which owns the scope/role
-        gates — a separate isolated block so a role-handler failure cannot
-        starve the memory step."""
+        never fail an otherwise-complete turn."""
         role = self.config.role
         try:
             if role == "user" and self.channel == Channel.USER:
@@ -636,18 +1144,56 @@ class MessageProcessor:
                 self._disclose_to_human(response_text)
         except Exception as exc:  # noqa: BLE001 — post-turn work must never fail the turn
             logger.warning("[post_turn] %s handler failed (isolated): %s", role, exc)
+
+    def _offer_memory_step(self) -> None:
+        """Offer this completed turn to the memory-step service, which owns
+        the scope and role gates (a memory step never fires for its own
+        settle). Called from ``_drive`` after ``finish`` — never from inside
+        the step recursion — so the step starts only after the turn's final
+        provider call has settled and its execution row is closed. Isolated:
+        a failure is logged, never propagated."""
         try:
             from services.memory_step_service import MemoryStepService  # noqa: PLC0415
             MemoryStepService.instance().on_settle(self)
-        except Exception as exc:  # noqa: BLE001 — post-turn work must never fail the turn
-            logger.warning("[post_turn] memory step trigger failed (isolated): %s", exc)
+        except Exception as exc:  # noqa: BLE001 — the turn is already complete; log, never raise
+            logger.warning("[MessageProcessor] memory step trigger failed (isolated): %s", exc)
+
+    def _close_browser_tab(self) -> None:
+        """Close the browser tab this turn opened, however the turn ended. The
+        browser keys a run's tab by the run's input row; a turn that never
+        browsed has none, and closing it is a no-op. Never raises: the turn is
+        already terminal, so a failed close is logged."""
+        if self.uid is None:
+            return
+        try:
+            close_session(self.uid)
+        except Exception:  # noqa: BLE001 — the turn is already terminal; log, never raise
+            logger.exception("[MessageProcessor] %s turn %s: closing its browser tab failed", self.channel, self.turn_id)
+
+    def _report_to_caller(self, answer: str) -> None:
+        """Hand this turn's outcome — the model's raw final text, since the
+        reply is the input of a turn on the caller's channel and input rows
+        are raw text — to the channel that spawned this subagent, when that
+        caller did not wait for it: it opens a turn there, or queues behind
+        the one running (:meth:`deliver`). Every ending is offered —
+        completed, stopped or crashed — and
+        :func:`~abilities._delegate.reply_to_caller` settles whether it is
+        sent. Never raises: the turn is already terminal, so a reply that
+        fails is logged and dropped, and the caller gets nothing."""
+        try:
+            reply_to_caller(self.channel, self.turn_id, answer)
+        except Exception:  # noqa: BLE001 — the turn is already terminal; log, never raise
+            logger.exception("[MessageProcessor] %s turn %s: reply to its caller failed", self.channel, self.turn_id)
 
     def _voice_presynthesis(self) -> None:
-        """Kick background speech pre-synthesis for this turn's settled row on a
-        fire-and-forget daemon thread — the pipeline owns every gate and terminal
-        state, and running it inline would delay the turn-complete frame the
-        frontend waits on (``finish(COMPLETED)`` stamps after post-turn work)."""
-        settle_id = Transcript.settle0(self.channel, self.turn_id)
+        """Kick background speech pre-synthesis for the row this exchange just
+        settled — its terminal row, the current anchor once :meth:`_settle` has
+        stored it. Not the turn's settle0: in a reply that is still the opener's
+        answer. Runs on a fire-and-forget daemon thread — the pipeline owns
+        every gate and terminal state, and running it inline would hold the
+        drive thread, and with it the memory-step offer and any caller waiting
+        in :meth:`result`, for the length of a synthesis."""
+        settle_id = self.current_transcript_id
         if settle_id is None:
             return
         from services.voice_transcript_service import VoiceTranscriptService  # noqa: PLC0415
@@ -691,19 +1237,94 @@ class MessageProcessor:
     # ── setup (on the drive thread, before the first send) ─────────────────────
 
     def _setup(self) -> None:
-        """Pre-loop setup: seed the always-available tools, gate thinking on the
-        ``user`` channel, seed the turn-zero flashback + any attachments, and
-        ingest the reply's parent gist on a fork."""
+        """Pre-loop setup: work out the waiting reminder once, before the
+        first prompt reads it — less the subagent whose own message opened
+        this turn (:func:`~abilities.message_parent.waiting_reminder`) — seed
+        the always-available tools — and ``message_parent`` on the turn of a
+        subagent the chat spawned, the one kind that holds it, which no config
+        can tell — read the model and thinking level off the turn's thread,
+        gate thinking on the ``user`` channel, seed the turn-zero
+        flashback + any attachments, ingest the reply's parent gist on a fork,
+        then plan the message."""
+        self.waiting_reminder = waiting_reminder(self.channel, cast("int | None", self.metadata.get("tool_call_id")))
         self.active_tools = list(self.config.always_available or [])
-        # Resolve thinking override from the transcript row written by begin()
-        # (the current turn's input row). medium/high becomes the override,
-        # auto/NULL leaves it unset so the deliberation gate decides normally.
-        level = Transcript.latest_thinking_level(self.channel, self.turn_id)
-        self.thinking_override = level if level in ("medium", "high") else None
+        if holds(self.agent):
+            self.active_tools.append(MessageParentAbility.NAME)
+        anchor = self.transcript_service.anchor_row()
+        if anchor is not None:
+            self._offer_replying_tools([anchor])
+        self._read_thread_settings()
         if self.channel == Channel.USER:
             self._run_thinking_gate()
         self._seed_turn_zero()
         self._maybe_fire_gist()
+        self._plan_turn()
+
+    def _read_thread_settings(self) -> None:
+        """Take this turn's model and thinking level from its thread row. A
+        model that is unset or no longer configured falls back to the default,
+        and the default is stored on the thread so the fallback sticks. A turn
+        with no thread row (a channel that writes no transcript, such as a
+        compaction or its hand-over) runs on the model its caller passed, else
+        the default, at its own level."""
+        thread = ThreadRow.of(self.channel, self.turn_id)
+        if thread is None:
+            self.provider_id = cast("int | None", self.metadata.get("provider_id"))
+            return
+        self.provider_id = cast("int | None", ProviderCacheService.chat_provider(thread.provider_id).get("id"))
+        if self.provider_id is not None and self.provider_id != thread.provider_id:
+            ThreadRow.set_settings(self.channel, self.turn_id, self.provider_id, thread.thinking_level)
+        level = thread.thinking_level
+        self.thinking_override = level if level in ("medium", "high") else None
+
+    def _plan_turn(self) -> None:
+        """The planning pre-pass: before the loop's first step, the model plans
+        the message with only ``recall``, ``plan`` and — where the config pins
+        it — ``find_tools`` callable, while ``PromptService`` shows it the
+        planning instruction and every other tool as a catalogue. Runs on a
+        config that plans (:func:`~abilities.plan.plans`), for a message with an
+        input row. Stops once a plan is stored, when the model calls no tool it
+        may call, or after ``_PLANNING_STEP_LIMIT`` sends; a message left
+        unplanned reaches the loop with the instruction to create its plan first.
+
+        A tool ``find_tools`` loads while planning is held back until planning
+        ends, so the pre-pass never runs it, and is offered from the loop's
+        first step on — the loop need not look it up again.
+
+        Writes no assistant row and no thinking trace and leaves the runaway
+        tallies alone: its calls anchor to the input row, where the act trail
+        shows them to the loop. A call to any other tool is logged, not run —
+        dispatch itself runs any registered tool — and, with nothing run, the
+        next send would repeat this one, so planning ends there."""
+        message_id = self.uid
+        if not plans(self.config) or message_id is None:
+            return
+        pinned = self.active_tools
+        offered = [name for name in pinned if name in _PLANNING_TOOLS]
+        loaded: list[str] = []
+        self.planning = True
+        try:
+            for _ in range(_PLANNING_STEP_LIMIT):
+                self.active_tools = list(offered)
+                tool_calls = self._send_fitting().tool_calls
+                if not tool_calls:
+                    return
+                allowed = [call for call in tool_calls if call["name"] in offered]
+                if len(allowed) < len(tool_calls):
+                    logger.warning(
+                        "[MessageProcessor] turn %s: planning skipped calls to %s",
+                        self.turn_id,
+                        sorted({cast("str", call["name"]) for call in tool_calls} - set(offered)),
+                    )
+                if not allowed:
+                    return
+                self._dispatch_tools(allowed)
+                loaded += [name for name in self.active_tools if name not in offered and name not in loaded]
+                if PlanTask.next_position(message_id) > 1:
+                    return
+        finally:
+            self.active_tools = pinned + [name for name in loaded if name not in pinned]
+            self.planning = False
 
     def _run_thinking_gate(self) -> None:
         """Pick this turn's thinking level: an explicit override wins outright;

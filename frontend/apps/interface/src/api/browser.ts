@@ -1,0 +1,80 @@
+import { api, getHost } from '@chalie/shared';
+import type { AskOrigin } from '@chalie/shared';
+import type { SingleEnvelope } from './conversation';
+
+/** A page the browser refused for its certificate; the tab stays on the page it had. */
+export interface BrowserCertificateError {
+  host: string;
+  port: number;
+  /** The browser's reason, e.g. 'ERR_CERT_AUTHORITY_INVALID'. */
+  error: string;
+  /** The url refused: where proceeding goes. */
+  url: string;
+}
+
+/** One open tab in the server's browser. */
+export interface BrowserTab {
+  id: string;
+  /** 'about:blank' while the tab has nothing loaded. */
+  url: string;
+  title: string;
+  /** Who opened it: Chalie's tabs close with the run that opened them, so only the user's can be closed here. */
+  opener: 'chalie' | 'user';
+  /** The turn of the run the tab belongs to (its page, or a popup kept from it); null for the user's own tabs. */
+  origin: AskOrigin | null;
+  /** Set while the tab shows the certificate warning, until it loads another page or the user goes back. */
+  certificate_error: BrowserCertificateError | null;
+}
+
+export type BrowserHistoryAction = 'back' | 'forward' | 'reload';
+
+/*
+ * Open, navigate and history return once the browser has the request, not once
+ * the page loads; `browser_tabs_changed` reports where the tab lands.
+ */
+export const browser = {
+  /** GET /api/browser/tabs — the open tabs; never starts the browser. */
+  async tabs(): Promise<BrowserTab[]> {
+    const body = await api.get<SingleEnvelope<{ tabs: BrowserTab[] }>>('/api/browser/tabs');
+    return body.result.tabs;
+  },
+
+  /** POST /api/browser/tabs — open a user tab, blank or on `url`. */
+  async open(url?: string): Promise<BrowserTab> {
+    const body = await api.post<SingleEnvelope<{ tab: BrowserTab }>>(
+      '/api/browser/tabs',
+      url ? { url } : undefined,
+    );
+    return body.result.tab;
+  },
+
+  /** DELETE /api/browser/tabs/<id> — 409 for a browsing run's tab, 404 when unknown. */
+  async close(tabId: string): Promise<void> {
+    await api.del(`/api/browser/tabs/${encodeURIComponent(tabId)}`);
+  },
+
+  /** POST /api/browser/navigate/<id> — point the tab at `url`, taken as given. */
+  async navigate(tabId: string, url: string): Promise<void> {
+    await api.post(`/api/browser/navigate/${encodeURIComponent(tabId)}`, { url });
+  },
+
+  /** POST /api/browser/history/<id> — back, forward or reload. */
+  async history(tabId: string, action: BrowserHistoryAction): Promise<void> {
+    await api.post(`/api/browser/history/${encodeURIComponent(tabId)}`, { action });
+  },
+
+  /**
+   * POST /api/browser/proceed/<id> — the user chose to proceed on the warning:
+   * the site opens in every tab until the browser restarts. 409 once the tab
+   * no longer warns about that site.
+   */
+  async proceed(tabId: string, host: string, port: number): Promise<void> {
+    await api.post(`/api/browser/proceed/${encodeURIComponent(tabId)}`, { host, port });
+  },
+
+  /** The tab's live stream socket. The session cookie rides the handshake. */
+  streamUrl(tabId: string): string {
+    const base = getHost().replace(/\/$/, '') || globalThis.location.origin;
+    return `${base.replace(/^http/, 'ws')}/ws/browser/${encodeURIComponent(tabId)}`;
+  },
+};

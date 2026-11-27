@@ -43,6 +43,16 @@ _ACT_SUMMARY_PROPERTY: dict[str, object] = {
     ),
 }
 
+# The block a tool's follow-up text (:meth:`Ability.follow_up`) travels in:
+# inside the result envelope (after any rich block, before ``[end:<tool>]``),
+# or after a delegate's late reply in the prompt of the exchange answering it.
+FOLLOW_UP_BLOCK = "[follow_up_instruction]\n{text}\n[end:follow_up_instruction]"
+
+# What a call to a tool its caller does not hold gets back: the dispatcher's
+# answer for a name with no ability, and the refusal of a tool held only by
+# some callers.
+UNKNOWN_TOOL = "Unknown tool: {tool_name}"
+
 # What run() receives: the ability's typed ParamBag. Every first-party ability
 # declares ``Ability[ItsParamsBag]`` and mypy then enforces that its run()
 # accepts exactly that bag. The PEP 696 default keeps bare ``Ability``
@@ -65,7 +75,9 @@ class Ability(ABC, Generic[B]):
     (``ProcessorConfig.always_available``), or — if the ability is
     ``DISCOVERABLE`` — the processor discovers it through ``find_tools`` (which
     the processor only carries when ``find_tools`` is in its always_available).
-    There is no per-config discoverable/blocked allow-list.
+    The one exception is ``message_parent``, which the processor offers itself
+    on the turn of a subagent the chat spawned: the same config runs a subagent
+    whoever spawned it. There is no per-config discoverable/blocked allow-list.
     """
 
     # Global discovery flag. True (the default) means find_tools may surface this
@@ -88,13 +100,6 @@ class Ability(ABC, Generic[B]):
     # render under. None is correct (and enforced-as-fine) only for
     # DISCOVERABLE=False abilities, which never appear in the menu at all.
     CATEGORY: ClassVar[AbilityCategory | None] = None
-
-    # Settle flag. True (the default) means a tool_calls row for this ability
-    # demotes its transcript row's settled=1 back to 0 — the row carries a
-    # model-driven tool and is therefore NOT a settle0. Internal framework passes
-    # (chat_history_compactor, thinking) set this False so they never demote a
-    # settle: their tool_calls rows are implementation artefacts, not model tools.
-    counts_as_settle: ClassVar[bool] = True
 
     # Constructor-injected, the invoking MessageProcessor (the "parent" of this
     # tool call). A tool reads ALL its context off this — self.mp.config.channel,
@@ -164,6 +169,9 @@ class Ability(ABC, Generic[B]):
         # client telemetry dict (location / locale / time / currency …) or None
         # when no client context is stored yet (fresh boot, no heartbeat).
         self.telemetry: "dict[str, object] | None" = None
+        # Set by DispatchService._run() alongside telemetry: the ``tool_calls``
+        # row this call opened, or None when it went unrecorded (no anchor row).
+        self.tool_call_id: "int | None" = None
 
     # ── Metadata getters — every concrete ability implements all four ──────────
 
@@ -182,6 +190,23 @@ class Ability(ABC, Generic[B]):
     @abstractmethod
     def get_search_tooltip(self) -> str:
         ...
+
+    def follow_up(self, tr: "ToolResult", action: "str | None") -> str:
+        """The text of the follow-up block for ``tr``, or ``""`` for none.
+
+        Only a real SUCCESS gets one, so a tool with neither a nudge nor
+        untrusted output renders byte-identical to a plain result. The block is
+        this tool's :meth:`get_follow_up` nudge, then the ``UNTRUSTED_CONTENT``
+        steer for ``action`` LAST — the closest instruction to the point of
+        generation, pressed against the payload it describes instead of sitting
+        in a system prompt that a long result has buried. The steer is per
+        action because ``email.read`` and ``browser.scroll`` are not the same
+        warning, and an action absent from the map gets none."""
+        if tr.status != "success":
+            return ""
+        nudge = self.get_follow_up(tr)
+        steer = self.UNTRUSTED_CONTENT.get(action or "", "")
+        return f"{nudge}\n\n{steer}".strip() if steer else nudge
 
     def get_follow_up(self, tr: "ToolResult") -> str:
         """A standing next-step nudge appended to this tool's SUCCESSFUL result.

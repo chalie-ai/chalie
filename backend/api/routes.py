@@ -24,6 +24,13 @@ from __future__ import annotations
 from importlib import import_module
 from pkgutil import walk_packages
 
+from .actions.asks.dismiss import AsksDismiss
+from .actions.asks.open import AsksOpen
+from .actions.asks.reply import AsksReply
+from .actions.browser.history import BrowserHistory
+from .actions.browser.navigate import BrowserNavigate
+from .actions.browser.proceed import BrowserProceed
+from .actions.browser.tabs import BrowserTabs
 from .actions.capabilities.disconnect import CapabilitiesDisconnect
 from .actions.capabilities.setup import CapabilitiesSetup
 from .actions.capabilities.status import CapabilitiesStatus
@@ -34,9 +41,7 @@ from .actions.mcp_clients.test import McpTest
 from .actions.mcp_clients.tools import McpTools
 from .actions.memory.search import MemorySearch
 from .actions.policies.blocked import BlockedAction
-from .actions.policies.pending import PendingAction
 from .actions.policies.reset import ResetAction
-from .actions.policies.respond import RespondAction
 from .actions.providers.api_key import ProviderApiKey
 from .actions.providers.catalog import ProviderCatalog
 from .actions.providers.delegate import ProviderDelegate
@@ -51,11 +56,12 @@ from .actions.skills.toggle import SkillToggle
 from .actions.snapshot.export import SnapshotExportAction
 from .actions.snapshot.import_ import SnapshotImportAction
 from .actions.threads.batch import ThreadsBatch
-from .actions.threads.thinking_level import ThreadsThinkingLevel
+from .actions.threads.settings import ThreadsSettings
 from .actions.voice.health import VoiceHealthAction
 from .actions.voice.transcribe import VoiceTranscribeAction
 from .actions.voice.transcript import VoiceTranscriptAction
 from .endpoint import Endpoint
+from .endpoints.agents import AgentsEndpoint
 from .endpoints.capabilities import CapabilitiesEndpoint
 from .endpoints.lists import Lists
 from .endpoints.mcp_clients import McpClients
@@ -65,9 +71,21 @@ from .endpoints.providers import Providers
 from .endpoints.scheduler import Scheduler
 from .endpoints.skills import Skills
 from .endpoints.threads import ThreadsEndpoint
+from .endpoints.tool_calls import ToolCallsEndpoint
 from .endpoints.wrappers import WrappersEndpoint
 
 ROUTES: tuple[Endpoint, ...] = (
+    AgentsEndpoint("agents"),
+
+    AsksDismiss("asks", "dismiss"),
+    AsksOpen("asks", "open"),
+    AsksReply("asks", "reply"),
+
+    BrowserHistory("browser", "history"),
+    BrowserNavigate("browser", "navigate"),
+    BrowserProceed("browser", "proceed"),
+    BrowserTabs("browser", "tabs"),
+
     CapabilitiesEndpoint("capabilities"),
     CapabilitiesDisconnect("capabilities", "disconnect"),
     CapabilitiesSetup("capabilities", "setup"),
@@ -89,9 +107,7 @@ ROUTES: tuple[Endpoint, ...] = (
 
     PoliciesEndpoint("policies"),
     BlockedAction("policies", "blocked"),
-    PendingAction("policies", "pending"),
     ResetAction("policies", "reset"),
-    RespondAction("policies", "respond"),
 
     Providers("providers"),
     ProviderApiKey("providers", "api-key"),
@@ -116,7 +132,9 @@ ROUTES: tuple[Endpoint, ...] = (
 
     ThreadsEndpoint("threads"),
     ThreadsBatch("threads", "batch"),
-    ThreadsThinkingLevel("threads", "thinking-level"),
+    ThreadsSettings("threads", "settings"),
+
+    ToolCallsEndpoint("tool-calls"),
 
     VoiceHealthAction("voice", "health"),
     VoiceTranscribeAction("voice", "transcribe"),

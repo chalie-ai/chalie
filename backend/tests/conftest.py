@@ -13,6 +13,10 @@ from unittest.mock import patch
 
 import pytest
 
+# Plugins are named here, in the top-level conftest: a test module naming one
+# registers it for every test collected after it, not only its own.
+pytest_plugins = ("tests._browser_live",)
+
 if TYPE_CHECKING:
     from services.memory_store import MemoryStore
 
@@ -159,6 +163,45 @@ def chat_provider(db: sqlite3.Connection) -> sqlite3.Connection:
     )
     db.commit()
     return db
+
+
+@pytest.fixture
+def models(chat_provider: sqlite3.Connection) -> tuple[int, int]:
+    """``(default, other)``: the selected provider and a second configured one."""
+    chat_provider.execute(
+        "INSERT INTO providers (name, platform, model, host, context_window) "
+        "VALUES ('second-provider', 'ollama', 'second-model', 'http://localhost:11434', ?)",
+        (SEEDED_CONTEXT_WINDOW,),
+    )
+    chat_provider.commit()
+    ids = {
+        str(row["name"]): int(row["id"])
+        for row in chat_provider.execute("SELECT id, name FROM providers").fetchall()
+    }
+    return ids["test-chat-provider"], ids["second-provider"]
+
+
+@pytest.fixture
+def earlier_agents(db: sqlite3.Connection) -> None:
+    """Record ``EARLIER_AGENTS`` subagents that ran and ended before the test,
+    through the real model, so every agent the test spawns is numbered past
+    them while turn ids still count from 1 on each channel. A test that reads
+    a subagent's number therefore proves it came from the agents table, never
+    from the subagent's turn id."""
+    from abilities.web_search import WebSearchAbility
+    from configs.enums.channels import Channel
+    from models.agent import Agent
+    from services.database import Database
+    from tests._delegates import EARLIER_AGENTS
+
+    with Database.transaction():
+        for n in range(1, EARLIER_AGENTS + 1):
+            agent = Agent(
+                type=WebSearchAbility.NAME, prompt="an earlier search",
+                spawned_by_channel=Channel.SCHEDULE.value, spawned_in_turn=n, turn_id=100_000 + n,
+                context_id=None,
+            ).insert()
+            Agent.end(agent.agent_id, agent.turn_id, Agent.DONE, None)
 
 
 # ── Vault backup isolation ────────────────────────────────────────

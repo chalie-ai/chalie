@@ -58,15 +58,16 @@ function close(): void {
   <div class="rich-card image-preview-card">
     <!-- The url may point off-machine (a remote image is shown from its own
          source, never copied here), so send no referrer with the request. -->
-    <img
-      class="image-preview-card__img"
-      :src="payload.url"
-      :alt="payload.alt || 'preview'"
-      :style="thumbStyle"
-      referrerpolicy="no-referrer"
-      @load="onLoad"
-      @click="open"
-    />
+    <button type="button" class="image-preview-card__open" aria-haspopup="dialog" @click="open">
+      <img
+        class="image-preview-card__img"
+        :src="payload.url"
+        :alt="payload.alt || 'preview'"
+        :style="thumbStyle"
+        referrerpolicy="no-referrer"
+        @load="onLoad"
+      />
+    </button>
     <p v-if="payload.subtitle" class="image-preview-card__caption">
       {{ payload.subtitle }}
     </p>
@@ -83,21 +84,26 @@ function close(): void {
 </template>
 
 <style scoped lang="scss">
+.image-preview-card__open {
+  display: block;
+  margin: 0;
+  padding: 0;
+  background: none;
+}
+
 .image-preview-card__img {
   width: min(640px, 90vw);
   height: auto;
   max-height: 640px;
   object-fit: contain;
-  cursor: pointer;
-  border-radius: var(--radius-md);
   display: block;
 }
 
 .image-preview-card__caption {
   margin: 10px 0 0;
   padding: 0 16px;
-  color: var(--text-secondary);
-  font-size: 0.8125rem;
+  color: var(--muted);
+  font-size: var(--fs-body);
   line-height: 1.4;
 }
 </style>

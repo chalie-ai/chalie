@@ -5,10 +5,11 @@ records unconditionally and the trail render drops every call at or below it, so
 the tool work, thinking and interim prose of the turn that triggered compaction
 vanish with nothing left in their place. ``chat_history_compactor`` cannot fill
 that gap — it reads ``transcript_service.read()``, which floors every turn at its
-``settle0`` and therefore skips the unsettled turn entirely.
+``settle0`` and therefore skips the in-flight turn entirely.
 
 This pass owns exactly that gap. It reads the turn currently in flight — its
-transcript rows plus the RAW tool-call results, deliberately unfiltered by the
+transcript rows plus each tool call's result as the model was shown it (its
+follow-up nudge included, which is never stored), deliberately unfiltered by the
 compaction watermark, because the watermark marks precisely what is about to be
 erased — and asks the model to write itself a first-person hand-over.
 
@@ -51,6 +52,7 @@ class TurnHandoverService:
             else:
                 handover = (MessageProcessor.process(
                     TurnHandoverConfig(), raw_input=body,
+                    metadata={"provider_id": mp.provider_id},
                 ).result() or "").strip()
                 if handover:
                     return handover
@@ -69,8 +71,8 @@ class TurnHandoverService:
     def _fit(mp: "MessageProcessor") -> str | None:
         """Build the hand-over request body.
 
-        The body is the in-flight turn's transcript rows followed by its raw
-        tool-call results. It is a strict subset of the turn the provider has
+        The body is the in-flight turn's transcript rows followed by each of
+        its tool calls' results as the model was shown them. It is a strict subset of the turn the provider has
         already been carrying — one turn's rows, no system history, no tools —
         so it cannot be larger than a request that provider already accepted.
         Nothing is sized and nothing is dropped. Returns None when the turn has
@@ -93,7 +95,7 @@ class TurnHandoverService:
                 lines.append(f"{cast('str', fields.get('role') or 'unknown')}: {content}")
 
         tools = [
-            f"[{call.tool_name}] {call.params} → {call.result or ''}"
+            f"[{call.tool_name}] {call.params} → {mp.tool_call_service.shown(call) or ''}"
             for call in mp.tool_call_service.by_turn()
             if call.tool_name != ChatHistoryCompactor.NAME
         ]

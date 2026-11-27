@@ -9,11 +9,12 @@
 """Feature tests — the ``code_agent`` delegate's user prompt, and the
 class-of-defect guard that covers every channel behind it.
 
-``CodeAgentConfig`` sets ``suppress_history=True``, so the string
-:meth:`PromptService.user_prompt` returns IS the delegate's entire input: there
-is no history, no seeded memory, nothing else in the message list to carry the
-task. This channel once had no dispatch arm at all, and the fallthrough returned
-an empty body — which is not a soft failure. Empty-content tolerance is
+Each ``code_agent`` subagent runs as the first turn of a channel of its own
+(``delegate:code_agent:<agent_id>``), so it has no earlier history and the
+string :meth:`PromptService.user_prompt` returns is the only thing in the
+message list that carries the task. Its prompt is chosen by its kind's bare
+``delegate:code_agent`` channel. That channel once had no dispatch arm at all,
+and the fallthrough returned an empty body — which is not a soft failure. Empty-content tolerance is
 per-provider: a lenient provider answers plausible nonsense, a strict one rejects
 the request and the resulting crash names the vendor instead of the omission.
 Both are wrong, and neither is detectable by asserting on the delegate's answer.
@@ -21,9 +22,9 @@ Both are wrong, and neither is detectable by asserting on the delegate's answer.
 These lock the wiring itself:
 
   1. The prompt carries the task — non-empty, and the instruction text verbatim.
-  2. The prompt carries the date anchor. The telemetry block's ``local_time`` is
-     the only date any channel receives, and a coding agent that cannot date its
-     own work writes wrong dates into the files it creates.
+  2. The prompt starts with the turn's own ``[Ddd YYYY-MM-DD HH:MM] Task:``
+     stamp — the delegate's only anchor for dating the work it writes to
+     disk.
   3. The prompt carries the act trail's re-feed seam, so the delegate sees its
      own tool output across ACT iterations instead of iterating blind.
   4. An unrouted channel raises :class:`UnroutedPromptChannel` — the fallthrough
@@ -40,11 +41,13 @@ from __future__ import annotations
 
 import importlib
 import pkgutil
+import re
 import sqlite3
 
 import pytest
 
 import configs.channels as channels_pkg
+from abilities.code_agent import CodeAgentAbility
 from configs.channels.code_agent import CodeAgentConfig
 from configs.enums.channels import Channel
 from configs.enums.policy_channel import PolicyChannel
@@ -58,24 +61,32 @@ pytestmark = pytest.mark.unit
 _TASK = "write a Deno script that reverses a string and prove it runs"
 
 
-def _seed_telemetry(ctx: dict[str, object]) -> None:
-    """Persist a heartbeat snapshot the way POST /health does."""
-    from services.telemetry_service import TelemetryService
-    TelemetryService.write(ctx)
-
-
-def _clear_telemetry() -> None:
-    """The no-heartbeat state: no snapshot file, no cache."""
-    from services.file_mapper_service import FileMapperService
-    from services.telemetry_service import TelemetryService
-    FileMapperService.get_telemetry_json_path().unlink(missing_ok=True)
-    TelemetryService._cache = None
+def _code_agent_config() -> ProcessorConfig:
+    """A code_agent subagent's config, on the subagent's own channel as the
+    spawning turn rebinds it."""
+    return CodeAgentConfig(PolicyChannel.CHAT).on_channel(Channel.for_agent(CodeAgentAbility.NAME, 12))
 
 
 def _code_agent_prompt(task: str = _TASK) -> str:
     """The real user-message body for a real code_agent delegate turn."""
-    mp = MessageProcessor(CodeAgentConfig(PolicyChannel.CHAT), raw_input=task)
+    mp = MessageProcessor(_code_agent_config(), raw_input=task)
     return mp.prompt_service.user_prompt()
+
+
+def _open_code_agent_turn(task: str = _TASK) -> MessageProcessor:
+    """Build a code_agent delegate turn the way ``CodeAgentAbility``'s real
+    invocation does — with a real input row and a real execution row, since
+    ``skip_input_row=False`` for this config (see configs/channels/code_agent.py)
+    — so the prompt's stamp resolves to a real timestamp instead of falling
+    through ``_input_stamp``'s chain to the missing-timestamp placeholder.
+    The other tests in this file don't depend on either row and use the
+    lighter ``_code_agent_prompt`` helper instead."""
+    mp = MessageProcessor(_code_agent_config(), raw_input=task)
+    mp.turn_id = mp.transcript_service.allocate_turn()
+    mp.uid = mp.transcript_service.append_input(mp.raw_input)
+    mp.current_transcript_id = mp.uid
+    mp.turn_execution_service.open()
+    return mp
 
 
 # ---------------------------------------------------------------------------
@@ -84,13 +95,13 @@ def _code_agent_prompt(task: str = _TASK) -> str:
 
 
 def test_code_agent_prompt_is_not_empty(db: sqlite3.Connection) -> None:
-    """The headline guarantee. With ``suppress_history=True`` this body is the
-    whole message, so a builder that returns nothing is as bad as no builder at
-    all — and unlike the missing arm, it would not raise."""
+    """The headline guarantee. On a subagent's first turn this body is the only
+    statement of its task, so a builder that returns nothing is as bad as no
+    builder at all — and unlike the missing arm, it would not raise."""
     prompt = _code_agent_prompt()
     assert prompt.strip(), (
-        "code_agent's user prompt is empty — with suppress_history=True this is "
-        "the delegate's ENTIRE input, and a strict provider rejects an "
+        "code_agent's user prompt is empty — on a subagent's first turn this is "
+        "the delegate's only statement of its task, and a strict provider rejects an "
         f"empty-content request outright. prompt={prompt!r}"
     )
 
@@ -119,31 +130,24 @@ def test_code_agent_prompt_does_not_route_through_the_user_channel(
 
 
 # ---------------------------------------------------------------------------
-# 2. The date anchor reaches the delegate.
+# 2. The task line is stamped, and the delegate carries no world block.
 # ---------------------------------------------------------------------------
 
 
-def test_code_agent_prompt_carries_the_date_anchor(db: sqlite3.Connection) -> None:
-    """``local_time`` in the telemetry block is the only date any channel gets.
-    Without it the delegate has no way to date the work it writes to disk."""
-    _seed_telemetry({"timezone": "Europe/Malta", "locale": "en-GB"})
-    prompt = _code_agent_prompt()
-    assert "local_time:" in prompt, (
-        "code_agent must receive the telemetry block's date anchor — a coding "
-        f"agent that cannot date its own work writes wrong dates. prompt={prompt!r}"
+def test_code_agent_prompt_starts_with_the_stamped_task_line(db: sqlite3.Connection) -> None:
+    """The whole body is ``[stamp] Task:\\n<task>`` (+ trail): the stamp is
+    the delegate's only anchor for dating the work it writes to disk, taken
+    from the turn's own input row. A coding agent that cannot date its own
+    work writes wrong dates into the files it creates."""
+    mp = _open_code_agent_turn()
+    prompt = mp.prompt_service.user_prompt()
+    match = re.match(r"^\[[A-Z][a-z]{2} \d{4}-\d{2}-\d{2} \d{2}:\d{2}\] Task:\n", prompt)
+    assert match, (
+        "code_agent's prompt must start with a [Ddd YYYY-MM-DD HH:MM] Task: "
+        f"stamp line. prompt={prompt!r}"
     )
-
-
-def test_code_agent_prompt_survives_an_absent_heartbeat(db: sqlite3.Connection) -> None:
-    """Telemetry is off-spine: with no heartbeat persisted the block renders
-    empty, and the task must still arrive rather than the body collapsing."""
-    _clear_telemetry()
-    prompt = _code_agent_prompt()
-    assert _TASK in prompt, (
-        f"an empty telemetry block must not cost the delegate its task. prompt={prompt!r}"
-    )
-    assert "local_time:" not in prompt, (
-        f"no heartbeat means no anchor line — not a fabricated one. prompt={prompt!r}"
+    assert prompt[match.end():].startswith(_TASK), (
+        f"the task text must follow the stamp line verbatim. prompt={prompt!r}"
     )
 
 
@@ -159,7 +163,7 @@ def test_code_agent_prompt_renders_its_act_trail(db: sqlite3.Connection) -> None
     body staying well-formed rather than by trail content that does not exist
     yet. The populated-trail path is shared with every sibling delegate and
     covered by ``act_trail``'s own tests."""
-    mp = MessageProcessor(CodeAgentConfig(PolicyChannel.CHAT), raw_input=_TASK)
+    mp = MessageProcessor(_code_agent_config(), raw_input=_TASK)
     prompt = mp.prompt_service.user_prompt()
     trail = mp.prompt_service.act_trail()
     if trail:
@@ -176,7 +180,7 @@ def test_code_agent_prompt_renders_its_act_trail(db: sqlite3.Connection) -> None
 # ---------------------------------------------------------------------------
 
 
-def _all_subclasses(cls: type) -> set[type]:
+def _all_subclasses(cls: type[object]) -> set[type]:
     out: set[type] = set()
     for sub in cls.__subclasses__():
         out.add(sub)
@@ -202,7 +206,8 @@ def test_an_unrouted_channel_raises_instead_of_returning_an_empty_body(
 
 def test_code_agent_channel_is_dispatched(db: sqlite3.Connection) -> None:
     """The specific omission that crashed the turn: ``delegate:code_agent``
-    reaching the fallthrough."""
+    reaching the fallthrough — a subagent's own channel included, which is
+    dispatched by its kind's bare one."""
     try:
         _code_agent_prompt()
     except UnroutedPromptChannel as exc:  # pragma: no cover — the defect under test

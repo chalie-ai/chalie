@@ -151,6 +151,22 @@ class ProviderCacheService:
 
 
     @staticmethod
+    def chat_provider(provider_id: int | None) -> dict[str, object]:
+        """The chat model for a thread's ``provider_id``: that provider while it
+        is configured, else the default — the selected provider, else the first
+        configured one. ``{}`` when no provider is configured."""
+        if provider_id is not None:
+            for entry in ProviderCacheService.get_providers().values():
+                if entry.get('id') == provider_id:
+                    return entry
+        selected = ProviderCacheService.get_selected_provider()
+        if selected:
+            return selected
+        providers = ProviderCacheService.get_providers()
+        return next(iter(providers.values())) if providers else {}
+
+
+    @staticmethod
     def invalidate() -> None:
         """Invalidate and bump the MemoryStore version counter so other processes detect a cache miss on next call."""
         try:

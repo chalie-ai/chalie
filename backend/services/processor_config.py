@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import copy
 from abc import ABC
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar
@@ -25,22 +26,40 @@ class ProcessorConfig(ABC):
 
     RENDERS_HTML: ClassVar[bool] = False
     """True → this channel's output is rendered to a human as HTML, which is one
-    fact with three consequences, all of which must move together:
+    fact with two consequences that must move together:
 
     * ``PromptService`` appends the response-format contract, so the model is
-      told to emit ``markup.PROMPT_TAGS`` instead of markdown;
+      told to emit ``markup.PROMPT_TAGS`` instead of markdown — except on a
+      subagent's own turn, which is told to reply in plain text, because its
+      answer reaches its caller as text — on the chat, a reply shown as
+      plain text;
     * ``MessageProcessor._format`` converts and sanitises the reply at persist
-      time, so both the live send and the refresh read inherit the same markup;
-    * ``DispatchService`` assigns rich-media ordinals, whose ``<span id>`` pairing
-      only means anything on a rendered surface.
+      time, so both the live send and the refresh read inherit the same markup.
 
     Splitting these was the old bug: a channel told to emit HTML but not
     sanitised persists raw model markup, and a channel sanitised but not told
     emits markdown that survives conversion — ``markdown_to_html`` is an
     inline-only fallback and cannot rescue headings, lists, or tables.
 
-    Only UserConfig and ScheduledConfig set it. DiscoveryConfig deliberately does
-    not: it inherits UserConfig's *thinking*, never its user-facing identity."""
+    Rich-media cards are a separate gate: see ``RENDERS_CARDS``.
+
+    UserConfig, ScheduledConfig and the four watchable subagent channels
+    (WebSearchConfig, WebBrowseConfig, PimConfig, CodeAgentConfig) set it, the
+    subagent channels because the subagent panel renders their transcript as
+    HTML; a subtask inherits it from the chat or schedule it was started from.
+    DiscoveryConfig deliberately does not: it inherits UserConfig's *thinking*,
+    never its user-facing identity. VisionConfig does not either: its output is
+    indexed text, never displayed."""
+
+    RENDERS_CARDS: ClassVar[bool] = False
+    """True → ``DispatchService`` assigns rich-media card ordinals on this
+    channel, so a rich tool result carries the ``<span id>`` card instruction
+    that pairs the reply to its ``tool_calls`` row.
+
+    Only the channels whose replies the user reads in the feed set it:
+    UserConfig and ScheduledConfig. Subagent channels render HTML but never
+    carry cards: their answer is handed to the calling agent, and a card span
+    there would pair against the caller's own ordinals."""
 
     BROADCASTS_STATE: ClassVar[bool] = False
     """True → this channel streams its live progress to its surface: the lean
@@ -49,6 +68,12 @@ class ProcessorConfig(ABC):
     ToolCallService. Only UserConfig sets it; every other channel stays silent (each
     chokepoint no-ops). The single state-gate for live progress. Distinct from
     ``RENDERS_HTML``, which is about the *markup* of the settled reply."""
+
+    TRANSIENT: ClassVar[bool] = False
+    """True → a turn on this channel writes no row to any table: no turn
+    execution, no provider-call ledger row — on top of the rows
+    ``skip_transcript`` and ``skip_input_row`` already withhold. For a one-shot
+    call whose answer is handed straight back to its caller."""
 
     thinking_mode: ClassVar[str | None] = None
     """Fixed reasoning level for a background channel whose deliberation must not
@@ -73,12 +98,12 @@ class ProcessorConfig(ABC):
 
     uses_vision_provider: ClassVar[bool] = False
     """True -> ProviderService._resolve reads the brain's Vision Provider from the DB
-    instead of the global selected provider. Only VisionConfig sets it."""
+    instead of the model of the turn's thread. Only VisionConfig sets it."""
 
     uses_delegate_provider: ClassVar[bool] = False
     """True -> ProviderService._resolve reads the brain's Delegate Provider from the DB
     (falling back to the selected provider when none is pinned) instead of the
-    global selected provider. Set by the subagent channels (web_search,
+    model of the turn's thread. Set by the subagent channels (web_search,
     web_browse). Vision takes precedence: VisionConfig keeps uses_vision_provider
     and never sets this (vision > delegate > chat)."""
 
@@ -86,7 +111,9 @@ class ProcessorConfig(ABC):
 
     channel: str
     """Transcript / telemetry channel.  E.g. 'user', 'discovery',
-    'external-agent:mybot', 'delegate:web_search'."""
+    'external-agent:mybot', 'delegate:web_search:12'. A subagent's config
+    declares its kind's bare ``delegate:<type>``; the turn that spawns the
+    subagent rebinds it to the subagent's own channel (:meth:`on_channel`)."""
 
     role: str
     """Transcript role for the input row.  E.g. 'user', 'external_agent',
@@ -118,8 +145,8 @@ class ProcessorConfig(ABC):
     """True → input row skipped but assistant row still written (hidden_input)."""
 
     suppress_history: bool
-    """True → get_previous_messages() returns '' (housekeeping loops).
-    Set on all channels except UMP and ExternalAgent."""
+    """True → the history read returns nothing (housekeeping loops), and the
+    channel is never context-gated or compacted."""
 
     # ── Turn-0 auto-seed (declarative, not a hook) ────────────────────────────
 
@@ -152,7 +179,8 @@ class ProcessorConfig(ABC):
     ``channel``. Only configs whose ``channel`` is dynamic or channel-specific
     yet share another channel's prompt assembly set this — DiscoveryConfig
     (``= "user"``) reuses the user prompts; EAMPConfig (``= "external_agent"``)
-    has a per-agent dynamic ``channel``."""
+    and each subagent's config (``= "delegate:<type>"``, or a subtask's
+    caller's) have a dynamic ``channel``."""
 
     # ── External turn-id ownership ────────────────────────────────────────────
 
@@ -212,7 +240,13 @@ class ProcessorConfig(ABC):
 
     def with_hidden_input(self) -> "ProcessorConfig":
         """Return a shallow copy with ``skip_input_row=True``."""
-        import copy  # noqa: PLC0415
         clone = copy.copy(self)
         object.__setattr__(clone, "skip_input_row", True)
+        return clone
+
+    def on_channel(self, channel: str) -> "ProcessorConfig":
+        """Return a shallow copy that writes and reads on ``channel`` — a
+        subagent's own (:meth:`Channel.for_agent`)."""
+        clone = copy.copy(self)
+        object.__setattr__(clone, "channel", channel)
         return clone

@@ -178,10 +178,10 @@ class AbstractCapability(ABC):
             )
             return None
 
-    def delete_credentials(self) -> None:
-        """Remove ALL ``tool_configs`` rows associated with this capability.
+    def delete_credentials(self, *, keep: tuple[str, ...] = ()) -> None:
+        """Remove this capability's ``tool_configs`` rows, all but the *keep* keys.
 
-        This is equivalent to calling
+        With nothing kept this removes ALL of them; it is equivalent to calling
         :meth:`~models.tool_config.ToolConfig.delete_all`
         with ``self.get_id()`` as the tool name.
 
@@ -189,13 +189,35 @@ class AbstractCapability(ABC):
             None
         """
         try:
-            ToolConfig.delete_all(self.get_id())
+            ToolConfig.delete_all(self.get_id(), keep=keep)
         except Exception as exc:
             logger.error(
                 "[%s] delete_credentials() failed: %s",
                 self.get_id(), exc,
                 exc_info=True,
             )
+
+    def unavailable_reason(self) -> str | None:
+        """Why this capability cannot work where Chalie runs, shown on its
+        card in place of setup; setup is refused while there is one. ``None``
+        when it is available."""
+        return None
+
+    def status_note(self) -> str | None:
+        """One plain line about this capability's state, shown on its card in
+        the Brain dashboard. ``None`` when there is nothing to add."""
+        return None
+
+    def setup_pending(self) -> bool:
+        """Whether a setup attempt is still being confirmed in the background,
+        so the capability is neither connected nor failed yet."""
+        return False
+
+    def setup_code(self) -> str | None:
+        """The code the user must send to finish a setup still being
+        confirmed, shown on its own beside :meth:`status_note`. ``None`` when
+        no setup waits for one."""
+        return None
 
     def is_connected(self) -> bool:
         """Return the current in-memory connection state.

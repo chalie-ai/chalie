@@ -74,15 +74,20 @@ def test_explicit_recall_returns_no_memory_and_fires_no_fanout(db: sqlite3.Conne
 def test_turn0_seed_recall_returns_no_memory_and_fires_no_fanout(db: sqlite3.Connection) -> None:
     mp = _build_user_mp("what did we talk about at home last week")
 
-    out = mp.dispatch_service.dispatch(
-        "recall",
-        {"query": "what did we talk about at home last week", "_auto": True},
-    )
+    # The real seed, as begin() runs it: the recall goes out with the framework's
+    # ``_auto`` marker while the seed phase is raised.
+    mp._seed_turn_zero()
 
+    from typing import cast
+    (out,) = [
+        row[0] for row in db.execute(
+            "SELECT result FROM tool_calls WHERE transcript_id = ? AND tool_name = 'recall'",
+            (cast(int, mp.uid),),
+        ).fetchall()
+    ]
     # Empty seed returns the same success-with-empty-body as any recall.
     assert "status=success" in out, f"empty seed must return success: {out!r}"
     assert "No existing memory found." in out, f"empty seed must show empty body: {out!r}"
-    from typing import cast
     # ...and never fans out to the other stores.
     names = _tool_names_recorded(db, cast(int, mp.uid))
     assert "document" not in names and "schedule" not in names, (

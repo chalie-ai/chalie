@@ -38,30 +38,34 @@ export function useAutoscroll(feedRef: Ref<HTMLElement | null>) {
    * Unconditionally scroll to the very bottom. Two nested rAFs straddle layout
    * + paint of just-appended nodes; then re-scroll once each late-loading <img>
    * fires load/error, since async images shift scrollHeight after the scroll.
+   * Settles once the jump has been made (the image re-scrolls come later).
    */
-  function forceScrollToBottom(): void {
+  function forceScrollToBottom(): Promise<void> {
     userScrolledUp.value = false;
 
     const scroll = (): void => {
       window.scrollTo({ top: document.body.scrollHeight, behavior: 'instant' });
     };
 
-    requestAnimationFrame(() => {
+    return new Promise((resolve) => {
       requestAnimationFrame(() => {
-        scroll();
+        requestAnimationFrame(() => {
+          scroll();
+          resolve();
 
-        const spine = feedRef.value;
-        if (!spine) return;
+          const spine = feedRef.value;
+          if (!spine) return;
 
-        for (const img of spine.querySelectorAll<HTMLImageElement>('img')) {
-          if (img.complete) continue;
-          // Re-scroll once the image lands, unless the user scrolled away since.
-          const retry = (): void => {
-            if (!userScrolledUp.value) scroll();
-          };
-          img.addEventListener('load', retry, { once: true });
-          img.addEventListener('error', retry, { once: true });
-        }
+          for (const img of spine.querySelectorAll<HTMLImageElement>('img')) {
+            if (img.complete) continue;
+            // Re-scroll once the image lands, unless the user scrolled away since.
+            const retry = (): void => {
+              if (!userScrolledUp.value) scroll();
+            };
+            img.addEventListener('load', retry, { once: true });
+            img.addEventListener('error', retry, { once: true });
+          }
+        });
       });
     });
   }

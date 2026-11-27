@@ -15,10 +15,9 @@ from flask.typing import ResponseReturnValue
 
 from api.action import Action
 from api.endpoint import DocumentedResponse
-from exceptions import NotFoundError
 from api.response.scheduler_turn import SchedulerTurn
 from models.scheduled_item import ScheduledItem
-from models.thread_gist import ThreadGist
+from models.thread import Thread
 
 
 class SchedulerTurns(Action):
@@ -32,14 +31,12 @@ class SchedulerTurns(Action):
 
         Every live schedule is its own thread — ``turn_id`` is simply the
         schedule's own ``id`` (no series ``group_id`` to collapse occurrences
-        into). The gist is sourced from ``thread_gist`` (keyed by
-        channel=schedule, turn_id) — read separately and merged here, each
-        model owning its own table's SQL rather than a cross-table JOIN.
+        into). The gist is the schedule thread's own label — read separately
+        and merged here.
         """
-        if not self.is_create(id):
-            raise NotFoundError("Not found")
+        self.require_create_sentinel(id)
         schedules = ScheduledItem.recent()
-        gists = ThreadGist.bulk_get(ScheduledItem.SCHEDULE_CHANNEL, [cast(int, s.id) for s in schedules])
+        gists = Thread.summaries(ScheduledItem.SCHEDULE_CHANNEL, [cast(int, s.id) for s in schedules])
         items = [
             SchedulerTurn(
                 turn_id=cast(int, s.id),

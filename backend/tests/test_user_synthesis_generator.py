@@ -46,6 +46,7 @@ from controllers.message_processor import MessageProcessor
 from exceptions import ContextLimit
 from models.compaction import Compaction
 from models.provider_response import ProviderResponse
+from models.transcript import Transcript
 from models.turn_execution import TurnExecution
 from models.user_synthesis import UserSynthesisRow
 from services.policy_manager import INTERNAL
@@ -262,9 +263,11 @@ def test_a_schedule_compaction_never_wakes_the_generator() -> None:
     assert _terminal_state(second) == TurnExecution.COMPLETED
     # The compaction really happened — on whichever axis the schedule view
     # keys (fork when the second pass continues the turn, main otherwise).
+    opening_id = Transcript.first_id(Channel.SCHEDULE.value, first.turn_id)
+    assert opening_id is not None
     assert (
         Compaction.latest_main(Channel.SCHEDULE.value) is not None
-        or Compaction.latest_fork(Channel.SCHEDULE.value, first.turn_id) is not None
+        or Compaction.latest_fork(Channel.SCHEDULE.value, opening_id) is not None
     )
     assert provider.synthesis_requests == []
     assert UserSynthesisRow.latest() is None

@@ -1,12 +1,11 @@
 /**
  * Tasks store — the Activity drawer's open/close state only.
  *
- * The drawer's content is NOT held here: forked-thread activity (the drawer's
- * row family) is DOM-derived — see `utils/threadActivity.ts`'s
- * `useThreadActivity` — rather than a store getter: a Pinia getter/Vue
- * computed can't reactively track a raw `querySelectorAll` read, so
- * `totalCount` is combined at the component level (PresenceBar.vue,
- * TaskDrawer.vue) instead.
+ * The drawer's content is NOT held here. Its thread rows are DOM-derived —
+ * see `utils/threadActivity.ts`'s `useThreadActivity` — rather than a store
+ * getter: a Pinia getter/Vue computed can't reactively track a raw
+ * `querySelectorAll` read. Its agent rows come from the agents store. The
+ * two are combined at the component level (PresenceBar.vue, TaskDrawer.vue).
  */
 import { defineStore } from 'pinia';
 

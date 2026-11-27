@@ -16,19 +16,29 @@ const activeDockKey = ref<string>('main');
  * never touches the WebSocket directly.
  */
 import { storeToRefs } from 'pinia';
-import { ConfigType } from '@chalie/shared';
+import { ConfigType, webPlatformAdapter } from '@chalie/shared';
 import { readDomContext } from '../../utils/domContext';
 import { on } from '../../composables/useEventBus';
 import { useSessionStore } from '../../stores/session';
 import { useVoiceStore } from '../../stores/voice';
 import { useAttachmentsStore } from '../../stores/attachments';
 import { useContextUsageStore } from '../../stores/contextUsage';
-import { useAmbientSensor } from '../../composables/useAmbientSensor';
 import { lsGet, lsSet } from '../../utils/storage';
-import { system } from '../../api';
+import { providers, system } from '../../api';
+import type { Provider } from '../../api/providers';
 import ImageAttachStrip from '../upload/ImageAttachStrip.vue';
 import QueuedMessages from '../conversation/QueuedMessages.vue';
-import { Plus, Mic, Send, X, AlertTriangle, ChevronDown } from '@lucide/vue';
+import QuoteComposer from '../conversation/QuoteComposer.vue';
+import {
+  QUOTE_BLOCK_EVENT,
+  encodeQuoteBlocks,
+  parseQuoteBlocks,
+  type QuoteBlock,
+  type QuoteBlockEventDetail,
+} from '../../utils/quoteBlocks';
+import OffScreenAsks from './OffScreenAsks.vue';
+import DockError from './DockError.vue';
+import { Plus, Mic, Send, ChevronDown, ChevronLeft, ChevronRight } from '@lucide/vue';
 
 /**
  * `turnId` is the only thing that distinguishes a thread reply from a main-dock
@@ -53,17 +63,10 @@ const session = useSessionStore();
 const voiceStore = useVoiceStore();
 const attachments = useAttachmentsStore();
 const contextUsage = useContextUsageStore();
-const ambient = useAmbientSensor();
 const { available: voiceAvailable, recorderState } = storeToRefs(voiceStore);
-// A null turnId (the footer dock) reads the channel's latest reading; a thread
-// panel's dock reads its own thread. Both are fed by the same `context_usage`
-// frame — the store resolves which entry that is.
-const usageDisplay = computed(() => contextUsage.usageDisplayFor(props.type, props.turnId));
-const usageRatio = computed(() => contextUsage.usageRatioFor(props.type, props.turnId));
-// The meter shows the percentage used ("30%"); the raw "X/Y" token counts move
-// to the hover tooltip (see the container's :title below) so the inline chip
-// stays compact.
-const usagePercent = computed(() => Math.round(usageRatio.value * 100) + '%');
+// The ring's % label shows on hover and keyboard focus; a phone has neither,
+// so a tap toggles it.
+const percentShown = ref(false);
 
 const THINKING_ITEMS = [
   { level: 'auto', label: 'Auto' },
@@ -71,56 +74,109 @@ const THINKING_ITEMS = [
   { level: 'high', label: 'High' },
 ] as const;
 
-/** Union of every attachable kind — one field, images and documents alike. */
-const ATTACH_ACCEPT =
-  'image/jpeg,image/png,image/webp,image/gif,.pdf,.docx,.pptx,.html,.htm,.txt,.md,.csv,.json,.xml';
-
 const textareaRef = ref<HTMLTextAreaElement | null>(null);
 const sendBtnRef = ref<HTMLButtonElement | null>(null);
 const text = ref('');
+// Quote blocks waiting to go out at the head of the next message.
+const blocks = ref<QuoteBlock[]>([]);
 
 // Restore draft: persisted on every change so a reload/close/navigate recovers it.
-// Keyed per thread so a reply draft never bleeds into the main composer.
+// Keyed per thread so a reply draft never bleeds into the main composer. The
+// draft is stored as the message it would send, quote blocks and all.
 const DRAFT_KEY = props.turnId == null ? 'chalie:draft' : `chalie:draft:t${props.turnId}`;
 const stored = lsGet(DRAFT_KEY);
-if (stored) text.value = stored;
-watch(text, (v) => lsSet(DRAFT_KEY, v));
+if (stored) loadMessage(stored);
+const draft = computed(() => encodeQuoteBlocks(blocks.value, text.value));
+watch(draft, (v) => lsSet(DRAFT_KEY, v));
+
+/** Put a whole message back in the composer: its quote blocks as blocks, the
+ *  rest as text. */
+function loadMessage(message: string): void {
+  const parsed = parseQuoteBlocks(message);
+  blocks.value = parsed.blocks;
+  text.value = parsed.text;
+}
 
 const fileInputRef = ref<HTMLInputElement | null>(null);
 
-const thinkingMenuOpen = ref(false);
-const thinkingWrapRef = ref<HTMLDivElement | null>(null);
 const footerRef = ref<HTMLElement | null>(null);
 
-const level = ref<'auto' | 'medium' | 'high'>('auto');
-const levelLabel = computed(() => level.value.charAt(0).toUpperCase() + level.value.slice(1));
+type Level = (typeof THINKING_ITEMS)[number]['level'];
 
-/** True when there is something to send: non-empty text OR ≥1 attachment.
- *  Mirrors the handleSend guard — both gate on getFiles(). */
-const canSend = computed(() => text.value.trim().length > 0 || attachments.getFiles().length > 0);
+// What the dock's next message runs on: its thread's model and level. The
+// main dock's thread is the channel's latest, which a new thread copies; on a
+// channel with no thread yet it shows the default and has nothing to change
+// until the first message makes one.
+const level = ref<Level>('auto');
+const providerId = ref<number | null>(null);
+const hasThread = ref(false);
+const canPick = computed(() => props.turnId != null || hasThread.value);
+// Every configured model; null until the list has been read.
+const models = ref<Provider[] | null>(null);
+// A model is shown by the model it runs; where two providers run the same one,
+// each adds its provider's name so the two can be told apart.
+const sharedModels = computed(() => {
+  const seen = new Set<string>();
+  const shared = new Set<string>();
+  for (const m of models.value ?? []) (seen.has(m.model) ? shared : seen).add(m.model);
+  return shared;
+});
+const modelName = (m: Provider): string => (sharedModels.value.has(m.model) ? `${m.model} (${m.name})` : m.model);
+const levelLabel = (l: string): string => THINKING_ITEMS.find((i) => i.level === l)?.label ?? l;
+const triggerLabel = computed(() => {
+  const picked = models.value?.find((m) => m.id === providerId.value);
+  return picked ? `${modelName(picked)} · ${levelLabel(level.value)}` : levelLabel(level.value);
+});
+// A null turnId (the footer dock) reads the channel's latest reading; a thread
+// panel's dock reads its own thread. Both are fed by the same `context_usage`
+// frame — the store resolves which entry that is. The reading is measured
+// against the window of the model the next message goes to, as the server's
+// context check measures it, so a switch to a smaller model shows at once.
+const pickedWindow = computed(() => models.value?.find((m) => m.id === providerId.value)?.context_window ?? null);
+const percentUsed = computed(() => contextUsage.percentUsedFor(props.type, props.turnId, pickedWindow.value));
+
+// The menu drills in: it lists the models, and choosing one lists that
+// model's levels (`menuModel`), with a row back to the models at the top.
+const menuOpen = ref(false);
+const menuModel = ref<Provider | null>(null);
+const selectWrapRef = ref<HTMLDivElement | null>(null);
+const triggerRef = ref<HTMLButtonElement | null>(null);
+const menuRef = ref<HTMLDivElement | null>(null);
+
+/** True when there is something to send: non-empty text, ≥1 quote block OR ≥1
+ *  attachment. Mirrors the handleSend guard — both gate on getFiles(). */
+const canSend = computed(
+  () =>
+    text.value.trim().length > 0 || blocks.value.length > 0 || attachments.getFiles().length > 0,
+);
 
 async function handleSend(): Promise<void> {
   const trimmed = text.value.trim();
   const files = attachments.getFiles();
+  const quoted = blocks.value;
 
   // Guard here too so we don't clear needlessly. Same gate as canSend.
-  if (!trimmed && files.length === 0) return;
+  if (!trimmed && quoted.length === 0 && files.length === 0) return;
 
   // Read the dock's DOM contract at click time — the ref can go null if the
   // dock unmounts across an await, and the send must target the same lane.
   const { turnId, type } = readDomContext(footerRef.value);
 
-  // Clear textarea before awaiting so the UI feels instant.
+  // Clear the composer before awaiting so the UI feels instant.
   text.value = '';
+  blocks.value = [];
   await nextTick();
 
-  await session.sendMessage(trimmed, files, turnId, type, level.value);
+  await session.sendMessage(encodeQuoteBlocks(quoted, trimmed), files, turnId, type);
+  // A main-dock send may start the channel's first thread, which the menu
+  // then has to change.
+  if (props.turnId == null) void loadSettings();
 
   // sendMessage takes ownership of `files` in BOTH branches — a direct dispatch
-  // uploads them; a busy send queues the whole {text, files} (queue.ts stores
-  // and replays them on drain). Either way the strip must clear: leaving files
-  // pending after a queued send re-attaches them to the user's NEXT message,
-  // a duplicate upload.
+  // uploads them; a busy send with files queues the whole {text, files}
+  // (queue.ts stores and replays them on drain). Either way the strip must
+  // clear: leaving files pending after a queued send re-attaches them to the
+  // user's NEXT message, a duplicate upload.
   attachments.clear();
 
   textareaRef.value?.focus();
@@ -153,16 +209,103 @@ function onFileInputChange(e: Event): void {
   input.value = ''; // allow re-selecting the same file
 }
 
-function selectLevel(next: (typeof THINKING_ITEMS)[number]['level']): void {
-  level.value = next;
-  thinkingMenuOpen.value = false;
+/** Read what the dock's next message runs on: its thread's settings, -1
+ *  naming the main dock's thread. */
+async function loadSettings(): Promise<void> {
+  try {
+    const r = await system.threadSettings(props.type, props.turnId ?? -1);
+    level.value = asLevel(r.thinking_level);
+    providerId.value = r.provider_id;
+    hasThread.value = r.turn_id != null;
+  } catch {
+    level.value = 'auto';
+  }
 }
 
-function onDocumentClick(e: MouseEvent): void {
-  const target = e.target as Node;
-  if (thinkingMenuOpen.value && !thinkingWrapRef.value?.contains(target)) {
-    thinkingMenuOpen.value = false;
+async function loadModels(): Promise<void> {
+  try {
+    models.value = await providers.all();
+  } catch {
+    session.errorMessage = 'Could not load the models';
   }
+}
+
+function asLevel(v: string): Level {
+  return v === 'medium' || v === 'high' ? v : 'auto';
+}
+
+/** Move focus into the menu once it renders: onto the checked row, else the first. */
+function focusMenuRow(): void {
+  void nextTick(() => {
+    const rows = menuRef.value?.querySelectorAll<HTMLElement>('[role^="menuitem"]');
+    const checked = menuRef.value?.querySelector<HTMLElement>('.active');
+    (checked ?? rows?.[0])?.focus();
+  });
+}
+
+function closeMenu(): void {
+  menuOpen.value = false;
+  menuModel.value = null;
+}
+
+function toggleMenu(): void {
+  if (menuOpen.value) return closeMenu();
+  menuOpen.value = true;
+  focusMenuRow();
+}
+
+function openLevels(model: Provider): void {
+  menuModel.value = model;
+  focusMenuRow();
+}
+
+function backToModels(): void {
+  menuModel.value = null;
+  focusMenuRow();
+}
+
+/** Arrow keys move between rows, wrapping; Escape backs out of a model's
+ *  levels, then closes. Enter picks through the row's own click. */
+function onMenuKeydown(e: KeyboardEvent): void {
+  if (e.key === 'Escape') {
+    e.stopPropagation();
+    if (menuModel.value) return backToModels();
+    closeMenu();
+    triggerRef.value?.focus();
+    return;
+  }
+  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+  e.preventDefault();
+  const rows = Array.from(menuRef.value?.querySelectorAll<HTMLElement>('[role^="menuitem"]') ?? []);
+  const at = rows.indexOf(document.activeElement as HTMLElement);
+  const step = e.key === 'ArrowDown' ? 1 : -1;
+  rows[(at + step + rows.length) % rows.length]?.focus();
+}
+
+/** Save the pick to the dock's thread at once, -1 naming the main dock's
+ *  thread; a failed save keeps the old settings. */
+async function selectLevel(next: Level): Promise<void> {
+  const model = menuModel.value;
+  closeMenu();
+  triggerRef.value?.focus();
+  if (!model) return;
+  const saved = await system
+    .saveThreadSettings(props.type, props.turnId ?? -1, { provider_id: model.id, thinking_level: next })
+    .catch(() => null);
+  if (!saved) {
+    session.errorMessage = 'Could not change the model or thinking level';
+    return;
+  }
+  providerId.value = saved.provider_id;
+  level.value = asLevel(saved.thinking_level);
+}
+
+/** Where a click landed is read from its path, fixed when it was dispatched:
+ *  choosing a model or going back re-renders the menu before the click reaches
+ *  the document, so the row clicked has already left the page. */
+function onDocumentClick(e: MouseEvent): void {
+  const wrap = selectWrapRef.value;
+  if (menuOpen.value && !(wrap && e.composedPath().includes(wrap))) closeMenu();
 }
 
 // Raw File objects are structurally non-persistable, so the only loss the
@@ -177,12 +320,13 @@ function onBeforeUnload(e: BeforeUnloadEvent): void {
 
 /** A turn was stopped/undone — restore its draft into the dock that owns its
  *  scope. Matched by turn_id (like the sibling `chalie:edit-queued` handler),
- *  not `isActiveDock`: the stop control lives in ActCycle/TurnView, never in
- *  an InputDock footer, so `activeDockKey` never points at the right dock. */
+ *  not `isActiveDock`: the stop control lives in the turn's activity line,
+ *  never in an InputDock footer, so `activeDockKey` never points at the right
+ *  dock. */
 function onTurnInterrupted(e: Event): void {
   const detail = (e as CustomEvent<{ text: string; turnId: number | null }>).detail;
   if (detail.turnId !== props.turnId) return;
-  text.value = detail.text ?? '';
+  loadMessage(detail.text ?? '');
   nextTick(() => {
     textareaRef.value?.focus();
     // Move cursor to end.
@@ -201,7 +345,27 @@ function onEditQueued(e: Event): void {
   const detail = (e as CustomEvent<{ turnId: number | null; text: string }>).detail;
   if (detail.turnId !== props.turnId) return;
   markActive();
-  text.value = text.value ? `${text.value}\n${detail.text}` : detail.text;
+  const queued = parseQuoteBlocks(detail.text);
+  blocks.value = [...blocks.value, ...queued.blocks];
+  if (queued.text) text.value = text.value ? `${text.value}\n${queued.text}` : queued.text;
+  focusAtEnd();
+}
+
+/** A quote was made in a reply on this dock's surface — add it as a block. */
+function onQuoteBlock(e: Event): void {
+  const detail = (e as CustomEvent<QuoteBlockEventDetail>).detail;
+  if (detail.dockId !== props.dockId) return;
+  markActive();
+  blocks.value = [...blocks.value, detail.block];
+  focusAtEnd();
+}
+
+function removeBlock(index: number): void {
+  blocks.value = blocks.value.filter((_, i) => i !== index);
+  textareaRef.value?.focus();
+}
+
+function focusAtEnd(): void {
   nextTick(() => {
     textareaRef.value?.focus();
     const el = textareaRef.value;
@@ -237,6 +401,7 @@ function onVoiceTranscript({ text: transcript }: { text: string }): void {
 onMounted(() => {
   document.addEventListener('session:turn-interrupted', onTurnInterrupted);
   document.addEventListener('chalie:edit-queued', onEditQueued);
+  document.addEventListener(QUOTE_BLOCK_EVENT, onQuoteBlock);
   _unsubVoiceTranscript = on('chalie:voice-transcript', onVoiceTranscript);
   document.addEventListener('click', onDocumentClick);
   globalThis.addEventListener('beforeunload', onBeforeUnload);
@@ -251,18 +416,14 @@ onMounted(() => {
     _dockResizeObserver.observe(footerRef.value);
   }
 
-  // Behavioral signals: typing cadence feeds the ambient snapshot.
-  if (textareaRef.value) ambient.bindTypingInput(textareaRef.value);
-
-  void system.thinkingLevel(props.type, props.turnId ?? -1).then((r) => {
-    const v = r?.level;
-    level.value = v === 'medium' || v === 'high' ? v : 'auto';
-  }).catch(() => { level.value = 'auto'; });
+  void loadSettings();
+  void loadModels();
 });
 
 onBeforeUnmount(() => {
   document.removeEventListener('session:turn-interrupted', onTurnInterrupted);
   document.removeEventListener('chalie:edit-queued', onEditQueued);
+  document.removeEventListener(QUOTE_BLOCK_EVENT, onQuoteBlock);
   _unsubVoiceTranscript?.();
   document.removeEventListener('click', onDocumentClick);
   globalThis.removeEventListener('beforeunload', onBeforeUnload);
@@ -290,18 +451,10 @@ onBeforeUnmount(() => {
     @focusin="markActive"
     @pointerdown="markActive"
   >
-    <div v-if="session.errorMessage" class="dock-error" role="alert">
-      <AlertTriangle class="dock-error__icon" :size="18" aria-hidden="true" />
-      <span class="dock-error__text">{{ session.errorMessage }}</span>
-      <button
-        class="dock-error__close"
-        type="button"
-        aria-label="Dismiss error"
-        @click="session.errorMessage = null"
-      >
-        <X :size="16" />
-      </button>
-    </div>
+    <DockError />
+
+    <!-- Pending asks no live line on screen shows; active dock only, like the attach strip. -->
+    <OffScreenAsks v-if="isActiveDock" />
 
     <!-- Attachments are a shared store; render the pending strip only in the
          active dock so the footer and an open thread don't show duplicates. -->
@@ -309,6 +462,9 @@ onBeforeUnmount(() => {
 
     <!-- Pending (queued) sends for this dock's scope, floating above the composer. -->
     <QueuedMessages :thread-id="turnId" />
+
+    <!-- Quote blocks made from replies, waiting to go out with the next message. -->
+    <QuoteComposer :blocks="blocks" @remove="removeBlock" />
 
     <div class="input-dock__outer">
       <div class="input-dock__inner">
@@ -320,7 +476,7 @@ onBeforeUnmount(() => {
           :data-state="recorderState"
           @click="voiceStore.toggleRecording()"
         >
-          <Mic class="voice-rec-btn__mic" :size="18" />
+          <Mic class="voice-rec-btn__mic" :size="16" />
           <span class="voice-rec-btn__dot" aria-hidden="true"></span>
           <span class="voice-rec-btn__spinner" aria-hidden="true"></span>
         </button>
@@ -331,7 +487,7 @@ onBeforeUnmount(() => {
           aria-label="Attach"
           @click="openFilePicker"
         >
-          <Plus :size="20" />
+          <Plus :size="16" />
         </button>
 
         <textarea
@@ -352,65 +508,128 @@ onBeforeUnmount(() => {
           :disabled="!canSend"
           @click="handleSend()"
         >
-          <Send :size="20" />
+          <Send :size="16" />
         </button>
       </div>
     </div>
 
     <div class="dock-controls">
-      <div ref="thinkingWrapRef" class="thinking-select">
+      <div ref="selectWrapRef" class="model-select">
+        <!-- With no model configured there is nothing to pick: the trigger
+             opens the Brain, whose first page adds one. -->
         <button
-          id="thinkingTrigger"
-          class="thinking-select__trigger"
+          v-if="models?.length === 0"
+          id="modelTrigger"
+          class="model-select__trigger"
           type="button"
-          aria-haspopup="true"
-          :aria-expanded="thinkingMenuOpen"
-          @click.stop="thinkingMenuOpen = !thinkingMenuOpen"
+          @click="webPlatformAdapter.openBrain()"
         >
-          <span class="thinking-select__swirl" aria-hidden="true"></span>
-          <span id="thinkingLabel" class="thinking-select__value">{{ levelLabel }}</span>
-          <ChevronDown :size="12" style="opacity: 0.6" />
+          <span class="model-select__swirl" aria-hidden="true"></span>
+          <span class="model-select__value">Add a model</span>
+        </button>
+        <button
+          v-else
+          id="modelTrigger"
+          ref="triggerRef"
+          class="model-select__trigger"
+          type="button"
+          aria-haspopup="menu"
+          :aria-expanded="menuOpen"
+          :disabled="!canPick"
+          @click.stop="toggleMenu"
+        >
+          <span class="model-select__swirl" aria-hidden="true"></span>
+          <span id="modelLabel" class="model-select__value">{{ triggerLabel }}</span>
+          <ChevronDown :size="16" style="opacity: 0.6" />
         </button>
         <div
-          id="thinkingMenu"
-          class="thinking-select__menu"
-          :class="{ hidden: !thinkingMenuOpen }"
+          v-if="menuOpen"
+          id="modelMenu"
+          ref="menuRef"
+          class="model-select__menu"
           role="menu"
+          :aria-label="menuModel ? `${modelName(menuModel)} thinking levels` : 'Models'"
+          @keydown="onMenuKeydown"
         >
-          <button
-            v-for="item in THINKING_ITEMS"
-            :key="item.level"
-            class="thinking-select__item"
-            :class="{ active: level === item.level }"
-            :data-level="item.level"
-            type="button"
-            role="menuitem"
-            @click="selectLevel(item.level)"
-          >
-            {{ item.label }}
-          </button>
+          <template v-if="menuModel">
+            <button class="model-select__item model-select__item--back" type="button" role="menuitem" @click="backToModels">
+              <ChevronLeft :size="16" aria-hidden="true" />
+              <span class="model-select__name">{{ modelName(menuModel) }}</span>
+            </button>
+            <button
+              v-for="item in THINKING_ITEMS"
+              :key="item.level"
+              class="model-select__item"
+              :class="{ active: menuModel.id === providerId && level === item.level }"
+              :data-level="item.level"
+              type="button"
+              role="menuitemradio"
+              :aria-checked="menuModel.id === providerId && level === item.level"
+              @click="selectLevel(item.level)"
+            >
+              {{ item.label }}
+            </button>
+          </template>
+          <template v-else>
+            <button
+              v-for="model in models"
+              :key="model.id"
+              class="model-select__item"
+              :class="{ active: model.id === providerId }"
+              :data-model="model.id"
+              type="button"
+              role="menuitem"
+              aria-haspopup="menu"
+              @click="openLevels(model)"
+            >
+              <span class="model-select__name">{{ modelName(model) }}</span>
+              <ChevronRight :size="16" aria-hidden="true" />
+            </button>
+          </template>
         </div>
       </div>
-      <div
-        id="contextDisplay"
-        class="context-display"
-        :class="{ hidden: !usageDisplay }"
-        :title="`${usageDisplay} context`"
-      >
-        <span class="context-indicator">
-          <b>{{ usagePercent }}</b>
-        </span>
-        <span class="meter"><i :style="{ width: usageRatio * 100 + '%' }"></i></span>
+      <div v-if="percentUsed != null" class="context-ring">
+        <div
+          id="contextDisplay"
+          class="context-ring__meter"
+          :class="{ 'context-ring--open': percentShown }"
+          role="meter"
+          aria-label="Context used"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          :aria-valuenow="percentUsed"
+        >
+          <svg class="context-ring__dial" viewBox="0 0 36 36" aria-hidden="true">
+            <circle class="context-ring__track" cx="18" cy="18" r="14" />
+            <circle
+              class="context-ring__fill"
+              cx="18"
+              cy="18"
+              r="14"
+              pathLength="100"
+              stroke-dasharray="100"
+              :stroke-dashoffset="100 - percentUsed"
+            />
+          </svg>
+          <span class="context-ring__label">{{ percentUsed }}%</span>
+        </div>
+        <button
+          type="button"
+          class="context-ring__toggle"
+          aria-label="Show the percentage"
+          :aria-pressed="percentShown"
+          @click="percentShown = !percentShown"
+        />
       </div>
     </div>
 
-    <!-- No capture attr: lets mobile show the standard OS picker (library +
+    <!-- No accept attr: any file may be attached, the same as dropping one.
+         No capture attr: lets mobile show the standard OS picker (library +
          take-photo), WhatsApp-style. -->
     <input
       id="attachFileInput"
       ref="fileInputRef"
       type="file"
-      :accept="ATTACH_ACCEPT"
       aria-label="Attach file"
       multiple
       hidden

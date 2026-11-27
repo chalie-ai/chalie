@@ -18,6 +18,7 @@ from api.response.response import Response
 from api.response.voice import TranscriptionResponse
 from services.speech_to_text_service import MAX_AUDIO_SECONDS
 from services.speech_to_text_service import get_service as stt_service
+from services.voice_cleanup_service import clean_transcript
 from services.voice_transcript_service import VoiceTranscriptService
 
 logger = logging.getLogger(__name__)
@@ -73,7 +74,8 @@ class VoiceTranscribeAction(Action):
             return self._not_ready()
 
         try:
-            return TranscriptionResponse(text=stt.transcribe(audio)).single()
+            text = stt.transcribe(audio)
+            return TranscriptionResponse(text=clean_transcript(text)).single()
         except Exception as e:
             logger.error("[Voice] STT error: %s", e)
             return Response.failure("Transcription failed"), 500

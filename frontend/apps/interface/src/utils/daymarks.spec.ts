@@ -39,7 +39,7 @@ function block(turnId: number, day: string, timestamp = '29 Jul 10:35'): Convers
     working: false,
     duration_ms: 0,
     type: 'user',
-    messages: [{ id: String(turnId), role: 'user', content: 'hi', timestamp, day, turn_id: turnId }],
+    messages: [{ id: String(turnId), role: 'user', content: 'hi', timestamp, day, created_at: '2026-01-01T00:00:00Z', turn_id: turnId }],
   };
 }
 

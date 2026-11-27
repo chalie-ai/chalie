@@ -26,12 +26,14 @@ These run against the REAL production stack:
 No mocks, no stub configs — the configs under test are the ones production runs.
 """
 
+import sys
 from typing import Mapping, Sequence, cast
 
 import pytest
 
 from abilities._registry import AbilityRegistry
 from abilities.find_tools import FindToolsAbility
+from abilities.message_parent import MessageParentAbility
 from contracts.params.find_tools_params_bag import FindToolsParamsBag
 from configs.channels import DiscoveryConfig, UserConfig
 from configs.channels.web_browse import WebBrowseConfig
@@ -202,7 +204,11 @@ _EXPECTED_NON_DISCOVERABLE = frozenset({
     "calendar",                # personal info — pim delegate only
     "contacts",                # personal info — pim delegate only
     "run_script",               # code-agent-delegate-exclusive — CodeAgentConfig only
-})
+    "plan",                    # a turn's own plan — pinned on every planning config
+    MessageParentAbility.NAME,  # a chat-spawned subagent's turn only — offered by the processor
+}) | (frozenset() if sys.platform == "darwin" else frozenset({
+    "imessage",                # Apple-only — offered only where Chalie runs on a Mac
+}))
 
 
 def test_non_discoverable_set_is_exactly_the_expected_set() -> None:

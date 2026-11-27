@@ -9,7 +9,9 @@ export { conversation } from './conversation';
 export { voice } from './voice';
 export { scheduler } from './scheduler';
 export { system } from './system';
-export { policies } from './policies';
+export { browser } from './browser';
+export { agents } from './agents';
+export { providers } from './providers';
 export { toggleItem } from './lists';
 
 export { getHost } from '@chalie/shared';

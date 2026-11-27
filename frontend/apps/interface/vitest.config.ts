@@ -18,5 +18,8 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['src/**/*.spec.ts'],
+    // Components mount with their own stylesheets applied, so a spec can read
+    // what the reader would see through getComputedStyle.
+    css: true,
   },
 });

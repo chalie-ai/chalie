@@ -32,6 +32,8 @@ import logging
 from typing import ClassVar, cast
 from urllib.parse import urlsplit, urlunsplit
 
+import httpx
+
 from services.llm_clients.openai_compatible import OpenAICompatibleClient, _positive_int
 
 logger = logging.getLogger(__name__)
@@ -62,16 +64,16 @@ class LlamaCppClient(OpenAICompatibleClient):
         if url is None:
             return None
 
-        import requests  # noqa: PLC0415
-        from services.provider_api import PROVIDER_CALL_TIMEOUT_S  # noqa: PLC0415
-
         headers = {}
         api_key = self._config.get('api_key')
         if api_key:
             headers['Authorization'] = f'Bearer {api_key}'
 
         try:
-            resp = requests.get(url, headers=headers, timeout=PROVIDER_CALL_TIMEOUT_S)
+            # Over the abortable transport: a send can run this probe first,
+            # and Stop must be able to end it there too.
+            with httpx.Client(timeout=None, event_hooks=self._abort.hooks()) as http:
+                resp = http.get(url, headers=headers)
             resp.raise_for_status()
             payload = cast(dict[str, object], resp.json())
         except Exception as exc:

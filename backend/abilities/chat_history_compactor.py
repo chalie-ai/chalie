@@ -9,11 +9,11 @@ channel's history via ``prompt_service.previous_messages()`` from the bound ``mp
 and writes the model's output VERBATIM into the ``compactions`` table — never a transcript
 row, so firing never moves a ``turn_id`` and the turn boundary survives.
 
-The checkpoint is scoped to the parent's VIEW: a FORK reply writes ``for_turn_id =
-turn_id`` and its watermark is the max transcript.id of the folded rows; the MAIN
-spine writes ``for_turn_id = NULL`` and its watermark is the max turn_id. Each axis
-is exactly what the matching ``transcript_service.read()`` cuts on, so the next read
-returns nothing through the watermark.
+The checkpoint is scoped to the parent's VIEW through ``mp.compaction_service``: a
+FORK reply's checkpoint belongs to its thread, the MAIN spine's to the channel. On
+both, the watermark is the max transcript.id of the folded rows — exactly what the
+matching ``transcript_service.read()`` cuts on, so the next read returns nothing
+through the watermark.
 
 The checkpoint is KEYED on the channel the parent READS cross-turn history from —
 ``config.read_channel`` when the config splits read/write (DiscoveryConfig reads the
@@ -34,18 +34,19 @@ from abilities._compaction_config import CompactionConfig
 from abilities._result import ToolResult
 from contracts.params.chat_history_compactor_params_bag import ChatHistoryCompactorParamsBag
 from contracts.params.param_bag import ParamBag
-from models.compaction import Compaction
 
 if TYPE_CHECKING:
     from typing import Protocol
 
+    from models.compaction import Compaction
     from models.transcript import Transcript
 
     class _CompactionParent(Protocol):
         _compaction_kept_rows: int
         _compaction_folded_block: str
         turn_id: "int | None"
-        _forked: bool
+        fork_view: bool
+        provider_id: "int | None"
 
         class _TranscriptService(Protocol):
             def read(self) -> list["Transcript"]: ...
@@ -56,6 +57,12 @@ if TYPE_CHECKING:
             def previous_messages(self, drop_oldest: int = ...) -> str: ...
 
         prompt_service: _PromptService
+
+        class _CompactionService(Protocol):
+            def get(self) -> "Compaction | None": ...
+            def write(self, compacted_up_to_id: int, content: str) -> "Compaction": ...
+
+        compaction_service: _CompactionService
 
         class _Config(Protocol):
             channel: str
@@ -107,7 +114,6 @@ Rules:
 class ChatHistoryCompactor(Ability[ChatHistoryCompactorParamsBag]):
     DISCOVERABLE: ClassVar[bool] = False  # internal-only compaction tool; pinned, never discovered
     NAME: ClassVar[str] = "chat_history_compactor"
-    counts_as_settle: ClassVar[bool] = False  # never demotes a settle0
     PARAMS: ClassVar[type[ParamBag] | None] = ChatHistoryCompactorParamsBag
 
 
@@ -146,14 +152,13 @@ class ChatHistoryCompactor(Ability[ChatHistoryCompactorParamsBag]):
         # the write ``channel`` — a fork is its own thread and
         # ``transcript_service.read()`` scopes its FORK view the same way, so
         # the id-axis watermark and the rows it cuts stay on one channel.
-        channel = mp.config.channel if mp._forked else (mp.config.read_channel or mp.config.channel)
-        # The checkpoint axis follows the parent's view: FORK → its thread, MAIN →
-        # the spine (NULL). Used for both the prior read and the new write.
-        for_turn_id = mp.turn_id if mp._forked else None
+        # ``mp.compaction_service`` keys the checkpoint the same way; ``channel``
+        # names it in the log and the user-synthesis handoff.
+        channel = mp.config.channel if mp.fork_view else (mp.config.read_channel or mp.config.channel)
 
         # Carry forward the prior checkpoint so continuity chains across
         # compactions instead of restarting from the recent tail each time.
-        prior_row = Compaction.latest_main(channel) if for_turn_id is None else Compaction.latest_fork(channel, for_turn_id)
+        prior_row = mp.compaction_service.get()
         prior = (prior_row.content or "").strip() if prior_row is not None else ""
 
         combined = self._fit_compaction_input(mp, prior)
@@ -169,27 +174,23 @@ class ChatHistoryCompactor(Ability[ChatHistoryCompactorParamsBag]):
 
         summary = (MessageProcessor.process(
             ChatHistoryCompactionConfig(), raw_input=combined,
+            metadata={"provider_id": mp.provider_id},
         ).result() or "").strip()
         if not summary:
             logger.warning(
-                "[chat_history_compactor] empty summary on channel=%s scope=%s; advancing watermark anyway",
-                channel, for_turn_id,
+                "[chat_history_compactor] empty summary on channel=%s turn=%s fork=%s; advancing watermark anyway",
+                channel, mp.turn_id, mp.fork_view,
             )
 
         # The model's output IS the checkpoint — write it verbatim into the
         # compactions table. The watermark covers everything just read (the full
         # transcript_service.read(), not the kept subset) so a rare drop-oldest
-        # stays covered and the next read returns nothing through it. Axis follows
-        # the view: a FORK stores the max transcript.id, the MAIN spine the max
-        # turn_id. This advance only holds because transcript_service.read()
-        # returns rows ABOVE the prior watermark — keep that contract (its flow
-        # narrative spells out why).
+        # stays covered and the next read returns nothing through it. Both views
+        # store the max transcript.id. This advance only holds because
+        # transcript_service.read() returns rows ABOVE the prior watermark — keep
+        # that contract (its flow narrative spells out why).
         rows = mp.transcript_service.read()
-        compacted_up_to = (
-            max(cast(int, r.id) for r in rows) if mp._forked
-            else max(cast(int, tid) for r in rows if (tid := r.to_dict()["turn_id"]) is not None)
-        )
-        Compaction.write(channel, for_turn_id, compacted_up_to, summary)
+        mp.compaction_service.write(max(cast(int, r.id) for r in rows), summary)
         # A folded USER window is the user-synthesis trigger — hand over the
         # block stashed pre-watermark. Never allowed to break the recovery
         # path the compactor sits on.
@@ -229,7 +230,7 @@ class ChatHistoryCompactor(Ability[ChatHistoryCompactorParamsBag]):
         combined = prev if not prior else f"## Previous Summary\n\n{prior}\n\n## New Turns\n\n{prev}"
         parent._compaction_kept_rows = total
         # The folded window WITHOUT the prior checkpoint — stashed here because
-        # the handoff fires only after Compaction.write, when these rows can no
+        # the handoff fires only after the checkpoint write, when these rows can no
         # longer be read.
         parent._compaction_folded_block = prev
         return combined

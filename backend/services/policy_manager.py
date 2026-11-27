@@ -10,38 +10,39 @@ The seed file (policy_defaults.json) is the single source of truth for the
 policy table. ``apply_seed`` converges the table to the seed on every boot: it
 INSERT-OR-IGNOREs every seeded row, then DELETES every row whose permission is
 neither in the seed nor an MCP tool permission. Retiring an ability needs only
-a seed-file edit — never a migration. The seed is exhaustive (71 permissions ×
-3 channels = 213 rows), so matching on the permission column alone is correct
+a seed-file edit — never a migration. The seed is exhaustive (88 permissions ×
+3 channels = 264 rows), so matching on the permission column alone is correct
 and complete.
 
 A small set of tools (``INTERNAL``) ALWAYS bypass the gate regardless of channel
-or any seeded row — read-only / scratch / infrastructure tools, plus
-delegate-exclusive inner tools whose user-facing permission is the OUTER delegate
-tool (``pim`` covers email/calendar/contacts exactly as ``web_search`` covers
-search). They are never user-gated and carry no seed rows.
+or any seeded row — read-only / scratch / infrastructure tools, and the tools
+that spawn and manage subagents. They are never user-gated and carry no seed
+rows. A tool a subagent calls is gated on the channel of the agent at the top of
+the chain, since every subagent runs on its spawner's policy channel.
 
 The gate is dead simple: short-circuit INTERNAL tools, else SELECT the setting
-(lazily creating an 'ask' row on a miss), then run | block | prompt. The decision
+(lazily creating an 'ask' row on a miss), then run | block | ask. The decision
 carries no execution timeout — an allowed tool runs to completion in the callback
-(Ability.execute). An ``ask`` prompts only when the turn has a surface a human
-can answer from — its ``origin`` (the interactive turn the call belongs to);
-with no origin it denies at once and tells the model to ask the user for
-access. The interactive prompt parks until the user responds OR the turn's
-should_stop() returns True, so it never pins the per-channel turn lock.
+(Ability.execute). An ``ask`` goes to the user through ``AskUser`` whether or
+not anyone is watching; the call's ``origin`` (the interactive turn it belongs
+to, if any) rides along as plain data. The calling turn's thread waits for the
+answer, with no time limit, until the user replies or dismisses the ask or the
+turn's should_stop() returns True; it holds no lock while it waits, so other
+turns run beside it. An exception while asking propagates: nothing runs
+unapproved.
 """
 
 import json
 import logging
 import threading
-import uuid
 from collections.abc import Callable
 from typing import cast
 
 from configs.enums.policy_channel import PolicyChannel
 from models.policy import Policy
 from models.policy_blocked_log import PolicyBlockedLog
+from services.ask_user import AskReply, AskUser, Origin, PermissionAsk
 from services.time_utils import utc_now
-from services.websocket import Websocket
 
 logger = logging.getLogger(__name__)
 
@@ -49,45 +50,35 @@ CHANNEL = PolicyChannel
 VALID_CHANNELS = {c.value for c in CHANNEL}
 VALID_SETTINGS = {"internal", "allow", "ask", "deny"}
 
-# Tools that ALWAYS bypass the gate, on every channel, with no seed row. Two
+# Tools that ALWAYS bypass the gate, on every channel, with no seed row. Three
 # admission grounds: (1) read-only / scratch / infrastructure tools — never
-# user-gated; (2) delegate-exclusive inner tools (DISCOVERABLE=False, pinned on
-# one delegate config) — the user-facing permission is the OUTER delegate tool
-# (``web_search`` covers search/news, ``web_browse`` covers browser,
-# ``pim`` covers email/calendar/contacts, ``code_agent`` covers ``run_script``).
-# The mutating file primitives (write_file / edit_file / move / make_dir /
-# delete / set_permissions) are NOT here: they carry seeded ``allow`` rows, so
-# the user can tighten them per channel. ANY action on INTERNAL tools runs unconditionally;
+# user-gated; (2) the tools that spawn subagents and those that list, check,
+# stop or message them, and the one a subagent messages its spawner with —
+# starting, managing and talking to subagents is internal mechanics, never
+# asked; (3) delegate-exclusive inner tools of web_search and web_browse
+# (search/news, browser), which have no permission of their own. email /
+# calendar / contacts are NOT here: they carry seeded per-action rows, gated on
+# the spawner's channel; nor is code_agent's run_script, which carries one
+# seeded row per channel. Nor are the mutating file primitives (write_file /
+# edit_file / move / make_dir / delete / set_permissions): they carry seeded
+# ``allow`` rows, so the user can tighten them per channel. ANY action on
+# INTERNAL tools runs unconditionally;
 # they never appear in the Brain policy surface, and the reap pass removes any
 # stale rows for them so this frozenset stays the single source of truth.
 INTERNAL = frozenset({
-    "browser", "calendar", "chalie_docs", "chat_history_compactor", "contacts",
-    "delete_graph", "email", "find_skills", "find_tools", "image_preview", "mcp_tools", "news",
-    "read", "recall", "review_tool_calls", "review_transcript", "run_script", "save_graph",
-    "save_map", "save_synthesis", "search", "skill_manager", "web_fetch",
+    "agent_status", "browser", "chalie_docs", "chat_history_compactor", "code_agent",
+    "delete_graph", "find_skills", "find_tools", "image_preview", "list_agents", "mcp_tools",
+    "message_parent", "message_subagent", "news", "pim", "plan", "read", "recall",
+    "review_tool_calls", "review_transcript", "save_graph", "save_map",
+    "save_synthesis", "search", "skill_manager", "stop_subagent", "subtask", "web_browse",
+    "web_fetch", "web_search",
 })
 
 _BLOCK = "The {permission} action is not allowed. Do NOT retry."
 
-# An `ask` on a turn with no surface — nothing a human could answer from — is
-# denied on the spot and the model is told why, so it asks the user for access
-# instead of retrying. One rule for every channel: a surface decides, not the
-# channel's name.
-_ASK_NO_SURFACE = (
-    'The {permission} action is blocked by policy on the {channel} channel: it is set to "ask" '
-    "and nobody can answer a prompt here. Do NOT retry. Tell the user it was blocked by policy "
-    'and ask them to set {permission} to "allow" for the {channel} channel in Brain → Policies.'
-)
-
-# request_id -> {"event": threading.Event, "result": str | None, "frame": dict}.
-# ``frame`` is the exact ``permission_request`` dict that was broadcast, so
-# GET /api/policies/pending restores the very card a client missed. Woken by
-# POST /api/policies/respond. Insertion order = oldest first.
-_permission_gates: dict[str, dict[str, object]] = {}
-
-# How often the interactive ask-gate re-checks the turn's should_stop() while
-# parked: small enough that a cancelled turn frees the per-channel
-# lock near-instantly, large enough to cost no measurable idle CPU.
+# How often a waiting ask re-checks the turn's should_stop(): small enough that
+# a stopped turn ends its wait near-instantly, large enough to cost no
+# measurable idle CPU.
 _GATE_POLL_SECONDS = 0.25
 
 
@@ -109,19 +100,9 @@ class PolicyManager:
         setting = Policy.get_or_create_default(channel.value, permission)
         if setting in ("internal", "allow"):
             return callback()
-        if setting == "ask":
-            if origin is None:
-                # Nobody can answer a prompt here: deny now, say why, and steer
-                # the model to ask the user for access instead of retrying.
-                self._log_blocked(channel.value, permission, "user_unavailable")
-                logger.info(
-                    "[PolicyManager] ask with no surface → deny: permission=%s channel=%s",
-                    permission, channel.value,
-                )
-                return _ASK_NO_SURFACE.format(permission=permission, channel=channel.value)
-            if self._ask_user(permission, channel.value, origin, summary, should_stop):
-                return callback()
-        # A turn cancelled while parked on the ask gate denies the tool
+        if setting == "ask" and self._ask_user(permission, channel.value, origin, summary, should_stop):
+            return callback()
+        # A turn cancelled while waiting on the ask denies the tool
         # but is NOT a user verdict — skip the audit row so the blocked-log stays
         # honest. The guard self-no-ops for every non-cancel path (no should_stop,
         # or it never returned True), which keeps the normal deny/denied logging.
@@ -136,66 +117,47 @@ class PolicyManager:
         # bespoke classmethod on Policy owns the INSERT OR IGNORE default.
         return Policy.get_or_create_default(channel, permission)
 
-    # ── Interactive prompt (turns with a surface; fail-open per D6) ───────────
+    # ── Asking the user ───────────────────────────────────────────────────────
 
     def _ask_user(
         self,
         permission: str,
         channel: str,
-        origin: dict[str, object],
+        origin: dict[str, object] | None,
         summary: str,
         should_stop: "Callable[[], bool] | None" = None,
     ) -> bool:
-        """Park the call on a prompt the interface shows on the turn ``origin``
-        names, until a human answers or the turn is cancelled. ``channel`` is
-        the policy channel the row was read on — kept for the log line only;
-        the frame carries the origin, which is what routes the card."""
-        rid = str(uuid.uuid4())
+        """Ask the user whether ``permission`` may run and wait in this thread
+        for the answer; True only when they allow it. A dismissed ask, or one
+        cancelled because the turn's should_stop() fired, reads as denied.
+        ``channel`` is the policy channel the row was read on — kept for the
+        log line only."""
+        done = threading.Event()
+        outcome: dict[str, bool] = {}
+
+        def on_reply(reply: AskReply) -> None:
+            outcome["allowed"] = reply.answered and reply.value is True
+            done.set()
+
+        ask = PermissionAsk(
+            action_id=permission,
+            summary=summary,
+            origin=None if origin is None else Origin.model_validate(origin),
+        )
+        ask_id = AskUser.permission(ask, on_reply)
+        logger.info(
+            "[PolicyManager] ask parked: ask_id=%s permission=%s channel=%s origin=%s",
+            ask_id, permission, channel, origin,
+        )
         try:
-            from models.ws_message import WsMessage  # noqa: PLC0415
-            frame: dict[str, object] = {
-                "type": "permission_request",
-                "request_id": rid,
-                "action_id": permission,
-                "summary": summary,
-                "origin": origin,
-            }
-            gate = _permission_gates[rid] = {"event": threading.Event(), "result": None, "frame": frame}
-            Websocket.broadcast(WsMessage(**frame))
-            logger.info("[PolicyManager] ask parked: permission=%s channel=%s origin=%s", permission, channel, origin)
-            # Park until the user responds (POST /api/policies/respond sets the gate
-            # event) OR the turn is cancelled. Polling makes the wait a cooperative
-            # cancel checkpoint instead of an unbounded park that would pin the
-            # per-channel turn lock forever. A cancel resolves as DENIED;
-            # we break and fall through — never raise, since the fail-open except
-            # below would swallow it and WRONGLY approve the gated tool.
-            event = cast(threading.Event, gate["event"])
-            while not event.wait(_GATE_POLL_SECONDS):
+            while not done.wait(_GATE_POLL_SECONDS):
                 if should_stop is not None and should_stop():
-                    break
-            return _permission_gates.pop(rid, {}).get("result") == "approved"
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("[PolicyManager] permission gate failed: %s", exc)
-            _permission_gates.pop(rid, None)
-            return True  # fail-open (D6)
+                    AskUser.cancel(ask_id)
         finally:
-            # Every exit — answered, cancelled, or the fail-open above — tells the
-            # surfaces the card is stale so no tab keeps a prompt nobody can act on.
-            self._resolve(rid)
-
-    @staticmethod
-    def _resolve(rid: str) -> None:
-        try:
-            from models.ws_message import WsMessage  # noqa: PLC0415
-            Websocket.broadcast(WsMessage(type="permission_resolved", request_id=rid))
-        except Exception as exc:  # noqa: BLE001 — a notice that fails must never change the verdict
-            logger.debug("[PolicyManager] permission_resolved broadcast failed: %s", exc)
-
-    def pending(self) -> list[dict[str, object]]:
-        """The broadcast frame of every parked ask-gate, oldest first — the same
-        dict the socket pushed, so a client restoring over REST sees exactly the
-        card it missed."""
-        return [cast("dict[str, object]", gate["frame"]) for gate in list(_permission_gates.values())]
+            # An exception out of the wait still closes the ask; once it is
+            # answered or cancelled this is a no-op.
+            AskUser.cancel(ask_id)
+        return outcome["allowed"]
 
     def _log_blocked(self, channel: str, permission: str, reason: str) -> None:
         PolicyBlockedLog.log_blocked(

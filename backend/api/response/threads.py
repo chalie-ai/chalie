@@ -10,7 +10,8 @@ Both shapes carry ``type`` — the ConfigType identity
 (``user``/``scheduled``/``discovery``) they were resolved under. ``turn_id`` is
 only unique PER TYPE, so a client that learns of a thread from the feed must
 carry this forward rather than fall back to the ``user`` default and resolve
-to the wrong channel.
+to the wrong channel. A delegate turn has no type: its block carries ``type``
+null and the ``channel`` it was read by instead.
 """
 
 from __future__ import annotations
@@ -24,16 +25,15 @@ from .response import Response
 
 class ThreadSummary(Response):
     """One collapsed feed row: the thread's id, last-activity timestamp, opener
-    preview, row count, one-sentence gist, and whether the turn is still
-    working. The internal recency sort key (the latest transcript row id)
-    drives ordering server-side and is not exposed."""
+    preview, row count and one-sentence gist. The internal recency sort key
+    (the latest transcript row id) drives ordering server-side and is not
+    exposed."""
 
     turn_id: int | None = None
     last_activity_at: str | None = None
     preview: str
     row_count: int
     gist: str | None = None
-    working: bool = False
     type: str
 
 
@@ -49,11 +49,16 @@ class TurnBlock(Response):
     working: bool
     duration_ms: int
     messages: list[Message]
-    type: str
+    type: str | None
+    #: Set only on a delegate turn's block, read by channel rather than type.
+    channel: str | None = None
     #: True when the turn's most recent execution ended CRASHED (unhandled step
     #: exception or a swept process death). Drives the FE "ended unexpectedly"
     #: note so a reply-less crash isn't mistaken for a normal empty turn.
     crashed: bool = False
+    #: True when the turn's most recent execution was stopped. Drives the
+    #: "stopped" note on a subagent's transcript panel.
+    cancelled: bool = False
 
 
 class ThreadBatch(Response):
@@ -62,11 +67,17 @@ class ThreadBatch(Response):
     blocks: list[TurnBlock]
 
 
-class ThinkingLevel(Response):
-    """``GET /api/threads/thinking-level/<turn_id>`` body — the literal value
-    persisted on the thread's input row (``auto``/``medium``/``high``)."""
+class ThreadSettings(Response):
+    """``/api/threads/settings/<turn_id>`` body — the model and thinking level
+    the thread's next message runs on."""
 
-    level: str
+    #: The provider's id; null only when no provider is configured at all.
+    provider_id: int | None
+    #: ``auto``/``medium``/``high``.
+    thinking_level: str
+    #: The thread these settings belong to; null on a channel with no thread
+    #: yet, where there is nothing to change until the first message.
+    turn_id: int | None
 
 
 class TurnExecution(Response):
@@ -90,6 +101,7 @@ class TurnExecution(Response):
     cancel_requested: bool
     state: str
     stop_reason: str | None
+    input_id: int | None
 
 
 class TurnStopResult(Response):

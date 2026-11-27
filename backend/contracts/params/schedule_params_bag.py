@@ -55,9 +55,11 @@ def _message(params: dict[str, object]) -> str | ToolResult:
 
 
 def _start_at(params: dict[str, object]) -> datetime | ToolResult:
-    """``start_at`` is a plain LOCAL wall-clock ISO string — the model copies it
-    verbatim from the World State's ``local_time`` telemetry and never converts
-    timezones itself. Optional; defaults to local now when omitted."""
+    """``start_at`` is a plain LOCAL wall-clock ISO string — the model takes the
+    date and time from the stamp on the current message (e.g. ``[Fri 2026-09-04
+    10:12]`` → ``2026-09-04T10:12:00``: user-local wall clock, seconds ``:00``,
+    no timezone suffix) and never converts timezones itself. Optional; defaults
+    to local now when omitted."""
     raw = ParamBag.str_default(params, Keys.start_at, default="")
     if isinstance(raw, ToolResult):
         return raw
@@ -72,8 +74,10 @@ def _start_at(params: dict[str, object]) -> datetime | ToolResult:
             code="invalid-time",
             hint=(
                 "pass start_at as a local wall-clock ISO timestamp, e.g. "
-                "'2026-03-20T09:00:00' — copy it straight from the World "
-                "State's current local_time."
+                "'2026-03-20T09:00:00' — take the date and time from the stamp "
+                "on the current message (e.g. '[Fri 2026-09-04 10:12]' → "
+                "'2026-09-04T10:12:00': user-local wall clock, seconds ':00', "
+                "no timezone suffix)."
             ),
         )
 

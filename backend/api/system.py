@@ -105,18 +105,16 @@ def _health() -> Health:
 
 
 def _absorb_heartbeat_signals(data: dict[str, object]) -> None:
-    """Absorb the heartbeat into WorldState as Signals (heartbeat / device /
-    local_time). The old telemetry mirror is gone: nothing reads the
-    world-state ``"telemetry"`` key — WorldState renders telemetry straight
-    from ``TelemetryService``."""
+    """Absorb the heartbeat into WorldState as Signals (heartbeat / device).
+    Nothing renders from WorldState into the prompt: the heartbeat's locale
+    fields reach the model as the system prompt's locale line and its device
+    groups through the ``user_device`` tool, both read straight from
+    ``TelemetryService``."""
     from services.world_state import world_state, Signal
     world_state.absorb(Signal(source=_SIGNAL_SOURCE_HEALTH, kind="heartbeat", payload=data))
     device_class = data.get("device_class") or cast(dict[str, object], data.get("device") or {}).get("class")
     if device_class:
         world_state.absorb(Signal(source=_SIGNAL_SOURCE_HEALTH, kind="device", payload={"device_class": device_class}))
-    local_time = data.get("local_time")
-    if local_time:
-        world_state.absorb(Signal(source=_SIGNAL_SOURCE_HEALTH, kind="local_time", payload={"local_time": local_time}))
 
 
 def _persist_heartbeat(data: dict[str, object]) -> None:
@@ -376,16 +374,18 @@ class ObservabilityWorldStateResource(Resource):
     @system_ns.response(500, "Failed to retrieve world state", model=_S["Error"])
     @responds(code=200)
     def get(self) -> ResponseReturnValue:
-        """World state as seen by the ACT loop — rendered block + raw inputs (raw passthrough)."""
+        """World-state inputs — the raw telemetry snapshot — plus ``rendered``,
+        the locale line exactly as it closes the model's system prompt (empty
+        before the first heartbeat)."""
         try:
-            from services.world_state import world_state
+            from services.prompt_service import PromptService
             from services.telemetry_service import TelemetryService
 
             return {
-                "rendered": world_state.render(),
                 "inputs": {
                     "telemetry": TelemetryService.read().as_dict(),
                 },
+                "rendered": PromptService.locale_line(),
             }
         except Exception:
             logger.exception("[REST API] observability/world-state error")
@@ -401,15 +401,15 @@ class ObservabilityCompactionResource(Resource):
     def get(self) -> CompactionView | ResponseReturnValue:
         """Continuity-compaction synthesis for the chat ('user') channel (read-only)."""
         try:
-            # MAIN-spine checkpoint (for_turn_id NULL): the watermark is a turn_id.
-            # The DTO field keeps its name so the existing Brain view needs no change.
+            # MAIN-spine checkpoint: the watermark is a transcript row id, and
+            # ``latest_main`` only returns a checkpoint that carries one.
             record = Compaction.latest_main(Channel.USER.value)
             if record is None:
                 return CompactionView(compaction=None)
             return CompactionView(
                 compaction=CompactionRecord(
                     summary=record.content,
-                    compacted_up_to_id=record.compacted_up_to,
+                    compacted_up_to_id=cast("int", record.compacted_up_to_id),
                     compacted_at=format_date(record.created_at, for_ui=True) or "",
                 ),
             )

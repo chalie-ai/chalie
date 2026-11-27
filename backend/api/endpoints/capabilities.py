@@ -35,6 +35,10 @@ if TYPE_CHECKING:
     class _Capability(Protocol):
         def get_manifest(self) -> dict[str, object]: ...
         def is_connected(self) -> bool: ...
+        def unavailable_reason(self) -> str | None: ...
+        def status_note(self) -> str | None: ...
+        def setup_pending(self) -> bool: ...
+        def setup_code(self) -> str | None: ...
         def load_credential(self, key: str) -> object: ...
         def configure(self, credentials: object) -> None: ...
         def connect(self) -> bool: ...
@@ -82,11 +86,17 @@ def _manifest(cap: "_Capability", cap_id: str) -> dict[str, object]:
 def _summary_dto(cap_id: str, cap: "_Capability") -> CapabilitySummaryResponse:
     """Build a :class:`CapabilitySummaryResponse` from a registry entry."""
     manifest = _manifest(cap, cap_id)
+    unavailable_reason = cap.unavailable_reason()
     return CapabilitySummaryResponse(
         id=cap_id,
         name=cast(str, manifest["name"]),
         version=cast(str, manifest["version"]),
+        description=cast("str | None", manifest.get("description")),
+        available=unavailable_reason is None,
+        unavailable_reason=unavailable_reason,
         connected=cap.is_connected(),
+        status_note=cap.status_note(),
+        setup_code=cap.setup_code(),
         last_sync_at=_get_last_sync_at(cap_id),
         providers=cast("list[str]", manifest["providers"]),
         fields=cast("list[dict[str, object]] | None", manifest.get("fields")),
@@ -134,7 +144,8 @@ class CapabilitiesEndpoint(Endpoint):
                 key = f"{cap_id}:{field['name']}"
                 val = cap.load_credential(key)
                 if val is not None:
-                    config[cast(str, field["name"])] = val
+                    # A checkbox is stored as "1"/"0" and sent back as the boolean setup takes.
+                    config[cast(str, field["name"])] = val == "1" if field.get("type") == "checkbox" else val
 
         return CapabilityDetailResponse(
             id=cap_id,

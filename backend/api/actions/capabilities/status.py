@@ -43,8 +43,14 @@ class CapabilitiesStatus(Action):
             raise NotFoundError(f"Capability not found: {cap_id}")
 
         cap = cast("_Capability", caps[cap_id])
+        unavailable_reason = cap.unavailable_reason()
         return CapabilityStatusResponse(
             id=cap_id,
+            available=unavailable_reason is None,
+            unavailable_reason=unavailable_reason,
             connected=cap.is_connected(),
+            pending=cap.setup_pending(),
+            status_note=cap.status_note(),
+            setup_code=cap.setup_code(),
             last_sync_at=_get_last_sync_at(cap_id),
         ).single()

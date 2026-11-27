@@ -26,8 +26,6 @@ records every request so steer injection is asserted on the actual bodies sent.
 """
 
 import sqlite3
-import threading
-import time
 from typing import cast
 from unittest.mock import patch
 
@@ -42,6 +40,7 @@ from controllers.message_processor import (
 from models.provider_response import ProviderResponse
 from models.transcript import Transcript
 from models.turn_execution import TurnExecution
+from tests.helpers import NO_PLAN, drain_background_turns, is_planning_request
 
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 
@@ -65,26 +64,12 @@ class _ScriptedProvider:
         return 200000
 
     def send(self, dto: object) -> ProviderResponse:
+        if is_planning_request(dto):
+            return NO_PLAN
         self.requests.append(dto)
         if len(self.requests) > len(self._responses):
             return self._TERMINAL
         return self._responses[len(self.requests) - 1]
-
-
-def _drain_background_turns(timeout_s: float = 10.0) -> None:
-    """Join the fire-and-forget post-turn daemon turns a completed ``user`` turn
-    spawns, so they run to completion inside THIS test's provider+DB patch (see
-    ``test_message_processor_runaway_loop.py`` for the full rationale)."""
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        pending = [
-            t for t in threading.enumerate()
-            if t.name in ("skill-suggest", "thread-gist") or t.name.startswith("turn-")
-        ]
-        if not pending:
-            return
-        for t in pending:
-            t.join(timeout=deadline - time.monotonic())
 
 
 def _run(provider: _ScriptedProvider, raw_input: str) -> MessageProcessor:
@@ -92,7 +77,7 @@ def _run(provider: _ScriptedProvider, raw_input: str) -> MessageProcessor:
     with patch(_BUILD_CLIENT, return_value=provider):
         mp.begin()
         mp.result()
-        _drain_background_turns()
+        drain_background_turns()
     return mp
 
 
@@ -192,9 +177,11 @@ def test_persistent_empty_completions_crash_the_turn(db: sqlite3.Connection) -> 
 
 
 def test_silent_finish_after_tool_work_settles(db: sqlite3.Connection) -> None:
-    """An empty terminal completion AFTER a tool-bearing step settles exactly as
-    before — background channels end silently by design once their work ran. The
-    guard keys on the turn-wide tool tally, not on the terminal step alone."""
+    """An empty terminal completion AFTER a tool-bearing step settles — background
+    channels end silently by design once their work ran. The guard keys on the
+    turn-wide tool tally, not on the terminal step alone. Each completed call
+    stores its own assistant row: the tool-only step an unsettled empty row that
+    carries its call, the silent finish a settled empty row of its own."""
     assert db is not None
     provider = _ScriptedProvider(
         ProviderResponse(text="", model="scripted", tool_calls=[_tool("noop_probe", q="x")]),
@@ -206,8 +193,12 @@ def test_silent_finish_after_tool_work_settles(db: sqlite3.Connection) -> None:
     execution = mp.turn_execution_service.latest_for_turn()
     assert execution is not None
     assert execution.state == TurnExecution.COMPLETED
-    # The silent settle stored the (empty) assistant row, as today.
-    assert len(_assistant_rows(mp)) == 1
+    rows = _assistant_rows(mp)
+    assert [r["content"] for r in rows] == ["", ""]
+    assert [r["settled"] for r in rows] == [0, 1]
+    # The probe call anchors to the tool-only step's own row.
+    probe_calls = [c for c in mp.tool_call_service.by_turn() if c.tool_name == "noop_probe"]
+    assert [c.transcript_id for c in probe_calls] == [rows[0]["id"]]
     # The main turn was never steered: neither of its two requests carries the
     # steer text (post-turn daemon turns may be steered — different turns).
     assert _EMPTY_COMPLETION_STEER not in _body(provider, 0)

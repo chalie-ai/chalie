@@ -1,16 +1,46 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { FileText, Image as ImageIcon } from '@lucide/vue';
+import { ChevronRight, FileText, Image as ImageIcon } from '@lucide/vue';
 import type { ConversationAttachment, ConversationMessage } from '../../api/conversation';
 import ImagePreviewModal from '../overlays/ImagePreviewModal.vue';
+import { subagentKind } from '../../utils/delegateChannel';
+import { parseQuoteBlocks } from '../../utils/quoteBlocks';
+import QuoteBlocks from './QuoteBlocks.vue';
 
-const props = defineProps<{ message: ConversationMessage }>();
+const props = withDefaults(defineProps<{
+  message: ConversationMessage;
+  /** Caption naming who wrote this row, when it isn't the user. */
+  label?: string | null;
+  /** A subagent's reply — starts folded to its caption, a click opens it, another folds it. */
+  collapsible?: boolean;
+}>(), { label: null, collapsible: false });
+
+// A message may open with quote blocks; they render above its text, apart.
+const parsed = computed(() => parseQuoteBlocks(props.message.content));
 
 // File-only messages carry the '[File attached]' placeholder text — drop the
-// empty bubble and let the attachment list stand on its own.
-const showText = computed(
-  () => !(props.message.content === '[File attached]' && props.message.attachments?.length),
-);
+// empty bubble and let the attachment list stand on its own. A message of
+// quote blocks alone has no text to show.
+const showText = computed(() => {
+  const { blocks, text } = parsed.value;
+  if (blocks.length && !text) return false;
+  return !(text === '[File attached]' && props.message.attachments?.length);
+});
+
+// A subagent's reply reads "Reply from <b>{name}</b> agent", and a message it
+// sent while still working "Message from <b>{name}</b> agent": the name is the
+// summary of the call that started it, or its type when the call had none —
+// never its tool name or number. One whose call was purged names neither.
+const replyName = computed(() => {
+  const origin = props.message.reply_from;
+  if (!origin) return null;
+  return origin.summary?.trim() || (origin.tool_name ? subagentKind(origin.tool_name).name : null);
+});
+const replyKind = computed(() => (props.message.reply_from?.kind === 'message' ? 'Message' : 'Reply'));
+
+// A subagent's reply starts folded to its label; a click opens it, another folds it.
+const open = ref(false);
+const showBody = computed(() => !props.collapsible || open.value);
 
 // Long messages collapse to a clamped 5-line preview with a show more/less toggle.
 const textEl = ref<HTMLElement | null>(null);
@@ -43,7 +73,7 @@ const previewSrc = ref<string | null>(null);
 const previewAlt = ref('');
 
 // Image → lightbox; document → download.
-function open(att: ConversationAttachment): void {
+function openAttachment(att: ConversationAttachment): void {
   if (!att.url) return;
   if (att.is_image) {
     previewSrc.value = att.url;
@@ -63,20 +93,42 @@ function open(att: ConversationAttachment): void {
 <template>
   <div
     class="user-message"
+    :class="{ 'user-message--collapsed': collapsible && !open }"
     :data-transcript-row-id="message.id"
+    :data-speaker="message.speaker ?? undefined"
     :data-user-text="message.content"
   >
+    <button
+      v-if="collapsible"
+      type="button"
+      class="user-message__label user-message__label--toggle"
+      :aria-expanded="open"
+      @click="open = !open"
+    >
+      <ChevronRight class="user-message__chevron" :size="14" />
+      <span v-if="replyName">{{ replyKind }} from <b>{{ replyName }}</b> agent</span>
+      <span v-else>{{ replyKind }} from a subagent</span>
+    </button>
+    <span v-else-if="label" class="user-message__label">{{ label }}</span>
+
+    <template v-if="parsed.blocks.length">
+      <QuoteBlocks v-show="showBody" :blocks="parsed.blocks" />
+      <div v-if="showText" v-show="showBody" class="user-message__divider" aria-hidden="true"></div>
+    </template>
+
     <div
       v-if="showText"
+      v-show="showBody"
       ref="textEl"
       class="user-text"
       :class="{ 'user-text--clamped': overflowing && collapsed }"
     >
-      {{ message.content }}
+      {{ parsed.text }}
     </div>
 
     <button
       v-if="showText && overflowing"
+      v-show="showBody"
       type="button"
       class="user-text__toggle"
       @click="collapsed = !collapsed"
@@ -85,13 +137,13 @@ function open(att: ConversationAttachment): void {
     </button>
 
     <!-- Attachments rendered from the API model directly. -->
-    <ul v-if="message.attachments && message.attachments.length" class="user-attachments">
+    <ul v-if="message.attachments && message.attachments.length" v-show="showBody" class="user-attachments">
       <li v-for="att in message.attachments" :key="att.filename">
-        <button type="button" class="user-attachments__item" @click="open(att)">
+        <button type="button" class="user-attachments__item" @click="openAttachment(att)">
           <component
             :is="att.is_image ? ImageIcon : FileText"
             class="user-attachments__icon"
-            :size="13"
+            :size="16"
           />
           <span class="user-attachments__name">{{ att.filename || 'attachment' }}</span>
         </button>

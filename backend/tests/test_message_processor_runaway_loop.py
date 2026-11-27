@@ -27,8 +27,6 @@ the call/text tally, independent of what any tool does.
 """
 
 import sqlite3
-import threading
-import time
 from typing import cast
 from unittest.mock import patch
 
@@ -43,6 +41,7 @@ from controllers.message_processor import (
 from models.provider_response import ProviderResponse
 from models.transcript import Transcript
 from models.turn_execution import TurnExecution
+from tests.helpers import NO_PLAN, drain_background_turns, is_planning_request
 
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("chat_provider")]
 
@@ -77,36 +76,14 @@ class _ScriptedProvider:
     def get_context_limit(self) -> int:
         return 200000
 
-    def send(self, _dto: object) -> ProviderResponse:
+    def send(self, dto: object) -> ProviderResponse:
+        if is_planning_request(dto):
+            return NO_PLAN
         if self.sends >= len(self._responses):
             return self._TERMINAL
         response = self._responses[self.sends]
         self.sends += 1
         return response
-
-
-def _drain_background_turns(timeout_s: float = 10.0) -> None:
-    """Join the fire-and-forget post-turn daemon turns a completed ``user`` turn
-    spawns (skill suggestion, thread gist) so they run to completion inside THIS
-    test's provider+DB patch and never leak into the next test.
-
-    ``_end`` starts them unjoined (``services.skill_suggestion_message_processor``
-    / ``thread_gist_message_processor``): each is a whole ``MessageProcessor``
-    turn on its own daemon (named ``skill-suggest``/``thread-gist`` and,
-    transitively, a ``turn-*`` drive thread). Left running, such a turn would call
-    ``build_client`` while the *next* test holds the patch, hitting that test's
-    scripted provider and repatched DB — the exact cross-test corruption this
-    guards against."""
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        pending = [
-            t for t in threading.enumerate()
-            if t.name in ("skill-suggest", "thread-gist") or t.name.startswith("turn-")
-        ]
-        if not pending:
-            return
-        for t in pending:
-            t.join(timeout=deadline - time.monotonic())
 
 
 def _run(provider: _ScriptedProvider, raw_input: str) -> MessageProcessor:
@@ -116,7 +93,7 @@ def _run(provider: _ScriptedProvider, raw_input: str) -> MessageProcessor:
     with patch(_BUILD_CLIENT, return_value=provider):
         mp.begin()
         mp.result()
-        _drain_background_turns()
+        drain_background_turns()
     return mp
 
 

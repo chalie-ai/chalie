@@ -14,6 +14,13 @@ for LLM execution with full tool access, keyed to the schedule's own thread:
 the schedule's integer ``id`` IS the turn_id on the ``schedule`` channel
 (``INTEGER PRIMARY KEY AUTOINCREMENT`` guarantees a cancelled schedule's id is
 never reissued, so a dead thread can never be re-entered).
+
+A schedule never overlaps itself: a match that arrives while a run on the
+schedule's thread is still going — its ``turn_executions`` row not yet ended —
+is skipped, not queued, and logged once. "Still going" is read from that row,
+never from in-memory state, so it covers a run a reply started as well as one a
+fire started; a run a restart cut off is stamped crashed by the boot sweep and
+no longer counts.
 """
 
 from __future__ import annotations
@@ -23,8 +30,10 @@ import threading
 from typing import cast
 
 from configs.channels import ScheduledConfig
+from configs.enums.channels import Channel
 from cron.base import ScheduledJob
 from models.scheduled_item import ScheduledItem
+from models.turn_execution import TurnExecution
 from services.cron_schedule import matches
 from services.time_utils import utc_now
 
@@ -77,20 +86,31 @@ class ScheduledItemsDispatcherJob(ScheduledJob):
                 cast(str, row["cron_month"]),
                 cast(str, row["cron_dow"]),
             ):
-                self._fire_item(cast(int, row["id"]), cast(str, row["message"]))
-                fired += 1
+                if self._fire_item(cast(int, row["id"]), cast(str, row["message"])):
+                    fired += 1
 
         return f"fired {fired} of {checked} due row(s)"
 
-    def _fire_item(self, item_id: int, message: str) -> None:
-        """Fire a due prompt item via the LLM pipeline, on its own daemon thread.
+    def _fire_item(self, item_id: int, message: str) -> bool:
+        """Fire a due prompt item via the LLM pipeline, on its own daemon thread;
+        returns whether it fired.
 
         The poll loop must NOT execute the full LLM ACT loop inline — it fires
-        asynchronously so the poller returns to sleep immediately.
+        asynchronously so the poller returns to sleep immediately. A schedule
+        whose thread still has a run going is skipped: the next run never starts
+        before the last one finishes.
         """
         if not message or not message.strip():
             logger.warning(f"{LOG_PREFIX} Skipping item '{item_id}' — empty message")
-            return
+            return False
+
+        running = TurnExecution.open_turn(Channel.SCHEDULE.value, item_id)
+        if running is not None:
+            logger.info(
+                f"{LOG_PREFIX} Skipped schedule {item_id}: its run started at "
+                f"{running.started_at} is still going"
+            )
+            return False
 
         threading.Thread(
             target=self._fire_scheduled_prompt,
@@ -98,6 +118,7 @@ class ScheduledItemsDispatcherJob(ScheduledJob):
             daemon=True,
             name=f"{_SCHEDULED_WORK_THREAD_PREFIX}-{item_id}",
         ).start()
+        return True
 
     def _fire_scheduled_prompt(self, item_id: int, message: str) -> None:
         """Run a fired scheduled prompt on the ``schedule`` channel.
@@ -111,7 +132,8 @@ class ScheduledItemsDispatcherJob(ScheduledJob):
 
         Runs on its own daemon thread so the scheduler poll never blocks on the
         LLM loop; this is fire-and-forget — no result() join, no turn_id
-        backfill, no cancellation check.
+        backfill, no cancellation check. Overlap is decided before this thread
+        starts, by :meth:`_fire_item`.
         """
         from controllers.message_processor import MessageProcessor  # noqa: PLC0415
 

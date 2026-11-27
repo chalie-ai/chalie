@@ -1,12 +1,12 @@
 /**
  * Notifications store — audio chime and OS notifications.
  *
- * Browser-API access goes exclusively through the runtime platform adapter (no raw
+ * Browser-API access goes exclusively through the platform adapter (no raw
  * window.Notification / localStorage / new AudioContext()); HTTP through api
  * wrappers only.
  */
 import { defineStore } from 'pinia';
-import { platform as adapter } from '@chalie/shared';
+import { webPlatformAdapter as adapter } from '@chalie/shared';
 
 const CHIME_FREQ_HZ = 880;        // A5
 const CHIME_DURATION_S = 0.5;

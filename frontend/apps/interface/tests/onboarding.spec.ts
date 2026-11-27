@@ -16,16 +16,17 @@ const REG_PASSWORD = 'onboarding-pw-123';
 
 test.describe.serial('onboarding flow', () => {
   // Capture the account state ONCE, before the suite mutates it. The skip-guard
-  // below references this stable initial value — NOT a fresh /auth/status each
-  // time — so the post-registration steps (which REQUIRE the account that the
-  // "register" step creates) are never skipped by their own side effect.
+  // below references this stable initial value — NOT a fresh /api/auth/status
+  // each time — so the post-registration steps (which REQUIRE the account
+  // that the "register" step creates) are never skipped by their own side
+  // effect.
   let initialHasAccount = false;
 
   test.beforeAll(async () => {
     const baseURL = process.env.CHALIE_BASE_URL;
     if (!baseURL) throw new Error('CHALIE_BASE_URL must point at a running Chalie instance');
     const ctx = await request.newContext({ baseURL });
-    const res = await ctx.get('/auth/status');
+    const res = await ctx.get('/api/auth/status');
     initialHasAccount = (await res.json()).has_master_account === true;
     await ctx.dispose();
   });
@@ -57,7 +58,7 @@ test.describe.serial('onboarding flow', () => {
 
     // Case 1: password too short (< 8). showToast('Password must be at least 8
     // characters', 'error') fires client-side (src/onboarding/OnboardingPage.vue:45-47)
-    // BEFORE any /auth/register request is made.
+    // BEFORE any /api/auth/register request is made.
     await page.locator('#accountUsername').fill('anyuser');
     await page.locator('#accountPassword').fill('short');
     await page.locator('#accountConfirmPassword').fill('short');
@@ -80,7 +81,7 @@ test.describe.serial('onboarding flow', () => {
   test('register redirects straight to /brain/', async ({ page }) => {
     // The onboarding page is account-phase-only now — no voice step exists.
     // handleAccountSubmit() calls window.location.replace('/brain/') directly
-    // on a successful POST /auth/register (src/onboarding/OnboardingPage.vue),
+    // on a successful POST /api/auth/register (src/onboarding/OnboardingPage.vue),
     // which also sets the session cookie.
     await page.goto('/on-boarding/');
 
@@ -89,7 +90,7 @@ test.describe.serial('onboarding flow', () => {
     await page.locator('#accountConfirmPassword').fill(REG_PASSWORD);
     await page.locator('button[type="submit"]').click();
 
-    // POST /auth/register → 201 (sets the session cookie) → immediate redirect.
+    // POST /api/auth/register → 201 (sets the session cookie) → immediate redirect.
     // A bare env has no LLM provider, so the brain router forces
     // /brain/providers under its providersOnly lock — matching /brain/ as a
     // substring is robust to that.

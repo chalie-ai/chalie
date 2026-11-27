@@ -7,17 +7,36 @@ row-shape reads/writes flow through the inherited active-record engine
 aggregate/feed shapes a generic builder cannot express (MAX / DISTINCT /
 GROUP BY / HAVING / correlated settle subselect) live here as named
 classmethods running their own parametrized SQL on the bound connection
-(§2.6). Cross-table effects (tool-call un-settle, GC of tool_calls/episodes,
-document links, location backfill) belong to the service layer — this model
+(§2.6). Cross-table effects (GC of tool_calls/episodes, document links,
+location backfill) belong to the service layer — this model
 only touches its own table.
 """
 
 from __future__ import annotations
 
-import json
+from datetime import datetime, timedelta, timezone
 from typing import ClassVar, Self, cast
 
+from configs.enums.channels import DELEGATE_CHANNEL_SPAN
 from models.model import Model
+
+# How long after a call's ``ended_at`` its child's input row may still land. A
+# finished call stamps ``ended_at`` after its child turn opened, but the boot
+# backfill closes a call a crash left open at its own ``created_at`` — while the
+# child row lands after the call opened, by the delegate's pre-flight plus however
+# long its ``BEGIN IMMEDIATE`` waited on the write lock.
+_CHILD_ROW_LAG = timedelta(minutes=1)
+
+
+def _row_time(stamp: str, shift: timedelta = timedelta()) -> str:
+    """A ``tool_calls`` timestamp moved by ``shift``, in the shape SQLite's
+    ``datetime('now')`` gives ``transcript.created_at`` — UTC, truncated to whole
+    seconds — so it compares as text against that column. A stamp with no
+    offset is the schema default's, already UTC; an unparseable one raises."""
+    at = datetime.fromisoformat(stamp)
+    if at.tzinfo is not None:
+        at = at.astimezone(timezone.utc)
+    return (at + shift).strftime("%Y-%m-%d %H:%M:%S")
 
 
 class Transcript(Model):
@@ -27,7 +46,7 @@ class Transcript(Model):
         "id", "channel", "role", "content", "tool_call_id", "tool_name",
         "internal", "deliberation_score", "created_at", "xml_migrated",
         "location_lat", "location_lon", "location_name", "turn_id", "settled",
-        "thinking_level",
+        "joined", "thread_id",
     )
 
     @classmethod
@@ -48,12 +67,15 @@ class Transcript(Model):
     location_name: str | None
     turn_id: int | None
     settled: int
-    thinking_level: str | None
+    joined: int
+    thread_id: int | None
 
     # settle0 — the FIRST assistant row of a turn with settled=1: the boundary
-    # between a turn's main exchange and its fork continuation. The write path
-    # stamps assistant rows settled=1; a settling tool-call demotes to 0
-    # (§6.9). No alias needed — every query below is single-table.
+    # between a turn's main exchange and its fork continuation. Each provider
+    # call writes its own assistant row; only the exchange's terminal call (the
+    # one with no tool calls, or one that answered while closing its plan) is
+    # stamped settled=1. No alias needed — every
+    # query below is single-table.
     _SETTLE_PREDICATE: ClassVar[str] = "role = 'assistant' AND settled = 1"
 
     # NULL-safe turn key. Legacy rows carry a NULL turn_id; -id is negative so
@@ -94,6 +116,40 @@ class Transcript(Model):
         return int(row[0]) if row and row[0] is not None else None
 
     @classmethod
+    def first_id(cls, channel: str, turn_id: int, *, above: int = 0) -> int | None:
+        """``id`` of the turn's first row past ``above``, or None when it has
+        none. With the default ``above`` it is the turn's opening row, the
+        record id other tables find a thread by. Mirrors :meth:`settle0`'s
+        style."""
+        row = cls._bound_connection().execute(
+            "SELECT MIN(id) FROM transcript WHERE channel = ? AND turn_id = ? AND id > ?",
+            (channel, turn_id, above),
+        ).fetchone()
+        return int(row[0]) if row and row[0] is not None else None
+
+    @classmethod
+    def last_id(cls, channel: str, turn_id: int) -> int | None:
+        """``id`` of the turn's last row, or None when it has none. Mirrors
+        :meth:`first_id`'s style."""
+        row = cls._bound_connection().execute(
+            "SELECT MAX(id) FROM transcript WHERE channel = ? AND turn_id = ?",
+            (channel, turn_id),
+        ).fetchone()
+        return int(row[0]) if row and row[0] is not None else None
+
+    @classmethod
+    def last_answer_id(cls, channel: str, turn_id: int) -> int | None:
+        """``id`` of the turn's newest settled assistant row — the answer its
+        latest completed exchange ended on — or None for a turn that never
+        settled. Mirrors :meth:`settle0`'s style."""
+        row = cls._bound_connection().execute(
+            f"SELECT MAX(id) FROM transcript WHERE channel = ? AND turn_id = ? "
+            f"AND {cls._SETTLE_PREDICATE}",
+            (channel, turn_id),
+        ).fetchone()
+        return int(row[0]) if row and row[0] is not None else None
+
+    @classmethod
     def ids_for_turn(cls, channel: str, turn_id: int) -> list[int]:
         """Every transcript row id for ``(channel, turn_id)``, ordered by
         ``id`` ascending — the act-trail anchor lookup. Empty list when the
@@ -105,31 +161,18 @@ class Transcript(Model):
         return [int(r[0]) for r in rows]
 
     @classmethod
-    def latest_thinking_level(cls, channel: str, turn_id: int | None = None) -> str | None:
-        """``thinking_level`` of the most recent row (highest id) for ``channel``
-        that has a non-NULL ``thinking_level``. When ``turn_id`` is given, also
-        filter on it — used to read back the level written onto the current
-        turn's input row; when ``turn_id`` is None, span every turn of the
-        channel (the spine's "latest level for this type"). Returns None when
-        no such row exists (legacy/empty channel)."""
-        sql = (
-            "SELECT thinking_level FROM transcript WHERE channel = ? "
-            "AND thinking_level IS NOT NULL"
+    def joined_since(cls, channel: str, turn_id: int, after_id: int) -> list[Self]:
+        """The joined input rows of ``(channel, turn_id)`` written after
+        ``after_id``, oldest-first — the messages sent into the working turn
+        that its running exchange has not read yet."""
+        return (
+            cls.filter("channel", channel)
+            .filter("turn_id", turn_id)
+            .filter("joined", 1)
+            .filter("id", after_id, ">")
+            .order_by("id ASC")
+            .get()
         )
-        params: list[object] = [channel]
-        if turn_id is not None:
-            sql += " AND turn_id = ?"
-            params.append(turn_id)
-        sql += " ORDER BY id DESC LIMIT 1"
-        row = cls._bound_connection().execute(sql, tuple(params)).fetchone()
-        return row[0] if row and row[0] is not None else None
-
-    def unsettle(self) -> Self:
-        """Demote this row's settle flag to 0 — the transcript-table half of the
-        cross-table un-settle a tool-call opening triggers (§6.9). The SERVICE
-        owns loading the owning row and calling this; the model only flips."""
-        self.settled = 0
-        return self.save()
 
     def set_deliberation_score(self, score: float) -> Self:
         """Persist this row's per-turn deliberation score — the value that
@@ -180,13 +223,12 @@ class Transcript(Model):
                        ) -> list[dict[str, object]]:
         """Thread-level metadata for the collapsed feed: one summary per thread
         (turn_id), ordered by last activity (``MAX(id)``). Each dict carries
-        ``turn_id``, ``last_activity_at``, ``last_row_id``, ``row_count``,
-        ``preview`` (first row's content, truncated) and ``working`` (no settled
-        assistant row yet). Legacy NULL-turn_id rows each form their own
-        singleton thread via ``_TURN_KEY``. A non-empty ``query`` restricts the
-        page to threads with a matching user-role row. Page-position facts
-        (total, has-more) come from :meth:`count_turns` — the one authority —
-        so this returns the page and nothing else."""
+        ``turn_id``, ``last_activity_at``, ``last_row_id``, ``row_count`` and
+        ``preview`` (first row's content, truncated). Legacy NULL-turn_id rows
+        each form their own singleton thread via ``_TURN_KEY``. A non-empty
+        ``query`` restricts the page to threads with a matching user-role row.
+        Page-position facts (total, has-more) come from :meth:`count_turns` —
+        the one authority — so this returns the page and nothing else."""
         role_filter = "".join(" AND role != ?" for _ in exclude_roles)
         having, having_params = cls._thread_query_filter(query)
         conn = cls._bound_connection()
@@ -204,8 +246,7 @@ class Transcript(Model):
         placeholders = cls._placeholders(len(page_keys))
         meta_rows = conn.execute(
             f"SELECT {cls._TURN_KEY} AS k, MAX(id) AS last_id, MAX(created_at) AS last_ts, "
-            f"COUNT(*) AS cnt, "
-            f"MIN(CASE WHEN {cls._SETTLE_PREDICATE} THEN id END) IS NULL AS working "
+            f"COUNT(*) AS cnt "
             f"FROM transcript "
             f"WHERE channel = ?{role_filter} AND {cls._TURN_KEY} IN ({placeholders}) "
             f"GROUP BY k",
@@ -225,7 +266,6 @@ class Transcript(Model):
                 "last_activity_at": r[2],
                 "last_row_id": int(r[1]),
                 "row_count": int(r[3]),
-                "working": bool(r[4]),
             }
         first_content: dict[int, str] = {
             int(r[0]): cast("str", r[1] or "")[:cls._PREVIEW_CHARS] for r in first_rows
@@ -238,7 +278,6 @@ class Transcript(Model):
                 "last_row_id": meta.get(key, {}).get("last_row_id", 0),
                 "row_count": meta.get(key, {}).get("row_count", 0),
                 "preview": first_content.get(key, ""),
-                "working": meta.get(key, {}).get("working", False),
             }
             for key in page_keys
         ]
@@ -261,6 +300,40 @@ class Transcript(Model):
             .order_by("id ASC")
             .get()
         ]
+
+    @classmethod
+    def delegate_turns(
+        cls, calls: dict[int, tuple[str, str | None]],
+    ) -> dict[int, dict[str, object]]:
+        """The watchable delegate turn each call spawned, keyed by its
+        ``tool_calls`` id: ``{"channel", "turn_id"}`` read off the child's input
+        row, whose ``tool_call_id`` holds the caller's call id as text.
+
+        ``calls`` maps each id to its ``(created_at, ended_at)``. A child row is
+        written after its call opened and, unless a message the call queued
+        opened it later, before it ended, so the read is bounded to the
+        batch's span — earliest open to latest end, open-ended when any
+        ``ended_at`` is ``None``: that call still runs, or the caller passes
+        ``None`` to find a turn its queued message opened later — and to the
+        delegate channels' range of the
+        ``(channel, created_at)`` index (every subagent has a channel of its
+        own, so they cannot be listed): ``tool_call_id`` is unindexed.
+        A call with no such row (not a delegate, not yet started, or purged by
+        retention) is simply absent. Empty input short-circuits to ``{}``."""
+        if not calls:
+            return {}
+        sql = (
+            f"SELECT tool_call_id, channel, turn_id FROM transcript "
+            f"WHERE channel >= ? AND channel < ? "
+            f"AND tool_call_id IN ({cls._placeholders(len(calls))}) AND created_at >= ?"
+        )
+        params = [*DELEGATE_CHANNEL_SPAN, *(str(i) for i in calls), min(_row_time(c) for c, _ in calls.values())]
+        ended = [e for _, e in calls.values() if e is not None]
+        if len(ended) == len(calls):
+            sql += " AND created_at <= ?"
+            params.append(max(_row_time(e, _CHILD_ROW_LAG) for e in ended))
+        rows = cls._bound_connection().execute(sql, params).fetchall()
+        return {int(r[0]): {"channel": r[1], "turn_id": r[2]} for r in rows}
 
     @classmethod
     def turn_scope_ids(cls, ids: list[int]) -> list[int]:
@@ -329,12 +402,12 @@ class Transcript(Model):
         settled row (a turn's settle0 boundary, :attr:`_SETTLE_PREDICATE`) is
         additionally protected: it is retained whenever its ``(channel,
         turn_id)`` still holds another row that is itself too young to be a
-        candidate or is episode-cited, so a partially-swept turn can never
-        lose its settle marker and misreport as still "working"
-        (:meth:`recent_threads`). A turn that is candidate in full — every one
-        of its rows old and uncited — has no such surviving sibling, so its
-        settle row is included with the rest. Legacy NULL-``turn_id`` rows
-        carry no turn and so no such protection.
+        candidate or is episode-cited, so a partially-swept turn never loses
+        the :meth:`settle0` its surviving rows are read against (the history
+        floor, the thread-gist prompt). A turn that is candidate in full —
+        every one of its rows old and uncited — has no such surviving sibling,
+        so its settle row is included with the rest. Legacy NULL-``turn_id``
+        rows carry no turn and so no such protection.
 
         Two deliberate shapes keep this scan-bound at production row counts
         instead of minutes: the age filter compares ``created_at`` directly
@@ -389,13 +462,7 @@ class Transcript(Model):
         together with the ``tool_calls`` pre-clear in one
         ``Database.transaction()`` (I6 — ``Database`` owns multi-write
         transactions). Returns rows deleted."""
-        if not ids:
-            return 0
-        cursor = cls._bound_connection().execute(
-            f"DELETE FROM {cls.get_table()} WHERE id IN (SELECT value FROM json_each(?))",
-            (json.dumps(ids),),
-        )
-        return cursor.rowcount or 0
+        return cls._delete_where_in_json("id", ids)
 
     # ── SQL fragment builders (shared, no duplication) ───────────────────────
 
@@ -403,41 +470,39 @@ class Transcript(Model):
     # row ended cancelled (MessageProcessor._step's cancel checkpoint discards
     # the in-flight response before any reply row is stored, §2.7) — excluded
     # from the feed so it never surfaces as a dangling, unanswered thread.
-    # ``MAX(CASE WHEN role != 'user' THEN 1 ELSE 0 END) = 0`` means NO row in
-    # the turn-group is non-user — i.e. every row is role='user', zero
-    # assistant/tool content — deliberately generalized from an earlier
-    # ``COUNT(*) = 1`` (a lone reply-less row only ever gated by the FE) since
-    # a direct API/automation POST into an open turn_id can append a second
-    # (or third) reply-less user row before the cancel lands, and this still
-    # correctly leaves a partially-completed turn (any real assistant/tool
-    # content already written) alone per existing doctrine. The correlated
-    # subquery mirrors ``recent_threads``' own
-    # ``MIN(CASE WHEN {predicate} THEN id END) IS NULL AS working`` idiom —
-    # an aggregate over a per-row expression, not a join, so it costs nothing
-    # on the common case and needs no schema change. COALESCE to '' guards
-    # legacy NULL-``turn_id`` rows (no turn_executions row exists for them at
-    # all): a bare comparison against a NULL subquery result is NULL, not
-    # FALSE, and HAVING drops NULL rows just like FALSE ones — silently
-    # excluding every legacy singleton thread from the feed.
+    # ``MAX(CASE WHEN role != 'user' OR joined = 1 THEN 1 ELSE 0 END) = 0``
+    # means every row in the turn-group is a plain role='user' input — zero
+    # assistant/tool content and nothing joined mid-turn. A message joined
+    # into the turn before the cancel landed keeps the thread visible, the
+    # same rule as ``TurnExecution.cancelled_orphan_cutoff``: the cancel
+    # strands it unanswered, and hiding it would lose the user's own words.
+    # Any real assistant/tool content already written — including a provider
+    # call's empty assistant row carrying its tool calls — likewise leaves a
+    # partially-completed turn alone per existing doctrine. The correlated
+    # subquery is an aggregate over a per-row expression, not a join, so it
+    # costs nothing on the common case and needs no schema change. COALESCE
+    # to '' guards legacy NULL-``turn_id`` rows (no turn_executions row exists
+    # for them at all): a bare comparison against a NULL subquery result is
+    # NULL, not FALSE, and HAVING drops NULL rows just like FALSE ones —
+    # silently excluding every legacy singleton thread from the feed.
     _CANCELLED_ORPHAN_HAVING: ClassVar[str] = (
-        "NOT (MAX(CASE WHEN role != 'user' THEN 1 ELSE 0 END) = 0 "
+        "NOT (MAX(CASE WHEN role != 'user' OR joined = 1 THEN 1 ELSE 0 END) = 0 "
         "AND MAX(COALESCE((SELECT te.state FROM turn_executions te "
         "WHERE te.channel = transcript.channel AND te.turn_id = transcript.turn_id "
         "ORDER BY te.id DESC LIMIT 1), '')) = 'cancelled')"
     )
 
     # A thread matches a search term when either its user-role content or its
-    # (LLM-generated) gist label carries it. The gist half is a correlated
-    # subquery keyed on the real ``transcript.turn_id`` (not the NULL-safe
-    # ``_TURN_KEY``) — ``thread_gist`` rows only ever exist for a real turn_id,
-    # never for a legacy NULL-turn_id singleton, so this correctly matches
-    # nothing for those. Wrapped in MAX(COALESCE(..., 0)) to mirror the
+    # (LLM-generated) label carries it. The label half is a correlated
+    # subquery on the thread each row points at (``threads.summary``). A
+    # legacy NULL-turn_id singleton has no thread, so this matches nothing for
+    # those. Wrapped in MAX(COALESCE(..., 0)) to mirror the
     # ``_CANCELLED_ORPHAN_HAVING`` idiom: a per-row correlated subquery
     # aggregated across the GROUP, since HAVING cannot reference a
     # non-aggregated, non-grouped column directly.
     _GIST_MATCH: ClassVar[str] = (
-        "MAX(COALESCE((SELECT 1 FROM thread_gist tg WHERE tg.channel = transcript.channel "
-        "AND tg.turn_id = transcript.turn_id AND tg.gist LIKE ?), 0)) = 1"
+        "MAX(COALESCE((SELECT 1 FROM threads th WHERE th.id = transcript.thread_id "
+        "AND th.summary LIKE ?), 0)) = 1"
     )
 
     @classmethod
@@ -445,7 +510,7 @@ class Transcript(Model):
         """The feed's HAVING clause over a per-turn GROUP: always drops a
         cancelled reply-less orphan (``_CANCELLED_ORPHAN_HAVING``), and when
         ``query`` is non-empty additionally keeps only threads carrying a
-        user-role row OR a thread_gist label matching it (case-insensitive
+        user-role row OR a thread label matching it (case-insensitive
         substring). Shared by ``recent_threads`` (the page) and ``count_turns``
         (its ``has_more``) so search and feed run one identical path."""
         conditions = [cls._CANCELLED_ORPHAN_HAVING]

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from abilities.plan import PlanAbility
 from configs.channels._common import DEFAULT_ALWAYS_AVAILABLE
 from configs.enums.channels import Channel
 from configs.enums.policy_channel import PolicyChannel
@@ -16,8 +17,13 @@ class EAMPConfig(ProcessorConfig):
 
     agent_name / project / loop_in_human are captured on the instance:
     PromptService reads agent_name/project via ``mp.config``; the controller
-    reads ``_loop_in_human`` post-turn to decide human disclosure.
+    reads ``_loop_in_human`` post-turn to decide human disclosure; a subtask
+    the agent starts carries the agent name and project over.
     """
+
+    _agent_name: str
+    _project: str
+    _loop_in_human: bool
 
     def __init__(
         self,
@@ -29,7 +35,7 @@ class EAMPConfig(ProcessorConfig):
             channel=Channel.for_external_agent(agent_name),
             role="external_agent",
             policy_channel=PolicyChannel.EXTERNAL_AGENT,
-            always_available=DEFAULT_ALWAYS_AVAILABLE,
+            always_available=[*DEFAULT_ALWAYS_AVAILABLE, PlanAbility.NAME],
             skip_transcript=False,
             skip_input_row=False,
             suppress_history=False,

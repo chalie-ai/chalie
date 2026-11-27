@@ -81,8 +81,8 @@ class TestVisionPolicyDefaults:
         assert pm._setting(_CHANNEL.CHAT.value, "vision") == "allow"
 
     def test_external_agent_vision_is_allow(self, tmp_path: Path) -> None:
-        """Intentional policy: external_agent vision is allow even though
-        external_agent web_search is deny — do not regress this to deny."""
+        """Intentional policy: external_agent vision is allow — do not regress
+        this to deny."""
         pm = _seeded_policy_db(tmp_path)
         assert pm._setting(_CHANNEL.EXTERNAL_AGENT.value, "vision") == "allow"
 
