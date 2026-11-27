@@ -19,6 +19,8 @@ const blockedOpen = ref(false);
 
 interface PolicyCategory {
   cat: string;
+  /** The heading: an MCP server's own name, or a built-in category id in words. */
+  title: string;
   isMcp: boolean;
   rows: { r: PolicyRow; label: string }[];
 }
@@ -28,7 +30,12 @@ const categories = computed<PolicyCategory[]>(() => {
   for (const r of rows.value) {
     if (r.channel !== props.channel) continue;
     const cat = r.group || r.permission.split('.')[0];
-    (byCat[cat] ??= { cat, isMcp: !!r.group, rows: [] }).rows.push({
+    (byCat[cat] ??= {
+      cat,
+      title: r.group || capitalize(cat.replace(/_/g, ' ')),
+      isMcp: !!r.group,
+      rows: [],
+    }).rows.push({
       r,
       label: r.label || r.permission,
     });
@@ -111,7 +118,7 @@ onMounted(load);
     <div v-for="c in categories" :key="c.cat" class="policy-category">
       <h4 class="section-head">
         <span v-if="c.isMcp" class="badge">MCP</span>
-        {{ c.cat }}
+        {{ c.title }}
       </h4>
       <div v-for="{ r, label } in c.rows" :key="r.permission" class="policy-rule">
         <span class="policy-label">{{ label }}</span>

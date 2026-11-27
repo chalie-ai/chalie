@@ -74,7 +74,7 @@ const STATUS_TEXT: Record<PlanTask['status'], string> = {
   width: 100%;
   margin: 0;
   padding: 5px 10px;
-  border-radius: 12px;
+  border-radius: var(--radius-card);
   list-style: none;
   background: linear-gradient(
     135deg,

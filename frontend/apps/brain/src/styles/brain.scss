@@ -50,8 +50,8 @@ body {
   grid-area: topbar;
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 0 20px;
+  gap: var(--space-md);
+  padding: 0 var(--space-lg);
   background: var(--surface);
   position: sticky;
   top: 0;
@@ -85,6 +85,7 @@ body {
   padding: 6px 12px;
   margin: 0;
   height: var(--control-h);
+  border-radius: var(--radius);
   background: var(--surface-2);
   color: var(--muted);
   font: inherit;
@@ -213,12 +214,12 @@ body {
 .nav-group { margin-bottom: 4px; }
 
 .nav-group-title {
-  padding: 12px 16px 4px;
-  font-family: var(--font-mono);
+  padding: var(--space-md) var(--space-md) var(--space-xs);
+  font-family: var(--font-ui);
   font-size: var(--fs-mono);
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.02em;
   color: var(--muted);
 }
 
@@ -227,11 +228,12 @@ body {
 .nav-item {
   display: flex;
   align-items: center;
-  gap: 10px;
-  width: calc(100% - 12px);
+  gap: var(--space-sm);
+  width: calc(100% - 2 * var(--space-sm));
   height: var(--control-h);
-  margin: 1px 6px;
-  padding: 8px 10px;
+  margin: 1px var(--space-sm);
+  padding: var(--space-sm);
+  border-radius: var(--radius);
   background: transparent;
   color: var(--muted);
   font-size: var(--fs-body);
@@ -379,52 +381,50 @@ body {
   z-index: 40;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-sm);
+  min-width: 0;
+  max-width: 100%;
   font-family: var(--font-mono);
   font-size: var(--fs-mono);
   line-height: 1.55;
   color: var(--muted);
 }
 
+// Raised off the page that scrolls under it: the foundation's one shadow.
 .ask-dock:not(:empty) {
-  padding: 10px 24px;
-  background: var(--bg);
+  padding: var(--space-sm) var(--space-lg);
+  background: var(--surface);
+  box-shadow: 0 -1px 0 var(--line), 0 -8px 24px rgb(0 0 0 / 0.16);
 }
 
 .panel-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 20px;
+  min-height: var(--control-h);
+  margin-bottom: var(--space-lg);
   padding-bottom: 16px;
 
   h2 { margin: 0; font-size: var(--fs-title); font-weight: 600; letter-spacing: -0.01em; }
   h2:has(svg) { display: flex; align-items: center; gap: 8px; }
 }
 
-.panel-header-actions { display: flex; align-items: center; gap: 10px; }
+.panel-header-actions { display: flex; align-items: center; gap: var(--space-sm); }
 .panel-desc { color: var(--muted); margin: 0 0 20px; line-height: 1.5; }
 
 .section-head {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: var(--fs-mono);
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.02em;
   color: var(--muted);
-  margin: 20px 0 10px;
-  padding-bottom: 8px;
+  margin: var(--space-lg) 0 var(--space-sm);
+  padding: 0;
   position: relative;
-
-  &::before {
-    content: '';
-    width: 6px;
-    height: 6px;
-    background: var(--pink);
-  }
 }
 
 // .btn, .btn-primary and .btn-danger come from the foundation. The size variants
@@ -486,8 +486,9 @@ body {
 .blocked-item {
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 14px 16px;
+  gap: var(--space-md);
+  padding: var(--space-md);
+  border-radius: var(--radius-card);
   background: var(--surface);
   margin-bottom: 8px;
   position: relative;
@@ -569,7 +570,8 @@ body {
 .badge {
   display: inline-flex;
   align-items: center;
-  padding: 5px 7px;
+  padding: var(--space-xs) var(--space-sm);
+  border-radius: var(--radius);
   font: 500 var(--fs-mono)/1 var(--font-mono);
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -608,7 +610,8 @@ select {
 }
 
 // A role picker holds one provider name; the full content width only stretched it.
-select.role-select { max-width: 380px; }
+// A fill like every other control, not a border.
+select.role-select { max-width: 380px; border: 0; background-color: var(--surface-2); }
 
 input[type='checkbox'] {
   appearance: none;
@@ -746,15 +749,20 @@ input[type='checkbox'] {
   td.num { text-align: right; font-variant-numeric: tabular-nums; }
 }
 
+// The track rounds as a card and insets its options by 2px, so the whole
+// control keeps the one control height.
 .segmented {
   display: flex;
   gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-card);
   background: var(--surface);
 }
 
 .seg-btn {
-  padding: 4px 12px;
+  padding: 0 var(--space-md);
   height: var(--control-h);
+  border-radius: var(--radius);
   background: transparent;
   color: var(--muted);
   font-size: var(--fs-body);
@@ -764,15 +772,19 @@ input[type='checkbox'] {
 
   &:hover { color: var(--text); }
 
+  // The chosen option reads at a glance.
   &.active {
-    background: var(--surface-2);
+    background: var(--cell);
     color: var(--text);
+    font-weight: 600;
 
     &[data-val='allow'] { color: var(--allow-text); }
     &[data-val='deny']  { color: var(--deny-text); }
     &[data-val='ask']   { color: var(--ask-text); }
   }
 }
+
+.segmented .seg-btn { height: calc(var(--control-h) - 4px); }
 
 .policy-bulk {
   .seg-btn[data-bulk='allow'] { color: var(--allow-text); }
@@ -1193,32 +1205,32 @@ input[type='checkbox'] {
 
 .cap-body { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; width: 100%; }
 
-// The reason sits over the dimmed, blurred card body in one grid cell, so the
-// card grows to whichever of the two is taller.
+// An unavailable capability stays readable but dimmed, with the reason it
+// cannot run on its own line under it.
 .cap-card.unavailable {
   display: grid;
-  align-items: center;
+  place-items: start stretch;
+  align-content: start;
 
   &:hover { background: var(--surface); }
 
-  > .cap-body,
-  > .cap-unavailable { grid-area: 1 / 1; }
-
   > .cap-body {
-    opacity: 0.3;
-    filter: blur(2px);
+    grid-area: 1 / 1;
+    opacity: 0.5;
     user-select: none;
     pointer-events: none;
   }
+
+  > .cap-unavailable { grid-area: 2 / 1; }
+
+  .cap-version { display: none; }
 }
 
 .cap-unavailable {
-  margin: 0;
-  font-size: var(--fs-body);
-  font-weight: 500;
-  line-height: 1.5;
-  color: var(--text);
-  text-align: center;
+  margin: var(--space-sm) 0 0;
+  font: 400 var(--fs-body)/1.55 var(--font-ui);
+  color: var(--muted);
+  text-align: start;
 }
 
 .cap-header { display: flex; align-items: center; justify-content: space-between; width: 100%; }
@@ -1228,14 +1240,14 @@ input[type='checkbox'] {
 .cap-actions { margin-top: 8px; }
 
 .policies-grid { display: flex; flex-direction: column; gap: 8px; }
-.policy-category { margin-bottom: 12px; }
+.policy-category { margin-bottom: var(--space-md); }
 
 .policy-rule {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 8px 0;
+  gap: var(--space-md);
+  padding: var(--space-xs) 0;
 }
 
 .policy-label { font-size: var(--fs-body); color: var(--muted); }
@@ -1548,7 +1560,7 @@ input[type='checkbox'] {
 // Responsive — breakpoint must match the 900px sidebar breakpoint above.
 @media (max-width: 900px) {
   .main { padding: 16px 12px; overflow-x: hidden; }
-  .ask-dock:not(:empty) { padding: 10px 12px; }
+  .ask-dock:not(:empty) { padding: var(--space-sm) var(--space-md); }
   .main-inner { max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
   .panel-header { flex-direction: column; align-items: flex-start; gap: 10px; }
   .panel-header-actions { width: 100%; flex-wrap: wrap; }
@@ -1594,7 +1606,7 @@ input[type='checkbox'] {
   .group-tab { flex-shrink: 0; }
 
   .segmented { gap: 0; }
-  .seg-btn { padding: 4px 8px; }
+  .seg-btn { padding: 0 var(--space-sm); }
 }
 
 // System and Import / Export pages: left-aligned sections like the Providers

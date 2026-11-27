@@ -236,8 +236,21 @@ function onKeydown(e: KeyboardEvent): void {
   color: var(--muted);
 }
 
+/* In the card's mono meta line, Open stays an underlined word in that line's
+   type rather than the activity line's filled text button. */
 .qcard__meta .activity__stop {
   height: auto;
+  margin: 0;
+  padding: 0;
+  border-radius: 0;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.qcard__meta .activity__stop:hover {
+  background: none;
+  color: var(--text);
 }
 
 .qcard__pager {

@@ -175,4 +175,12 @@ onBeforeUnmount(() => {
   justify-content: center;
   padding: 16px 0 8px;
 }
+
+// The end-of-history note reads as a sentence, not a shouted label.
+.history-end-pill .tag {
+  font-family: var(--font-ui);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
 </style>

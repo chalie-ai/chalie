@@ -4,17 +4,18 @@
 // --------------------------------------------------------------------------
 // 0. Date divider — day-group marker in the spine
 // --------------------------------------------------------------------------
-// A centered mono date label — the spacing around it separates turns by day,
-// no flanking rule line. Inserted imperatively by utils/daymarks.ts (so it
-// must be GLOBAL, not scoped — imperative nodes carry no scoped-style attr).
+// A small date label set on the conversation column — the spacing around it
+// separates turns by day, no flanking rule line. Inserted imperatively by
+// utils/daymarks.ts (so it must be GLOBAL, not scoped — imperative nodes carry
+// no scoped-style attr).
 .daymark {
   display: flex;
   align-items: center;
-  margin: 6px 0 26px;
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  width: 100%;
+  max-width: var(--dock-width, min(80%, 1200px));
+  margin: 0 auto var(--space-lg);
+  font: 600 var(--fs-mono)/1.2 var(--font-ui);
+  letter-spacing: 0.02em;
   color: var(--muted);
 }
 
@@ -38,8 +39,8 @@
   max-width: 80%;
   margin-left: auto;
   background: var(--surface-2);
-  padding: 11px 15px;
-  border-radius: 8px;
+  padding: var(--space-sm) var(--space-md);
+  border-radius: var(--radius-card);
 }
 
 // Names who wrote the row when it is not the user — a delegate transcript's
@@ -360,6 +361,12 @@
   white-space: nowrap;
 }
 
+// A step waiting on the user's answer reads at full strength, like the docked
+// ask. Its own rule: a browser without :has() drops only this.
+.step.activity:has(.activity__answer) .step__label {
+  color: var(--text);
+}
+
 .step__sep {
   flex-shrink: 0;
   color: var(--muted);
@@ -386,11 +393,12 @@
   color: var(--muted);
 }
 
-// Off-screen asks in the dock: the live line's muted mono type, at the composer's width.
+// Off-screen asks in the dock, at the composer's width: each a raised card
+// (AskRow) whose wait text keeps the live line's muted mono type.
 .offscreen-asks {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-sm);
   width: 100%;
   max-width: var(--dock-width);
   margin: 0 auto;
@@ -400,7 +408,7 @@
 }
 
 .offscreen-asks:not(:empty) {
-  padding: 0 4px 10px;
+  padding: 0 0 var(--space-sm);
 }
 
 // Tool-call rows (ToolCallList) — plain borderless lines, one per call:
@@ -420,6 +428,7 @@
   width: 100%;
   margin: 0;
   padding: 0;
+  border-radius: var(--radius-card);
   background: none;
   text-align: left;
   overflow-wrap: anywhere;

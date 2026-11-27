@@ -3,9 +3,12 @@
    a Sass toolchain can import it. The marketing site carries a mirrored copy of the
    tokens; this file is the source of truth.
 
-   Flat and sharp: no radius, gradient, glow, shadow or blur except the weather
-   card's sky, the plan card, the user's prompt bubble (8px), and the loading
-   spinners and the context ring, which are circles (status dots stay square).
+   Flat with soft corners: every control rounds to --radius (6px); every card, the
+   plan card and the user's prompt bubble to --radius-card (8px); the loading
+   spinners and the context ring are circles (status dots stay square). No
+   gradient, glow, shadow or blur except the weather card's sky, the plan card's
+   ground, and the one shadow that lifts the Brain's sticky ask dock off the page
+   scrolling under it.
    Depth comes from the three grounds (bg → surface → surface-2): fills group
    things; a border marks only a text field or the focus ring. One control height,
    one icon size, three text sizes (12 mono, 15 body, 20 title). Pink is the only
@@ -105,6 +108,8 @@
   --space-lg:     24px;
   --space-xl:     40px;
   --control-h:    32px;      /* every button, input, select and segmented control */
+  --radius:       6px;       /* every control's corners */
+  --radius-card:  8px;       /* every card's corners, and a segmented control's track */
   --icon:         16px;      /* every inline icon */
   --fs-mono:      0.75rem;   /* 12px: mono labels, times, counts */
   --fs-body:      0.9375rem; /* 15px: all reading and control text */
@@ -145,7 +150,7 @@ textarea,
 select {
   background: var(--surface-2);
   border: 1px solid var(--control);
-  border-radius: 0;
+  border-radius: var(--radius);
   color: var(--text);
   transition: border-color var(--dur-1) var(--ease-out);
 }
@@ -184,7 +189,7 @@ input[type="checkbox"], input[type="radio"], input[type="range"], progress { acc
   min-height: var(--control-h);
   padding: 0 var(--space-md);
   border: none;
-  border-radius: 0;
+  border-radius: var(--radius);
   background: var(--surface-2);
   color: var(--text);
   font: 600 var(--fs-body)/1 var(--font-ui);
@@ -207,7 +212,7 @@ input[type="checkbox"], input[type="radio"], input[type="range"], progress { acc
   padding: 6px 10px;
   min-height: var(--control-h);
   border: none;
-  border-radius: 0;
+  border-radius: var(--radius);
   background: var(--surface-2);
   color: var(--text);
   font: 600 var(--fs-mono)/1 var(--font-ui);
@@ -226,6 +231,7 @@ input[type="checkbox"], input[type="radio"], input[type="range"], progress { acc
 .tag {
   display: inline-block;
   padding: 5px 7px;
+  border-radius: var(--radius);
   background: var(--surface-2);
   font: 500 var(--fs-mono)/1 var(--font-mono);
   letter-spacing: 0.08em;

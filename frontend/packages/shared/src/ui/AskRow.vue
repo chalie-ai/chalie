@@ -28,7 +28,7 @@ const label = computed(() => {
 </script>
 
 <template>
-  <div class="activity">
+  <div class="activity activity--docked">
     <span class="activity__lead">
       <span class="activity__mark" />
       <span v-if="ask.data.origin" class="activity__origin">{{ originLabel(ask.data.origin) }} · #{{ ask.data.origin.turn_id }} ·</span>
@@ -84,13 +84,18 @@ const label = computed(() => {
 }
 
 /* An ask's lead and a running step's controls each hold together; the
-   action label ellipsizes. */
+   action label ellipsizes. Controls wrap rather than run off a narrow screen. */
 .activity__lead,
 .activity__controls {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-sm);
   min-width: 0;
+}
+
+.activity__controls {
+  flex-wrap: wrap;
+  row-gap: var(--space-xs);
 }
 
 .activity__mark,
@@ -101,22 +106,25 @@ const label = computed(() => {
   white-space: nowrap;
 }
 
+/* Stop and Open are quiet text buttons that fill on hover. */
 .activity__stop {
   display: inline-flex;
   align-items: center;
   height: var(--control-h);
-  padding: 0;
+  margin-inline-start: var(--space-sm);
+  padding: 0 var(--space-sm);
+  border-radius: var(--radius);
   background: none;
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono);
+  font: 500 var(--fs-body)/1 var(--font-ui);
   color: var(--muted);
-  text-decoration: underline;
-  text-underline-offset: 3px;
-  transition: color var(--dur-1) var(--ease-out);
+  transition:
+    background-color var(--dur-1) var(--ease-out),
+    color var(--dur-1) var(--ease-out);
 }
 
 .activity__stop:hover {
-  color: var(--deny-text);
+  background: var(--surface-2);
+  color: var(--text);
 }
 
 .activity__wait,
@@ -129,14 +137,21 @@ const label = computed(() => {
   white-space: nowrap;
 }
 
+.activity__ask::before {
+  content: '· ';
+}
+
+/* Deny and Allow are one pair with the regular button's metrics, set apart
+   from the words before them and closer to each other. */
 .activity__answer {
-  min-height: var(--control-h);
-  padding: 0 var(--space-sm);
-  font-weight: 500;
+  height: var(--control-h);
+  padding: 0 var(--space-md);
+  border-radius: var(--radius);
+  font: 600 var(--fs-body)/1 var(--font-ui);
   cursor: pointer;
   transition:
     background-color var(--dur-1) var(--ease-out),
-    color var(--dur-1) var(--ease-out),
+    filter var(--dur-1) var(--ease-out),
     translate var(--dur-1) var(--ease-out);
 }
 
@@ -144,26 +159,67 @@ const label = computed(() => {
   translate: 0 1px;
 }
 
+/* A sign-in code ask's Send stays disabled until the code is complete. */
 .activity__answer:disabled {
   opacity: 0.45;
 }
 
+/* Allow is the screen's primary action, so it takes the one accent. */
 .activity__answer--allow {
-  background: var(--allow);
+  margin-inline-start: calc(var(--space-xs) - var(--space-sm));
+  background: var(--pink);
   color: var(--on-pink);
 }
 
 .activity__answer--allow:hover:not(:disabled) {
-  background: var(--text);
-  color: var(--bg);
+  filter: brightness(1.1);
 }
 
 .activity__answer--deny {
+  margin-inline-start: var(--space-sm);
   background: var(--surface-2);
   color: var(--text);
 }
 
 .activity__answer--deny:hover {
   background: var(--cell);
+}
+
+/* A docked ask (the chat dock, the Brain's sticky dock) is a raised card whose
+   words read like the conversation and wrap instead of widening the page. */
+.activity--docked {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: var(--space-sm);
+  row-gap: var(--space-xs);
+  min-width: 0;
+  padding: var(--space-xs) var(--space-xs) var(--space-xs) var(--space-md);
+  border-radius: var(--radius-card);
+  background: var(--surface-2);
+}
+
+/* The card is Deny's own ground, so Deny steps up one fill to stay a button,
+   and Open fills on hover to that same step. */
+.activity--docked .activity__answer--deny,
+.activity--docked .activity__stop:hover {
+  background: var(--cell);
+}
+
+.activity--docked .activity__answer--deny:hover {
+  background: color-mix(in srgb, var(--cell), var(--text) 10%);
+}
+
+.activity--docked .activity__label {
+  font: 400 var(--fs-body)/1.55 var(--font-ui);
+  color: var(--text);
+  white-space: normal;
+}
+
+/* Wider than a phone, the answers sit at the card's right edge. */
+@media (min-width: 641px) {
+  .activity--docked .activity__controls {
+    margin-inline-start: auto;
+  }
 }
 </style>

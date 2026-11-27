@@ -438,7 +438,7 @@ body {
   // Centre at the dock width like .input-dock__outer. The 2px inset matches
   // .input-dock__inner's padding so the menu trigger lines up with the attach
   // button and the ring with the send button (border-box).
-  margin: 11px auto 0;
+  margin: var(--space-sm) auto 0;
   padding: 0 2px;
   display: flex;
   align-items: center;
@@ -459,7 +459,8 @@ body {
   gap: 6px;
   max-width: 100%;
   height: var(--control-h);
-  padding: 0 9px;
+  padding: 0 var(--space-sm);
+  border-radius: var(--radius);
   background: transparent;
   cursor: pointer;
   font-family: var(--font-mono);
