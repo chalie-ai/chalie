@@ -142,8 +142,19 @@ class IdleGatedJob(ScheduledJob):
             self._persist_fired(utc_now())
 
     def _is_idle(self) -> bool:
-        """True when the user has been idle at least ``idle_window``."""
+        """True when no turn is running on the user's channel and the user
+        has been quiet at least ``idle_window``.
+
+        A running turn counts as activity: a background turn started under it
+        shares the model with it and slows it down. Measuring only from the
+        last message let a job fire half an hour into a long turn.
+        """
+        from configs.enums.channels import Channel  # noqa: PLC0415
         from models.transcript import Transcript  # noqa: PLC0415
+        from models.turn_execution import TurnExecution  # noqa: PLC0415
+
+        if TurnExecution.open_on(Channel.USER.value) is not None:
+            return False
 
         last_msg_raw = Transcript.last_user_message_at()
         last_msg = parse_utc(last_msg_raw) if last_msg_raw else None
