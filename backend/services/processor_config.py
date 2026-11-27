@@ -69,6 +69,12 @@ class ProcessorConfig(ABC):
     chokepoint no-ops). The single state-gate for live progress. Distinct from
     ``RENDERS_HTML``, which is about the *markup* of the settled reply."""
 
+    TRANSIENT: ClassVar[bool] = False
+    """True → a turn on this channel writes no row to any table: no turn
+    execution, no provider-call ledger row — on top of the rows
+    ``skip_transcript`` and ``skip_input_row`` already withhold. For a one-shot
+    call whose answer is handed straight back to its caller."""
+
     thinking_mode: ClassVar[str | None] = None
     """Fixed reasoning level for a background channel whose deliberation must not
     be data-driven (thread_gist / web_search pin ``"low"``). ``None`` on every

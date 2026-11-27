@@ -2,7 +2,7 @@
 Chalie, never at the deleted Settings voice toggle or an installer-only
 caveat.
 
-Voice deps (kokoro-onnx, useful-moonshine-onnx, soundfile, scipy) and
+Voice deps (kokoro-onnx, useful-moonshine-onnx, soundfile) and
 model assets are unconditional base-install artifacts now — fetched once at
 install time (installer/install.sh / the Docker build), never at boot or
 runtime. There is no more enable/disable surface to point a broken install

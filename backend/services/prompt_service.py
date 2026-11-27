@@ -76,6 +76,7 @@ _CHANNEL_USER = Channel.USER
 _CHANNEL_SCHEDULE = Channel.SCHEDULE
 _CHANNEL_SKILLS_BUILDING = Channel.SKILLS_BUILDING
 _CHANNEL_THREAD_GIST = Channel.DELEGATE_THREAD_GIST
+_CHANNEL_VOICE_CLEANUP = Channel.DELEGATE_VOICE_CLEANUP
 _CHANNEL_VISION = Channel.DELEGATE_VISION
 _CHANNEL_WEB_BROWSE = Channel.DELEGATE_WEB_BROWSE
 _CHANNEL_WEB_SEARCH = Channel.DELEGATE_WEB_SEARCH
@@ -320,10 +321,11 @@ class PromptService:
             return self._code_agent_prompt()
         if channel == _CHANNEL_EXTERNAL_AGENT:
             return self._external_agent_prompt()
-        # vision, compaction and user_synthesis pass the raw input straight
-        # through.
+        # vision, voice clean-up, compaction and user_synthesis pass the raw
+        # input straight through.
         if channel in (
             _CHANNEL_VISION,
+            _CHANNEL_VOICE_CLEANUP,
             _CHANNEL_COMPACTION,
             _CHANNEL_USER_SYNTHESIS,
         ):

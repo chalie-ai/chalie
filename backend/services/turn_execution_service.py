@@ -74,9 +74,12 @@ class TurnExecutionService:
         """Insert this turn's row (state=working), stash it on
         ``self.mp.execution``, and emit the lifecycle frame. ``None`` on a
         write failure (logged) — ``should_stop`` fails open when there is no
-        row to poll. A turn opened on a subagent — its spawn, or a later turn
+        row to poll — and always ``None`` on a ``TRANSIENT`` config, which
+        keeps no row. A turn opened on a subagent — its spawn, or a later turn
         a message resumed it on — first announces its ``agents`` row,
         committed with its input row."""
+        if self.mp.config.TRANSIENT:
+            return None
         if self.mp.agent is not None:
             self.mp.announce(AgentService.frame(self.mp.agent))
         try:

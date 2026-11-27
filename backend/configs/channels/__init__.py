@@ -24,6 +24,7 @@ from configs.channels.thread_gist import ThreadGistConfig
 from configs.channels.user import UserConfig
 from configs.channels.user_synthesis import UserSynthesisConfig
 from configs.channels.vision import VisionConfig
+from configs.channels.voice_cleanup import VoiceCleanupConfig
 from configs.channels.web_browse import WebBrowseConfig
 from configs.channels.web_search import WebSearchConfig
 from configs.enums.config_type import ConfigTypeEnum
@@ -60,6 +61,7 @@ __all__ = [
     "UserSubtaskConfig",
     "UserSynthesisConfig",
     "VisionConfig",
+    "VoiceCleanupConfig",
     "WebBrowseConfig",
     "WebSearchConfig",
     "config_for",

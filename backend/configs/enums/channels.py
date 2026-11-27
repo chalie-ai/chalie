@@ -61,6 +61,7 @@ class Channel(str, Enum):
     DELEGATE_VISION      = "delegate:vision"
     DELEGATE_CODE_AGENT  = "delegate:code_agent"
     DELEGATE_SUBTASK     = "delegate:subtask"
+    DELEGATE_VOICE_CLEANUP = "delegate:voice_cleanup"
 
     # ── External agents (dynamic: external-agent:{name}) ─────────────────────
     EXTERNAL_AGENT = "external-agent"
@@ -79,11 +80,11 @@ class Channel(str, Enum):
 
 # The delegate kinds a user may watch: the bare channels of the configs that
 # each DelegateAbility tool runs its subagents on — every one writes a
-# transcript of its own (vision and thread_gist write none, so there is nothing
-# to show). Each subagent runs on its own channel under one of them
-# (:meth:`Channel.for_agent`); its frames reach the wire addressed by that
-# channel, and the threads read accepts no other delegate channel — whether
-# the caller waits for the subagent or not.
+# transcript of its own (vision, thread_gist and voice_cleanup write none, so
+# there is nothing to show). Each subagent runs on its own channel under one
+# of them (:meth:`Channel.for_agent`); its frames reach the wire addressed by
+# that channel, and the threads read accepts no other delegate channel —
+# whether the caller waits for the subagent or not.
 WATCHABLE_DELEGATE_CHANNELS: frozenset[str] = frozenset({
     Channel.DELEGATE_WEB_SEARCH.value,
     Channel.DELEGATE_WEB_BROWSE.value,
